@@ -1,10 +1,10 @@
 # shellcheck shell=bash
-# Funciones compartidas. Requiere jq. Compatibles con bash 3.2 (macOS) y con GNU/BSD.
+# Shared functions. Requires jq. Compatible with bash 3.2 (macOS) and with GNU/BSD tools.
 KIT="${KIT:-$HOME/.orca-roles}"
 
-# El CLI de Orca no siempre se llama 'orca': en las terminales de WSL que gestiona Orca en Windows es $ORCA_CLI_COMMAND
-# (p. ej. orca-ide). Si 'orca' no está en el PATH pero Orca indica otro nombre, se crea el envoltorio $KIT/shim/orca y se
-# antepone al PATH: los scripts del kit, los prompts y los agentes (que heredan el PATH) siguen usando 'orca'.
+# Orca's CLI is not always called 'orca': in the WSL terminals Orca manages on Windows it is $ORCA_CLI_COMMAND
+# (e.g. orca-ide). If 'orca' is not on the PATH but Orca names another command, the $KIT/shim/orca wrapper is created and
+# prepended to the PATH: the kit's scripts, the prompts and the agents (which inherit the PATH) keep using 'orca'.
 orca_shim() {
   local real="${ORCA_CLI_COMMAND:-}" dir="$KIT/shim" tmp
   command -v orca >/dev/null 2>&1 && return 0
@@ -15,15 +15,15 @@ orca_shim() {
 }
 orca_shim
 
-# Config efectiva: ~/.orca-roles/config.json (o la de serie) + .orca-roles.json del proyecto, si existe.
-# El .orca-roles.json se busca en la raíz del worktree y, si no está (p. ej. no está commiteado), en la del checkout principal.
-merged_config() {  # $1 = carpeta del proyecto/worktree
+# Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
+# .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
+merged_config() {  # $1 = project/worktree folder
   local base="$KIT/config.json" proj
   [ -f "$base" ] || base="$KIT/config.default.json"
   proj="$(project_config "${1:-.}")"
   if [ -n "$proj" ]; then jq -s '.[0] * .[1]' "$base" "$proj"; else cat "$base"; fi
 }
-# Ruta del .orca-roles.json que aplica a una carpeta (vacío si no hay).  project_config <carpeta>
+# Path of the .orca-roles.json that applies to a folder (empty if none).  project_config <folder>
 project_config() {
   local top common main
   top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 0
@@ -33,38 +33,38 @@ project_config() {
   [ -f "$main/.orca-roles.json" ] && echo "$main/.orca-roles.json"
   return 0
 }
-# Valor de un rol con herencia de defaults:  rcfg <config> <rol> <campo>
+# A role's value, inheriting from defaults:  rcfg <config> <role> <field>
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
-# Roles activos en orden; el planner va siempre
+# Enabled roles in order; the planner always runs
 enabled_roles() { jq -r '.roles | to_entries[] | select(.key == "planner" or .value.enabled != false) | .key' "$1"; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
-# Archivo de prompt de un rol: campo "prompt" (admite ~), o prompts/<rol>.md del kit
+# A role's prompt file: the "prompt" field (accepts ~), or the kit's prompts/<role>.md
 prompt_of() { local p; p="$(jq -r --arg r "$2" '.roles[$r].prompt // empty' "$1")"; p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$2.md}"; }
-# Actualiza una configuración de usuario con las claves/roles nuevos de la de serie, sin pisar valores ni el orden de sus roles.
-upgrade_config() {  # $1 = config.default.json, $2 = config.json del usuario → stdout
+# Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
+upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
   jq -s '.[0] as $d | .[1] as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)' "$1" "$2"
 }
-# Excepciones de launch.sh (opciones del setup script del proyecto, o de 'roles') como JSON:
+# launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
 #   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}]}
-# overrides_from_args [--only a,b] [--enable a,b] [--disable a,b] [--set ruta.con.puntos=valor] ...  → stdout; 1 si hay un error
-# Las listas se acumulan si una opción se repite. En --set el valor se lee como JSON si lo es (true, 10, ["x"]) y si no, como texto.
+# overrides_from_args [--only a,b] [--enable a,b] [--disable a,b] [--set dotted.path=value] ...  → stdout; 1 on error
+# Lists add up if an option repeats. In --set the value is read as JSON if it is JSON (true, 10, ["x"]) and as text otherwise.
 overrides_from_args() {
   local o='{"only":[],"enable":[],"disable":[],"set":[]}' opt val k
   while [ $# -gt 0 ]; do
     case "$1" in
       --only=*|--enable=*|--disable=*|--set=*) opt="${1%%=*}"; val="${1#*=}";;
-      --only|--enable|--disable|--set) opt="$1"; [ $# -ge 2 ] || { echo "ERROR: $1 necesita un valor" >&2; return 1; }; val="$2"; shift;;
-      *) echo "ERROR: opción desconocida: $1" >&2; return 1;;
+      --only|--enable|--disable|--set) opt="$1"; [ $# -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; return 1; }; val="$2"; shift;;
+      *) echo "ERROR: unknown option: $1" >&2; return 1;;
     esac
     shift
     k="${opt#--}"
     if [ "$k" = set ]; then
-      case "$val" in *=*) ;; *) echo "ERROR: --set espera ruta=valor (p. ej. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
+      case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
       o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" '.set += [{path: ($p | split(".")), value: ($v | try fromjson catch $v)}]' <<<"$o")"
     else
       o="$(jq -c --arg k "$k" --arg v "$val" '.[$k] += ($v | split(",") | map(gsub("^ +| +$"; "")) | map(select(. != "")))' <<<"$o")"
@@ -72,14 +72,14 @@ overrides_from_args() {
   done
   printf '%s\n' "$o"
 }
-# Comprueba que las excepciones solo nombran roles que existen y no desactivan al planner.  check_overrides <config> <overrides>
+# Checks that the exceptions only name existing roles and do not disable the planner.  check_overrides <config> <overrides>
 check_overrides() {
   jq -r --slurpfile o "$2" '(.roles | keys) as $ks | $o[0] as $o
     | ([$o.only[], $o.enable[], $o.disable[]] | unique | map(select(. as $r | $ks | index($r) | not))
-       | if length > 0 then "ERROR: roles desconocidos: \(join(", ")). Disponibles: \($ks | join(", "))" else empty end),
-      (if ($o.disable | index("planner")) then "ERROR: el planner no se puede desactivar" else empty end)' "$1"
+       | if length > 0 then "ERROR: unknown roles: \(join(", ")). Available: \($ks | join(", "))" else empty end),
+      (if ($o.disable | index("planner")) then "ERROR: the planner cannot be disabled" else empty end)' "$1"
 }
-# Aplica las excepciones a una configuración: --only (el planner siempre queda), luego --enable, --disable y --set.  apply_overrides <config> <overrides>
+# Applies the exceptions to a configuration: --only (the planner always stays), then --enable, --disable and --set.  apply_overrides <config> <overrides>
 apply_overrides() {
   jq --slurpfile o "$2" '$o[0] as $o
     | if ($o.only | length) > 0 then .roles |= with_entries(.value.enabled = (.key == "planner" or (.key as $k | $o.only | index($k)) != null)) else . end
@@ -87,12 +87,12 @@ apply_overrides() {
     | reduce $o.disable[] as $r (.; .roles[$r].enabled = false)
     | reduce $o.set[] as $s (.; setpath($s.path; $s.value))' "$1"
 }
-# Escapa un texto para usarlo literalmente dentro de una expresión regular
+# Escapes a text to use it literally inside a regular expression
 regex_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|\\]/\\&/g'; }
-# Clave de Jira del worktree.  jira_key <rama> <jiraIdentifier de Orca> <url del ticket>
-# Orca guarda el ticket de un worktree enlazado en linkedWorkItem (provider "jira", jiraIdentifier, url): manda eso.
-# Sin enlace (worktree creado a mano, 'roles' en un checkout), se toma de la rama solo si la clave, en mayúsculas,
-# abre la rama o uno de sus segmentos (DEVGD-220-x, feature/DEVGD-220), para no confundir fix-123 o release-1.4 con un ticket.
+# The worktree's Jira key.  jira_key <branch> <Orca's jiraIdentifier> <ticket url>
+# Orca stores a linked worktree's ticket in linkedWorkItem (provider "jira", jiraIdentifier, url): that wins.
+# Without a link (worktree created by hand, 'roles' in a checkout), it is taken from the branch only if the key, in uppercase,
+# starts the branch or one of its segments (DEVGD-220-x, feature/DEVGD-220), so fix-123 or release-1.4 are not taken for tickets.
 jira_key() {
   local k=""
   if [ -n "$2" ]; then k="$2"
@@ -101,9 +101,9 @@ jira_key() {
   fi
   printf '%s' "$k" | tr 'a-z' 'A-Z'
 }
-# Expresión (jq, sin distinguir mayúsculas) que debe cumplir el título de la sesión extra del composer para cerrarla:
-# empieza por la clave de Jira seguida de un separador o del final ("DEVGD-220", "DEVGD-220: resumen"),
-# o es exactamente el nombre de la rama. Vacía si no hay ni clave ni rama.  composer_title_regex <clave> <rama>
+# Expression (jq, case-insensitive) the title of the composer's extra session must match for it to be closed:
+# it starts with the Jira key followed by a separator or the end ("DEVGD-220", "DEVGD-220: summary"),
+# or it is exactly the branch name. Empty if there is neither key nor branch.  composer_title_regex <key> <branch>
 composer_title_regex() {
   local alts=""
   [ -n "$1" ] && alts="$(regex_escape "$1")([^A-Za-z0-9_-].*)?"
@@ -111,9 +111,9 @@ composer_title_regex() {
   [ -n "$alts" ] && printf '^(%s)$' "$alts"
   return 0
 }
-# Mensaje de arranque del Planner.  planner_msg <config> "<roles activos>" <state> <jira_key> <jira_url> <retomar 0|1>
+# The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -124,41 +124,43 @@ planner_msg() {
   extra="$(jq -r --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
     '[.roles | to_entries[] | select(.key != "planner" and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
-  msg="Lee $(prompt_of "$cfg" planner) y adopta ese rol desde ahora. Roles activos en este workspace:${active:- ninguno}. Handles:${handles%,}."
-  [ -n "$params" ] && msg="$msg Parámetros de configuración: $params."
-  [ -n "$extra" ] && msg="$msg Roles adicionales (intégralos en el flujo según su descripción): $extra."
-  if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg Al cerrar cada paso, propón al usuario limpiar el contexto de los workers (ver tu sección «Limpiar el contexto de los workers»)."
-  else msg="$msg Limpia el contexto de los workers solo si el usuario te lo pide."; fi
-  [ -n "$key" ] && msg="$msg Este worktree está vinculado al ticket de Jira $key${url:+ ($url)}: léelo con Jira y úsalo como punto de partida de la planificación."
+  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Active roles in this workspace:${active:- none}. Handles:${handles%,}."
+  lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
+  [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
+  [ -n "$params" ] && msg="$msg Configuration parameters: $params."
+  [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
+  if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
+  else msg="$msg Clean the workers' context only if the user asks you to."; fi
+  [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   if [ "$resume" = 1 ]; then
-    msg="$msg ATENCIÓN: este workspace se está RETOMANDO tras un reinicio. Las terminales anteriores del equipo murieron y los handles de arriba son nuevos. Antes de hablar con el usuario, sigue la sección «Retomar un workspace tras un reinicio» de tu prompt: recupera el Run, las tareas, las últimas comunicaciones y el estado del código, y preséntale un resumen. Empieza por ahí."
+    msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
   else
-    msg="$msg Empieza con el arranque."
+    msg="$msg Start with the startup."
   fi
   printf '%s' "$msg"
 }
-# Parámetros de un rol (defaults.params + roles.<rol>.params) como "k=v, k=v"
+# A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
-# Instrucciones extra de un rol solo para este worktree (las guarda el Planner con su skill): <carpeta git>/orca-roles.notes/<rol>.md
+# A role's extra instructions for this worktree only (the Planner saves them with its skill): <git dir>/orca-roles.notes/<role>.md
 notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
-# Mensaje de arranque de un worker.  worker_msg <config> <rol>
-# Si el rol tiene instrucciones de este worktree, van dentro del mensaje: así sobreviven a la limpieza de contexto.
+# A worker's startup message.  worker_msg <config> <role>
+# If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
 worker_msg() {
   local p n notes=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
-  [ -n "$n" ] && [ -s "$n" ] && notes=" Instrucciones adicionales para este worktree, que prevalecen sobre tu prompt si chocan: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  printf '%s' "Lee $KIT/prompts/comun-workers.md y $(prompt_of "$1" "$2") y adopta ese rol desde ahora. Sigue sus instrucciones al pie de la letra.${p:+ Parámetros de configuración: $p.}$notes"
+  [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
+  printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$notes"
 }
-# Ruta con ~, {kit} o {home} expandidos
+# A path with ~, {kit} or {home} expanded
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
-# Comando que abre una conversación nueva en el agente de un rol (campo clearCommand, o el propio del agente)
+# Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {
   local c; c="$(rstr "$1" "$2" clearCommand)"
   if [ -n "$c" ]; then echo "$c"; return; fi
   case "$(rstr "$1" "$2" agent)" in claude|"") echo "/clear";; codex) echo "/new";; *) ;; esac
 }
-# Servidores MCP de un rol como archivo {"mcpServers": {...}} (formato de Claude Code, Cursor y Gemini CLI).  mcp_file <config> <rol>
-# En los args, env y url de los servidores se expanden los placeholders {worktree}, {project}, {evidenceDir}, {browserState}, {kit} y {home}
-# (valores de role_context; si no se ha llamado, el worktree es el directorio actual).
+# A role's MCP servers as a {"mcpServers": {...}} file (the format of Claude Code, Cursor and Gemini CLI).  mcp_file <config> <role>
+# The placeholders {worktree}, {project}, {evidenceDir}, {browserState}, {kit} and {home} are expanded in the servers' args, env and url
+# (values from role_context; if it was not called, the worktree is the current directory).
 mcp_file() {
   jq --arg r "$2" \
      --arg worktree "${ORCA_ROLES_WORKTREE:-$PWD}" --arg project "${ORCA_ROLES_PROJECT:-$(basename "$PWD")}" \
@@ -172,7 +174,7 @@ mcp_file() {
         | gsub("\\{browserState\\}"; $browserState) | gsub("\\{kit\\}"; $kit) | gsub("\\{home\\}"; $home)
       else . end)' "$1"
 }
-# Los mismos servidores como overrides -c de Codex (mcp_servers.<nombre>.<campo>=<valor TOML>), uno por línea.  codex_mcp_overrides <archivo mcp>
+# The same servers as Codex -c overrides (mcp_servers.<name>.<field>=<TOML value>), one per line.  codex_mcp_overrides <mcp file>
 codex_mcp_overrides() {
   jq -r '.mcpServers | to_entries[] | .key as $n | .value
     | (if .command then "mcp_servers.\($n).command=\(.command | @json)" else empty end),
@@ -180,14 +182,14 @@ codex_mcp_overrides() {
       (if .url then "mcp_servers.\($n).url=\(.url | @json)" else empty end),
       (if .env then "mcp_servers.\($n).env={" + ([.env | to_entries[] | "\(.key) = \(.value | @json)"] | join(", ")) + "}" else empty end)' "$1"
 }
-# Nombre del proyecto: carpeta del repo principal (no del worktree); si no es un repo, la carpeta dada.  project_name <carpeta>
+# Project name: the main repo's folder (not the worktree's); if it is not a repo, the given folder.  project_name <folder>
 project_name() {
   local common
   if common="$(cd "$1" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)"; then
     common="$(cd "$1" && cd "$common" && pwd)"; basename "$(dirname "$common")"
   else basename "$(cd "$1" && pwd)"; fi
 }
-# Contexto de un rol para los placeholders de mcpServers; exporta ORCA_ROLES_WORKTREE/PROJECT/EVIDENCE_DIR/BROWSER_STATE.  role_context <config> <rol> <worktree>
+# A role's context for the mcpServers placeholders; exports ORCA_ROLES_WORKTREE/PROJECT/EVIDENCE_DIR/BROWSER_STATE.  role_context <config> <role> <worktree>
 role_context() {
   ORCA_ROLES_WORKTREE="$(cd "$3" && pwd)"
   ORCA_ROLES_PROJECT="$(project_name "$3")"
@@ -195,5 +197,5 @@ role_context() {
   ORCA_ROLES_BROWSER_STATE="$KIT/browser/$ORCA_ROLES_PROJECT.json"
   export ORCA_ROLES_WORKTREE ORCA_ROLES_PROJECT ORCA_ROLES_EVIDENCE_DIR ORCA_ROLES_BROWSER_STATE
 }
-# Crea un estado de navegador vacío si no existe (Playwright acepta {"cookies":[],"origins":[]}); browser-login.sh lo rellena.
+# Creates an empty browser state if none exists (Playwright accepts {"cookies":[],"origins":[]}); browser-login.sh fills it.
 ensure_browser_state() { [ -f "$1" ] || { mkdir -p "$(dirname "$1")"; echo '{"cookies":[],"origins":[]}' > "$1"; }; }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lanza el agente de un rol según la configuración.  Uso: agent.sh <rol>
+# Launches a role's agent according to the configuration.  Usage: agent.sh <role>
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 ROLE="$1"
@@ -11,22 +11,22 @@ MODEL="$(rstr "$CFG" "$ROLE" model)"
 PERM="$(rstr "$CFG" "$ROLE" permissionMode)"
 PROMPT="$(prompt_of "$CFG" "$ROLE")"
 
-# Variables de entorno del rol (defaults.env + roles.<rol>.env)
+# The role's environment variables (defaults.env + roles.<role>.env)
 while IFS=$'\t' read -r k v; do [ -n "$k" ] && export "$k=$v"; done < <(jq -r --arg r "$ROLE" '((.defaults.env // {}) * (.roles[$r].env // {})) | to_entries[] | "\(.key)\t\(.value)"' "$CFG")
 
-# Servidores MCP del rol, en un archivo con formato mcpServers. Con mcp="all" no se genera: el agente usa su propia configuración.
+# The role's MCP servers, in a file in mcpServers format. With mcp="all" none is generated: the agent uses its own configuration.
 MCPFILE=""
 if [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
   role_context "$CFG" "$ROLE" .          # placeholders {worktree}, {project}, {evidenceDir}, {browserState}...
   ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"
-  # En la carpeta git del worktree, uno por rol, reescrito en cada arranque (fuera de un repo, un temporal)
+  # In the worktree's git dir, one per role, rewritten on every start (outside a repo, a temporary file)
   if GD="$(git rev-parse --git-dir 2>/dev/null)"; then MCPFILE="$(cd "$GD" && pwd)/orca-roles-mcp-$ROLE.json"; else MCPFILE="$(mktemp)"; fi
   mcp_file "$CFG" "$ROLE" > "$MCPFILE"
   export ORCA_ROLES_MCP="$MCPFILE"
 fi
 
 ARGS=()
-add_list() {  # $1 campo (array), $2 flag opcional por elemento, $3 = path para expandir ~, {kit} y {home}
+add_list() {  # $1 field (array), $2 optional flag per element, $3 = path to expand ~, {kit} and {home}
   while IFS= read -r x; do [ -n "$x" ] || continue; [ "${3:-}" = path ] && x="$(expand_path "$x")"
     if [ -n "${2:-}" ]; then ARGS+=("$2" "$x"); else ARGS+=("$x"); fi
   done < <(rcfg "$CFG" "$ROLE" "$1" | jq -r '.[]?' 2>/dev/null)
@@ -40,7 +40,7 @@ case "$AGENT" in
     PDIR="$(dirname "$PROMPT")"
     [ "$PDIR" != "$KIT/prompts" ] && [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR")
     add_list extraDirs --add-dir path
-    add_list pluginDirs --plugin-dir path   # plugins de Claude Code solo para este rol (la skill del Planner)
+    add_list pluginDirs --plugin-dir path   # Claude Code plugins for this role only (the Planner's skill)
     if [ -n "$MCPFILE" ]; then
       ARGS+=(--strict-mcp-config --mcp-config "$MCPFILE")
       export ENABLE_CLAUDEAI_MCP_SERVERS=false
@@ -53,18 +53,18 @@ case "$AGENT" in
   codex)
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
     [ "$PERM" = auto ] && ARGS+=(--full-auto)
-    # Servidores MCP como overrides de configuración (-c mcp_servers.<nombre>.<campo>=...), sin tocar ~/.codex/config.toml
+    # MCP servers as configuration overrides (-c mcp_servers.<name>.<field>=...), without touching ~/.codex/config.toml
     if [ -n "$MCPFILE" ]; then while IFS= read -r o; do [ -n "$o" ] && ARGS+=(-c "$o"); done < <(codex_mcp_overrides "$MCPFILE"); fi
     add_list extraArgs
-    exec codex ${ARGS[@]+"${ARGS[@]}"}   # forma segura con lista vacía en bash 3.2 (macOS)
+    exec codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
     ;;
   custom)
-    # El comando se ejecuta en un shell de login (PATH de tu perfil). Placeholders:
-    #   {model} → campo model;  {prompts} → carpeta de prompts del kit;  {prompt} → archivo de prompt del rol
-    #   {mcp}   → archivo {"mcpServers": {...}} con los servidores del rol (vacío si mcp="all"); también en $ORCA_ROLES_MCP
-    # Se añaden extraArgs al final. permissionMode, allowedTools y extraDirs no se aplican (son de claude).
+    # The command runs in a login shell (your profile's PATH). Placeholders:
+    #   {model} → model field;  {prompts} → the kit's prompts folder;  {prompt} → the role's prompt file
+    #   {mcp}   → {"mcpServers": {...}} file with the role's servers (empty if mcp="all"); also in $ORCA_ROLES_MCP
+    # extraArgs are appended. permissionMode, allowedTools and extraDirs do not apply (they are claude's).
     CMD="$(rstr "$CFG" "$ROLE" command)"
-    [ -n "$CMD" ] || { echo "El rol $ROLE es 'custom' pero no tiene 'command'." >&2; exit 1; }
+    [ -n "$CMD" ] || { echo "Role $ROLE is 'custom' but has no 'command'." >&2; exit 1; }
     Q_MODEL="$(printf '%q' "$MODEL")"; Q_PROMPTS="$(printf '%q' "$KIT/prompts")"; Q_PROMPT="$(printf '%q' "$PROMPT")"
     Q_MCP=""; [ -n "$MCPFILE" ] && Q_MCP="$(printf '%q' "$MCPFILE")"
     CMD="${CMD//\{model\}/$Q_MODEL}"; CMD="${CMD//\{prompts\}/$Q_PROMPTS}"; CMD="${CMD//\{prompt\}/$Q_PROMPT}"; CMD="${CMD//\{mcp\}/$Q_MCP}"
@@ -72,5 +72,5 @@ case "$AGENT" in
     for a in "${ARGS[@]+"${ARGS[@]}"}"; do CMD="$CMD $(printf '%q' "$a")"; done
     exec bash -lc "$CMD"
     ;;
-  *) echo "Agente desconocido para $ROLE: $AGENT (usa claude, codex o custom)" >&2; exit 1;;
+  *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;;
 esac

@@ -1,6 +1,6 @@
 {
   "name": "orca-roles",
-  "description": "Guía del kit orca-roles para el Planner: instalación, configuración, excepciones del setup script, crear agentes y cambiar el comportamiento de los roles.",
+  "description": "Guide to the orca-roles kit for the Planner: installation, configuration, setup script exceptions, creating agents and changing how roles behave.",
   "version": "0.1.0",
   "author": {
     "name": "FelipeCastano"

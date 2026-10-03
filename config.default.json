@@ -5,7 +5,8 @@
     "jiraHandoff": true,
     "closeComposerAgent": true,
     "composerAgentWindowSeconds": 180,
-    "cleanWorkersAfterStep": true
+    "cleanWorkersAfterStep": true,
+    "language": "auto"
   },
   "defaults": {
     "agent": "claude",
