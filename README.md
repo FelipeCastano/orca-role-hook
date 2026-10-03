@@ -342,7 +342,7 @@ Dentro de cada worktree:
 
 | Sistema | Estado |
 |---|---|
-| **macOS** | Plataforma principal. Los scripts están escritos para el bash 3.2 que trae el sistema (sin probar aún en un Mac real). |
+| **macOS** | Plataforma principal. Funciona con el bash 3.2 que trae el sistema: el CI ejecuta las pruebas en macOS con ese bash. |
 | **Linux** (Ubuntu, Debian...) | Soportado: los scripts usan solo herramientas comunes a GNU y BSD. Depende de que Orca tenga versión para tu distribución. |
 | **Windows** | Con **WSL2** (ver abajo). No hay versión nativa para PowerShell o Git Bash: el kit son scripts de Bash. |
 
