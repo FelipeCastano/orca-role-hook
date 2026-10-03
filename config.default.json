@@ -1,0 +1,71 @@
+{
+  "settings": {
+    "launchWaitSeconds": 15,
+    "kickoffTimeoutSeconds": 180,
+    "jiraHandoff": true,
+    "closeComposerAgent": true,
+    "composerAgentWindowSeconds": 180,
+    "cleanWorkersAfterStep": true
+  },
+  "defaults": {
+    "agent": "claude",
+    "permissionMode": "auto",
+    "mcp": [],
+    "allowedTools": ["Bash(orca orchestration:*)", "Read"],
+    "extraDirs": [],
+    "extraArgs": [],
+    "env": {},
+    "params": {}
+  },
+  "mcpServers": {
+    "atlassian": { "type": "sse", "url": "https://mcp.atlassian.com/v1/sse" },
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated",
+                                              "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"] }
+  },
+  "roles": {
+    "planner": {
+      "title": "Planner",
+      "enabled": true,
+      "model": "claude-opus-5-5",
+      "mcp": "all",
+      "allowedTools": ["Bash(orca:*)", "Read"]
+    },
+    "researcher": {
+      "title": "Researcher",
+      "enabled": true,
+      "model": "claude-opus-5-5",
+      "mcp": ["context7"]
+    },
+    "dev": {
+      "title": "Dev",
+      "enabled": true,
+      "model": "claude-sonnet-5-5",
+      "mcp": ["context7"]
+    },
+    "tester": {
+      "title": "Tester",
+      "enabled": true,
+      "model": "claude-sonnet-5-5",
+      "params": { "maxNewTests": 10, "maxWorkers": 2, "timeoutMinutes": 10 }
+    },
+    "auditor": {
+      "title": "Auditor",
+      "enabled": true,
+      "model": "claude-opus-5-5",
+      "params": { "maxMutants": 15 }
+    },
+    "visual-tester": {
+      "title": "Visual-Tester",
+      "enabled": true,
+      "model": "claude-opus-5-5",
+      "mcp": ["playwright"],
+      "params": { "evidenceDir": "qa-evidence" }
+    },
+    "deployer": {
+      "title": "Deployer",
+      "enabled": true,
+      "model": "claude-sonnet-5-5"
+    }
+  }
+}
