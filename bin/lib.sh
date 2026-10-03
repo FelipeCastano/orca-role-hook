@@ -49,6 +49,44 @@ upgrade_config() {  # $1 = config.default.json, $2 = config.json del usuario →
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)' "$1" "$2"
 }
+# Excepciones de launch.sh (opciones del setup script del proyecto, o de 'roles') como JSON:
+#   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}]}
+# overrides_from_args [--only a,b] [--enable a,b] [--disable a,b] [--set ruta.con.puntos=valor] ...  → stdout; 1 si hay un error
+# Las listas se acumulan si una opción se repite. En --set el valor se lee como JSON si lo es (true, 10, ["x"]) y si no, como texto.
+overrides_from_args() {
+  local o='{"only":[],"enable":[],"disable":[],"set":[]}' opt val k
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --only=*|--enable=*|--disable=*|--set=*) opt="${1%%=*}"; val="${1#*=}";;
+      --only|--enable|--disable|--set) opt="$1"; [ $# -ge 2 ] || { echo "ERROR: $1 necesita un valor" >&2; return 1; }; val="$2"; shift;;
+      *) echo "ERROR: opción desconocida: $1" >&2; return 1;;
+    esac
+    shift
+    k="${opt#--}"
+    if [ "$k" = set ]; then
+      case "$val" in *=*) ;; *) echo "ERROR: --set espera ruta=valor (p. ej. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
+      o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" '.set += [{path: ($p | split(".")), value: ($v | try fromjson catch $v)}]' <<<"$o")"
+    else
+      o="$(jq -c --arg k "$k" --arg v "$val" '.[$k] += ($v | split(",") | map(gsub("^ +| +$"; "")) | map(select(. != "")))' <<<"$o")"
+    fi
+  done
+  printf '%s\n' "$o"
+}
+# Comprueba que las excepciones solo nombran roles que existen y no desactivan al planner.  check_overrides <config> <overrides>
+check_overrides() {
+  jq -r --slurpfile o "$2" '(.roles | keys) as $ks | $o[0] as $o
+    | ([$o.only[], $o.enable[], $o.disable[]] | unique | map(select(. as $r | $ks | index($r) | not))
+       | if length > 0 then "ERROR: roles desconocidos: \(join(", ")). Disponibles: \($ks | join(", "))" else empty end),
+      (if ($o.disable | index("planner")) then "ERROR: el planner no se puede desactivar" else empty end)' "$1"
+}
+# Aplica las excepciones a una configuración: --only (el planner siempre queda), luego --enable, --disable y --set.  apply_overrides <config> <overrides>
+apply_overrides() {
+  jq --slurpfile o "$2" '$o[0] as $o
+    | if ($o.only | length) > 0 then .roles |= with_entries(.value.enabled = (.key == "planner" or (.key as $k | $o.only | index($k)) != null)) else . end
+    | reduce $o.enable[] as $r (.; .roles[$r].enabled = true)
+    | reduce $o.disable[] as $r (.; .roles[$r].enabled = false)
+    | reduce $o.set[] as $s (.; setpath($s.path; $s.value))' "$1"
+}
 # Escapa un texto para usarlo literalmente dentro de una expresión regular
 regex_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|\\]/\\&/g'; }
 # Clave de Jira del worktree.  jira_key <rama> <jiraIdentifier de Orca> <url del ticket>

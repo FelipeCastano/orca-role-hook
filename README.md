@@ -164,7 +164,7 @@ Todos los workers reciben además las reglas comunes de `prompts/comun-workers.m
 
 ## Configuración
 
-Toda la configuración vive en `~/.orca-roles/config.json`. Se lee cada vez que se crea un worktree, así que no hace falta reinstalar tras editarla. Es la única fuente de verdad: no hay flags ni atajos que la sustituyan.
+Toda la configuración vive en `~/.orca-roles/config.json`. Se lee cada vez que se crea un worktree, así que no hace falta reinstalar tras editarla. Es la configuración de siempre; para las excepciones de un proyecto concreto están [`.orca-roles.json`](#configuración-por-proyecto) y las [opciones del setup script](#excepciones-en-el-setup-script).
 
 ```json
 {
@@ -292,6 +292,29 @@ Un `.orca-roles.json` en la raíz de un repo se mezcla encima de tu configuraci�
 
 Los objetos se mezclan campo a campo; las listas se sustituyen enteras.
 
+### Excepciones en el setup script
+
+Sin crear ningún archivo, puedes añadir opciones a la línea de `launch.sh` en el setup script del proyecto (Settings → Repository, o el `orca.yaml` de `roles-yaml`). Se aplican encima de `config.json` y de `.orca-roles.json`:
+
+```
+$HOME/.orca-roles/bin/launch.sh --disable visual-tester,deployer
+```
+
+| Opción | Qué hace |
+|---|---|
+| `--only a,b` | Solo esos roles; el `planner` va siempre. |
+| `--enable a,b` | Activa roles desactivados en la configuración. |
+| `--disable a,b` | Desactiva roles. El `planner` no se puede desactivar. |
+| `--set ruta=valor` | Cambia cualquier clave de la configuración. La ruta va con puntos y el valor se lee como JSON si lo es (`true`, `10`, `["x"]`) y si no, como texto. |
+| `--reset` | Olvida las excepciones guardadas del worktree (solo con `roles`). |
+
+Ejemplos de `--set`: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `roles.tester.params.maxNewTests=5`, `roles.dev.mcp='["context7"]'`.
+
+- Se pueden combinar y repetir: `--only dev,tester --set roles.dev.model=claude-opus-5-5`. Se aplican en este orden: `--only`, `--enable`, `--disable` y por último `--set`.
+- Si una opción nombra un rol que no existe, `launch.sh` falla con la lista de roles disponibles en lugar de arrancar a medias.
+- Las excepciones se guardan por worktree (`orca-roles.overrides.json` en su carpeta git). Así, `roles` sin opciones las vuelve a aplicar al retomar tras un reinicio; con opciones nuevas, las sustituye; con `--reset`, vuelve a la configuración normal.
+- También valen con `roles` en una terminal del workspace (`roles --enable visual-tester`). Solo deciden qué pestañas se abren: desactivar un rol cuya pestaña ya está abierta no la cierra.
+
 ### Ajustes generales (`settings`)
 
 | Campo | Qué hace |
@@ -334,7 +357,7 @@ Dentro de cada worktree:
 
 - `research/` y `qa-evidence/`: trabajo del Researcher y capturas del Visual-Tester. Se ignoran localmente en `.git/info/exclude`, sin tocar tu `.gitignore`.
 - `DESPLIEGUE.md`: manual del Deployer. No se commitea salvo que lo pidas.
-- En la carpeta git del worktree (`git rev-parse --git-dir`): `orca-roles.config.json` (configuración efectiva usada), `orca-roles-mcp-<rol>.json` (servidores MCP que recibió cada rol), `orca-roles.env` (handles), `orca-roles-launch.log` y `orca-roles-kickoff.log` (arranque), `orca-<servicio>.log` y `orca-<servicio>.pid` (servicios locales del Deployer).
+- En la carpeta git del worktree (`git rev-parse --git-dir`): `orca-roles.config.json` (configuración efectiva usada), `orca-roles.overrides.json` (excepciones del setup script, si las hay), `orca-roles-mcp-<rol>.json` (servidores MCP que recibió cada rol), `orca-roles.env` (handles), `orca-roles-launch.log` y `orca-roles-kickoff.log` (arranque), `orca-<servicio>.log` y `orca-<servicio>.pid` (servicios locales del Deployer).
 - Fuera del worktree: `~/.orca-roles/browser/<proyecto>.json`, la sesión del navegador para el Visual-Tester.
 - En Windows (WSL): `~/.orca-roles/shim/orca`, el envoltorio del CLI de Orca (ver [Windows con WSL2](#windows-con-wsl2)).
 
@@ -387,7 +410,8 @@ El workflow de GitHub Actions ejecuta lo mismo en cada push.
 | «No encuentro el CLI de Orca» (Windows) | Lanza el comando desde una terminal de Orca: fuera de ellas no existen `orca` ni `$ORCA_CLI_COMMAND` |
 | Los agentes no reciben su rol | `orca-roles-kickoff.log` del worktree |
 | «Configuración inválida» | Valida tu JSON: `jq . ~/.orca-roles/config.json` (y el `.orca-roles.json` del proyecto) |
-| Un agente arranca con otro modelo o MCP | `orca-roles.config.json` en la carpeta git del worktree muestra la configuración que se usó |
+| Un agente arranca con otro modelo o MCP | `orca-roles.config.json` en la carpeta git del worktree muestra la configuración que se usó, y `orca-roles-launch.log` las excepciones aplicadas |
+| Un rol no aparece aunque `enabled` es `true` | Excepciones guardadas del worktree: `orca-roles.overrides.json` en su carpeta git. Bórralas con `roles --reset` |
 | Un agente pide permisos | Que esté en auto mode (`Shift+Tab` muestra el modo actual) |
 | Pestañas en otro workspace | `launch.sh` usa `ORCA_WORKTREE_ID`; puedes forzarlo con `launch.sh id:<ORCA_WORKTREE_ID>` |
 | Tras reiniciar, el Planner no retoma el estado | `orca-roles-launch.log` debe decir «Retomando workspace». Si no, el archivo `orca-roles.env` de la carpeta git del worktree no existía o estaba vacío |

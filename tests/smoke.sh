@@ -283,4 +283,43 @@ try yaml "$Y"; check "roles-yaml: no toca un orca.yaml ajeno" "$RC:$(cat "$Y/orc
 git -C "$Y" add orca.yaml; git -C "$Y" -c user.name=t -c user.email=t@t commit -q -m yaml
 try yaml "$Y"; check "roles-yaml: no toca un orca.yaml commiteado" "$RC" "1"; case "$OUT" in *commiteado*) echo "ok   roles-yaml explica el orca.yaml commiteado";; *) echo "FAIL roles-yaml: $OUT"; FAIL=1;; esac
 
+# Excepciones de launch.sh (setup script del proyecto): --only, --enable, --disable, --set, guardadas por worktree
+check "overrides: listas y --set tipado" "$(overrides_from_args --only planner,dev --disable 'x, y' --set roles.dev.model=m1 --set=settings.jiraHandoff=false --set roles.t.params.n=5)" \
+  '{"only":["planner","dev"],"enable":[],"disable":["x","y"],"set":[{"path":["roles","dev","model"],"value":"m1"},{"path":["settings","jiraHandoff"],"value":false},{"path":["roles","t","params","n"],"value":5}]}'
+try overrides_from_args --nope 2>/dev/null; check "overrides: opción desconocida" "$RC" "1"
+try overrides_from_args --set sinvalor 2>/dev/null; check "overrides: --set sin =" "$RC" "1"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" },
+             "tester": { "title": "Tester", "enabled": false }, "deployer": { "title": "Deployer" } } }
+J
+overrides_from_args --only dev --enable tester --set roles.dev.model=m2 > "$TMP/ovr.json"
+check "apply_overrides: --only deja planner y dev, --enable suma tester" "$(apply_overrides "$KIT/config.json" "$TMP/ovr.json" > "$TMP/c.json"; enabled_roles "$TMP/c.json" | tr '\n' ' ')" "planner dev tester "
+check "apply_overrides: --set" "$(jq -r '.roles.dev.model' "$TMP/c.json")" "m2"
+overrides_from_args --disable planner,nadie > "$TMP/ovr.json"
+check "check_overrides: rol desconocido y planner" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | cut -c1-40 | tr '\n' '|')" "ERROR: roles desconocidos: nadie. Dispon|ERROR: el planner no se puede desactivar|"
+# launch.sh de punta a punta con un 'orca' simulado (cada pestaña se llama h-<título>; ninguna sigue viva al relanzar)
+L="$TMP/lproj"; mkdir -p "$L" "$TMP/lbin"; git -C "$L" init -q
+cat > "$TMP/lbin/orca" <<'EOS'
+#!/bin/sh
+case "$1 $2" in
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal show") exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/lbin/orca"
+launch() { (cd "$L" && HOME="$TMP/home" PATH="$TMP/lbin:$PATH" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+handles() { cut -d= -f1 "$L/.git/orca-roles.env" | tr '\n' ' '; }
+try launch --disable deployer --set roles.dev.model=m3; check "launch: --disable" "$RC:$(handles)" "0:PLANNER DEV "
+check "launch: --set en la config efectiva" "$(jq -r '.roles.dev.model' "$L/.git/orca-roles.config.json")" "m3"
+try launch; check "launch: retoma con las excepciones guardadas" "$RC:$(handles)" "0:PLANNER DEV "
+case "$OUT" in *"excepciones guardadas"*) echo "ok   launch: avisa de las excepciones guardadas";; *) echo "FAIL launch guardadas: $OUT"; FAIL=1;; esac
+try launch --reset; check "launch: --reset vuelve a la configuración" "$RC:$(handles)" "0:PLANNER DEV DEPLOYER "
+try launch --only dev; check "launch: --only" "$RC:$(handles)" "0:PLANNER DEV "
+try launch --enable nadie; check "launch: rol desconocido falla" "$RC" "1"
+check "launch: un error no pisa las excepciones guardadas" "$(jq -c .only "$L/.git/orca-roles.overrides.json")" '["dev"]'
+sleep 1   # deja terminar los kickoff en segundo plano antes de borrar el directorio temporal
+
 [ "$FAIL" = 0 ] && echo "TODO OK" || { echo "HAY FALLOS"; exit 1; }
