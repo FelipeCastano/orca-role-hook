@@ -2,7 +2,11 @@
 # Las pruebas corren en Ubuntu y en macOS; en macOS con el bash 3.2 del sistema, que es el que tienen los usuarios de Mac.
 name: ci
 
-on: [push, pull_request]
+# push solo en main: en una rama con PR abierto, el evento pull_request ya lo cubre (si no, cada cambio corre dos veces)
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   shellcheck:
