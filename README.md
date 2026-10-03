@@ -2,7 +2,22 @@
 
 Kit para [Orca](https://github.com/stablyai/orca) que abre automáticamente un equipo de agentes con roles definidos en cada worktree nuevo y los coordina mediante **Orca Orchestration**. Tú solo hablas con el Planner; el resto del equipo recibe todo su trabajo de él.
 
-Toda la configuración (qué roles están activos, con qué modelo, agente, MCP y parámetros) vive en un único archivo: `~/.orca-roles/config.json`. Ver [Configuración](#configuración).
+La configuración de siempre (qué roles están activos, con qué modelo, agente, MCP y parámetros) vive en `~/.orca-roles/config.json`. Las excepciones de un proyecto van en su `.orca-roles.json` o en las opciones del setup script. Ver [Configuración](#configuración).
+
+## Guía rápida
+
+1. **Instala el kit** en una terminal (en Windows, dentro de WSL; ver [Windows con WSL2](#windows-con-wsl2)). Necesitas `jq`, Claude Code y Orca con Orchestration activado.
+   ```bash
+   git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
+   ```
+2. **Registra el kit en tu proyecto**, una vez: en Orca, **Settings → Repository → *tu proyecto* → Setup script**, pega `$HOME/.orca-roles/bin/launch.sh`; o ejecuta `roles-yaml` en una terminal del proyecto. Ver [Configurar un proyecto](#configurar-un-proyecto-una-vez-por-proyecto).
+3. **Crea un worktree** desde el **"+"** del proyecto. Se abren las pestañas del equipo y el Planner empieza a planificar contigo.
+4. **Ajusta el equipo** según el alcance:
+   - Para siempre: `enabled`, `model`... en `~/.orca-roles/config.json` ([Configuración](#configuración)).
+   - Solo un proyecto, sin archivos: opciones en la línea del setup script, p. ej. `$HOME/.orca-roles/bin/launch.sh --disable visual-tester,deployer` ([Excepciones en el setup script](#excepciones-en-el-setup-script)).
+   - Solo un proyecto, versionado: `.orca-roles.json` en la raíz del repo ([Configuración por proyecto](#configuración-por-proyecto)).
+5. **Pídeselo al Planner.** Conoce el kit gracias a su skill: «crea un agente que revise la seguridad», «desactiva el Visual-Tester en este proyecto», «que el Dev use pnpm solo en este worktree», «¿cómo actualizo el kit?». Ver [La skill del Planner](#la-skill-del-planner).
+6. **Tras reiniciar**, o en un worktree donde el hook no se ejecutó, lanza `roles` en una terminal del workspace ([Reanudar tras reiniciar](#reanudar-tras-reiniciar)).
 
 ## Roles
 
@@ -162,6 +177,30 @@ Antes de guardar te enseña un resumen. Guarda una copia de la configuración an
 
 Todos los workers reciben además las reglas comunes de `prompts/comun-workers.md`. Para editar un rol más tarde, cambia su entrada en la configuración y su archivo de prompt, o vuelve a ejecutar `nuevo-rol` con el mismo identificador para sobrescribirlo.
 
+**Sin preguntas:** `nuevo-rol --from-json <archivo>` crea el rol a partir de un JSON con `id`, `description` y `prompt` (texto Markdown) obligatorios, y los mismos campos opcionales que un rol de la configuración, más `after` (posición) y `overwrite: true` para reemplazar uno existente. Es lo que usa el Planner con su skill.
+
+## La skill del Planner
+
+El Planner carga el plugin `orca-roles` (en `~/.orca-roles/plugin`), que trae la skill **`equipo`**: una guía del propio kit para que te ayude a instalarlo, configurarlo y usarlo sin salir de la conversación. Pregúntale en lenguaje normal, o invócala con `/orca-roles:equipo`. Cubre:
+
+- **Instalación y actualización**: te dice qué ejecutar (no lo ejecuta él).
+- **Registrar un proyecto** (Settings o `roles-yaml`) y la **configuración**: `config.json`, `.orca-roles.json` y las excepciones del setup script, con cuál conviene en cada caso.
+- **Crear agentes**: te pregunta lo necesario, redacta el prompt con la estructura común, te lo enseña y lo guarda con `nuevo-rol --from-json`.
+- **Cambiar el comportamiento de un rol** en tres niveles, y siempre te pregunta cuál quieres:
+
+  | Nivel | Dónde se guarda | Cuánto dura |
+  |---|---|---|
+  | Al vuelo | En ningún sitio: lo incluye en las tareas que le asigna a ese rol | Lo que dure la sesión del Planner |
+  | Este worktree | `orca-roles.notes/<rol>.md` en la carpeta git del worktree; el kit lo añade al mensaje de rol del worker | Mientras exista el worktree, aunque se limpie el worker o se reinicie |
+  | Permanente | `~/.orca-roles/config.json` y los prompts de `~/.orca-roles/roles/` | Todos los worktrees nuevos (el hook lee la configuración al crear cada uno) |
+
+- **Aplicar los cambios en el workspace actual**: abre la pestaña de un rol nuevo con `launch.sh` (la única forma en que el Planner puede abrir pestañas) o reenvía el rol a un worker con `clean.sh`.
+- **Diagnóstico**: qué log mirar según el síntoma.
+
+Antes de escribir cualquier archivo del kit o de abrir pestañas, el Planner te explica qué va a cambiar y a qué afecta, y espera tu confirmación. Nunca lo hace porque se lo pida un worker. Para que pueda editar la configuración, arranca con acceso a `~/.orca-roles` (`extraDirs` del planner).
+
+La skill es de Claude Code. Si el Planner usa otro agente, su prompt le indica leer el mismo archivo (`~/.orca-roles/plugin/skills/equipo/SKILL.md`). Cualquier rol de Claude puede cargar plugins propios con el campo `pluginDirs`.
+
 ## Configuración
 
 Toda la configuración vive en `~/.orca-roles/config.json`. Se lee cada vez que se crea un worktree, así que no hace falta reinstalar tras editarla. Es la configuración de siempre; para las excepciones de un proyecto concreto están [`.orca-roles.json`](#configuración-por-proyecto) y las [opciones del setup script](#excepciones-en-el-setup-script).
@@ -217,11 +256,12 @@ Cada rol hereda de `defaults` lo que no defina.
 | `permissionMode` | En `claude`, el `--permission-mode` (`auto`, `acceptEdits`, `manual`...). `default` significa no pasar el flag. En `codex`, `auto` equivale a `--full-auto`. |
 | `mcp` | `"all"` para que el agente use su propia configuración de MCP (en `claude`, todos tus conectores), o una lista de nombres de `mcpServers` (`[]` = ninguno). Funciona con cualquier agente: ver [MCP en otros agentes](#mcp-en-otros-agentes). |
 | `allowedTools` | Herramientas permitidas sin preguntar. Solo `claude`. |
-| `extraDirs` | Carpetas extra a las que el agente puede acceder. Solo `claude`. |
+| `extraDirs` | Carpetas extra a las que el agente puede acceder. Admite `~` y `{kit}`. Solo `claude`. |
 | `extraArgs` | Argumentos adicionales, tal cual, para el CLI. En `custom` se añaden al final del comando. |
 | `env` | Variables de entorno para ese agente (`defaults.env` y las del rol se mezclan). |
 | `params` | Parámetros que se le pasan al rol en su mensaje de arranque (límites del Tester, `maxMutants` del Auditor, `evidenceDir` del Visual-Tester...). Cada prompt documenta los suyos y su valor por defecto. |
 | `command` | Solo con `agent: "custom"`: comando a ejecutar. Admite `{model}`, `{prompts}`, `{prompt}` y `{mcp}`. |
+| `pluginDirs` | Plugins de Claude Code que carga ese rol (`--plugin-dir`). Admite `~` y `{kit}`. El planner trae `{kit}/plugin`, con su skill. Solo `claude`. |
 | `clearCommand` | Comando que abre una conversación nueva en el agente, para la limpieza de contexto. Por defecto `/clear` en `claude` y `/new` en `codex`; en `custom` hay que definirlo o el rol no se limpia. |
 
 El orden de las pestañas es el orden de los roles en el JSON.
@@ -342,6 +382,8 @@ orca-role-hook/                  # este repo → se instala en ~/.orca-roles/
 │   ├── lib.sh                   # funciones compartidas
 │   ├── orca-yaml.sh             # registra el kit en un proyecto con un orca.yaml local (comando roles-yaml)
 │   └── apply-hooks.sh           # explica al instalar cómo registrar el kit en cada proyecto
+├── plugin/                      # plugin de Claude Code que carga el Planner
+│   └── skills/equipo/SKILL.md   # guía del kit: instalación, configuración, excepciones, agentes nuevos
 ├── prompts/
 │   ├── comun-workers.md         # reglas comunes a todos los workers
 │   └── <rol>.md                 # instrucciones de cada rol (con su método de revisión, si lo tiene)
@@ -357,7 +399,7 @@ Dentro de cada worktree:
 
 - `research/` y `qa-evidence/`: trabajo del Researcher y capturas del Visual-Tester. Se ignoran localmente en `.git/info/exclude`, sin tocar tu `.gitignore`.
 - `DESPLIEGUE.md`: manual del Deployer. No se commitea salvo que lo pidas.
-- En la carpeta git del worktree (`git rev-parse --git-dir`): `orca-roles.config.json` (configuración efectiva usada), `orca-roles.overrides.json` (excepciones del setup script, si las hay), `orca-roles-mcp-<rol>.json` (servidores MCP que recibió cada rol), `orca-roles.env` (handles), `orca-roles-launch.log` y `orca-roles-kickoff.log` (arranque), `orca-<servicio>.log` y `orca-<servicio>.pid` (servicios locales del Deployer).
+- En la carpeta git del worktree (`git rev-parse --git-dir`): `orca-roles.config.json` (configuración efectiva usada), `orca-roles.overrides.json` (excepciones del setup script, si las hay), `orca-roles.notes/<rol>.md` (instrucciones de un rol solo para este worktree), `orca-roles-mcp-<rol>.json` (servidores MCP que recibió cada rol), `orca-roles.env` (handles), `orca-roles-launch.log` y `orca-roles-kickoff.log` (arranque), `orca-<servicio>.log` y `orca-<servicio>.pid` (servicios locales del Deployer).
 - Fuera del worktree: `~/.orca-roles/browser/<proyecto>.json`, la sesión del navegador para el Visual-Tester.
 - En Windows (WSL): `~/.orca-roles/shim/orca`, el envoltorio del CLI de Orca (ver [Windows con WSL2](#windows-con-wsl2)).
 

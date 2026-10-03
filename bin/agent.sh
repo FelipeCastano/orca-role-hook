@@ -26,8 +26,9 @@ if [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
 fi
 
 ARGS=()
-add_list() {  # $1 campo (array), $2 flag opcional por elemento
-  while IFS= read -r x; do [ -n "$x" ] || continue; if [ -n "${2:-}" ]; then ARGS+=("$2" "$x"); else ARGS+=("$x"); fi
+add_list() {  # $1 campo (array), $2 flag opcional por elemento, $3 = path para expandir ~, {kit} y {home}
+  while IFS= read -r x; do [ -n "$x" ] || continue; [ "${3:-}" = path ] && x="$(expand_path "$x")"
+    if [ -n "${2:-}" ]; then ARGS+=("$2" "$x"); else ARGS+=("$x"); fi
   done < <(rcfg "$CFG" "$ROLE" "$1" | jq -r '.[]?' 2>/dev/null)
 }
 
@@ -38,7 +39,8 @@ case "$AGENT" in
     ARGS+=(--add-dir "$KIT/prompts")
     PDIR="$(dirname "$PROMPT")"
     [ "$PDIR" != "$KIT/prompts" ] && [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR")
-    add_list extraDirs --add-dir
+    add_list extraDirs --add-dir path
+    add_list pluginDirs --plugin-dir path   # plugins de Claude Code solo para este rol (la skill del Planner)
     if [ -n "$MCPFILE" ]; then
       ARGS+=(--strict-mcp-config --mcp-config "$MCPFILE")
       export ENABLE_CLAUDEAI_MCP_SERVERS=false

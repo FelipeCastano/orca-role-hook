@@ -43,8 +43,8 @@ fi
 
 # Copia del kit (tu config.json y tus roles en ~/.orca-roles/roles/ se conservan entre actualizaciones)
 mkdir -p "$KIT"
-rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/mcp"   # se regeneran; config.json y roles/ no se tocan
-cp -R "$SRC/bin" "$SRC/prompts" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
+rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp"   # se regeneran; config.json y roles/ no se tocan
+cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
 chmod +x "$KIT/bin/"*.sh
 rm -f "$KIT/config.env"   # formato antiguo
 . "$KIT/bin/lib.sh"

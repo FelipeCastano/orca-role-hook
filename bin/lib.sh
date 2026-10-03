@@ -139,11 +139,17 @@ planner_msg() {
 }
 # Parámetros de un rol (defaults.params + roles.<rol>.params) como "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
+# Instrucciones extra de un rol solo para este worktree (las guarda el Planner con su skill): <carpeta git>/orca-roles.notes/<rol>.md
+notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
 # Mensaje de arranque de un worker.  worker_msg <config> <rol>
+# Si el rol tiene instrucciones de este worktree, van dentro del mensaje: así sobreviven a la limpieza de contexto.
 worker_msg() {
-  local p; p="$(params_of "$1" "$2")"
-  printf '%s' "Lee $KIT/prompts/comun-workers.md y $(prompt_of "$1" "$2") y adopta ese rol desde ahora. Sigue sus instrucciones al pie de la letra.${p:+ Parámetros de configuración: $p.}"
+  local p n notes=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
+  [ -n "$n" ] && [ -s "$n" ] && notes=" Instrucciones adicionales para este worktree, que prevalecen sobre tu prompt si chocan: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
+  printf '%s' "Lee $KIT/prompts/comun-workers.md y $(prompt_of "$1" "$2") y adopta ese rol desde ahora. Sigue sus instrucciones al pie de la letra.${p:+ Parámetros de configuración: $p.}$notes"
 }
+# Ruta con ~, {kit} o {home} expandidos
+expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Comando que abre una conversación nueva en el agente de un rol (campo clearCommand, o el propio del agente)
 clear_command() {
   local c; c="$(rstr "$1" "$2" clearCommand)"

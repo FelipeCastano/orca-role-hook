@@ -322,4 +322,39 @@ try launch --enable nadie; check "launch: rol desconocido falla" "$RC" "1"
 check "launch: un error no pisa las excepciones guardadas" "$(jq -c .only "$L/.git/orca-roles.overrides.json")" '["dev"]'
 sleep 1   # deja terminar los kickoff en segundo plano antes de borrar el directorio temporal
 
+# Skill del Planner: plugin, nuevo-rol --from-json, instrucciones por worktree y carga del plugin
+jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json válido" || { echo "FAIL plugin.json"; FAIL=1; }
+check "skill: nombre en el frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/equipo/SKILL.md")" "name: equipo"
+grep -q '^## Gestionar el kit y el equipo' "$ROOT/prompts/planner.md" && echo "ok   planner.md enlaza la skill" || { echo "FAIL planner.md sin la skill"; FAIL=1; }
+check "config de serie: plugin del planner" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin"]'
+cat > "$KIT/config.json" <<'J'
+{ "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester" } } }
+J
+newrole() { (cd "$TMP" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/new-role.sh" --from-json "$1" 2>&1); }
+printf '%s' '{"id":"sec-review","description":"revisa seguridad","model":"m-sec","params":{"maxFindings":20},"after":"dev","prompt":"# Rol: SEC\n\n## Reporte\nx\n"}' > "$TMP/rol.json"
+try newrole "$TMP/rol.json"; check "from-json: crea el rol" "$RC" "0"
+check "from-json: posición tras dev" "$(jq -r '.roles | keys_unsorted | join(" ")' "$KIT/config.json")" "planner dev sec-review tester"
+check "from-json: campos y título por defecto" "$(jq -c '.roles["sec-review"] | {title, description, enabled, agent, model, params}' "$KIT/config.json")" '{"title":"Sec-Review","description":"revisa seguridad","enabled":true,"agent":"claude","model":"m-sec","params":{"maxFindings":20}}'
+check "from-json: prompt en roles/" "$(head -1 "$KIT/roles/sec-review.md"):$(jq -r '.roles["sec-review"].prompt' "$KIT/config.json")" "# Rol: SEC:$TMP/home/.orca-roles/roles/sec-review.md"
+[ -f "$KIT/config.json.bak" ] && echo "ok   from-json: copia .bak" || { echo "FAIL from-json sin .bak"; FAIL=1; }
+try newrole "$TMP/rol.json"; check "from-json: no sobrescribe sin overwrite" "$RC" "1"
+jq '. + {overwrite: true, model: "m2"}' "$TMP/rol.json" > "$TMP/rol2.json"
+try newrole "$TMP/rol2.json"; check "from-json: overwrite" "$RC:$(jq -r '.roles["sec-review"].model' "$KIT/config.json")" "0:m2"
+printf '%s' '{"id":"Mal Id","description":"x","prompt":"p"}' > "$TMP/rol3.json"; try newrole "$TMP/rol3.json"; check "from-json: id no válido" "$RC" "1"
+printf '%s' '{"id":"sin-desc","prompt":"p"}' > "$TMP/rol3.json"; try newrole "$TMP/rol3.json"; check "from-json: sin description" "$RC" "1"
+printf '%s' '{"id":"planner","description":"x","prompt":"p"}' > "$TMP/rol3.json"; try newrole "$TMP/rol3.json"; check "from-json: planner reservado" "$RC" "1"
+# Instrucciones de un rol solo para este worktree, dentro de su mensaje de rol
+N="$TMP/nproj"; mkdir -p "$N"; git -C "$N" init -q; mkdir -p "$N/.git/orca-roles.notes"
+printf 'Usa pnpm.\nNo toques la carpeta legacy.\n' > "$N/.git/orca-roles.notes/dev.md"
+case "$(cd "$N" && worker_msg "$KIT/config.json" dev)" in *"Instrucciones adicionales para este worktree, que prevalecen sobre tu prompt si chocan: Usa pnpm. No toques la carpeta legacy." ) echo "ok   worker_msg incluye las instrucciones del worktree";; *) echo "FAIL worker_msg notas: $(cd "$N" && worker_msg "$KIT/config.json" dev)"; FAIL=1;; esac
+case "$(cd "$N" && worker_msg "$KIT/config.json" tester)" in *"Instrucciones adicionales"*) echo "FAIL worker_msg: notas en un rol sin notas"; FAIL=1;; *) echo "ok   worker_msg sin notas no añade nada";; esac
+# agent.sh pasa el plugin y las carpetas extra con ~ y {kit} expandidos
+cat > "$KIT/config.json" <<'J'
+{ "defaults": { "mcp": [] }, "mcpServers": {}, "roles": { "planner": { "agent": "claude", "mcp": "all", "extraDirs": ["{kit}", "~/x"], "pluginDirs": ["{kit}/plugin"] } } }
+J
+printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; chmod +x "$TMP/fakebin/claude"
+OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
+case "$OUT" in *"--add-dir $TMP/home/.orca-roles --add-dir $TMP/home/x --plugin-dir $TMP/home/.orca-roles/plugin "*) echo "ok   agent.sh: --plugin-dir y --add-dir expandidos";; *) echo "FAIL agent.sh plugin: $OUT"; FAIL=1;; esac
+rm -f "$TMP/fakebin/claude"
+
 [ "$FAIL" = 0 ] && echo "TODO OK" || { echo "HAY FALLOS"; exit 1; }

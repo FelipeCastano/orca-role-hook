@@ -3,16 +3,19 @@
 #
 #   nuevo-rol                      # guarda el rol en tu instalación (~/.orca-roles)
 #   nuevo-rol --repo <ruta-clon>   # lo guarda en tu clon del repo (versionado) y reinstala
+#   nuevo-rol --from-json <archivo> [--repo <ruta-clon>]   # sin preguntas (lo usa la skill del Planner)
+#     El JSON lleva: id, description y prompt (texto Markdown) obligatorios; title, agent, model, permissionMode,
+#     command, mcp, allowedTools, extraDirs, extraArgs, env, params, enabled, after y overwrite opcionales.
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
-exec 3< "$TTY"   # entrada interactiva aunque el script se ejecute desde una tubería
 
-REPO=""
+REPO=""; FROM_JSON=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="${2:-}"; shift 2;;
-    -h|--help) sed -n 2,5p "$0"; exit 0;;
+    --from-json) FROM_JSON="${2:-}"; shift 2;;
+    -h|--help) sed -n 2,8p "$0"; exit 0;;
     *) echo "Opción desconocida: $1" >&2; exit 1;;
   esac
 done
@@ -51,6 +54,59 @@ else
   echo "Modo local: el rol se guarda en tu instalación ($TARGET_CFG)."
 fi
 mkdir -p "$PROMPT_DIR"
+
+# Guarda el rol en la configuración (copia previa en .bak), después de $AFTER.  Usa ID, AFTER, ROLE_JSON y NEW_SERVERS.
+save_role() {
+  cp "$TARGET_CFG" "$TARGET_CFG.bak"
+  TMPC="$(mktemp)"
+  jq --arg id "$ID" --arg after "$AFTER" --argjson role "$ROLE_JSON" --argjson servers "$NEW_SERVERS" '
+    .mcpServers = ((.mcpServers // {}) + $servers)
+    | .roles = (.roles | to_entries | map(select(.key != $id))
+        | (map(.key) | index($after)) as $i
+        | (.[0:$i+1] + [{key:$id, value:$role}] + .[$i+1:]) | from_entries)' "$TARGET_CFG" > "$TMPC"
+  jq empty "$TMPC" && mv "$TMPC" "$TARGET_CFG"
+  echo "Configuración actualizada: $TARGET_CFG (copia anterior en $TARGET_CFG.bak)"
+  if [ -n "$REPO" ]; then
+    if [ -n "$FROM_JSON" ]; then echo "Para aplicarlo ya, reinstala el kit: bash $REPO/install.sh"
+    elif ask_yn "¿Reinstalar el kit desde el repo para aplicarlo ya?" s; then bash "$REPO/install.sh"; fi
+    echo "Recuerda: cd $REPO && git add -A && git commit -m \"Nuevo rol: $ID\" && git push"
+  fi
+}
+
+# ---------- modo sin preguntas: --from-json ----------
+if [ -n "$FROM_JSON" ]; then
+  [ -f "$FROM_JSON" ] || { echo "No existe $FROM_JSON" >&2; exit 1; }
+  jq empty "$FROM_JSON" 2>/dev/null || { echo "$FROM_JSON no es JSON válido" >&2; exit 1; }
+  J() { jq -r --arg k "$1" '.[$k] // empty | if type == "string" then . else tojson end' "$FROM_JSON"; }
+  ID="$(J id)"; DESC="$(J description)"
+  [[ "$ID" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "id no válido (minúsculas y guiones): '$ID'" >&2; exit 1; }
+  [ "$ID" != planner ] || { echo "'planner' está reservado" >&2; exit 1; }
+  [ -n "$DESC" ] || { echo "Falta description (el Planner la usa para integrar el rol)" >&2; exit 1; }
+  [ -n "$(J prompt)" ] || { echo "Falta prompt" >&2; exit 1; }
+  AGENT="$(J agent)"; AGENT="${AGENT:-claude}"
+  case "$AGENT" in claude|codex|custom) ;; *) echo "Agente no válido: $AGENT" >&2; exit 1;; esac
+  [ "$AGENT" != custom ] || [ -n "$(J command)" ] || { echo "Un agente custom necesita command" >&2; exit 1; }
+  if jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null && [ "$(J overwrite)" != true ]; then
+    echo "Ya existe el rol '$ID'; pasa \"overwrite\": true para sobrescribirlo" >&2; exit 1
+  fi
+  AFTER="$(J after)"; [ -n "$AFTER" ] || AFTER="$(jq -r --arg id "$ID" '.roles | keys_unsorted | map(select(. != $id)) | last' "$TARGET_CFG")"
+  jq -e --arg r "$AFTER" '.roles | has($r)' "$TARGET_CFG" >/dev/null || { echo "No existe el rol '$AFTER' (after)" >&2; exit 1; }
+  PROMPT_FILE="$PROMPT_DIR/$ID.md"
+  J prompt > "$PROMPT_FILE"
+  grep -q '^## Reporte' "$PROMPT_FILE" || echo "Aviso: el prompt no tiene sección '## Reporte'; revisa que siga el patrón del resto de roles."
+  PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"
+  ROLE_JSON="$(jq --arg prompt "$PROMPT_FIELD" --arg agent "$AGENT" '
+    {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
+    + (with_entries(select(.key | IN("model","permissionMode","command","mcp","allowedTools","extraDirs","extraArgs","env","params"))))
+    + (if $prompt != "" then {prompt: $prompt} else {} end)' "$FROM_JSON")"
+  NEW_SERVERS='{}'
+  save_role
+  echo "Prompt: $PROMPT_FILE"
+  echo "Listo. El rol '$(jq -r .title <<<"$ROLE_JSON")' aparecerá en los worktrees que crees a partir de ahora (o con 'roles' en uno existente)."
+  exit 0
+fi
+
+exec 3< "$TTY"   # entrada interactiva aunque el script se ejecute desde una tubería
 
 # ---------- identidad ----------
 section "Identidad"
@@ -228,18 +284,5 @@ jq . <<<"$ROLE_JSON"
 echo "Prompt: $PROMPT_FILE"
 ask_yn "¿Guardar?" s || { echo "Cancelado (el prompt quedó en $PROMPT_FILE)."; exit 1; }
 
-cp "$TARGET_CFG" "$TARGET_CFG.bak"
-TMPC="$(mktemp)"
-jq --arg id "$ID" --arg after "$AFTER" --argjson role "$ROLE_JSON" --argjson servers "$NEW_SERVERS" '
-  .mcpServers = ((.mcpServers // {}) + $servers)
-  | .roles = (.roles | to_entries | map(select(.key != $id))
-      | (map(.key) | index($after)) as $i
-      | (.[0:$i+1] + [{key:$id, value:$role}] + .[$i+1:]) | from_entries)' "$TARGET_CFG" > "$TMPC"
-jq empty "$TMPC" && mv "$TMPC" "$TARGET_CFG"
-echo "Configuración actualizada: $TARGET_CFG (copia anterior en $TARGET_CFG.bak)"
-
-if [ -n "$REPO" ]; then
-  if ask_yn "¿Reinstalar el kit desde el repo para aplicarlo ya?" s; then bash "$REPO/install.sh"; fi
-  echo "Recuerda: cd $REPO && git add -A && git commit -m \"Nuevo rol: $ID\" && git push"
-fi
+save_role
 echo "Listo. El rol '$TITLE' aparecerá en los worktrees que crees a partir de ahora (o con 'roles' en uno existente)."

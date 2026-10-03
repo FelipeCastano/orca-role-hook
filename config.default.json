@@ -29,7 +29,9 @@
       "enabled": true,
       "model": "claude-opus-5-5",
       "mcp": "all",
-      "allowedTools": ["Bash(orca:*)", "Read"]
+      "allowedTools": ["Bash(orca:*)", "Read"],
+      "extraDirs": ["{kit}"],
+      "pluginDirs": ["{kit}/plugin"]
     },
     "researcher": {
       "title": "Researcher",
