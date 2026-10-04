@@ -173,5 +173,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
 | "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |
+| A worker did the work but never reported | Check its dispatch (`dispatch-show`: `last_heartbeat_at`). Usually a non-Claude agent that ran `orca orchestration send` as a background task; ask the user to look at its tab |
+| A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
 
 More cases in the "Troubleshooting" table of `~/.orca-roles/README.md`.

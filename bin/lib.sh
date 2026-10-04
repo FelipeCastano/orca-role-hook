@@ -171,10 +171,13 @@ params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params
 notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
 # A worker's startup message.  worker_msg <config> <role>
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
+# Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
+# background subagent task that never finished, so Orca never got its report.
 worker_msg() {
-  local p n notes=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
+  local p n notes="" fg=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
+  case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$notes"
+  printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
 }
 # A path with ~, {kit} or {home} expanded
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
