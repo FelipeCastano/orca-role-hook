@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the Planner,
-# tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent.
+# tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
 # Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>"]
 set -uo pipefail
 WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"
@@ -32,6 +32,42 @@ JIRA_URL=$(printf '%s' "$WT_JSON" | jq -r '[.. | objects | select(.provider? == 
 JIRA_KEY="$(jira_key "$BRANCH" "$JIRA_ID" "$JIRA_URL")"
 [ "$(setting "$CFG" jiraHandoff true)" = true ] || JIRA_KEY=""
 
+# Closing the extra session Orca's composer opens when a worktree is created (the "done" tab). It runs in the background from the
+# start, in parallel with the kickoff, because Claude Code renames that tab soon after. Only in a new worktree (launch.sh left
+# the snapshot of the terminals that existed before the team), and only an agent terminal outside the team whose FIRST title is
+# the branch or starts with the Jira key, or whose screen showed the key (see seen_merge and composer_targets).
+GITDIR="$(dirname "$STATE")"; PRE="$GITDIR/orca-roles.preexisting.json"; SEEN="$GITDIR/orca-roles.composer-seen.json"
+composer_watch() {
+  local match ours tries targets h list
+  [ "$(setting "$CFG" closeComposerAgent true)" = true ] || return 0
+  [ -f "$PRE" ] || { echo "Not a new worktree: no extra session is looked for."; return 0; }
+  match="$(composer_title_regex "$JIRA_KEY" "$BRANCH")"
+  [ -n "$match" ] || { echo "No Jira key and no branch: no extra session is closed."; return 0; }
+  ours=$(cut -d= -f2 "$STATE" | jq -R . | jq -s -c .)
+  cp "$PRE" "$SEEN"
+  tries=$(( $(setting "$CFG" composerAgentWindowSeconds 180) / 2 ))
+  for _ in $(seq 1 "$tries"); do
+    if list="$(orca terminal list --worktree "$WT" --json 2>/dev/null)"; then
+      printf '%s' "$list" | seen_merge "$SEEN" > "$SEEN.tmp" && mv "$SEEN.tmp" "$SEEN"
+    fi
+    targets="$(composer_targets "$SEEN" "$ours" "$match" "$JIRA_KEY")"
+    if [ -n "$targets" ]; then
+      for h in $targets; do
+        echo "Composer extra session detected ($h, first title: '$(jq -r --arg h "$h" '.[] | select(.handle == $h) | .title' "$SEEN")'); closing it."
+        if orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1; then echo "Closed $h"
+        else  # older Orca without terminal close: ask the agent to exit
+          orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 2
+          orca terminal send --terminal "$h" --text "/exit" --enter --json >/dev/null && echo "/exit sent to $h"
+        fi
+      done
+      return 0
+    fi
+    sleep 2
+  done
+  echo "No composer extra session found (titles seen: $(jq -c '[.[] | select((.agentIdentity // "") != "") | .title]' "$SEEN"))."
+}
+composer_watch & WATCH_PID=$!
+
 if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac
   kick "$PLANNER" "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
@@ -43,28 +79,4 @@ for id in $ROLES; do
   kick "${!v}" "$(worker_msg "$CFG" "$id")"
 done
 
-# Closing the extra session Orca's composer opens. Only a terminal outside the team is touched,
-# and only if its title is the branch name or starts with the Jira key (see composer_title_regex).
-[ "$(setting "$CFG" closeComposerAgent true)" = true ] || exit 0
-MATCH="$(composer_title_regex "$JIRA_KEY" "$BRANCH")"
-if [ -z "$MATCH" ]; then echo "No Jira key and no branch: no extra session is closed."; exit 0; fi
-OURS=$(cut -d= -f2 "$STATE" | jq -R . | jq -s .)
-TRIES=$(( $(setting "$CFG" composerAgentWindowSeconds 180) / 5 ))
-for _ in $(seq 1 "$TRIES"); do
-  extra=$(orca terminal list --worktree "$WT" --json | jq -r --argjson ours "$OURS" --arg re "$MATCH" '
-    [.. | objects | select(has("handle"))
-      | select(.handle as $h | $ours | index($h) | not)
-      | select((.title // "") | test($re; "i"))
-      | .handle] | unique | .[]')
-  if [ -n "$extra" ]; then
-    for h in $extra; do
-      echo "Composer extra session detected ($h, title matches '$MATCH'); closing it."
-      orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1
-      sleep 2
-      orca terminal wait --terminal "$h" --for tui-idle --timeout-ms 30000 --json >/dev/null || true
-      orca terminal send --terminal "$h" --text "/exit" --enter --json >/dev/null && echo "/exit sent to $h"
-    done
-    break
-  fi
-  sleep 5
-done
+wait "$WATCH_PID"   # the composer watcher may still be polling

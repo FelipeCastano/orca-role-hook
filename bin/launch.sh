@@ -48,14 +48,20 @@ if [ -f "$OVR" ]; then
   apply_overrides "$CFG" "$OVR" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG" || { echo "ERROR: could not apply the exceptions in $OVR"; exit 1; }
 fi
 
+FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
 alive()     { [ -n "${1:-}" ] && orca terminal show --terminal "$1" --json >/dev/null 2>&1; }
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
 
 WAIT="$(setting "$CFG" launchWaitSeconds 15)"
+LIST=""
 for i in $(seq 1 "$WAIT"); do
-  orca terminal list --worktree "$WT" --json >/dev/null 2>&1 && break
+  LIST="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && break
   echo "Waiting for Orca to have the worktree ready ($i/$WAIT)..."; sleep 1
 done
+# Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
+# title (Claude Code renames it soon after). kickoff.sh uses this snapshot to recognize and close it.
+PRE="$GITDIR/orca-roles.preexisting.json"; rm -f "$PRE"
+[ "$FRESH" = 1 ] && [ -n "$LIST" ] && printf '%s' "$LIST" | seen_merge "" > "$PRE"
 
 # The agents' working folders, ignored locally
 EVID="$(jq -r '.roles["visual-tester"].params.evidenceDir // "qa-evidence"' "$CFG")"

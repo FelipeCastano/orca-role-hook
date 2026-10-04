@@ -364,8 +364,8 @@ $HOME/.orca-roles/bin/launch.sh --disable visual-tester,deployer
 | `launchWaitSeconds` | Maximum time the setup waits for Orca to have the worktree ready (it moves on earlier if it is). |
 | `kickoffTimeoutSeconds` | Maximum time it waits for each agent to be ready to receive its role. |
 | `jiraHandoff` | Pass the worktree's Jira ticket to the Planner. |
-| `closeComposerAgent` | Close the extra session Orca's composer opens. Only a terminal outside the team is closed, and only if its title is exactly the branch name or starts with the Jira key (`DEVGD-220`, `DEVGD-220: summary`); if there is none, nothing is touched and it is noted in the log. |
-| `composerAgentWindowSeconds` | How long that extra session is watched for. |
+| `closeComposerAgent` | Close the extra session Orca's composer opens when you create a worktree (often a Claude tab soon renamed by Claude Code, e.g. "done"). Only in a new worktree, and only an agent tab outside the team whose **first** title was exactly the branch name or started with the Jira key (`DEVGD-220`, `DEVGD-220: summary`), or whose screen showed the key. It is closed with `orca terminal close`. If there is none, nothing is touched and it is noted in the log. |
+| `composerAgentWindowSeconds` | How long that extra session is watched for after the worktree is created. |
 | `cleanWorkersAfterStep` | Whether the Planner proposes cleaning the workers' context when closing each step. With `false` it only does it when you ask. |
 | `language` | The language the Planner replies to you in. `"auto"` (default): the language you write in. Any other value (`"Spanish"`, `"English"`...): always that one. The prompts are in English either way. |
 
@@ -402,7 +402,7 @@ Inside each worktree:
 
 - `research/` and `qa-evidence/`: the Researcher's work and the Visual-Tester's screenshots. They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`.
 - `DEPLOYMENT.md`: the Deployer's guide. It is not committed unless you ask.
-- In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
+- In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json` and `orca-roles.composer-seen.json` (tabs seen when the worktree was created, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
 - Outside the worktree: `~/.orca-roles/browser/<project>.json`, the browser session for the Visual-Tester.
 - On Windows (WSL): `~/.orca-roles/shim/orca`, the Orca CLI wrapper (see [Windows with WSL2](#windows-with-wsl2)).
 
@@ -462,7 +462,7 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | Tabs in another workspace | `launch.sh` uses `ORCA_WORKTREE_ID`; you can force it with `launch.sh id:<ORCA_WORKTREE_ID>` |
 | After a restart, the Planner does not recover the state | `orca-roles-launch.log` must say "Resuming workspace". If not, the `orca-roles.env` file in the worktree's git dir did not exist or was empty |
 | Cleaning a worker fails | `clean.sh` says why: dead tab (run `roles`), or a `custom` agent without `clearCommand` |
-| The composer's extra session does not close | Its title matches neither the Jira key nor the branch; `orca-roles-kickoff.log` says so. Close it by hand or disable `closeComposerAgent` |
+| The composer's extra session (the "done" tab) does not close | `orca-roles-kickoff.log` lists the titles it saw; if none was the branch or started with the Jira key, it was left alone. Close it by hand or disable `closeComposerAgent` |
 | The Visual-Tester does not open the browser | `npx playwright install chromium` |
 | The Visual-Tester sees the login screen | Run `~/.orca-roles/bin/browser-login.sh <url>` and ask the Planner to clean the Visual-Tester (`clean.sh visual-tester`) so it starts with the new session |
 | The Planner does not receive the Jira ticket | Create the worktree from the ticket in Orca so it is linked (`orca worktree show --json` must show `linkedWorkItem`). Without a link, the branch must start with the uppercase key |
@@ -474,4 +474,4 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 - The hook only fires when a worktree is created; in other cases (including resuming after a restart) use `roles`.
 - When resuming, the Planner rebuilds the state from Orca and git, but it does not recover its previous conversation: the decisions you made verbally that did not end up in a task are lost. Resuming the Claude Code sessions with `--resume` is a possible improvement.
 - Orca has no global setup script: it has to be configured once per project.
-- Closing the composer's extra session depends on Orca titling it with the exact branch or starting with the Jira key. If it titles it differently, it is not closed (the exact format of the title is not verified).
+- Closing the composer's extra session depends on Orca first titling it with the exact branch or the Jira key (or showing the key on its screen). Claude Code renames the tab soon after, so the kit records the title each tab had when it was first seen; if Orca titles it differently from the start, it is not closed.

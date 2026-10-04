@@ -111,6 +111,25 @@ composer_title_regex() {
   [ -n "$alts" ] && printf '^(%s)$' "$alts"
   return 0
 }
+# First sighting of each terminal: adds to the list in <seen file> (a JSON array, or empty/missing) the terminals of an
+# `orca terminal list --json` (stdin) not seen before, with the title and preview they had then.  seen_merge <seen file> < list
+# Why: Claude Code renames its tab with a summary of the task ("done"...), so the composer's extra session is recognized by the
+# title it had when it was first seen, not by the current one.
+seen_merge() {
+  local seen='[]'; [ -s "${1:-}" ] && seen="$(cat "$1")"
+  jq -c --argjson seen "$seen" '[.. | objects | select(has("handle")) | {handle, title, preview, agentIdentity}] as $cur
+    | $seen + [$cur[] | select(.handle as $h | ($seen | map(.handle) | index($h)) | not)] | unique_by(.handle)'
+}
+# Handles of the composer's extra session among the first sightings: an agent (agentIdentity set), outside the team, whose first
+# title matches composer_title_regex or whose screen showed the Jira key.  composer_targets <seen file> <ours json array> <regex> <key>
+composer_targets() {
+  jq -r --argjson ours "$2" --arg re "$3" --arg key "$4" '.[]
+    | select(.handle as $h | $ours | index($h) | not)
+    | select((.agentIdentity // "") != "")
+    | select(((.title // "") | test($re; "i"))
+             or ($key != "" and ((.preview // "") | test("(^|[^A-Za-z0-9])" + $key + "([^0-9]|$)"; "i"))))
+    | .handle' "$1"
+}
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
   local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang
