@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Explains how to register launch.sh as each project's setup script. Orca's CLI has no command for
-# setup scripts (see decisions.md §14), so the installer cannot do it by itself: there are two ways.
+# setup scripts, so the installer cannot do it by itself: there are two ways.
 set -euo pipefail
 echo
 echo "The kit still has to be registered in each project (once per project). Pick one way:"

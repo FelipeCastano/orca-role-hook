@@ -421,7 +421,6 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 ├── prompts/
 │   ├── common-workers.md        # rules common to all workers
 │   └── <role>.md                # each role's instructions (with its review method, if it has one)
-├── decisions.md                 # log of design decisions and what could not be verified
 ├── tests/
 │   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
 └── .github/workflows/ci.yml     # shellcheck + smoke on every push to main and every PR
