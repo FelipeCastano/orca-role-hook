@@ -143,7 +143,17 @@ Worktree-level instructions are short, direct text: they go inside the message t
 
 - **New or re-enabled role**: with the user's confirmation, run `~/.orca-roles/bin/launch.sh` from the worktree. It is the only way you can open tabs: it opens only the missing ones, without duplicating, and sends them their role. Then read the new handle in `<git dir>/orca-roles.env` (variable `<ROLE>` in uppercase, hyphens as `_`) and use it with `worker-start --terminal`. If the worktree has saved exceptions (`orca-roles.overrides.json`) that disable that role, relaunch with all of them plus `--enable <role>`: new options replace the saved ones, they do not add up.
 - **Changed prompt or instructions in a role that is already open**: clean its context with `~/.orca-roles/bin/clean.sh <role>` following your cleanup rules (no task in flight and with confirmation). It resends its role with the changes.
-- **Model, MCP or agent of an open role**: they only change when its tab is relaunched. Ask the user to close it and run `launch.sh`.
+- **Model, MCP or agent of an open role**: they only change when its tab is relaunched. Close it with `close-role.sh <role>` and run `launch.sh`.
+- **Closing a role's tab**: with the user's confirmation, first release its dispatch (`worker-release`) if it has one, then run `~/.orca-roles/bin/close-role.sh <role>` from the worktree. It closes the tab and forgets the handle; stop assigning tasks to it. If the role is still enabled, `roles` would open it again: the script says so.
+
+## 7b. Removing a role
+
+When the user wants a role gone, ask whether only from this workspace or for good, and do both parts they want, confirming before each:
+
+1. **This workspace**: close its tab as above (`close-role.sh`).
+2. **For good**:
+   - A role the user created: `~/.orca-roles/bin/new-role.sh --remove <id>` (removes its entry and its prompt, leaves `config.json.bak`).
+   - A default role (planner, researcher, dev, tester, auditor, visual-tester, deployer): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
 
 ## 8. Diagnosis
 

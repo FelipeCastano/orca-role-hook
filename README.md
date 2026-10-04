@@ -177,6 +177,8 @@ Before saving it shows you a summary. It keeps a copy of the previous configurat
 
 Every worker also receives the common rules in `prompts/common-workers.md`. To edit a role later, change its entry in the configuration and its prompt file, or run `new-role` again with the same id to overwrite it.
 
+**Removing a role:** `new-role --remove <id>` removes a role you created (its entry and its prompt; previous configuration in `.bak`). Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
+
 **Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` (Markdown text) required, and the same optional fields as a role in the configuration, plus `after` (position) and `overwrite: true` to replace an existing one. It is what the Planner uses with its skill.
 
 ## The Planner's skill
@@ -194,7 +196,8 @@ The Planner loads the `orca-roles` plugin (in `~/.orca-roles/plugin`), which bri
   | This worktree | `orca-roles.notes/<role>.md` in the worktree's git dir; the kit adds it to the worker's role message | As long as the worktree exists, even if the worker is cleaned or restarted |
   | Permanent | `~/.orca-roles/config.json` and the prompts in `~/.orca-roles/roles/` | Every new worktree (the hook reads the configuration when each one is created) |
 
-- **Applying the changes in the current workspace**: opens a new role's tab with `launch.sh` (the only way the Planner can open tabs) or resends a worker's role with `clean.sh`.
+- **Applying the changes in the current workspace**: opens a new role's tab with `launch.sh`, closes one with `close-role.sh` (the only ways the Planner can open or close tabs) or resends a worker's role with `clean.sh`.
+- **Removing a role**: closes its tab and, if you want it gone for good, removes it (`new-role --remove`) or disables it if it is a default role.
 - **Diagnosis**: which log to look at depending on the symptom.
 
 Before writing any kit file or opening tabs, the Planner explains what it will change and what it affects, and waits for your confirmation. It never does it because a worker asks for it. So it can edit the configuration, it starts with access to `~/.orca-roles` (the planner's `extraDirs`).
@@ -380,6 +383,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── agent.sh                 # launches a role's agent according to the configuration
 │   ├── kickoff.sh               # sends each agent its role, passes the Jira ticket and closes the extra agent
 │   ├── clean.sh                 # cleans the workers' context and resends their role
+│   ├── close-role.sh            # closes a role's tab in the current workspace
 │   ├── browser-login.sh         # saves your application session for the Visual-Tester
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
 │   ├── lib.sh                   # shared functions

@@ -4,18 +4,20 @@
 #   new-role                       # saves the role in your installation (~/.orca-roles)
 #   new-role --repo <clone-path>   # saves it in your clone of the repo (versioned) and reinstalls
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
+#   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompt
 #     The JSON has: id, description and prompt (Markdown text) required; title, agent, model, permissionMode,
 #     command, mcp, allowedTools, extraDirs, extraArgs, env, params, enabled, after and overwrite optional.
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
 
-REPO=""; FROM_JSON=""
+REPO=""; FROM_JSON=""; REMOVE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="${2:-}"; shift 2;;
     --from-json) FROM_JSON="${2:-}"; shift 2;;
-    -h|--help) sed -n 2,8p "$0"; exit 0;;
+    --remove) REMOVE="${2:-}"; shift 2;;
+    -h|--help) sed -n 2,9p "$0"; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 1;;
   esac
 done
@@ -72,6 +74,28 @@ save_role() {
     echo "Remember: cd $REPO && git add -A && git commit -m \"Add role: $ID\" && git push"
   fi
 }
+
+# ---------- remove a role: --remove ----------
+if [ -n "$REMOVE" ]; then
+  ID="$REMOVE"
+  [ "$ID" != planner ] || { echo "'planner' cannot be removed" >&2; exit 1; }
+  jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null || { echo "Role '$ID' does not exist in $TARGET_CFG" >&2; exit 1; }
+  if [ -z "$REPO" ] && jq -e --arg r "$ID" '.roles | has($r)' "$KIT/config.default.json" >/dev/null; then
+    echo "'$ID' is a default role: removed from config.json, it would come back on the next update." >&2
+    echo "Disable it instead: \"enabled\": false in $TARGET_CFG (or --disable $ID in a project's setup script)." >&2; exit 1
+  fi
+  P="$(jq -r --arg r "$ID" '.roles[$r].prompt // empty' "$TARGET_CFG")"; P="${P/#\~/$HOME}"; P="${P:-$PROMPT_DIR/$ID.md}"
+  cp "$TARGET_CFG" "$TARGET_CFG.bak"
+  TMPC="$(mktemp)"
+  jq --arg r "$ID" 'del(.roles[$r])' "$TARGET_CFG" > "$TMPC" && jq empty "$TMPC" && mv "$TMPC" "$TARGET_CFG"
+  echo "Removed role '$ID' from $TARGET_CFG (previous copy in $TARGET_CFG.bak)."
+  # Only the prompt the kit manages is deleted (roles/<id>.md, or prompts/<id>.md in the repo), never a file elsewhere
+  if [ "$P" = "$PROMPT_DIR/$ID.md" ] && [ -f "$P" ]; then rm -f "$P"; echo "Deleted its prompt: $P"
+  elif [ -f "$P" ]; then echo "Its prompt is outside the kit and was left alone: $P"; fi
+  [ -n "$REPO" ] && echo "Remember: reinstall (bash $REPO/install.sh) and commit."
+  echo "If its tab is open in a workspace, close it from that worktree with: ~/.orca-roles/bin/close-role.sh $ID"
+  exit 0
+fi
 
 # ---------- no-questions mode: --from-json ----------
 if [ -n "$FROM_JSON" ]; then

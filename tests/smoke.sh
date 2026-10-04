@@ -406,4 +406,37 @@ orca worktree list")" "orca-ide:worktree list"
 check "orca alias: nothing outside Orca" "$(PATH="/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c "shopt -s expand_aliases; $ALIAS_LINE
 command -v orca || echo none")" "none"
 
+# Removing a role: new-role --remove (only roles you created) and close-role.sh (closes its tab in this workspace)
+cat > "$KIT/config.json" <<'J'
+{ "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" } } }
+J
+printf '%s' '{"id":"sec-review","description":"reviews security","prompt":"# Role: SEC\n\n## Report\nx\n"}' > "$TMP/role.json"
+newrole "$TMP/role.json" >/dev/null
+rmrole() { (cd "$TMP" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/new-role.sh" --remove "$1" 2>&1); }
+try rmrole sec-review; check "remove: a role you created" "$RC:$(jq -r '.roles | keys_unsorted | join(" ")' "$KIT/config.json"):$([ -f "$KIT/roles/sec-review.md" ] && echo prompt-left || echo prompt-gone)" "0:planner dev:prompt-gone"
+[ -f "$KIT/config.json.bak" ] && jq -e '.roles["sec-review"]' "$KIT/config.json.bak" >/dev/null && echo "ok   remove: .bak keeps the role" || { echo "FAIL remove .bak"; FAIL=1; }
+try rmrole dev; check "remove: a default role is refused" "$RC" "1"; case "$OUT" in *'"enabled": false'*) echo "ok   remove: suggests enabled false for a default role";; *) echo "FAIL remove default: $OUT"; FAIL=1;; esac
+try rmrole planner; check "remove: the planner is refused" "$RC" "1"
+try rmrole nobody; check "remove: an unknown role fails" "$RC" "1"
+cat > "$KIT/config.json" <<'J'
+{ "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "sec": { "title": "Sec", "enabled": false } } }
+J
+printf 'PLANNER=t1\nDEV=t2\nSEC=t3\n' > "$TMP/state.env"
+CRLOG="$TMP/crorca.log"; : > "$CRLOG"
+cat > "$TMP/fakebin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$CRLOG"
+case "\$*" in *"show --terminal t2 "*) exit 1;; esac
+exit 0
+EOS
+chmod +x "$TMP/fakebin/orca"
+closerole() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/close-role.sh" "$@" 2>&1); }
+try closerole Sec; check "close-role: by title" "$RC:$OUT" "0:Sec: tab closed (t3)."
+check "close-role: closes the whole tab" "$(grep -c 'terminal close --terminal t3 --tab' "$CRLOG")" "1"
+check "close-role: forgets its handle" "$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')" "PLANNER DEV "
+try closerole dev; check "close-role: a dead tab is just forgotten" "$RC" "0"; case "$OUT" in *"already gone"*"still enabled"*) echo "ok   close-role: warns that roles would reopen an enabled role";; *) echo "FAIL close-role enabled: $OUT"; FAIL=1;; esac
+try closerole planner; check "close-role: never the planner" "$RC" "1"
+try closerole nobody; check "close-role: unknown role" "$RC" "1"
+rm -f "$TMP/fakebin/orca"
+
 [ "$FAIL" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
