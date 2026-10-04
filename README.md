@@ -60,6 +60,8 @@ The Planner is the partial exception: it is not a worker, so its sections are St
 7. **Deployer** updates `DEPLOYMENT.md`.
 8. The **Planner** reports the step to you.
 
+The Planner does not block while the workers run: it hands out the tasks, tells you what is running and stays free, so you can keep refining the plan with it. Orca notifies it when a worker reports, and you can ask it for the status at any time.
+
 If a role is disabled in the configuration, the Planner skips its part of the flow and tells you when a step would have needed it.
 
 ## Installation

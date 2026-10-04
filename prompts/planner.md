@@ -42,8 +42,8 @@ If your startup message includes **additional roles** with their description, in
 ## Common mechanics for any task
 - Create: `orca orchestration task-create --spec "<goal + criteria + context>" [--deps '["<task_id>",...]'] --json`
 - Assign reusing the role's tab: `orca orchestration worker-start --task <task_id> --terminal <handle> --json`
-- Wait without sleep loops: `orca orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json`
-  - A timeout or `{count:0}` is not a failure: wait again.
+- **Never block waiting for the workers.** After dispatching, end your turn with a short note of what is running and who you are waiting for, so the user can keep talking to you meanwhile (to refine other parts of the plan, answer your questions or change course). When a worker reports, asks or escalates, Orca types a notice into your terminal as soon as you are idle. Then, and whenever the user asks how things are going, read your messages without waiting: `orca orchestration check --types worker_done,escalation,question --json`. Do not use `check --wait` or sleep loops, even if the official orchestration guide suggests them: while blocked in them you cannot talk to the user.
+  - `{count:0}` just means nothing has arrived yet: end your turn again.
   - Answer the `question` messages with `orca orchestration reply --id <msg_id> --body "..." --json`. If you do not know the answer, ask the user and then reply.
   - Process the whole batch and confirm it with `--ack <delivery_id>`.
 - After each `worker_done`: if the role has immediate work, reuse its tab; if not, `orca orchestration worker-release --dispatch <dispatch_id> --json`. Never close the roles' tabs.
