@@ -1,11 +1,17 @@
 ---
 name: team
-description: Guide to the orca-roles kit for the Planner. Use it when the user asks how to install, update, configure or use the kit; wants to enable, disable or tweak roles (in config.json, .orca-roles.json or the setup script options); wants to create a new agent; or wants to change how a role works, only in this session, only in this worktree or permanently. Also to diagnose why a role does not start or starts with another configuration.
+description: Guide to the orca-roles kit, for any Claude Code session and for the kit's Planner. Use it when the user asks how to install, update, configure or use orca-roles (or a team of role-based agents for Orca); wants to enable, disable or tweak roles (in config.json, .orca-roles.json or the setup script options); wants to create a new agent; or wants to change how a role works, only in this session, only in this worktree or permanently. Also to diagnose why a role does not start or starts with another configuration.
 ---
 
-# orca-roles kit: guide for the Planner
+# orca-roles kit: guide
 
-You are the Planner of a team the orca-roles kit opens in every Orca worktree. This guide tells you how to help the user with the kit itself. The full reference is `~/.orca-roles/README.md`; read it when you need a detail that is not here. Talk to the user in their language.
+orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Researcher, Dev, Tester, Auditor, Visual-Tester, Deployer) in every new worktree and coordinates them through Orca Orchestration. This guide tells you how to help the user with the kit itself. Talk to the user in their language.
+
+**First, find out where you are:**
+
+- **The kit is not installed yet** (`~/.orca-roles` does not exist): you are a regular Claude Code session the user installed this plugin in to get help. Walk them through sections 1 and 2, one step at a time, checking each result with them before the next. The full reference is the `README.md` of the repo (https://github.com/FelipeCastano/orca-role-hook).
+- **The kit is installed but you are not in a team's worktree**: help with installation, configuration and diagnosis (sections 1 to 5 and 8). Sections 6 and 7 are for the Planner.
+- **You are the Planner** of a team (your startup message gave you that role): everything applies. The full reference is `~/.orca-roles/README.md`; read it when you need a detail that is not here.
 
 ## Rules
 
@@ -29,7 +35,7 @@ You are the Planner of a team the orca-roles kit opens in every Orca worktree. T
 
 ## 1. Installing and updating
 
-The user runs these in an Orca terminal (on Windows, inside WSL). Give them the commands; do not run them yourself.
+The user runs these in an Orca terminal (on Windows, inside WSL; see "Windows" below). Give them the commands; do not run them yourself. Before installing, check with them that they have `jq` (`jq --version`) and Orca with Orchestration enabled (Settings > Experimental).
 
 ```bash
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh   # install
@@ -38,7 +44,9 @@ git -C orca-role-hook pull && bash orca-role-hook/install.sh                    
 
 - Requirements: `jq` (essential), Orca with Orchestration enabled (Settings > Experimental), Claude Code; Node and `npx playwright install chromium` for the Visual-Tester.
 - Updating keeps `config.json` and `roles/`, and adds the new options.
-- The installer adds the `roles`, `new-role` and `roles-yaml` commands.
+- The installer adds the `roles`, `new-role` and `roles-yaml` commands (active in new terminals, or after `source ~/.bashrc`).
+- **Windows**: the kit runs in WSL2. The repo goes inside WSL (`~/...`), the project is added in Orca with its WSL path (`\\wsl.localhost\Ubuntu\home\<user>\<repo>`), and `jq`, Claude Code and Node are installed inside WSL. In Orca's WSL terminals the CLI is called `$ORCA_CLI_COMMAND` (e.g. `orca-ide`); the installer adds an `orca` alias for it.
+- The kit's Planner loads this same guide on its own; this plugin is only needed to get help outside the kit's sessions.
 
 ## 2. Registering the kit in a project
 
@@ -143,7 +151,17 @@ Worktree-level instructions are short, direct text: they go inside the message t
 
 - **New or re-enabled role**: with the user's confirmation, run `~/.orca-roles/bin/launch.sh` from the worktree. It is the only way you can open tabs: it opens only the missing ones, without duplicating, and sends them their role. Then read the new handle in `<git dir>/orca-roles.env` (variable `<ROLE>` in uppercase, hyphens as `_`) and use it with `worker-start --terminal`. If the worktree has saved exceptions (`orca-roles.overrides.json`) that disable that role, relaunch with all of them plus `--enable <role>`: new options replace the saved ones, they do not add up.
 - **Changed prompt or instructions in a role that is already open**: clean its context with `~/.orca-roles/bin/clean.sh <role>` following your cleanup rules (no task in flight and with confirmation). It resends its role with the changes.
-- **Model, MCP or agent of an open role**: they only change when its tab is relaunched. Ask the user to close it and run `launch.sh`.
+- **Model, MCP or agent of an open role**: they only change when its tab is relaunched. Close it with `close-role.sh <role>` and run `launch.sh`.
+- **Closing a role's tab**: with the user's confirmation, first release its dispatch (`worker-release`) if it has one, then run `~/.orca-roles/bin/close-role.sh <role>` from the worktree. It closes the tab and forgets the handle; stop assigning tasks to it. If the role is still enabled, `roles` would open it again: the script says so.
+
+## 7b. Removing a role
+
+When the user wants a role gone, ask whether only from this workspace or for good, and do both parts they want, confirming before each:
+
+1. **This workspace**: close its tab as above (`close-role.sh`).
+2. **For good**:
+   - A role the user created: `~/.orca-roles/bin/new-role.sh --remove <id>` (removes its entry and its prompt, leaves `config.json.bak`).
+   - A default role (planner, researcher, dev, tester, auditor, visual-tester, deployer): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
 
 ## 8. Diagnosis
 
@@ -153,7 +171,9 @@ Worktree-level instructions are short, direct text: they go inside the message t
 | A worker does not receive its role | `orca-roles-kickoff.log` |
 | A role does not appear even though it is `enabled` | `orca-roles.overrides.json` (saved exceptions); `roles --reset` forgets them |
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
-| "Orca CLI not found" | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`) |
+| "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |
+| A worker did the work but never reported | Check its dispatch (`dispatch-show`: `last_heartbeat_at`). Usually a non-Claude agent that ran `orca orchestration send` as a background task; ask the user to look at its tab |
+| A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
 
 More cases in the "Troubleshooting" table of `~/.orca-roles/README.md`.

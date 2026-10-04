@@ -1,0 +1,14 @@
+{
+  "name": "orca-role-hook",
+  "description": "Claude Code plugin for the orca-roles kit, a team of role-based agents for Orca.",
+  "owner": {
+    "name": "FelipeCastano"
+  },
+  "plugins": [
+    {
+      "name": "orca-roles",
+      "source": "./plugin",
+      "description": "Guide to the orca-roles kit: install it, register projects, configure the team, create agents and change how roles behave."
+    }
+  ]
+}

@@ -111,6 +111,32 @@ composer_title_regex() {
   [ -n "$alts" ] && printf '^(%s)$' "$alts"
   return 0
 }
+# First sighting of each terminal: adds to the list in <seen file> (a JSON array, or empty/missing) the terminals of an
+# `orca terminal list --json` (stdin) not seen before, with the title and preview they had then.  seen_merge <seen file> < list
+# Why: Claude Code renames its tab with a summary of the task ("done"...), so the composer's extra session is recognized by the
+# title it had when it was first seen, not by the current one.
+seen_merge() {
+  local seen='[]'; [ -s "${1:-}" ] && seen="$(cat "$1")"
+  jq -c --argjson seen "$seen" '[.. | objects | select(has("handle")) | {handle, title, preview, agentIdentity}] as $cur
+    | $seen + [$cur[] | select(.handle as $h | ($seen | map(.handle) | index($h)) | not)] | unique_by(.handle)'
+}
+# Handles of the composer's extra session among the first sightings: an agent (agentIdentity set), outside the team, whose first
+# title matches composer_title_regex or whose screen showed the Jira key.  composer_targets <seen file> <ours json array> <regex> <key>
+composer_targets() {
+  jq -r --argjson ours "$2" --arg re "$3" --arg key "$4" '.[]
+    | select(.handle as $h | $ours | index($h) | not)
+    | select((.agentIdentity // "") != "")
+    | select(((.title // "") | test($re; "i"))
+             or ($key != "" and ((.preview // "") | test("(^|[^A-Za-z0-9])" + $key + "([^0-9]|$)"; "i"))))
+    | .handle' "$1"
+}
+# Agent tabs that already existed before the team in a new worktree, outside the team: when the kit was started by Orca's
+# setup script, those can only be the composer's extra session, whatever its title ("✳ Claude Code", "done"...).
+# preexisting_agents <snapshot file> <ours json array>
+preexisting_agents() {
+  [ -s "$1" ] || return 0
+  jq -r --argjson ours "$2" '.[] | select(.handle as $h | $ours | index($h) | not) | select((.agentIdentity // "") != "") | .handle' "$1"
+}
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
   local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang
@@ -145,10 +171,13 @@ params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params
 notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
 # A worker's startup message.  worker_msg <config> <role>
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
+# Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
+# background subagent task that never finished, so Orca never got its report.
 worker_msg() {
-  local p n notes=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
+  local p n notes="" fg=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
+  case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$notes"
+  printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
 }
 # A path with ~, {kit} or {home} expanded
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
