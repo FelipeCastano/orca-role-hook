@@ -130,6 +130,13 @@ composer_targets() {
              or ($key != "" and ((.preview // "") | test("(^|[^A-Za-z0-9])" + $key + "([^0-9]|$)"; "i"))))
     | .handle' "$1"
 }
+# Agent tabs that already existed before the team in a new worktree, outside the team: when the kit was started by Orca's
+# setup script, those can only be the composer's extra session, whatever its title ("✳ Claude Code", "done"...).
+# preexisting_agents <snapshot file> <ours json array>
+preexisting_agents() {
+  [ -s "$1" ] || return 0
+  jq -r --argjson ours "$2" '.[] | select(.handle as $h | $ours | index($h) | not) | select((.agentIdentity // "") != "") | .handle' "$1"
+}
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
   local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang

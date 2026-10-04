@@ -34,23 +34,29 @@ JIRA_KEY="$(jira_key "$BRANCH" "$JIRA_ID" "$JIRA_URL")"
 
 # Closing the extra session Orca's composer opens when a worktree is created (the "done" tab). It runs in the background from the
 # start, in parallel with the kickoff, because Claude Code renames that tab soon after. Only in a new worktree (launch.sh left
-# the snapshot of the terminals that existed before the team), and only an agent terminal outside the team whose FIRST title is
-# the branch or starts with the Jira key, or whose screen showed the key (see seen_merge and composer_targets).
+# the snapshot of the terminals that existed before the team), and only an agent terminal outside the team that either already
+# existed before the team when Orca's setup script started the kit (see preexisting_agents), or whose FIRST title is the branch
+# or starts with the Jira key, or whose screen showed the key (see seen_merge and composer_targets).
 GITDIR="$(dirname "$STATE")"; PRE="$GITDIR/orca-roles.preexisting.json"; SEEN="$GITDIR/orca-roles.composer-seen.json"
 composer_watch() {
   local match ours tries targets h list
   [ "$(setting "$CFG" closeComposerAgent true)" = true ] || return 0
   [ -f "$PRE" ] || { echo "Not a new worktree: no extra session is looked for."; return 0; }
+  local setupctx=0 pre_agents=""; [ -f "$GITDIR/orca-roles.setup-context" ] && setupctx=1
   match="$(composer_title_regex "$JIRA_KEY" "$BRANCH")"
-  [ -n "$match" ] || { echo "No Jira key and no branch: no extra session is closed."; return 0; }
+  if [ -z "$match" ]; then
+    [ "$setupctx" = 1 ] || { echo "No Jira key and no branch: no extra session is closed."; return 0; }
+    match='a^'   # matches nothing: only the tabs that existed before the team count
+  fi
   ours=$(cut -d= -f2 "$STATE" | jq -R . | jq -s -c .)
+  [ "$setupctx" = 1 ] && pre_agents="$(preexisting_agents "$PRE" "$ours")"
   cp "$PRE" "$SEEN"
   tries=$(( $(setting "$CFG" composerAgentWindowSeconds 180) / 2 ))
   for _ in $(seq 1 "$tries"); do
     if list="$(orca terminal list --worktree "$WT" --json 2>/dev/null)"; then
       printf '%s' "$list" | seen_merge "$SEEN" > "$SEEN.tmp" && mv "$SEEN.tmp" "$SEEN"
     fi
-    targets="$(composer_targets "$SEEN" "$ours" "$match" "$JIRA_KEY")"
+    targets="$( { composer_targets "$SEEN" "$ours" "$match" "$JIRA_KEY"; printf '%s\n' "$pre_agents"; } | grep . | sort -u)"
     if [ -n "$targets" ]; then
       for h in $targets; do
         echo "Composer extra session detected ($h, first title: '$(jq -r --arg h "$h" '.[] | select(.handle == $h) | .title' "$SEEN")'); closing it."

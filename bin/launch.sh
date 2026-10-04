@@ -49,7 +49,20 @@ if [ -f "$OVR" ]; then
 fi
 
 FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
-alive()     { [ -n "${1:-}" ] && orca terminal show --terminal "$1" --json >/dev/null 2>&1; }
+# Whether a role's tab is still working: 0 alive, 1 no tab, 2 the tab exists but its agent is gone (e.g. after Ctrl+C).
+# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
+# An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
+agent_in()   { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
+role_alive() {  # role_alive <role> <handle>
+  [ -n "${2:-}" ] || return 1
+  orca terminal show --terminal "$2" --json >/dev/null 2>&1 || return 1
+  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac
+  local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
+    [ -n "$(agent_in "$2")" ] && return 0
+    [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
+  done
+  return 2
+}
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
 
 WAIT="$(setting "$CFG" launchWaitSeconds 15)"
@@ -62,6 +75,11 @@ done
 # title (Claude Code renames it soon after). kickoff.sh uses this snapshot to recognize and close it.
 PRE="$GITDIR/orca-roles.preexisting.json"; rm -f "$PRE"
 [ "$FRESH" = 1 ] && [ -n "$LIST" ] && printf '%s' "$LIST" | seen_merge "" > "$PRE"
+# Orca passes ORCA_ROOT_PATH and ORCA_WORKTREE_PATH to its setup scripts, not to its terminals: they tell a worktree that Orca
+# is creating right now (where the composer's session may be open) from a 'roles' run by hand.
+SETUPCTX="$GITDIR/orca-roles.setup-context"; rm -f "$SETUPCTX"
+if [ -n "${ORCA_ROOT_PATH:-}${ORCA_WORKTREE_PATH:-}" ]; then echo "Started by Orca's setup script."; [ "$FRESH" = 1 ] && : > "$SETUPCTX"
+else echo "Started by hand (not by Orca's setup script)."; fi
 
 # The agents' working folders, ignored locally
 EVID="$(jq -r '.roles["visual-tester"].params.evidenceDir // "qa-evidence"' "$CFG")"
@@ -76,8 +94,14 @@ ROLES="$(enabled_roles "$CFG" | tr '\n' ' ')"
 NEW=""; RESUMED=""   # RESUMED: roles whose previous tab died (e.g. after a restart); the Planner recovers the state
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
-  alive "${!v:-}" && continue
-  [ -n "${!v:-}" ] && { RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."; }
+  role_alive "$id" "${!v:-}"; st=$?
+  [ "$st" = 0 ] && continue
+  if [ "$st" = 2 ]; then
+    RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
+    orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
+  elif [ -n "${!v:-}" ]; then
+    RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
+  fi
   h=""
   for try in 1 2 3; do
     h=$(orca terminal create --worktree "$WT" --title "$t" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id" --json 2>&1 | handle_of)
