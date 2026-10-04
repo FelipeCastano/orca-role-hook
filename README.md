@@ -45,8 +45,8 @@ By default:
 | **Planner** | Opus 5.5 | All of yours (incl. Jira) | The only agent that talks to you. Plans in steps, audits its plan with its plan review method before presenting it, hands out the work, supervises and reports to you. Replies in your language (or the one in `settings.language`). |
 | **Researcher** | Opus 5.5 | context7 | PoCs, metrics, performance, load and capacity. Works in `research/`. |
 | **Dev** | Sonnet 5.5 | context7 | Implements the production code. |
-| **Tester** | Sonnet 5.5 | None | Does not review: implements and runs the tests, with limits on quantity, parallelism and time, and mandatory cleanup at the end. |
-| **Auditor** | Opus 5.5 | None | Reviews Dev's code and the Tester's tests with its code review method (including mutation, always in a temporary copy). |
+| **Tester** | Sonnet 5.5 | None | Does not review: implements and runs the tests, covering each criterion as a family of inputs with its boundaries, checks them with a few mutants of its own, within limits on quantity, parallelism and time, and cleans up at the end. |
+| **Auditor** | Opus 5.5 | None | Reviews Dev's code and the Tester's tests with its code review method (including mutation, always in a temporary copy). Only findings from the step's rejection threshold up (default `high`) reject; the rest are notes. |
 | **Visual-Tester** | Opus 5.5 | Playwright | Proposes a visual test plan for the application (front end or API) and, once you approve it, runs it in a headless browser with your session, with screenshots at the key points. |
 | **Deployer** | Sonnet 5.5 | None | Starts and stops the application locally (API, front end and required services) when asked, and maintains `DEPLOYMENT.md` with the step-by-step guide for dev and prod. Never deploys. |
 
@@ -132,6 +132,12 @@ Create a worktree from the project's **"+"**. In a few seconds you will have you
 
 - **From a Jira ticket:** the kit reads the ticket Orca links to the worktree (`linkedWorkItem` in `orca worktree show`) and passes it to the Planner, which reads it and plans from there. If the worktree is not linked, it tries the branch, but only when the uppercase key starts the branch or one of its segments (`DEVGD-220-new-api`, `feature/DEVGD-220`), so `fix-123` or `release-1.4` are not taken for tickets. The session Orca creates by default with the ticket's name is interrupted and closes by itself.
 - **Where the hook does not run** (main checkout, folder projects, existing worktrees): run `roles` in a workspace terminal. It does not duplicate open tabs.
+
+### Connecting Jira
+
+The Planner reads tickets with the Atlassian MCP. By default it uses your own Claude Code connectors (`"mcp": "all"`), so connect Atlassian once in Claude Code: run `/mcp`, pick the Atlassian server and authenticate. If you do not have it yet, add it with `claude mcp add --transport sse atlassian https://mcp.atlassian.com/v1/sse` and then authenticate it with `/mcp`.
+
+If the Planner says it has no Jira tool, its session is not authenticated: run `/mcp` in the Planner's tab, authenticate Atlassian and tell it to continue, or paste the ticket into the conversation.
 
 ## Visual testing: browser, session and screenshots
 
@@ -283,7 +289,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `extraDirs` | Extra folders the agent can access. Accepts `~` and `{kit}`. `claude` only. |
 | `extraArgs` | Additional arguments, as they are, for the CLI. In `custom` they are appended to the command. |
 | `env` | Environment variables for that agent (`defaults.env` and the role's are merged). |
-| `params` | Parameters passed to the role in its startup message (the Tester's limits, the Auditor's `maxMutants`, the Visual-Tester's `evidenceDir`...). Each prompt documents its own and their default value. |
+| `params` | Parameters passed to the role in its startup message (the Tester's limits and `maxSelfMutants`, the Auditor's `maxMutants` and `rejectSeverity`, the Visual-Tester's `evidenceDir`...). Each prompt documents its own and their default value. |
 | `command` | Only with `agent: "custom"`: command to run. Accepts `{model}`, `{prompts}`, `{prompt}` and `{mcp}`. |
 | `pluginDirs` | Claude Code plugins that role loads (`--plugin-dir`). Accepts `~` and `{kit}`. The planner brings `{kit}/plugin`, with its skill. `claude` only. |
 | `clearCommand` | Command that opens a new conversation in the agent, for context cleanup. By default `/clear` in `claude` and `/new` in `codex`; in `custom` it must be defined or the role is not cleaned. |
@@ -489,6 +495,7 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | The composer's extra session (the "done" tab) does not close | `orca-roles-kickoff.log` lists the titles it saw; if none was the branch or started with the Jira key, it was left alone. Close it by hand or disable `closeComposerAgent` |
 | The Visual-Tester does not open the browser | `npx playwright install chromium` |
 | The Visual-Tester sees the login screen | Run `~/.orca-roles/bin/browser-login.sh <url>` and ask the Planner to clean the Visual-Tester (`clean.sh visual-tester`) so it starts with the new session |
+| The Planner says it has no Jira tool | Its session is not authenticated with Atlassian: run `/mcp` in its tab and authenticate (see [Connecting Jira](#connecting-jira)) |
 | The Planner does not receive the Jira ticket | Create the worktree from the ticket in Orca so it is linked (`orca worktree show --json` must show `linkedWorkItem`). Without a link, the branch must start with the uppercase key |
 | The screenshots are not in `qa-evidence/` | Check the `--output-dir` of the `playwright` server in the worktree's `orca-roles.config.json` |
 | A local service does not stop | `ls "$(git rev-parse --git-dir)"/orca-*.pid` and kill those processes |

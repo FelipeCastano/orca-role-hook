@@ -50,13 +50,13 @@
       "title": "Tester",
       "enabled": true,
       "model": "claude-sonnet-5-5",
-      "params": { "maxNewTests": 10, "maxWorkers": 2, "timeoutMinutes": 10 }
+      "params": { "maxNewTests": 10, "maxWorkers": 2, "timeoutMinutes": 10, "maxSelfMutants": 5 }
     },
     "auditor": {
       "title": "Auditor",
       "enabled": true,
       "model": "claude-opus-5-5",
-      "params": { "maxMutants": 15 }
+      "params": { "maxMutants": 15, "rejectSeverity": "high" }
     },
     "visual-tester": {
       "title": "Visual-Tester",

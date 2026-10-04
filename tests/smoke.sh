@@ -447,4 +447,14 @@ check "marketplace: lists the orca-roles plugin from ./plugin" "$(jq -r '.plugin
 check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/.claude-plugin/marketplace.json")" "$(jq -r '.name' "$ROOT/plugin/.claude-plugin/plugin.json")"
 grep -q '^## Start here' "$ROOT/README.md" && [ "$(grep -n '^## ' "$ROOT/README.md" | head -1 | cut -d: -f2-)" = "## Start here: get Claude's help with the setup" ] && echo "ok   README starts with installing the guide" || { echo "FAIL README does not start with the guide"; FAIL=1; }
 
+# Tighter steps: the rules from the review are in the prompts and the defaults
+for pat in 'Scope: only what the user asked' 'Criteria as families with boundaries' 'Threat model and rejection threshold' 'Check the libraries first' 'contract decision' 'Fix rounds carry only what changed' 'do not try Jira'"'"'s REST API'; do
+  grep -q "$pat" "$ROOT/prompts/planner.md" || { echo "FAIL planner.md without: $pat"; FAIL=1; }
+done
+grep -q 'maxSelfMutants' "$ROOT/prompts/tester.md" && grep -q 'family of inputs with its boundaries' "$ROOT/prompts/tester.md" || { echo "FAIL tester.md without self-mutation or families"; FAIL=1; }
+grep -q 'Reject only from the threshold' "$ROOT/prompts/auditor.md" && grep -q 'rejectSeverity' "$ROOT/prompts/auditor.md" || { echo "FAIL auditor.md without the threshold"; FAIL=1; }
+grep -q 'family with its boundaries' "$ROOT/prompts/dev.md" || { echo "FAIL dev.md without boundaries"; FAIL=1; }
+check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[5,"high"]'
+echo "ok   prompts carry the review's rules"
+
 [ "$FAIL" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
