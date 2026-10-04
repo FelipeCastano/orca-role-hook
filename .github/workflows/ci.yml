@@ -1,8 +1,8 @@
-# shellcheck y pruebas de humo en cada push y pull request.
-# Las pruebas corren en Ubuntu y en macOS; en macOS con el bash 3.2 del sistema, que es el que tienen los usuarios de Mac.
+# shellcheck and smoke tests on every push to main and every pull request.
+# The tests run on Ubuntu and on macOS; on macOS with the system bash 3.2, which is what Mac users have.
 name: ci
 
-# push solo en main: en una rama con PR abierto, el evento pull_request ya lo cubre (si no, cada cambio corre dos veces)
+# push only on main: on a branch with an open PR, the pull_request event already covers it (otherwise every change runs twice)
 on:
   push:
     branches: [main]
@@ -23,7 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Usar el bash 3.2 del sistema (macOS)
+      - name: Use the system bash 3.2 (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p "$RUNNER_TEMP/bash32"

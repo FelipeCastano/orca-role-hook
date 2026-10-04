@@ -1,0 +1,14 @@
+{
+  "name": "orca-roles",
+  "description": "Guide to the orca-roles kit for the Planner: installation, configuration, setup script exceptions, creating agents and changing how roles behave.",
+  "version": "0.1.0",
+  "author": {
+    "name": "FelipeCastano"
+  },
+  "keywords": [
+    "orca",
+    "orchestration",
+    "agents",
+    "roles"
+  ]
+}
