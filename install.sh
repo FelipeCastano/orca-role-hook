@@ -2,13 +2,13 @@
 # Instalador de orca-roles.
 #
 # Desde GitHub (sin clonar):
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/orca-roles/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/main/install.sh | bash   (solo si el repo es público)
 # Desde un clon local:
 #   ./install.sh
 # Toda la configuración (roles activos, modelos, agentes, MCP, parámetros) vive en ~/.orca-roles/config.json
 set -euo pipefail
 
-REPO="${ORCA_ROLES_REPO:-OWNER/orca-roles}"   # ← cambia OWNER por tu usuario de GitHub
+REPO="${ORCA_ROLES_REPO:-FelipeCastano/orca-role-hook}"
 BRANCH="${ORCA_ROLES_BRANCH:-main}"
 KIT="$HOME/.orca-roles"
 

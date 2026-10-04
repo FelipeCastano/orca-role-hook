@@ -49,20 +49,25 @@ Si un rol está desactivado en la configuración, el Planner salta su parte del 
 
 ## Instalación
 
+Clona el repo y ejecuta el instalador desde el clon:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/orca-roles/main/install.sh | bash
+git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-Instala en `~/.orca-roles/`, crea tu `~/.orca-roles/config.json`, añade los comandos `roles`, `nuevo-rol` y `roles-yaml` a tu shell y te explica cómo registrar el kit en tus proyectos. **Para actualizar**, repite el mismo comando: tu configuración se conserva (valores y orden de tus roles) y solo se le añaden las opciones nuevas.
+Instala en `~/.orca-roles/`, crea tu `~/.orca-roles/config.json`, añade los comandos `roles`, `nuevo-rol` y `roles-yaml` a tu shell y te explica cómo registrar el kit en tus proyectos. **Para actualizar**, trae los cambios y repite el instalador: tu configuración se conserva (valores y orden de tus roles) y solo se le añaden las opciones nuevas.
+
+```bash
+git -C orca-role-hook pull && bash orca-role-hook/install.sh
+```
+
+Si el repo fuera público, también se podría instalar sin clonar (de momento es privado y GitHub no sirve sus archivos sin autenticación):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/main/install.sh | bash
+```
 
 El instalador no admite opciones: los roles se activan y desactivan con `enabled` en `config.json` (ver [Configuración](#configuración)).
-
-**Repo privado:** clónalo y ejecuta el instalador desde el clon:
-
-```bash
-git clone git@github.com:OWNER/orca-roles.git && bash orca-roles/install.sh
-# Para actualizar: git -C orca-roles pull && bash orca-roles/install.sh
-```
 
 La primera vez que el Visual-Tester use el navegador, puede hacer falta `npx playwright install chromium`.
 
@@ -137,7 +142,7 @@ Los workers vuelven limpios; no les hace falta memoria porque cada tarea les lle
 
 ```bash
 nuevo-rol                         # lo guarda en tu instalación
-nuevo-rol --repo ~/ruta/orca-roles  # lo guarda en tu clon del repo, para versionarlo
+nuevo-rol --repo ~/ruta/orca-role-hook  # lo guarda en tu clon del repo, para versionarlo
 ```
 
 El asistente te pregunta todo lo necesario y actualiza la configuración:
@@ -301,7 +306,7 @@ Los objetos se mezclan campo a campo; las listas se sustituyen enteras.
 ## Archivos
 
 ```
-orca-roles/                      # este repo → se instala en ~/.orca-roles/
+orca-role-hook/                  # este repo → se instala en ~/.orca-roles/
 ├── install.sh
 ├── config.default.json          # configuración de serie (tu copia: ~/.orca-roles/config.json)
 ├── bin/
@@ -337,7 +342,7 @@ Dentro de cada worktree:
 
 | Sistema | Estado |
 |---|---|
-| **macOS** | Plataforma principal. Los scripts están escritos para el bash 3.2 que trae el sistema (sin probar aún en un Mac real). |
+| **macOS** | Plataforma principal. Funciona con el bash 3.2 que trae el sistema: el CI ejecuta las pruebas en macOS con ese bash. |
 | **Linux** (Ubuntu, Debian...) | Soportado: los scripts usan solo herramientas comunes a GNU y BSD. Depende de que Orca tenga versión para tu distribución. |
 | **Windows** | Con **WSL2** (ver abajo). No hay versión nativa para PowerShell o Git Bash: el kit son scripts de Bash. |
 
@@ -400,12 +405,3 @@ El workflow de GitHub Actions ejecuta lo mismo en cada push.
 - Al retomar, el Planner reconstruye el estado desde Orca y git, pero no recupera su conversación anterior: las decisiones que tomaste de palabra y no quedaron en una tarea se pierden. Reanudar las sesiones de Claude Code con `--resume` es una mejora posible.
 - Orca no tiene setup script global: hay que configurarlo una vez por proyecto.
 - El cierre de la sesión extra del composer depende de que Orca la titule con la rama exacta o empezando por la clave de Jira. Si la titula de otra forma, no se cierra (el formato exacto del título no está verificado).
-
-## Publicar el repo (primera vez)
-
-```bash
-# Desde la raíz del repo; funciona igual en macOS y Linux
-grep -rl "OWNER/orca-roles" --exclude-dir=.git . | xargs perl -pi -e 's#OWNER/orca-roles#<tu-usuario>/orca-roles#g'
-git add -A && git commit -m "orca-roles"
-gh repo create orca-roles --public --source . --push   # o --private
-```
