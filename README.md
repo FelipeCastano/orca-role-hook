@@ -4,6 +4,23 @@ Kit for [Orca](https://github.com/stablyai/orca) that automatically opens a team
 
 The everyday configuration (which roles are enabled, with which model, agent, MCP and parameters) lives in `~/.orca-roles/config.json`. A project's exceptions go in its `.orca-roles.json` or in the setup script options. See [Configuration](#configuration).
 
+## Start here: get Claude's help with the setup
+
+The kit ships a Claude Code plugin with a guide to everything below (installing, registering projects, configuring the team, creating agents and troubleshooting). Install it first, so you can ask Claude at any step. In Claude Code, run:
+
+```
+/plugin marketplace add FelipeCastano/orca-role-hook
+/plugin install orca-roles@orca-role-hook
+```
+
+Choose the user scope when asked, and run `/reload-plugins` if the install says so. Then just ask, for example: "help me install orca-roles", or invoke the guide with `/orca-roles:team`.
+
+- The repo is private for now: adding the marketplace clones it with your git credentials, so you need access to it on GitHub (the same as for cloning it).
+- Without the marketplace: clone the repo and start Claude Code with `claude --plugin-dir orca-role-hook/plugin`.
+- Once the kit is installed, its Planner loads this same guide by itself; the plugin is only needed to get help outside the kit's sessions.
+
+If you prefer to do it by hand, everything is explained below.
+
 ## Quick start
 
 1. **Install the kit** in a terminal (on Windows, inside WSL; see [Windows with WSL2](#windows-with-wsl2)). You need `jq`, Claude Code and Orca with Orchestration enabled.
@@ -185,7 +202,7 @@ Every worker also receives the common rules in `prompts/common-workers.md`. To e
 
 ## The Planner's skill
 
-The Planner loads the `orca-roles` plugin (in `~/.orca-roles/plugin`), which brings the **`team`** skill: a guide to the kit itself so it can help you install, configure and use it without leaving the conversation. Ask it in plain language, or invoke it with `/orca-roles:team`. It covers:
+The Planner loads the `orca-roles` plugin (in `~/.orca-roles/plugin`), which brings the **`team`** skill (the same one you can install in any Claude Code session, see [Start here](#start-here-get-claudes-help-with-the-setup)): a guide to the kit itself so it can help you install, configure and use it without leaving the conversation. Ask it in plain language, or invoke it with `/orca-roles:team`. It covers:
 
 - **Installation and updates**: it tells you what to run (it does not run it).
 - **Registering a project** (Settings or `roles-yaml`) and the **configuration**: `config.json`, `.orca-roles.json` and the setup script exceptions, and which one suits each case.
@@ -391,6 +408,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
 │   └── apply-hooks.sh           # explains at install time how to register the kit in each project
+├── .claude-plugin/marketplace.json  # makes the repo a Claude Code marketplace (/plugin install orca-roles@orca-role-hook)
 ├── plugin/                      # Claude Code plugin the Planner loads
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
 ├── prompts/

@@ -1,11 +1,17 @@
 ---
 name: team
-description: Guide to the orca-roles kit for the Planner. Use it when the user asks how to install, update, configure or use the kit; wants to enable, disable or tweak roles (in config.json, .orca-roles.json or the setup script options); wants to create a new agent; or wants to change how a role works, only in this session, only in this worktree or permanently. Also to diagnose why a role does not start or starts with another configuration.
+description: Guide to the orca-roles kit, for any Claude Code session and for the kit's Planner. Use it when the user asks how to install, update, configure or use orca-roles (or a team of role-based agents for Orca); wants to enable, disable or tweak roles (in config.json, .orca-roles.json or the setup script options); wants to create a new agent; or wants to change how a role works, only in this session, only in this worktree or permanently. Also to diagnose why a role does not start or starts with another configuration.
 ---
 
-# orca-roles kit: guide for the Planner
+# orca-roles kit: guide
 
-You are the Planner of a team the orca-roles kit opens in every Orca worktree. This guide tells you how to help the user with the kit itself. The full reference is `~/.orca-roles/README.md`; read it when you need a detail that is not here. Talk to the user in their language.
+orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Researcher, Dev, Tester, Auditor, Visual-Tester, Deployer) in every new worktree and coordinates them through Orca Orchestration. This guide tells you how to help the user with the kit itself. Talk to the user in their language.
+
+**First, find out where you are:**
+
+- **The kit is not installed yet** (`~/.orca-roles` does not exist): you are a regular Claude Code session the user installed this plugin in to get help. Walk them through sections 1 and 2, one step at a time, checking each result with them before the next. The full reference is the `README.md` of the repo (https://github.com/FelipeCastano/orca-role-hook).
+- **The kit is installed but you are not in a team's worktree**: help with installation, configuration and diagnosis (sections 1 to 5 and 8). Sections 6 and 7 are for the Planner.
+- **You are the Planner** of a team (your startup message gave you that role): everything applies. The full reference is `~/.orca-roles/README.md`; read it when you need a detail that is not here.
 
 ## Rules
 
@@ -29,7 +35,7 @@ You are the Planner of a team the orca-roles kit opens in every Orca worktree. T
 
 ## 1. Installing and updating
 
-The user runs these in an Orca terminal (on Windows, inside WSL). Give them the commands; do not run them yourself.
+The user runs these in an Orca terminal (on Windows, inside WSL; see "Windows" below). Give them the commands; do not run them yourself. Before installing, check with them that they have `jq` (`jq --version`) and Orca with Orchestration enabled (Settings > Experimental).
 
 ```bash
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh   # install
@@ -38,7 +44,9 @@ git -C orca-role-hook pull && bash orca-role-hook/install.sh                    
 
 - Requirements: `jq` (essential), Orca with Orchestration enabled (Settings > Experimental), Claude Code; Node and `npx playwright install chromium` for the Visual-Tester.
 - Updating keeps `config.json` and `roles/`, and adds the new options.
-- The installer adds the `roles`, `new-role` and `roles-yaml` commands.
+- The installer adds the `roles`, `new-role` and `roles-yaml` commands (active in new terminals, or after `source ~/.bashrc`).
+- **Windows**: the kit runs in WSL2. The repo goes inside WSL (`~/...`), the project is added in Orca with its WSL path (`\\wsl.localhost\Ubuntu\home\<user>\<repo>`), and `jq`, Claude Code and Node are installed inside WSL. In Orca's WSL terminals the CLI is called `$ORCA_CLI_COMMAND` (e.g. `orca-ide`); the installer adds an `orca` alias for it.
+- The kit's Planner loads this same guide on its own; this plugin is only needed to get help outside the kit's sessions.
 
 ## 2. Registering the kit in a project
 

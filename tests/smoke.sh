@@ -442,4 +442,9 @@ rm -f "$TMP/fakebin/orca"
 # The Planner does not block waiting for the workers
 grep -q 'Never block waiting for the workers' "$ROOT/prompts/planner.md" && ! grep -q 'check --wait --types' "$ROOT/prompts/planner.md" && echo "ok   planner.md: waits without blocking" || { echo "FAIL planner.md still blocks in check --wait"; FAIL=1; }
 
+# The repo is a Claude Code marketplace whose plugin is the kit's own
+check "marketplace: lists the orca-roles plugin from ./plugin" "$(jq -r '.plugins[] | "\(.name) \(.source)"' "$ROOT/.claude-plugin/marketplace.json")" "orca-roles ./plugin"
+check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/.claude-plugin/marketplace.json")" "$(jq -r '.name' "$ROOT/plugin/.claude-plugin/plugin.json")"
+grep -q '^## Start here' "$ROOT/README.md" && [ "$(grep -n '^## ' "$ROOT/README.md" | head -1 | cut -d: -f2-)" = "## Start here: get Claude's help with the setup" ] && echo "ok   README starts with installing the guide" || { echo "FAIL README does not start with the guide"; FAIL=1; }
+
 [ "$FAIL" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
