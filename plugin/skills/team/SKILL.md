@@ -153,7 +153,7 @@ Worktree-level instructions are short, direct text: they go inside the message t
 | A worker does not receive its role | `orca-roles-kickoff.log` |
 | A role does not appear even though it is `enabled` | `orca-roles.overrides.json` (saved exceptions); `roles --reset` forgets them |
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
-| "Orca CLI not found" | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`) |
+| "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |
 
 More cases in the "Troubleshooting" table of `~/.orca-roles/README.md`.
