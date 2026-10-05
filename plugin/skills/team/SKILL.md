@@ -46,6 +46,11 @@ git -C orca-role-hook pull && bash orca-role-hook/install.sh                    
 - Updating keeps `config.json` and `roles/`, and adds the new options. The Visual-Tester is now the E2E-Tester (`e2e-tester`): an old `visual-tester` in `config.json`, `.orca-roles.json` or the setup script options is renamed automatically, keeping its settings.
 - The installer adds the `roles`, `new-role` and `roles-yaml` commands (active in new terminals, or after `source ~/.bashrc`).
 - **Windows**: the kit runs in WSL2. The repo goes inside WSL (`~/...`), the project is added in Orca with its WSL path (`\\wsl.localhost\Ubuntu\home\<user>\<repo>`), and `jq`, Claude Code and Node are installed inside WSL. In Orca's WSL terminals the CLI is called `$ORCA_CLI_COMMAND` (e.g. `orca-ide`); the installer adds an `orca` alias for it.
+- **Installing `jq`**: macOS `brew install jq`; Ubuntu, Debian and WSL `sudo apt update && sudo apt install -y jq`. If that fails, in this order:
+  - Windows: `jq` must be installed inside WSL, not with winget or Chocolatey on Windows; `which jq` in the WSL terminal must print a Linux path (`/usr/bin/jq`).
+  - `Unable to locate package jq`: the package list is stale or the `universe` repository is off: `sudo add-apt-repository universe && sudo apt update && sudo apt install -y jq`.
+  - `Temporary failure resolving` or downloads that hang: WSL has no DNS. Check with `ping -c1 archive.ubuntu.com`; usually `wsl --shutdown` from PowerShell and reopening the terminal fixes it, and behind a VPN or corporate proxy it may need the proxy set for apt.
+  - No `sudo` password, or apt still fails: install the official binary for the user only, with no `sudo`: `mkdir -p ~/.local/bin && curl -fsSL -o ~/.local/bin/jq https://github.com/jqlang/jq/releases/latest/download/jq-linux-amd64 && chmod +x ~/.local/bin/jq` (`jq-linux-arm64` on ARM; `uname -m` tells). Then make sure `~/.local/bin` is on the PATH (`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`, new terminal) and check `jq --version`.
 - The kit's Planner loads this same guide on its own; this plugin is only needed to get help outside the kit's sessions.
 
 ## 2. Registering the kit in a project
