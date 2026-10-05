@@ -58,8 +58,8 @@
       "model": "claude-opus-5-5",
       "params": { "maxMutants": 15, "rejectSeverity": "high" }
     },
-    "visual-tester": {
-      "title": "Visual-Tester",
+    "e2e-tester": {
+      "title": "E2E-Tester",
       "enabled": true,
       "model": "claude-opus-5-5",
       "mcp": ["playwright"],

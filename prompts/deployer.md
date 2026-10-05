@@ -40,7 +40,7 @@ None.
 ## Report
 Report with `worker_done`:
 - `--subject`: kind of task and result in one line
-- `--body`: when starting, for each service its base URL, port, command used, PID, log path and how you checked it is alive, and which URL is the entry point for the Visual-Tester; when stopping, what you stopped and that the ports are free; when updating the guide, which sections changed
+- `--body`: when starting, for each service its base URL, port, command used, PID, log path and how you checked it is alive, and which URL is the entry point for the E2E-Tester; when stopping, what you stopped and that the ports are free; when updating the guide, which sections changed
 - `--files-modified` with `DEPLOYMENT.md` when you touch it
 - `--outcome succeeded` if you completed the task
 

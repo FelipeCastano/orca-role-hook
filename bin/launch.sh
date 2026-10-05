@@ -90,7 +90,7 @@ else
 fi
 
 # The agents' working folders, ignored locally
-EVID="$(jq -r '.roles["visual-tester"].params.evidenceDir // "qa-evidence"' "$CFG")"
+EVID="$(jq -r '.roles["e2e-tester"].params.evidenceDir // "qa-evidence"' "$CFG")"
 if COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"; then
   mkdir -p "$COMMON/info"; touch "$COMMON/info/exclude"
   for p in research/ "$EVID/"; do grep -qxF "$p" "$COMMON/info/exclude" || echo "$p" >> "$COMMON/info/exclude"; done
