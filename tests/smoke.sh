@@ -56,7 +56,11 @@ check "setting with default" "$(setting "$C" kickoffTimeoutSeconds 180)" "180"
 check "setting defined" "$(setting "$C" launchWaitSeconds 15)" "3"
 check "title_of" "$(title_of "$C" dev)" "Dev"
 check "title_of without title" "$(title_of "$C" newone)" "newone"
-check "var_of" "$(var_of visual-tester)" "VISUAL_TESTER"
+check "var_of" "$(var_of e2e-tester)" "E2E_TESTER"
+# Renamed role: visual-tester → e2e-tester, keeping the user's settings and position
+printf '{"roles":{"dev":{},"visual-tester":{"title":"Visual-Tester","enabled":false},"deployer":{}}}' > "$TMP/legacy.json"
+check "upgrade_config renames visual-tester" "$(upgrade_config "$ROOT/config.default.json" "$TMP/legacy.json" | jq -c '[(.roles | keys_unsorted | .[0:3]), .roles["e2e-tester"].title, .roles["e2e-tester"].enabled, (.roles | has("visual-tester"))]')" '[["dev","e2e-tester","deployer"],"E2E-Tester",false,false]'
+check "overrides accept the old id" "$(overrides_from_args --disable visual-tester --set roles.visual-tester.model=m | jq -c '[.disable, .set[0].path]')" '[["e2e-tester"],["roles","e2e-tester","model"]]'
 check "prompt_of default" "$(prompt_of "$C" dev)" "$KIT/prompts/dev.md"
 check "prompt_of with ~" "$(prompt_of "$C" extra)" "$HOME/x/extra.md"
 check "regex_escape" "$(regex_escape 'feat/DEV-1.x+(y)')" 'feat/DEV-1\.x\+\(y\)'
@@ -205,10 +209,10 @@ check "agent.sh: MCP file with expanded placeholders" "$(jq -r '.mcpServers.pw.a
 echo '{"cookies":[{"n":1}],"origins":[]}' > "$KIT/browser/proj.json"
 ( role_context "$C" vt "$PROJ"; ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"; check "ensure_browser_state does not overwrite an existing session" "$(jq -c '.cookies | length' "$KIT/browser/proj.json")" "1"; [ "$FAIL" = 0 ] ) || FAIL=1
 grep -q -- '--headless' "$ROOT/config.default.json" && grep -q '{browserState}' "$ROOT/config.default.json" && grep -q '{worktree}/{evidenceDir}' "$ROOT/config.default.json" && echo "ok   config.default: headless playwright with session and evidence" || { echo "FAIL config.default playwright"; FAIL=1; }
-for sec in '^## Your browser' 'browser-login.sh' 'browser_evaluate'; do grep -q "$sec" "$ROOT/prompts/visual-tester.md" || { echo "FAIL visual-tester.md without $sec"; FAIL=1; }; done
+for sec in '^## Your browser' 'browser-login.sh' 'browser_evaluate'; do grep -q "$sec" "$ROOT/prompts/e2e-tester.md" || { echo "FAIL e2e-tester.md without $sec"; FAIL=1; }; done
 grep -q 'browser-login.sh' "$ROOT/prompts/planner.md" || { echo "FAIL planner.md without browser-login"; FAIL=1; }
 grep -q 'orca-<service>.pid' "$ROOT/prompts/deployer.md" || { echo "FAIL deployer.md without services"; FAIL=1; }
-echo "ok   visual test prompts"
+echo "ok   E2E test prompts"
 
 # agent.sh custom: placeholders and extraArgs (bash is replaced by an echo)
 cat > "$KIT/config.json" <<J

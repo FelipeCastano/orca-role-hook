@@ -21,7 +21,7 @@ merged_config() {  # $1 = project/worktree folder
   local base="$KIT/config.json" proj
   [ -f "$base" ] || base="$KIT/config.default.json"
   proj="$(project_config "${1:-.}")"
-  if [ -n "$proj" ]; then jq -s '.[0] * .[1]' "$base" "$proj"; else cat "$base"; fi
+  if [ -n "$proj" ]; then jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' (.[0] | legacy($l)) * (.[1] | legacy($l))' "$base" "$proj"; else jq --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' legacy($l)' "$base"; fi
 }
 # Path of the .orca-roles.json that applies to a folder (empty if none).  project_config <folder>
 project_config() {
@@ -44,8 +44,11 @@ var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # A role's prompt file: the "prompt" field (accepts ~), or the kit's prompts/<role>.md
 prompt_of() { local p; p="$(jq -r --arg r "$2" '.roles[$r].prompt // empty' "$1")"; p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$2.md}"; }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
+# Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
+LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
+LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
-  jq -s '.[0] as $d | .[1] as $u | ($d * $u) as $m
+  jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)' "$1" "$2"
 }
@@ -65,9 +68,9 @@ overrides_from_args() {
     k="${opt#--}"
     if [ "$k" = set ]; then
       case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
-      o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" '.set += [{path: ($p | split(".")), value: ($v | try fromjson catch $v)}]' <<<"$o")"
+      o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" --argjson l "$LEGACY_ROLES" '.set += [{path: ($p | split(".") | if .[0] == "roles" and $l[.[1]] then .[1] = $l[.[1]] else . end), value: ($v | try fromjson catch $v)}]' <<<"$o")"
     else
-      o="$(jq -c --arg k "$k" --arg v "$val" '.[$k] += ($v | split(",") | map(gsub("^ +| +$"; "")) | map(select(. != "")))' <<<"$o")"
+      o="$(jq -c --arg k "$k" --arg v "$val" --argjson l "$LEGACY_ROLES" '.[$k] += ($v | split(",") | map(gsub("^ +| +$"; "")) | map(select(. != "")) | map($l[.] // .))' <<<"$o")"
     fi
   done
   printf '%s\n' "$o"
@@ -222,7 +225,7 @@ project_name() {
 role_context() {
   ORCA_ROLES_WORKTREE="$(cd "$3" && pwd)"
   ORCA_ROLES_PROJECT="$(project_name "$3")"
-  ORCA_ROLES_EVIDENCE_DIR="$(jq -r --arg r "$2" '.roles[$r].params.evidenceDir // .roles["visual-tester"].params.evidenceDir // .defaults.params.evidenceDir // "qa-evidence"' "$1")"
+  ORCA_ROLES_EVIDENCE_DIR="$(jq -r --arg r "$2" '.roles[$r].params.evidenceDir // .roles["e2e-tester"].params.evidenceDir // .defaults.params.evidenceDir // "qa-evidence"' "$1")"
   ORCA_ROLES_BROWSER_STATE="$KIT/browser/$ORCA_ROLES_PROJECT.json"
   export ORCA_ROLES_WORKTREE ORCA_ROLES_PROJECT ORCA_ROLES_EVIDENCE_DIR ORCA_ROLES_BROWSER_STATE
 }

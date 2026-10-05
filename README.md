@@ -32,9 +32,9 @@ If you prefer to do it by hand, everything is explained below.
 3. **Create a worktree** from the project's **"+"**. The team's tabs open and the Planner starts planning with you.
 4. **Tune the team** depending on the scope:
    - For good: `enabled`, `model`... in `~/.orca-roles/config.json` ([Configuration](#configuration)).
-   - One project only, without files: options on the setup script line, e.g. `$HOME/.orca-roles/bin/launch.sh --disable visual-tester,deployer` ([Exceptions in the setup script](#exceptions-in-the-setup-script)).
+   - One project only, without files: options on the setup script line, e.g. `$HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer` ([Exceptions in the setup script](#exceptions-in-the-setup-script)).
    - One project only, versioned: `.orca-roles.json` at the repo root ([Per-project configuration](#per-project-configuration)).
-5. **Ask the Planner.** It knows the kit thanks to its skill: "create an agent that reviews security", "disable the Visual-Tester in this project", "make Dev use pnpm in this worktree only", "how do I update the kit?". See [The Planner's skill](#the-planners-skill).
+5. **Ask the Planner.** It knows the kit thanks to its skill: "create an agent that reviews security", "disable the E2E-Tester in this project", "make Dev use pnpm in this worktree only", "how do I update the kit?". See [The Planner's skill](#the-planners-skill).
 6. **After a restart**, or in a worktree where the hook did not run, launch `roles` in a workspace terminal ([Resuming after a restart](#resuming-after-a-restart)).
 
 ## Roles
@@ -48,7 +48,7 @@ By default:
 | **Dev** | Sonnet 5.5 | context7 | Implements the production code. |
 | **Tester** | Sonnet 5.5 | None | Does not review: implements and runs the tests, covering each criterion as a family of inputs with its boundaries, checks them with a few mutants of its own, within limits on quantity, parallelism and time, and cleans up at the end. |
 | **Auditor** | Opus 5.5 | None | Reviews Dev's code and the Tester's tests with its code review method (including mutation, always in a temporary copy). Only findings from the step's rejection threshold up (default `high`) reject; the rest are notes. |
-| **Visual-Tester** | Opus 5.5 | Playwright | Proposes a visual test plan for the application (front end or API) and, once you approve it, runs it in a headless browser with your session, with screenshots at the key points. |
+| **E2E-Tester** | Opus 5.5 | Playwright | Proposes an E2E test plan for the application (front end or API) and, once you approve it, runs it in a headless browser with your session, with screenshots at the key points. |
 | **Deployer** | Sonnet 5.5 | None | Starts and stops the application locally (API, front end and required services) when asked, and maintains `DEPLOYMENT.md` with the step-by-step guide for dev and prod. Never deploys. |
 
 They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
@@ -73,7 +73,7 @@ The Planner is the partial exception: it is not a worker, so its sections are St
 2. **Dev** implements.
 3. **Tester** implements and runs the tests. If they fail because of the code, Dev fixes it.
 4. **Auditor** reviews code and tests. Its findings go to Dev or the Tester as appropriate, and it repeats until it accepts (after 3 rejected rounds, the Planner checks with you).
-5. If a visual test is needed: **Deployer** starts the application → **Visual-Tester** proposes a plan → you approve it → **Visual-Tester** runs it → **Deployer** stops it.
+5. If an E2E test is needed: **Deployer** starts the application → **E2E-Tester** proposes a plan → you approve it → **E2E-Tester** runs it → **Deployer** stops it.
 6. **Researcher** validates performance or capacity if needed.
 7. **Deployer** updates `DEPLOYMENT.md`.
 8. The **Planner** reports the step to you.
@@ -90,7 +90,7 @@ Clone the repo and run the installer from the clone:
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added.
+It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings.
 
 ```bash
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/main/i
 
 The installer takes no options: roles are enabled and disabled with `enabled` in `config.json` (see [Configuration](#configuration)).
 
-The first time the Visual-Tester uses the browser, `npx playwright install chromium` may be needed.
+The first time the E2E-Tester uses the browser, `npx playwright install chromium` may be needed.
 
 ## Setting up a project (once per project)
 
@@ -140,9 +140,9 @@ The Planner reads tickets with the Atlassian MCP. By default it uses your own Cl
 
 If the Planner says it has no Jira tool, its session is not authenticated: run `/mcp` in the Planner's tab, authenticate Atlassian and tell it to continue, or paste the ticket into the conversation.
 
-## Visual testing: browser, session and screenshots
+## E2E testing: browser, session and screenshots
 
-The Visual-Tester does not use Orca's embedded browser: it controls its own Chromium through the Playwright MCP. Screenshots are requested over the protocol, they are not screen captures, so they work even if the window is behind others or does not exist. By default the browser is **headless**: you can keep working while it tests.
+The E2E-Tester does not use Orca's embedded browser: it controls its own Chromium through the Playwright MCP. Screenshots are requested over the protocol, they are not screen captures, so they work even if the window is behind others or does not exist. By default the browser is **headless**: you can keep working while it tests.
 
 **Session.** If your application requires a login (Entra, Google, MFA...), sign in yourself once:
 
@@ -150,13 +150,13 @@ The Visual-Tester does not use Orca's embedded browser: it controls its own Chro
 ~/.orca-roles/bin/browser-login.sh https://localhost:5173
 ```
 
-It opens a visible browser, you wait for the application to load with your session, you close the window and the session (cookies and localStorage) is saved in `~/.orca-roles/browser/<project>.json`. The Visual-Tester starts with it in isolated mode: nothing is written to disk during the test and several worktrees can test at the same time. If the application asks it to log in, the Visual-Tester does not try to authenticate: it tells the Planner, which will ask you to run the command and will launch the task again. The first time, `npx playwright install chromium` may be needed.
+It opens a visible browser, you wait for the application to load with your session, you close the window and the session (cookies and localStorage) is saved in `~/.orca-roles/browser/<project>.json`. The E2E-Tester starts with it in isolated mode: nothing is written to disk during the test and several worktrees can test at the same time. If the application asks it to log in, the E2E-Tester does not try to authenticate: it tells the Planner, which will ask you to run the command and will launch the task again. The first time, `npx playwright install chromium` may be needed.
 
-It depends on your application keeping the session in cookies or `localStorage`; if it keeps it in `sessionStorage`, it does not survive. Tokens expire according to your identity provider: when the Visual-Tester sees the login screen again, run the command again.
+It depends on your application keeping the session in cookies or `localStorage`; if it keeps it in `sessionStorage`, it does not survive. Tokens expire according to your identity provider: when the E2E-Tester sees the login screen again, run the command again.
 
-**Screenshots.** They go to `<evidenceDir>/step-<N>/` in the worktree (by default `qa-evidence/`, locally ignored by git) thanks to `--output-dir`. **Network.** To validate payloads, the Visual-Tester injects a hook on XHR/fetch with `browser_evaluate` and reads the bodies from the page; it never logs headers.
+**Screenshots.** They go to `<evidenceDir>/step-<N>/` in the worktree (by default `qa-evidence/`, locally ignored by git) thanks to `--output-dir`. **Network.** To validate payloads, the E2E-Tester injects a hook on XHR/fetch with `browser_evaluate` and reads the bodies from the page; it never logs headers.
 
-**Regression.** This is exploratory validation. The Visual-Tester reports the exact sequence of steps it ran so that, if a flow deserves to be repeated, the Planner hands it to the Tester as a Playwright test.
+**Regression.** This is exploratory validation. The E2E-Tester reports the exact sequence of steps it ran so that, if a flow deserves to be repeated, the Planner hands it to the Tester as a Playwright test.
 
 All of this is configured in the `playwright` server of `mcpServers`; see [placeholders](#placeholders-in-mcpservers) to remove `--headless` or change paths.
 
@@ -269,7 +269,7 @@ All the configuration lives in `~/.orca-roles/config.json`. It is read every tim
 Change `enabled` in the role. The `planner` is always enabled even if you set `false`. For a single project, use the [per-project configuration](#per-project-configuration).
 
 ```json
-"visual-tester": { "enabled": false }
+"e2e-tester": { "enabled": false }
 ```
 
 ### Role options
@@ -290,7 +290,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `extraDirs` | Extra folders the agent can access. Accepts `~` and `{kit}`. `claude` only. |
 | `extraArgs` | Additional arguments, as they are, for the CLI. In `custom` they are appended to the command. |
 | `env` | Environment variables for that agent (`defaults.env` and the role's are merged). |
-| `params` | Parameters passed to the role in its startup message (the Tester's limits and `maxSelfMutants`, the Auditor's `maxMutants` and `rejectSeverity`, the Visual-Tester's `evidenceDir`...). Each prompt documents its own and their default value. |
+| `params` | Parameters passed to the role in its startup message (the Tester's limits and `maxSelfMutants`, the Auditor's `maxMutants` and `rejectSeverity`, the E2E-Tester's `evidenceDir`...). Each prompt documents its own and their default value. |
 | `command` | Only with `agent: "custom"`: command to run. Accepts `{model}`, `{prompts}`, `{prompt}` and `{mcp}`. |
 | `pluginDirs` | Claude Code plugins that role loads (`--plugin-dir`). Accepts `~` and `{kit}`. The planner brings `{kit}/plugin`, with its skill. `claude` only. |
 | `clearCommand` | Command that opens a new conversation in the agent, for context cleanup. By default `/clear` in `claude` and `/new` in `codex`; in `custom` it must be defined or the role is not cleaned. |
@@ -330,7 +330,7 @@ With this the Planner is not tied to Claude. By default, `mcpServers` includes `
 "planner": { "agent": "codex", "model": "<model>", "mcp": ["atlassian", "context7"] }
 ```
 
-The Visual-Tester still needs the `playwright` server, which is a local process (`npx @playwright/mcp`): it works in any agent that can start it.
+The E2E-Tester still needs the `playwright` server, which is a local process (`npx @playwright/mcp`): it works in any agent that can start it.
 
 ### Placeholders in `mcpServers`
 
@@ -340,7 +340,7 @@ In the `args`, `env` and `url` of any server they are expanded when each role st
 |---|---|
 | `{worktree}` | Absolute path of the worktree |
 | `{project}` | Name of the main repo's folder (not the worktree's) |
-| `{evidenceDir}` | `params.evidenceDir` of the role (or of the Visual-Tester, or `qa-evidence`) |
+| `{evidenceDir}` | `params.evidenceDir` of the role (or of the E2E-Tester, or `qa-evidence`) |
 | `{browserState}` | `~/.orca-roles/browser/{project}.json`, the session saved by `browser-login.sh` (created empty if missing) |
 | `{kit}`, `{home}` | `~/.orca-roles` and your `$HOME` |
 
@@ -358,7 +358,7 @@ To see the browser in a project, remove `--headless` in its `.orca-roles.json` (
 A `.orca-roles.json` at a repo's root is merged on top of your global configuration for that project only. It is looked up at the worktree root and, if missing, at the main checkout root, so it works even if you do not commit it. For example, for a library without an API:
 
 ```json
-{ "roles": { "visual-tester": { "enabled": false }, "deployer": { "enabled": false } } }
+{ "roles": { "e2e-tester": { "enabled": false }, "deployer": { "enabled": false } } }
 ```
 
 Objects are merged field by field; lists are replaced whole.
@@ -368,7 +368,7 @@ Objects are merged field by field; lists are replaced whole.
 Without creating any file, you can add options to the `launch.sh` line in the project's setup script (Settings → Repository, or the `orca.yaml` of `roles-yaml`). They are applied on top of `config.json` and `.orca-roles.json`:
 
 ```
-$HOME/.orca-roles/bin/launch.sh --disable visual-tester,deployer
+$HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 ```
 
 | Option | What it does |
@@ -384,7 +384,7 @@ $HOME/.orca-roles/bin/launch.sh --disable visual-tester,deployer
 - They can be combined and repeated: `--only dev,tester --set roles.dev.model=claude-opus-5-5`. They are applied in this order: `--only`, `--enable`, `--disable` and finally `--set`.
 - If an option names a role that does not exist, `launch.sh` fails with the list of available roles instead of starting halfway.
 - The exceptions are saved per worktree (`orca-roles.overrides.json` in its git dir). So `roles` without options applies them again when resuming after a restart; with new options, it replaces them; with `--reset`, it goes back to the normal configuration.
-- They also work with `roles` in a workspace terminal (`roles --enable visual-tester`). They only decide which tabs open: disabling a role whose tab is already open does not close it.
+- They also work with `roles` in a workspace terminal (`roles --enable e2e-tester`). They only decide which tabs open: disabling a role whose tab is already open does not close it.
 
 ### General settings (`settings`)
 
@@ -410,7 +410,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── kickoff.sh               # sends each agent its role, passes the Jira ticket and closes the extra agent
 │   ├── clean.sh                 # cleans the workers' context and resends their role
 │   ├── close-role.sh            # closes a role's tab in the current workspace
-│   ├── browser-login.sh         # saves your application session for the Visual-Tester
+│   ├── browser-login.sh         # saves your application session for the E2E-Tester
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
@@ -430,10 +430,10 @@ To change a role's behavior, edit `prompts/<role>.md` in the repo and run the in
 
 Inside each worktree:
 
-- `research/` and `qa-evidence/`: the Researcher's work and the Visual-Tester's screenshots. They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`.
+- `research/` and `qa-evidence/`: the Researcher's work and the E2E-Tester's screenshots. They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`.
 - `DEPLOYMENT.md`: the Deployer's guide. It is not committed unless you ask.
 - In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json`, `orca-roles.composer-seen.json` and `orca-roles.setup-context` (tabs seen when the worktree was created, and whether Orca's setup script started the kit, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
-- Outside the worktree: `~/.orca-roles/browser/<project>.json`, the browser session for the Visual-Tester.
+- Outside the worktree: `~/.orca-roles/browser/<project>.json`, the browser session for the E2E-Tester.
 - On Windows (WSL): `~/.orca-roles/shim/orca`, the Orca CLI wrapper (see [Windows with WSL2](#windows-with-wsl2)).
 
 ## Platforms
@@ -453,7 +453,7 @@ Orca for Windows runs the terminals, and with them the agents and the setup scri
 3. **In Orca, add the project with its WSL path**: `\\wsl.localhost\Ubuntu\home\<user>\<repo>`. That way Orca opens its terminals inside WSL.
 4. **Install inside WSL, from an Orca terminal**: `sudo apt install jq`, Claude Code and Node inside WSL (not the Windows ones), and then the kit's installer.
 5. **Register the kit in each project** with `roles-yaml` or in Settings (see [Setting up a project](#setting-up-a-project-once-per-project)).
-6. **Visual-Tester**: `npx playwright install --with-deps chromium` inside WSL.
+6. **E2E-Tester**: `npx playwright install --with-deps chromium` inside WSL.
 
 **Orca's CLI has another name.** In WSL terminals, Orca does not install `orca` but a launcher whose name is given by `$ORCA_CLI_COMMAND` (`orca-ide` in Orca 1.4.219), which calls `orca.exe` on Windows. The kit detects it and creates the `~/.orca-roles/shim/orca` wrapper, which it prepends to the PATH of its scripts and of the agents; the prompts and the permissions (`Bash(orca orchestration:*)`) keep working unchanged. That is why the CLI is only available in terminals opened by Orca: the kit's commands (`roles`, `clean.sh`, the installer) must be run from one of them. So you can also type `orca ...` yourself in those terminals, the installer adds to your `~/.bashrc` an `orca` alias to `$ORCA_CLI_COMMAND`, which only applies when that variable is set and there is no real `orca`. Do not install the `orca` package apt suggests: it is GNOME's screen reader.
 
@@ -465,7 +465,7 @@ The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshr
 - `jq` (macOS: `brew install jq`; Ubuntu/Debian: `sudo apt install jq`). It is essential: the installer and the kit fail with a clear message if it is missing.
 - Claude Code (`claude`) with `--permission-mode auto` available. The installer checks it and warns you if your version does not offer it; in that case update Claude Code or change `permissionMode` in `config.json`. Checked with 2.1.x.
 - The CLIs of any other agent you configure.
-- `curl` and `tar` (they come with macOS and Ubuntu), Node (`npx`, for Playwright). For the Visual-Tester, Playwright's Chromium: `npx playwright install chromium` (on Ubuntu, `npx playwright install --with-deps chromium`, which also installs the system libraries it needs and asks for sudo).
+- `curl` and `tar` (they come with macOS and Ubuntu), Node (`npx`, for Playwright). For the E2E-Tester, Playwright's Chromium: `npx playwright install chromium` (on Ubuntu, `npx playwright install --with-deps chromium`, which also installs the system libraries it needs and asks for sudo).
 
 ## Development
 
@@ -494,8 +494,8 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | After a restart, the Planner does not recover the state | `orca-roles-launch.log` must say "Resuming workspace". If not, the `orca-roles.env` file in the worktree's git dir did not exist or was empty |
 | Cleaning a worker fails | `clean.sh` says why: dead tab (run `roles`), or a `custom` agent without `clearCommand` |
 | The composer's extra session (the "done" tab) does not close | `orca-roles-kickoff.log` lists the titles it saw; if none was the branch or started with the Jira key, it was left alone. Close it by hand or disable `closeComposerAgent` |
-| The Visual-Tester does not open the browser | `npx playwright install chromium` |
-| The Visual-Tester sees the login screen | Run `~/.orca-roles/bin/browser-login.sh <url>` and ask the Planner to clean the Visual-Tester (`clean.sh visual-tester`) so it starts with the new session |
+| The E2E-Tester does not open the browser | `npx playwright install chromium` |
+| The E2E-Tester sees the login screen | Run `~/.orca-roles/bin/browser-login.sh <url>` and ask the Planner to clean the E2E-Tester (`clean.sh e2e-tester`) so it starts with the new session |
 | `/plugin marketplace add` says `Marketplace file not found` | The marketplace file is not on the repo's `main` branch yet: add it from your clone, `/plugin marketplace add ~/orca-role-hook` |
 | A worker finished its work but the Planner never got its report | It is probably not a Claude agent and ran `orca orchestration send` in a way that never finished (for example as a background task). Look at its tab; the Planner warns you when a worker has been silent for more than 10 minutes |
 | The Planner says it has no Jira tool | Its session is not authenticated with Atlassian: run `/mcp` in its tab and authenticate (see [Connecting Jira](#connecting-jira)) |

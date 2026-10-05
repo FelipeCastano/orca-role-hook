@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Signs in to the application ONCE with a visible browser and saves the session (cookies and localStorage)
-# so the Visual-Tester reuses it in headless mode.
+# so the E2E-Tester reuses it in headless mode.
 # Usage (from the worktree or the project's repo):  browser-login.sh <url> [project-name]
 # The session is saved in ~/.orca-roles/browser/<project>.json (by default, the name of the main repo's folder).
 set -euo pipefail
@@ -16,7 +16,7 @@ npx -y playwright open --save-storage="$STATE" "$URL" || {
   echo "Could not open the browser. If it is the first time, install Chromium: npx playwright install chromium" >&2; exit 1; }
 if jq -e '((.cookies // []) | length) + ((.origins // []) | length) > 0' "$STATE" >/dev/null 2>&1; then
   echo "Session saved: $(jq -r '"\((.cookies // []) | length) cookies, \((.origins // []) | length) origins with localStorage"' "$STATE")."
-  echo "The Visual-Tester will use it the next time its tab starts (or after cleaning it with clean.sh)."
+  echo "The E2E-Tester will use it the next time its tab starts (or after cleaning it with clean.sh)."
 else
   echo "Warning: the saved session is empty. Did you close the browser before finishing the login?" >&2; exit 1
 fi

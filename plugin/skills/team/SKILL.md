@@ -5,7 +5,7 @@ description: Guide to the orca-roles kit, for any Claude Code session and for th
 
 # orca-roles kit: guide
 
-orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Researcher, Dev, Tester, Auditor, Visual-Tester, Deployer) in every new worktree and coordinates them through Orca Orchestration. This guide tells you how to help the user with the kit itself. Talk to the user in their language.
+orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer) in every new worktree and coordinates them through Orca Orchestration. This guide tells you how to help the user with the kit itself. Talk to the user in their language.
 
 **First, find out where you are:**
 
@@ -42,8 +42,8 @@ git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook
 git -C orca-role-hook pull && bash orca-role-hook/install.sh                                     # update
 ```
 
-- Requirements: `jq` (essential), Orca with Orchestration enabled (Settings > Experimental), Claude Code; Node and `npx playwright install chromium` for the Visual-Tester.
-- Updating keeps `config.json` and `roles/`, and adds the new options.
+- Requirements: `jq` (essential), Orca with Orchestration enabled (Settings > Experimental), Claude Code; Node and `npx playwright install chromium` for the E2E-Tester.
+- Updating keeps `config.json` and `roles/`, and adds the new options. The Visual-Tester is now the E2E-Tester (`e2e-tester`): an old `visual-tester` in `config.json`, `.orca-roles.json` or the setup script options is renamed automatically, keeping its settings.
 - The installer adds the `roles`, `new-role` and `roles-yaml` commands (active in new terminals, or after `source ~/.bashrc`).
 - **Windows**: the kit runs in WSL2. The repo goes inside WSL (`~/...`), the project is added in Orca with its WSL path (`\\wsl.localhost\Ubuntu\home\<user>\<repo>`), and `jq`, Claude Code and Node are installed inside WSL. In Orca's WSL terminals the CLI is called `$ORCA_CLI_COMMAND` (e.g. `orca-ide`); the installer adds an `orca` alias for it.
 - The kit's Planner loads this same guide on its own; this plugin is only needed to get help outside the kit's sessions.
@@ -67,7 +67,7 @@ Where the hook does not fire (main checkout, existing worktrees, after a restart
 For a single project, `.orca-roles.json` at the repo root, with the same shape (objects are merged field by field; lists are replaced whole):
 
 ```json
-{ "roles": { "visual-tester": { "enabled": false }, "deployer": { "enabled": false } } }
+{ "roles": { "e2e-tester": { "enabled": false }, "deployer": { "enabled": false } } }
 ```
 
 ## 4. Exceptions in the setup script
@@ -161,7 +161,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 1. **This workspace**: close its tab as above (`close-role.sh`).
 2. **For good**:
    - A role the user created: `~/.orca-roles/bin/new-role.sh --remove <id>` (removes its entry and its prompt, leaves `config.json.bak`).
-   - A default role (planner, researcher, dev, tester, auditor, visual-tester, deployer): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
+   - A default role (planner, researcher, dev, tester, auditor, e2e-tester, deployer): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
 
 ## 8. Diagnosis
 
