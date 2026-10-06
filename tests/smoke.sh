@@ -27,6 +27,10 @@ grep -q '^## Plan review method' "$ROOT/prompts/planner.md" || { echo "FAIL plan
 grep -q '^## Resuming a workspace after a restart' "$ROOT/prompts/planner.md" || { echo "FAIL planner.md without the resume section"; FAIL=1; }
 grep -q 'reply to the user in the language they write to you in' "$ROOT/prompts/planner.md" || { echo "FAIL planner.md does not reply in the user's language"; FAIL=1; }
 echo "ok   prompt pattern"
+grep -q 'No heartbeats' "$ROOT/prompts/common-workers.md" || { echo "FAIL common-workers.md: falta la regla de no enviar heartbeats"; FAIL=1; }
+grep -q 'lastOutputAt' "$ROOT/prompts/planner.md" || { echo "FAIL planner.md: la detección de workers silenciosos debe usar lastOutputAt"; FAIL=1; }
+grep -q 'last_heartbeat_at' "$ROOT/prompts/planner.md" && { echo "FAIL planner.md: aún depende de last_heartbeat_at"; FAIL=1; }
+echo "ok   heartbeats: workers no laten, planner vigila por lastOutputAt"
 
 # Every role in the config has a prompt
 for r in $(jq -r '.roles | keys_unsorted[]' "$KIT/config.default.json"); do
