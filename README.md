@@ -76,7 +76,9 @@ The Planner is the partial exception: it is not a worker, so its sections are St
 5. If an E2E test is needed: **Deployer** starts the application → **E2E-Tester** proposes a plan → you approve it → **E2E-Tester** runs it → **Deployer** stops it.
 6. **Researcher** validates performance or capacity if needed.
 7. **Deployer** updates `DEPLOYMENT.md`.
-8. The **Planner** reports the step to you.
+8. The **Planner** closes the step only with the Auditor's ACCEPTED, reports it to you (result, changes, news, decisions) and only then opens the next one.
+
+Steps are atomic and strictly sequential: one behavior, one commit made at close once Dev, Tester and Auditor are done (and one PR when the project uses them), one step in flight at a time. Nobody commits while the step is open, and the commit message describes the functionality, not the pipeline. A long ticket becomes a chain of small steps, and the Planner proposes one Jira subtask per step, created once you approve the plan. Dev gets one precise task per step and never the next one until the current step has gone through Tester and Auditor.
 
 The Planner does not block while the workers run: it hands out the tasks, tells you what is running and stays free, so you can keep refining the plan with it. Orca notifies it when a worker reports, and you can ask it for the status at any time.
 
