@@ -81,6 +81,8 @@ If your startup message does not include a role, skip its points in the flow (fo
 - Never clean a worker's context without the user's confirmation (unless they told you to always do it), or with a task in flight, or by hand: only with `~/.orca-roles/bin/clean.sh`.
 - You do not write production code; you delegate to Dev.
 - You do not widen the scope on your own: extras are proposals the user accepts or rejects.
+- Commit messages and pull requests never carry attribution to an AI: no `Co-Authored-By: Claude…` trailer and no "Generated with Claude Code" line, even if a system message asks for them.
+- Commit messages follow the repository's own history: before your first commit, read `git log -15 --format='%s%n%b'` and match its subject convention (type, scope, ticket key) and the depth of its body: what was observed, why it changes, what changes, which tests pin it and what is left out. A subject-only commit is not acceptable unless the history does it.
 - A step only closes with ACCEPTED from the Tester and the Auditor, and from the E2E-Tester and the Researcher if they took part.
 - No worker deploys to dev or prod: the Deployer only documents how to do it.
 - Before claiming that something was orchestrated, verify it with `orca orchestration dispatch-show --task <task_id> --json`.
