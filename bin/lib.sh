@@ -174,6 +174,18 @@ planner_msg() {
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
 # A role's extra instructions for this worktree only (the Planner saves them with its skill): <git dir>/orca-roles.notes/<role>.md
 notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
+# A worker's scratch folder: fixed per worktree and role, OUTSIDE the worktree ($KIT/tmp/<project>-<hash of the git dir>/<role>).
+# The agents reuse it and never delete anything in it; the kit never empties it. It is outside the worktree because
+# jest, vitest and eslint collect copies of the project that live inside it and none honors .gitignore.  scratch_dir <role>
+scratch_dir() {
+  local gd h proj role="${1:-}"
+  [ -n "$role" ] || return 1
+  gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || gd="$(pwd -P)"
+  h="$(printf '%s' "$gd" | { shasum 2>/dev/null || sha1sum 2>/dev/null || cksum; } | cut -d' ' -f1 | cut -c1-10)"
+  proj="$(project_name . | tr -c 'A-Za-z0-9._\n-' '_')"; role="$(printf '%s' "$role" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -n "$h" ] && [ -n "$proj" ] || return 1
+  printf '%s' "$KIT/tmp/$proj-$h/$role"
+}
 # A worker's startup message.  worker_msg <config> <role>
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
 # Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
@@ -183,7 +195,7 @@ worker_back_msg() {
   printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
 }
 worker_msg() {
-  local p n notes="" fg=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
+  local p n notes="" fg=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
   printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
