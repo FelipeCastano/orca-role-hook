@@ -163,6 +163,8 @@ planner_msg() {
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   if [ "$resume" = 1 ]; then
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
+  elif [ "$resume" = 2 ]; then
+    msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
   else
     msg="$msg Start with the startup."
   fi
@@ -176,6 +178,10 @@ notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
 # Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
 # background subagent task that never finished, so Orca never got its report.
+# A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
+worker_back_msg() {
+  printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
+}
 worker_msg() {
   local p n notes="" fg=""; p="$(params_of "$1" "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac

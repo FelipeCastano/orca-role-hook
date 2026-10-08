@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Launches a role's agent according to the configuration.  Usage: agent.sh <role>
+# Launches a role's agent according to the configuration.  Usage: agent.sh <role> [--resume <claude session id>]
+# --resume: reopen the role's previous Claude Code conversation (launch.sh uses it for a tab Orca restored after a restart).
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
-ROLE="$1"
+ROLE="$1"; shift; RESUME=""
+while [ $# -gt 0 ]; do case "$1" in --resume) RESUME="${2:-}"; shift;; esac; shift; done
 CFG="${ORCA_ROLES_CONFIG:-}"
 if [ -z "$CFG" ] || [ ! -f "$CFG" ]; then CFG="$(mktemp)"; merged_config . > "$CFG"; fi
 
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
+[ -n "$RESUME" ] && [ "$AGENT" != claude ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
 PERM="$(rstr "$CFG" "$ROLE" permissionMode)"
 PROMPT="$(prompt_of "$CFG" "$ROLE")"
 
@@ -48,6 +51,7 @@ case "$AGENT" in
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
     add_list extraArgs
+    [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
     exec claude "${ARGS[@]}"
     ;;
   codex)

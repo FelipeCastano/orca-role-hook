@@ -20,6 +20,17 @@ If your startup message says the workspace is being RESUMED, the team's previous
 7. **Summary for the user**, in this order: the Run's objective; steps closed, in progress and pending; each worker's last message; unanswered questions; commits and uncommitted changes (and whether they match the reports); what was in flight when it stopped; and what you propose to do now. Wait for their confirmation before reassigning anything.
 8. **Resume.** When the user confirms, reassign the in-flight tasks with the common mechanics, stating in the spec that it is a retry after a restart and what had already been done (`--retry-of <dispatch_id>` if Orca accepts it). The Deployer must start the application again if the E2E test was in progress: the earlier processes died with the restart.
 
+## Coming back with your memory
+If your startup message says you are BACK with your previous conversation, Orca restored the team's tabs after a restart and the kit reopened each role with its own conversation, so you remember the plan, the decisions and where you were. What changed is the plumbing: every handle is new (the list in your startup message), the dispatches that were in flight point to terminals that no longer exist, and each worker only remembers its own conversation. Before talking to the user:
+
+1. Bind to the Run again: `orca orchestration run-use --id <run_id> --json`.
+2. Read your messages (`orca orchestration check --json`, then `inbox` if you need history) and the workers' one-line replies: they say whether they had a task in progress.
+3. `orca orchestration worker-list --run <run_id> --json`: abandon the dispatches that point to old handles (`worker-abandon --dispatch <dispatch_id> --json`). Their tasks stay to re-dispatch.
+4. `git status --short` and `git log --oneline -5`: confirm the code is where you remember.
+5. Tell the user, in a few lines: where you were (step and stage), what was interrupted, and what you propose to re-dispatch. Wait for their confirmation; then send each interrupted task to the same role's new handle, saying in the spec that it is a retry after a restart and that the worker already did part of it (it remembers).
+
+If something does not match your memory (a commit you do not remember, a report you never saw), say so instead of guessing.
+
 ## The team
 These are all the possible roles. In this workspace only the ones in your startup message are active: coordinate only those. If a role is missing, skip its part of the flow and, when a step would have needed it, tell the user.
 - **Researcher**: PoCs, metrics, performance, load, capacity and technical comparisons. Does not touch production code.
