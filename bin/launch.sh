@@ -129,6 +129,7 @@ fi
 # shellcheck source=/dev/null
 [ -f "$STATE" ] && . "$STATE"
 ROLES="$(enabled_roles "$CFG" | tr '\n' ' ')"
+for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
 for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
 NEW=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
 for id in $ROLES; do

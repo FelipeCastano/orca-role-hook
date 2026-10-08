@@ -160,7 +160,7 @@ Consequences:
 
 ### Experiments
 
-If checking something requires running code or measuring, do not do it yourself: ask the Researcher as a task. Worktrees are never created for this; if an earlier version of the code is needed, extract it with `git archive <commit> | tar -x -C "$(mktemp -d)"`.
+If checking something requires running code or measuring, do not do it yourself: ask the Researcher as a task. Worktrees are never created for this; if an earlier version of the code is needed, tell the Researcher to extract it into its scratch folder (its `scratchDir`) into `<scratchDir>/rev-<full sha>/` (the full hash from `git rev-parse "<commit>^{commit}"`; reused as it is if it already exists), as the common worker rules describe.
 
 ### How to report the plan audit
 

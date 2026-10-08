@@ -42,6 +42,7 @@ case "$AGENT" in
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
     [ -n "$PERM" ] && [ "$PERM" != default ] && ARGS+=(--permission-mode "$PERM")
     ARGS+=(--add-dir "$KIT/prompts")
+    SD="$(scratch_dir "$ROLE")" && mkdir -p "$SD" && ARGS+=(--add-dir "$SD")   # the role's scratch folder, outside the worktree
     PDIR="$(dirname "$PROMPT")"
     [ "$PDIR" != "$KIT/prompts" ] && [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR")
     add_list extraDirs --add-dir path
