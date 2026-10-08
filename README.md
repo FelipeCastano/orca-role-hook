@@ -294,7 +294,8 @@ Each role inherits from `defaults` whatever it does not define.
 | `allowedTools` | Tools allowed without asking. `claude` only. |
 | `extraDirs` | Extra folders the agent can access. Accepts `~` and `{kit}`. `claude` only. |
 | `extraArgs` | Additional arguments, as they are, for the CLI. In `custom` they are appended to the command. |
-| `env` | Environment variables for that agent (`defaults.env` and the role's are merged). |
+| `env` | Environment variables for that agent (`defaults.env` and the role's are merged). The Tester and the Auditor come with thread caps (`OMP_NUM_THREADS`, `GOMAXPROCS`, `MAKEFLAGS=-j2`...) and `CUDA_VISIBLE_DEVICES=` so they do not saturate the CPU or use the GPU. |
+| `nice` | CPU priority of the agent and everything it runs (`nice -n`): the Tester and the Auditor run at 10, so their test and mutation runs yield to you and to the other roles. `0` or absent: normal priority. |
 | `params` | Parameters passed to the role in its startup message (the Tester's limits and `maxSelfMutants`, the Auditor's `maxMutants` and `rejectSeverity`, the E2E-Tester's `evidenceDir`...). Each prompt documents its own and their default value. |
 | `command` | Only with `agent: "custom"`: command to run. Accepts `{model}`, `{prompts}`, `{prompt}` and `{mcp}`. |
 | `pluginDirs` | Claude Code plugins that role loads (`--plugin-dir`). Accepts `~` and `{kit}`. The planner brings `{kit}/plugin`, with its skill. `claude` only. |
