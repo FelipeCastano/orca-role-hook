@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the Planner,
 # tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
-# Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>"]
+# Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>" ["<remembered roles>"]]
+#   resumed: reopened without memory (the Planner recovers the state); remembered: reopened with their previous conversation.
 set -uo pipefail
-WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"
+WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"; REMEMBERED="${6:-}"
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 # shellcheck source=/dev/null
 . "$STATE"
@@ -16,13 +17,14 @@ press_enter() { orca terminal send --terminal "$1" --enter --json >/dev/null 2>&
 kick() {  # $1 handle, $2 message
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-    if screen_of "$1" | grep -qiE 'trust the files|trust this folder|do you trust|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
+    if screen_of "$1" | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
       press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
     else break; fi
   done
   orca terminal send --terminal "$1" --text "$2" --enter --json >/dev/null && echo "Prompt sent to $1"
 }
 is_new() { case " $NEW " in *" $1 "*) return 0;; *) return 1;; esac; }
+remembers() { case " $REMEMBERED " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 # The worktree's identity: branch and, if any, Jira key (Orca's linkedWorkItem or, without a link, the branch; see jira_key)
 BRANCH="$(git branch --show-current 2>/dev/null)"
@@ -75,14 +77,14 @@ composer_watch() {
 composer_watch & WATCH_PID=$!
 
 if is_new planner; then
-  RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac
+  RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
   kick "$PLANNER" "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
 fi
 for id in $ROLES; do
   [ "$id" = planner ] && continue
   is_new "$id" || continue
   v=$(var_of "$id")
-  kick "${!v}" "$(worker_msg "$CFG" "$id")"
+  if remembers "$id"; then kick "${!v}" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$(worker_msg "$CFG" "$id")"; fi
 done
 
 wait "$WATCH_PID"   # the composer watcher may still be polling

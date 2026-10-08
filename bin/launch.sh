@@ -27,6 +27,8 @@ WT="${WT:-${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}}"; WT="${WT:-active}"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 OVR="$GITDIR/orca-roles.overrides.json"  # this worktree's exceptions
 STATE="$GITDIR/orca-roles.env"
+PTY="$GITDIR/orca-roles.pty"             # each role's ptyId: stable across restarts, unlike the handle (see restored_handle)
+KICKOFF="${ORCA_ROLES_KICKOFF:-$KIT/bin/kickoff.sh}"
 CFG="$GITDIR/orca-roles.config.json"     # copy of the effective config for this worktree
 LOG="$GITDIR/orca-roles-launch.log"
 exec > >(tee -a "$LOG") 2>&1
@@ -66,6 +68,34 @@ role_alive() {  # role_alive <role> <handle>
   return 2
 }
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
+pty_of_handle() { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("ptyId")) | .ptyId] | first // empty' 2>/dev/null; }
+saved_pty() { grep "^$1=" "$PTY" 2>/dev/null | head -1 | cut -d= -f2-; }
+# After a restart (of the computer or of Orca), Orca restores the tabs that were open with NEW handles and, in each agent tab,
+# relaunches the agent with 'claude --resume <session>' but without the kit's settings (model, auto mode, plugin, MCP...).
+# The ptyId of a tab does not change, so the restored tab of a role is the worktree terminal whose ptyId is the saved one.
+restored_handle() { printf '%s' "$LIST" | jq -r --arg p "$1" '[.. | objects | select(has("handle") and .ptyId == $p) | .handle] | first // empty' 2>/dev/null; }
+# The Claude session Orca resumed in a restored tab: the 'claude' process whose ORCA_TERMINAL_HANDLE is that handle, started with --resume <id>.
+session_of_handle() {
+  [ -n "${ORCA_ROLES_SESSION_OF:-}" ] && { "$ORCA_ROLES_SESSION_OF" "$1"; return 0; }   # test hook
+  local pid env
+  for pid in $(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)claude$/ {print $1}'); do
+    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
+    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
+    ps -o args= -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -A1 -x -- '--resume' | tail -1 | grep -E '^[0-9a-f-]{36}$'
+    return 0
+  done
+  return 0
+}
+# Claude Code asks "Do you trust the files in this folder?" the first time it starts in a folder, and a tab stuck in that dialog never
+# gets its role. Registering the kit in the project is that answer, so the worktree is marked as trusted before the agents start.
+trust_folder() {
+  local f="$HOME/.claude.json" d; d="$(pwd -P)"
+  [ -f "$f" ] || return 0
+  jq -e --arg d "$d" '.projects[$d].hasTrustDialogAccepted == true' "$f" >/dev/null 2>&1 && return 0
+  if jq --arg d "$d" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' "$f" > "$f.orca-roles.tmp" 2>/dev/null && mv "$f.orca-roles.tmp" "$f"; then
+    echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents."
+  else rm -f "$f.orca-roles.tmp"; fi
+}
 
 WAIT="$(setting "$CFG" launchWaitSeconds 15)"
 LIST=""
@@ -99,9 +129,10 @@ fi
 # shellcheck source=/dev/null
 [ -f "$STATE" ] && . "$STATE"
 ROLES="$(enabled_roles "$CFG" | tr '\n' ' ')"
-NEW=""; RESUMED=""   # RESUMED: roles whose previous tab died (e.g. after a restart); the Planner recovers the state
+for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
+NEW=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
 for id in $ROLES; do
-  v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
+  v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
   role_alive "$id" "${!v:-}"; st=$?
   [ "$st" = 0 ] && continue
   if [ "$st" = 3 ]; then
@@ -111,11 +142,22 @@ for id in $ROLES; do
     RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
     orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
   elif [ -n "${!v:-}" ]; then
-    RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
+    p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p")"
+    if [ -n "$rh" ]; then
+      case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_handle "$rh")";; esac
+      orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || true
+      if [ -n "$sid" ]; then
+        REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
+      else
+        RESUMED="$RESUMED $id"; echo "Orca restored the tab of $t after a restart ($rh), but its session could not be read; closing it and opening a new one."
+      fi
+    else
+      RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
+    fi
   fi
   h=""
   for try in 1 2 3; do
-    h=$(orca terminal create --worktree "$WT" --title "$t" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id" --json 2>&1 | handle_of)
+    h=$(orca terminal create --worktree "$WT" --title "$t" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
     [ -n "$h" ] && break
     echo "Retrying $t ($try/3)..."; sleep 2
   done
@@ -123,11 +165,12 @@ for id in $ROLES; do
   printf -v "$v" '%s' "$h"; NEW="$NEW $id"
 done
 
-: > "$STATE"
-for id in $ROLES; do v="$(var_of "$id")"; echo "$v=${!v}" >> "$STATE"; done
+: > "$STATE"; : > "$PTY"
+for id in $ROLES; do v="$(var_of "$id")"; echo "$v=${!v}" >> "$STATE"; echo "$v=$(pty_of_handle "${!v}")" >> "$PTY"; done
 cat "$STATE"
 
 if [ -z "$NEW" ]; then echo "All roles are already open."; exit 0; fi
-[ -n "$RESUMED" ] && echo "Resuming workspace: the Planner will recover the previous state and give you a summary."
-nohup "$KIT/bin/kickoff.sh" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" > "$GITDIR/orca-roles-kickoff.log" 2>&1 &
+[ -n "$REMEMBERED" ] && echo "Resuming workspace:$REMEMBERED keep their conversation from before the restart."
+[ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; the Planner will recover the previous state and give you a summary."
+nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" > "$GITDIR/orca-roles-kickoff.log" 2>&1 &
 echo "Role kickoff in progress (log: $GITDIR/orca-roles-kickoff.log)"

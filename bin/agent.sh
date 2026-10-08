@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Launches a role's agent according to the configuration.  Usage: agent.sh <role>
+# Launches a role's agent according to the configuration.  Usage: agent.sh <role> [--resume <claude session id>]
+# --resume: reopen the role's previous Claude Code conversation (launch.sh uses it for a tab Orca restored after a restart).
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
-ROLE="$1"
+ROLE="$1"; shift; RESUME=""
+while [ $# -gt 0 ]; do case "$1" in --resume) RESUME="${2:-}"; shift;; esac; shift; done
 CFG="${ORCA_ROLES_CONFIG:-}"
 if [ -z "$CFG" ] || [ ! -f "$CFG" ]; then CFG="$(mktemp)"; merged_config . > "$CFG"; fi
 
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
+NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester and the Auditor run lowered
+RUN=(); if [ -n "$NICE" ] && [ "$NICE" != 0 ] && command -v nice >/dev/null; then RUN=(nice -n "$NICE"); fi
+[ -n "$RESUME" ] && [ "$AGENT" != claude ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
 PERM="$(rstr "$CFG" "$ROLE" permissionMode)"
 PROMPT="$(prompt_of "$CFG" "$ROLE")"
 
@@ -48,7 +53,8 @@ case "$AGENT" in
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
     add_list extraArgs
-    exec claude "${ARGS[@]}"
+    [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
+    exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"
     ;;
   codex)
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
@@ -56,7 +62,7 @@ case "$AGENT" in
     # MCP servers as configuration overrides (-c mcp_servers.<name>.<field>=...), without touching ~/.codex/config.toml
     if [ -n "$MCPFILE" ]; then while IFS= read -r o; do [ -n "$o" ] && ARGS+=(-c "$o"); done < <(codex_mcp_overrides "$MCPFILE"); fi
     add_list extraArgs
-    exec codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
+    exec "${RUN[@]+"${RUN[@]}"}" codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
     ;;
   custom)
     # The command runs in a login shell (your profile's PATH). Placeholders:
@@ -70,7 +76,7 @@ case "$AGENT" in
     CMD="${CMD//\{model\}/$Q_MODEL}"; CMD="${CMD//\{prompts\}/$Q_PROMPTS}"; CMD="${CMD//\{prompt\}/$Q_PROMPT}"; CMD="${CMD//\{mcp\}/$Q_MCP}"
     add_list extraArgs
     for a in "${ARGS[@]+"${ARGS[@]}"}"; do CMD="$CMD $(printf '%q' "$a")"; done
-    exec bash -lc "$CMD"
+    exec "${RUN[@]+"${RUN[@]}"}" bash -lc "$CMD"
     ;;
   *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;;
 esac
