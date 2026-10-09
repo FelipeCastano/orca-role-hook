@@ -180,5 +180,6 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |
 | A worker did the work but never reported | Check its dispatch (`dispatch-show`: `last_heartbeat_at`). Usually a non-Claude agent that ran `orca orchestration send` as a background task; ask the user to look at its tab |
 | A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
+| A role lost its role after a manual `/clear` or `/new` | Claude and Codex roles ask for it again on the next message (`clean.sh --msg <role>`, from a line outside the conversation). A `custom` role only if its `command` passes `{anchor}`; otherwise `clean.sh <role>`, or tell it to run `clean.sh --msg <role>` |
 
 More cases in the "Troubleshooting" table of `~/.orca-roles/README.md`.

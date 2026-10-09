@@ -104,6 +104,17 @@ jira_key() {
   fi
   printf '%s' "$k" | tr 'a-z' 'A-Z'
 }
+# The worktree's Jira ticket for the Planner, as two lines: key and url (no key with settings.jiraHandoff off). The key comes
+# from Orca's linked work item or, without one, from the branch (see jira_key).  worktree_jira <worktree> <config>
+worktree_jira() {
+  local j id url key
+  j="$(orca worktree show --worktree "$1" --json 2>/dev/null)"
+  id=$(printf '%s' "$j" | jq -r '[.. | objects | select(.provider? == "jira") | .jiraIdentifier // empty] | first // empty' 2>/dev/null)
+  url=$(printf '%s' "$j" | jq -r '[.. | objects | select(.provider? == "jira") | .url // empty] | first // ([.. | strings | select(test("atlassian\\.net/browse/"))] | first) // empty' 2>/dev/null)
+  key="$(jira_key "$(git branch --show-current 2>/dev/null)" "$id" "$url")"
+  [ "$(setting "$2" jiraHandoff true)" = true ] || key=""
+  printf '%s\n%s\n' "$key" "$url"
+}
 # Expression (jq, case-insensitive) the title of the composer's extra session must match for it to be closed:
 # it starts with the Jira key followed by a separator or the end ("DEVGD-220", "DEVGD-220: summary"),
 # or it is exactly the branch name. Empty if there is neither key nor branch.  composer_title_regex <key> <branch>
@@ -163,12 +174,20 @@ planner_msg() {
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   if [ "$resume" = 1 ]; then
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
+  elif [ "$resume" = 3 ]; then
+    msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
   else
     msg="$msg Start with the startup."
   fi
   printf '%s' "$msg"
+}
+# The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt
+# (--append-system-prompt), codex as developer_instructions, custom through {anchor} / $ORCA_ROLES_ANCHOR if its command uses them.
+# The role itself arrives as a message, so when that message is gone the agent asks the kit for it again.  role_anchor <config> <role>
+role_anchor() {
+  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you."
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
