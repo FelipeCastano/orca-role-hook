@@ -327,7 +327,7 @@ Codex (`agent: "codex"`):
 - `permissionMode: "auto"` runs it with `--sandbox workspace-write --ask-for-approval on-request`. The role's scratch folder and each `extraDirs` entry are always passed as `--add-dir` (they are writable only with `workspace-write`).
 - Every codex role needs codex >= 0.48 (`--add-dir` is passed in every mode).
 - The trust dialog is answered with a single `-c 'projects={"<worktree>" = {trust_level = "trusted"}}'` override: nothing is written to `~/.codex/config.toml`.
-- This behaviour was read from the Codex 0.162 source, **not verified against a real installation**.
+- Checked with Codex 0.162 without a session that uses a model: it rejects `--full-auto`, accepts the flags above, and with the `-c projects` override it opens without the trust dialog and writes nothing to its `config.toml`. Whether the `--add-dir` folders are writable in a real session was not measured.
 
 Antigravity (`agy`) has no trust flag and no sandbox that lets it write only in some folders. Example:
 
