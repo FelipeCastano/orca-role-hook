@@ -64,10 +64,10 @@ Where the hook does not fire (main checkout, existing worktrees, after a restart
 
 ## 3. Everyday configuration (`config.json`)
 
-- `settings`: general behavior (`launchWaitSeconds`, `kickoffTimeoutSeconds`, `jiraHandoff`, `closeComposerAgent`, `cleanWorkersAfterStep`, `language`: the language you reply to the user in, `"auto"` to use theirs...).
+- `settings`: general behavior (`launchWaitSeconds`, `kickoffTimeoutSeconds`, `jiraHandoff`, `closeComposerAgent`, `cleanWorkersAfterStep`, `mode`, `language`: the language you reply to the user in, `"auto"` to use theirs...).
 - `defaults`: what each role inherits if it does not define it.
 - `mcpServers`: MCP servers defined once; each role picks which ones with `mcp` (`"all"` = the agent's own).
-- `roles.<id>`: `enabled`, `title`, `description`, `prompt`, `agent` (`claude`, `codex`, `custom`), `model`, `permissionMode`, `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `nice`, `pluginDirs`, `command`, `addDirFlag`, `trust`, `clearCommand`. With `custom`, `addDirFlag` (e.g. `"--add-dir"`) passes it the scratch folder and `extraDirs`, and `trust` (`{"file": ..., "jq": ...}`) marks the worktree as trusted in a JSON settings file; the README has the details. The order of the tabs is the order of the roles.
+- `roles.<id>`: `enabled`, `title`, `description`, `prompt`, `agent` (`claude`, `codex`, `custom`), `model`, `permissionMode`, `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `nice`, `pluginDirs`, `command`, `addDirFlag`, `trust`, `clearCommand`, `modes`. With `custom`, `addDirFlag` (e.g. `"--add-dir"`) passes it the scratch folder and `extraDirs`, and `trust` (`{"file": ..., "jq": ...}`) marks the worktree as trusted in a JSON settings file; the README has the details. The order of the tabs is the order of the roles.
 
 For a single project, `.orca-roles.json` at the repo root, with the same shape (objects are merged field by field; lists are replaced whole):
 
@@ -84,9 +84,12 @@ Options on the `launch.sh` line of the project's setup script (or with `roles` i
 | `--only a,b` | Only those roles; the planner always runs. |
 | `--enable a,b` / `--disable a,b` | Enable or disable roles. The planner cannot be disabled. |
 | `--set path=value` | Any key; the value is read as JSON if it is JSON. E.g.: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `roles.tester.params.maxNewTests=5`. |
+| `--mode <mode>` | The team's mode (see Modes below). |
 | `--reset` | Forgets the worktree's saved exceptions. |
 
 They are saved per worktree and `roles` without options reapplies them. An unknown role makes the startup fail with the list of valid roles. They only decide which tabs open: disabling an open role does not close its tab.
+
+**Modes.** The kit has three fixed modes (`programmer`, `pr-reviewer`, `academic-writer`); only `programmer` exists today (a mode is available when `prompts/<mode>/planner.md` exists). Priority, lowest to highest: `settings.mode` in `config.json` (default `programmer`), `settings.mode` in `.orca-roles.json`, `--mode <x>` (saved in the worktree's exceptions and kept when later options omit it; `--mode` or `--set settings.mode=<mode>` change it and `--reset` drops it). An id that is not exactly one of the three, or not available, stops the launch before any tab opens. A role's `modes` is `"all"` or a list of mode ids (default `["programmer"]`); only the enabled roles of the mode open, and `--only/--enable/--disable` with a role outside it is an error. `prompt` is a path (programmer only) or `{"<mode>": "<path>"}`; without an entry, `prompts/<mode>/<role>.md`, and a role without its prompt file is skipped with a warning. The mode cannot change while the worktree's team is open: close it first (`close-role.sh` or the tabs). A custom `prompt` pointing to the old flat `~/.orca-roles/prompts/<role>.md` no longer exists: prompts moved to `prompts/programmer/`.
 
 When to recommend each: something for good → `config.json`; something for one project they want to version or share → `.orca-roles.json`; a quick project exception with no files → setup script options.
 

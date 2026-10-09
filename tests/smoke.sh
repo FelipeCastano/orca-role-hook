@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -805,6 +805,233 @@ check "launch: an error does not overwrite the saved exceptions" "$(jq -c .only 
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
 }
 
+sec_modes() {
+# Modes: selection (config < .orca-roles.json < --mode), roles per mode, prompts per mode and the open-team rule.
+# Own test kit (never the clone) with a fake second mode, pr-reviewer: planner + rv, and a role with "modes":"all" that has no prompt for it.
+pk_setup
+mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
+: > "$PK/prompts/programmer/allrole.md"
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all" },
+             "dev": { "title": "Dev", "modes": ["programmer"] },
+             "allrole": { "title": "Allrole", "modes": "all" },
+             "rv": { "title": "Rv", "modes": ["pr-reviewer"] } } }
+J
+M="$TMP/mproj"; mkdir -p "$M" "$TMP/mbin"; git -C "$M" init -q; MG="$M/.git"
+MLOG="$TMP/morca.log"; : > "$MLOG"
+cat > "$TMP/mbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$MLOG"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal list") [ -f "$TMP/m-listfail" ] && exit 1; exit 0;;
+  "terminal show") [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/mbin/orca"; printf '#!/bin/sh\nexit 0\n' > "$TMP/mbin/kickoff"; chmod +x "$TMP/mbin/kickoff"
+ml() { (cd "$M" && HOME="$PH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+mh() { cut -d= -f1 "$MG/orca-roles.env" | tr '\n' ' '; }
+mmode() { jq -r '.settings.mode' "$MG/orca-roles.config.json"; }
+mcreates() { grep -c '^terminal create' "$MLOG" || true; }
+mstate() { echo "$(cat "$MG/orca-roles.config.json" "$MG/orca-roles.env" 2>/dev/null | cksum) $(cat "$MG/orca-roles.overrides.json" 2>/dev/null | cksum)"; }
+MC="$PK/config.json"
+
+# mode ids: exact match, availability
+check "mode_error: known and available" "$(KIT="$PK" mode_error programmer)" ""
+check "mode_error: pr-reviewer available with its planner prompt" "$(KIT="$PK" mode_error pr-reviewer)" ""
+check "mode_error: known but not available" "$(KIT="$PK" mode_error academic-writer)" "mode 'academic-writer' is not available yet"
+for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr-reviewer/../programmer" program pr programmer2 pr-reviewer-x; do
+  check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-writer)"
+done
+check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner") | .value.modes] | unique)]' "$PKC")" '["programmer","all",[["programmer"]]]'
+check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "planner researcher dev tester auditor e2e-tester deployer "
+
+# roles and prompts per mode (library level)
+mcfg() { jq -c "$1" "$MC" > "$TMP/m.json"; }
+check "enabled_roles: programmer" "$(KIT="$PK" enabled_roles "$MC" | tr '\n' ' ')" "planner dev allrole "
+jq '.settings.mode = "pr-reviewer"' "$MC" > "$TMP/m-pr.json"
+check "enabled_roles: pr-reviewer = planner + its roles + 'all'" "$(KIT="$PK" enabled_roles "$TMP/m-pr.json" | tr '\n' ' ')" "planner allrole rv "
+check "prompts_dir_of follows the mode" "$(KIT="$PK" prompts_dir_of "$TMP/m-pr.json")" "$PK/prompts/pr-reviewer"
+check "prompt_of: default path in the mode's folder" "$(KIT="$PK" prompt_of "$TMP/m-pr.json" rv)" "$PK/prompts/pr-reviewer/rv.md"
+jq '.roles.dev.prompt = "/p/dev.md" | .roles.rv.prompt = {"pr-reviewer": "~/x/rv.md"} | .roles.allrole.prompt = {"programmer": "/p/all.md"}' "$TMP/m-pr.json" > "$TMP/m-pp.json"
+check "prompt_of: object entry for the mode (accepts ~)" "$(KIT="$PK" prompt_of "$TMP/m-pp.json" rv)" "$HOME/x/rv.md"
+check "prompt_of: string prompt is programmer only" "$(KIT="$PK" prompt_of "$TMP/m-pp.json" dev)" "$PK/prompts/pr-reviewer/dev.md"
+check "prompt_of: object without entry for the mode falls back to the default" "$(KIT="$PK" prompt_of "$TMP/m-pp.json" allrole)" "$PK/prompts/pr-reviewer/allrole.md"
+jq '.settings.mode = "programmer"' "$TMP/m-pp.json" > "$TMP/m-pp2.json"
+check "prompt_of: string prompt in programmer" "$(KIT="$PK" prompt_of "$TMP/m-pp2.json" dev)" "/p/dev.md"
+check "prompt_of: object entry in programmer" "$(KIT="$PK" prompt_of "$TMP/m-pp2.json" allrole)" "/p/all.md"
+check "worker_msg: common-workers.md from the mode's folder" "$(cd "$M" && KIT="$PK" worker_msg "$TMP/m-pr.json" rv | grep -o "Read [^ ]*common-workers.md and [^ ]*rv.md")" "Read $PK/prompts/pr-reviewer/common-workers.md and $PK/prompts/pr-reviewer/rv.md"
+check "launchable_roles: a role in the mode without prompt is skipped, with a warning" "$(KIT="$PK" launchable_roles "$TMP/m-pr.json" 2>&1 | tr '\n' ' ')" "planner Warning: role allrole is skipped: it has no prompt for mode pr-reviewer (expected $PK/prompts/pr-reviewer/allrole.md). rv "
+jq '.roles.planner.prompt = {"pr-reviewer": "/nonexistent/planner.md"}' "$TMP/m-pr.json" > "$TMP/m-pl.json"
+check "launchable_roles: the planner is never skipped, even without its prompt file" "$(KIT="$PK" launchable_roles "$TMP/m-pl.json" 2>/dev/null | tr '\n' ' ')" "planner rv "
+jq '.roles.planner.modes = ["pr-reviewer"] | .roles.planner.enabled = false' "$MC" > "$TMP/m-pm.json"
+check "enabled_roles: the planner runs in every mode, whatever its modes and enabled say" "$(KIT="$PK" enabled_roles "$TMP/m-pm.json" | tr '\n' ' ')" "planner dev allrole "
+# validation of modes and prompt
+check "check_config: valid" "$(KIT="$PK" check_config "$MC")" ""
+for v in '["foo"]' '5' '[]' '["programmer","Foo"]' '"programmer"' '[1]'; do
+  jq --argjson v "$v" '.roles.dev.modes = $v' "$MC" > "$TMP/m-bad.json"
+  check "check_config rejects modes $v" "$(KIT="$PK" check_config "$TMP/m-bad.json" | grep -c '^ERROR: role dev: modes')" "1"
+done
+for v in '{"foo": "x"}' '{"programmer": 1}' '5' '["x"]'; do
+  jq --argjson v "$v" '.roles.dev.prompt = $v' "$MC" > "$TMP/m-bad.json"
+  check "check_config rejects prompt $v" "$(KIT="$PK" check_config "$TMP/m-bad.json" | grep -c '^ERROR: role dev: prompt')" "1"
+done
+# upgrade of a config from before modes
+printf '%s' '{"roles":{"planner":{"title":"Planner","prompt":"/old/planner.md"},"dev":{"title":"Dev","prompt":"/old/dev.md"}}}' > "$TMP/m-old.json"
+UP="$(upgrade_config "$PKC" "$TMP/m-old.json")"; printf '%s\n' "$UP" > "$TMP/m-up.json"
+check "upgrade_config: adds settings.mode and keeps a string prompt" "$(jq -c '[.settings.mode, .roles.dev.prompt]' "$TMP/m-up.json")" '["programmer","/old/dev.md"]'
+printf '%s' '{"roles":{"planner":{"title":"Planner"},"dev":{"title":"Dev"}}}' > "$TMP/m-old2.json"
+check "a config without modes works: missing modes = programmer" "$(KIT="$PK" enabled_roles "$TMP/m-old2.json" | tr '\n' ' ')|$(KIT="$PK" mode_of "$TMP/m-old2.json")" "planner dev |programmer"
+
+# launch.sh
+try ml; check "launch: no mode = programmer, today's team" "$RC:$(mh):$(mmode)" "0:PLANNER DEV ALLROLE :programmer"
+case "$OUT" in *"Mode: programmer"*) echo "ok   launch: reports the mode";; *) echo "FAIL launch does not report the mode: $OUT"; FAIL=1;; esac
+check "launch: planner message states the mode and reads the mode's prompt" "$(cd "$M" && KIT="$PK" planner_msg "$MG/orca-roles.config.json" "$(mh | tr 'A-Z' 'a-z')" "$MG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md\|Mode: [a-z-]*\.')" "$(printf 'Read %s/prompts/programmer/planner.md\nMode: programmer.' "$PK")"
+rm -f "$M/.git/orca-roles.env"   # the team is closed: no live tab
+try ml --mode pr-reviewer; check "launch --mode pr-reviewer: planner + the mode's roles" "$RC:$(mh):$(mmode)" "0:PLANNER RV :pr-reviewer"
+case "$OUT" in *"Warning: role allrole is skipped: it has no prompt for mode pr-reviewer (expected $PKL/prompts/pr-reviewer/allrole.md)"*) echo "ok   launch: warns about the skipped role";; *) echo "FAIL launch skip warning: $OUT"; FAIL=1;; esac
+MSG="$(cd "$M" && KIT="$PK" planner_msg "$MG/orca-roles.config.json" "planner rv" "$MG/orca-roles.env" "" "" 0)"
+check "launch pr-reviewer: planner prompt from its folder, only its handles" "$(printf '%s' "$MSG" | grep -o 'Read [^ ]*planner.md\|Mode: [a-z-]*\.\|Handles:.*Rv=h-Rv\.' | tr '\n' '|')" "Read $PK/prompts/pr-reviewer/planner.md|Mode: pr-reviewer.|Handles: Rv=h-Rv.|"
+check "launch: --mode is saved in the exceptions" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "pr-reviewer"
+rm -f "$MG/orca-roles.env"
+try ml; check "launch: 'roles' without options keeps the saved mode" "$RC:$(mh):$(mmode)" "0:PLANNER RV :pr-reviewer"
+rm -f "$MG/orca-roles.env"
+try ml --reset; check "launch: --reset forgets the mode" "$RC:$(mh):$(mmode)" "0:PLANNER DEV ALLROLE :programmer"
+check "launch: --reset leaves no saved mode" "$(ls "$MG/orca-roles.overrides.json" 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# selection: settings.mode < .orca-roles.json < --mode
+rm -f "$MG/orca-roles.env"; jq '.settings.mode = "pr-reviewer"' "$MC" > "$TMP/m.json" && mv "$TMP/m.json" "$MC"
+try ml --reset; check "selection: settings.mode in config.json" "$RC:$(mmode)" "0:pr-reviewer"
+rm -f "$MG/orca-roles.env"; echo '{ "settings": { "mode": "programmer" } }' > "$M/.orca-roles.json"
+try ml; check "selection: .orca-roles.json beats settings.mode" "$RC:$(mmode)" "0:programmer"
+rm -f "$MG/orca-roles.env"
+try ml --mode pr-reviewer; check "selection: --mode beats both" "$RC:$(mmode)" "0:pr-reviewer"
+rm -f "$MG/orca-roles.env" "$M/.orca-roles.json"
+try ml --reset --mode programmer; check "selection: --mode programmer over a pr-reviewer settings.mode" "$RC:$(mmode)" "0:programmer"
+rm -f "$MG/orca-roles.env"; jq '.settings.mode = "programmer"' "$MC" > "$TMP/m.json" && mv "$TMP/m.json" "$MC"
+try ml --reset; check "back to the default mode" "$RC:$(mmode)" "0:programmer"
+rm -f "$MG/orca-roles.env"
+try ml --set settings.mode=pr-reviewer; check "selection: --set settings.mode" "$RC:$(mmode)" "0:pr-reviewer"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+
+# rejections: nothing opened, nothing saved
+ml --reset >/dev/null; B="$(mstate)"; N="$(mcreates)"
+for bad in Programmer ../x '' programmer/ "a b" foo academic-writer; do
+  try ml --mode "$bad"
+  check "launch --mode '$bad' fails before anything opens or is saved" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+done
+try ml --mode Programmer; case "$OUT" in *"unknown mode 'Programmer' (modes: programmer, pr-reviewer, academic-writer)"*) echo "ok   launch: unknown mode message";; *) echo "FAIL unknown mode message: $OUT"; FAIL=1;; esac
+try ml --mode academic-writer; case "$OUT" in *"mode 'academic-writer' is not available yet"*) echo "ok   launch: unavailable mode message";; *) echo "FAIL unavailable message: $OUT"; FAIL=1;; esac
+try ml --mode=Programmer; check "launch --mode=<x> form is validated too" "$RC:$(mstate)" "1:$B"
+try ml --set settings.mode=Programmer; check "launch --set settings.mode goes through the same validation" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+try ml --set settings.mode=../x; check "launch --set settings.mode=../x fails" "$RC:$(mstate)" "1:$B"
+try ml --set 'settings.mode=["pr-reviewer"]'; check "launch --set settings.mode with a non-string fails" "$RC:$(mstate)" "1:$B"
+# a role not in the mode
+rm -f "$MG/orca-roles.env"; ml --reset --mode pr-reviewer >/dev/null; rm -f "$MG/orca-roles.env"; B="$(mstate)"
+for o in --enable --disable --only; do
+  try ml --mode pr-reviewer "$o" dev; check "launch --mode pr-reviewer $o dev fails" "$RC:$(mstate)" "1:$B"
+  case "$OUT" in *"role dev is not part of mode pr-reviewer (its modes: programmer)"*) echo "ok   launch $o: error names the mode";; *) echo "FAIL $o message: $OUT"; FAIL=1;; esac
+done
+try ml --mode pr-reviewer --only rv; check "launch --only with a role of the mode works" "$RC:$(mh)" "0:PLANNER RV "
+B="$(mstate)"; N="$(mcreates)"
+for o in "--mode Foo" "--mode academic-writer" "--only dev,rv" "--enable dev"; do
+  # shellcheck disable=SC2086
+  try ml --mode pr-reviewer $o; check "launch $o with saved exceptions: rejected, saved config and exceptions unchanged" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+done
+# invalid modes in a config
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"; B="$(mstate)"; N="$(mcreates)"
+echo '{ "roles": { "dev": { "modes": ["foo"] } } }' > "$M/.orca-roles.json"
+try ml; check "launch: modes [\"foo\"] fails, nothing opened or saved" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+case "$OUT" in *"role dev: modes has unknown mode ids (foo)"*) echo "ok   launch: invalid modes message";; *) echo "FAIL modes message: $OUT"; FAIL=1;; esac
+rm -f "$M/.orca-roles.json"
+
+# the saved mode is kept when later options omit --mode
+rm -f "$MG/orca-roles.env"; ml --reset --mode pr-reviewer >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --set settings.language=Spanish; check "saved mode: --set without --mode stays in pr-reviewer" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
+check "saved mode: kept in the overrides" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "pr-reviewer"
+rm -f "$MG/orca-roles.env"
+try ml --enable rv; check "saved mode: --enable of a role of the mode stays in pr-reviewer" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
+rm -f "$MG/orca-roles.env"
+try ml --mode pr-reviewer --set settings.mode=programmer; check "--mode beats --set settings.mode" "$RC:$(mmode)" "0:pr-reviewer"
+rm -f "$MG/orca-roles.env"
+try ml --mode programmer; check "saved mode: another --mode changes it" "$RC:$(mmode)" "0:programmer"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# --set settings.mode is the same request as --mode: saved the same way
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --set settings.mode=pr-reviewer; check "--set settings.mode=pr-reviewer picks the mode" "$RC:$(mmode)" "0:pr-reviewer"
+check "--set settings.mode is saved as the mode, not as a set entry" "$(jq -c '[.mode, ([.set[].path | join(".")] | index("settings.mode"))]' "$MG/orca-roles.overrides.json")" '["pr-reviewer",null]'
+rm -f "$MG/orca-roles.env"
+try ml --set settings.language=Spanish; check "--set settings.mode is kept by later options" "$RC:$(mmode)" "0:pr-reviewer"
+rm -f "$MG/orca-roles.env"
+try ml --reset --set settings.language=Spanish; check "--reset with other options drops the saved mode" "$RC:$(mmode):$(jq -r '.mode // "none"' "$MG/orca-roles.overrides.json")" "0:programmer:none"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# a settings that is not an object is an error, a missing one is programmer
+for v in '"x"' null '[]' 5; do
+  jq --argjson v "$v" '.settings = $v' "$MC" > "$TMP/m-bad.json"
+  try env KIT="$PK" bash -c '. "$KIT/bin/lib.sh"; mode_of "$1" 2>/dev/null' _ "$TMP/m-bad.json"; check "mode_of rejects settings $v" "$RC" "1"
+  check "check_config reports settings $v" "$(KIT="$PK" check_config "$TMP/m-bad.json" 2>/dev/null | grep -c '^ERROR')" "1"
+done
+jq 'del(.settings)' "$MC" > "$TMP/m-nosettings.json"; check "mode_of: no settings at all = programmer" "$(KIT="$PK" mode_of "$TMP/m-nosettings.json")" "programmer"
+# a role without modes belongs to programmer even if the mode's folder has a prompt for it
+: > "$PK/prompts/pr-reviewer/nomodes.md"
+jq '.roles.nomodes = {"title": "Nomodes"}' "$MC" > "$TMP/m.json" && mv "$TMP/m.json" "$MC"
+try ml --mode pr-reviewer; check "role without modes and with a prompt in the mode: not launched" "$RC:$(mh)" "0:PLANNER RV "
+rm -f "$MG/orca-roles.env"; B="$(mstate)"
+try ml --mode pr-reviewer --enable nomodes; check "role without modes: --enable in pr-reviewer is rejected" "$RC:$(mstate)" "1:$B"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# a config the checks cannot read fails closed
+B="$(mstate)"; N="$(mcreates)"; echo '{ "roles": { "dev": "x" } }' > "$M/.orca-roles.json"
+try ml; check "launch: a role that is not an object fails closed, nothing opened or saved" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+case "$OUT" in *"ERROR: invalid configuration"*) echo "ok   launch: fails closed with an error";; *) echo "FAIL fail closed: $OUT"; FAIL=1;; esac
+rm -f "$M/.orca-roles.json"
+check "check_config: non-object role gives an error and not silence" "$(printf '%s' '{"roles":{"dev":"x"}}' > "$TMP/m-x.json"; KIT="$PK" check_config "$TMP/m-x.json" 2>/dev/null | grep -c '^ERROR')" "1"
+# exact ids, and a settings.mode that is not a string is an error (a missing key is programmer)
+check "mode_error: trailing newline" "$(KIT="$PK" mode_error $'programmer\n' | head -1 | cut -c1-12)" "unknown mode"
+for v in false null 5 '["programmer"]' '"programmer\n"' '""'; do
+  jq --argjson v "$v" '.settings.mode = $v' "$MC" > "$TMP/m-bad.json"
+  try env KIT="$PK" bash -c '. "$KIT/bin/lib.sh"; mode_of "$1" 2>/dev/null' _ "$TMP/m-bad.json"; check "mode_of rejects settings.mode $v" "$RC" "1"
+done
+jq 'del(.settings.mode)' "$MC" > "$TMP/m-nokey.json"; check "mode_of: missing settings.mode = programmer" "$(KIT="$PK" mode_of "$TMP/m-nokey.json")" "programmer"
+# an open team blocks a mode change
+ml --reset >/dev/null; : > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
+try ml --mode pr-reviewer; check "open team: a mode change is rejected, nothing changes" "$RC:$(mcreates):$(mstate):$(mmode)" "1:$N:$B:programmer"
+case "$OUT" in *"Close the team first"*"mode 'programmer'"*"'pr-reviewer'"*|*"mode 'programmer'"*"'pr-reviewer'"*"Close the team first"*) echo "ok   open team: the error explains it";; *) echo "FAIL open team message: $OUT"; FAIL=1;; esac
+check "open team: the overrides were not saved" "$(ls "$MG/orca-roles.overrides.json" 2>/dev/null | wc -l | tr -d ' ')" "0"
+try ml --mode programmer; check "open team: the same mode proceeds" "$RC:$(mmode)" "0:programmer"
+check "open team: the same mode is saved" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "programmer"
+# a saved configuration from before modes (no settings.mode) counts as programmer
+jq 'del(.settings.mode)' "$MG/orca-roles.config.json" > "$TMP/m.json" && mv "$TMP/m.json" "$MG/orca-roles.config.json"; B="$(mstate)"
+try ml --mode pr-reviewer; check "open team: a saved config without settings.mode blocks the change" "$RC:$(mstate)" "1:$B"
+# 'orca terminal list' failing for the whole wait: the open-team check cannot tell, so a mode change is refused
+: > "$TMP/m-listfail"; B="$(mstate)"; N="$(mcreates)"
+try ml --mode pr-reviewer; check "terminal list fails: a mode change with a saved team is refused, nothing changes" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+case "$OUT" in *"cannot tell whether this worktree's team"*) echo "ok   terminal list fails: the error explains it";; *) echo "FAIL list failure message: $OUT"; FAIL=1;; esac
+rm -f "$TMP/m-listfail"
+rm -f "$TMP/m-alive"
+try ml --mode pr-reviewer; check "closed team: the mode change proceeds" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
+# the team is open in pr-reviewer: every way back to another mode is rejected
+: > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
+for o in --reset "--mode programmer" "--set settings.mode=programmer"; do
+  # shellcheck disable=SC2086
+  try ml $o; check "open team in pr-reviewer: $o is rejected, nothing changes" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
+done
+rm -f "$TMP/m-alive"
+# a user config.json from before modes (no settings.mode, no modes) launches the same programmer team as before
+SAME="PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
+jq 'del(.settings.mode) | del(.roles[].modes) | .settings += {kickoffTimeoutSeconds: 1, launchWaitSeconds: 1, closeComposerAgent: false, jiraHandoff: false}' "$PKC" > "$TMP/m-legacy.json"
+check "legacy config: has neither settings.mode nor modes" "$(jq -c '[.settings.mode, ([.roles[].modes] | map(select(. != null)) | length)]' "$TMP/m-legacy.json")" "[null,0]"
+rm -f "$MG/orca-roles.env"; cp "$TMP/m-legacy.json" "$MC"
+try ml --reset; check "legacy config: the same programmer team as before" "$RC:$(mh):$(mmode)" "0:$SAME:programmer"
+rm -f "$MG/orca-roles.env"; upgrade_config "$PKC" "$TMP/m-legacy.json" > "$MC"
+try ml --reset; check "legacy config after upgrade_config: the same programmer team" "$RC:$(mh):$(mmode)" "0:$SAME:programmer"
+sleep 1
+rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config.json"   # the kit copy is shared with other sections
+}
+
 sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
@@ -1027,6 +1254,7 @@ cat > "$KIT/config.json" <<'J'
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "cu": { "title": "Custom", "agent": "custom", "command": "x" }, "tst": { "title": "Tst" } } }
 J
+for r in cu tst; do : > "$KIT/prompts/programmer/$r.md"; done   # fake roles need a prompt file to be launched (removed at the end of the section)
 OUT="$(cd "$DP" && HOME="$TMP/home" PATH="$TMP/dbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"The agent in the tab of Dev (t-dev) is gone"*) echo "ok   dead agent: detected in a live tab";; *) echo "FAIL dead agent: $OUT"; FAIL=1;; esac
 check "dead agent: its old tab is closed" "$(grep -c 'terminal close --terminal t-dev --tab' "$DLOG")" "1"
@@ -1037,6 +1265,7 @@ check "orphaned session: ended" "$(grep -c 'terminal close --terminal t-orp' "$D
 check "E1: non-Claude workers run Orca's commands in the foreground" "$(worker_msg "$KIT/config.json" cu | grep -c 'in the foreground')" "1"
 check "E1: Claude workers get no extra instruction" "$(worker_msg "$KIT/config.json" dev | grep -c 'in the foreground' || true)" "0"
 grep -q 'Watch for silent workers' "$ROOT/prompts/programmer/planner.md" && echo "ok   G: the Planner watches for silent workers" || { echo "FAIL planner.md without silent workers"; FAIL=1; }
+rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/tst.md"
 }
 
 sec_agent_flags() {
@@ -1107,6 +1336,14 @@ cat > "$KIT/config.json" <<'J'
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" } } }
 J
+: > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
+# the mode cannot change under a team Orca restored after a restart (new handles, same ptyId)
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
+HB="$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum)"; : > "$RLOG"
+OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode pr-reviewer 2>&1)" && RC=0 || RC=$?
+check "restart: restored tabs block a mode change; nothing saved, closed or opened" "$RC:$(grep -cE 'terminal (close|create)' "$RLOG" || true):$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum):$([ -e "$RP/.git/orca-roles.overrides.json" ] && echo ovr)" "1:0:$HB:"
+case "$OUT" in *"Close the team first"*) echo "ok   restart: the mode change error explains it";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
+rm -rf "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"Orca restored the tab of Planner after a restart (rs-pl) without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
 case "$OUT" in *"Orca restored the tab of Dev after a restart (rs-dev), but its session could not be read"*) echo "ok   restart: restored tab without a readable session starts fresh";; *) echo "FAIL restart dev: $OUT"; FAIL=1;; esac
@@ -1124,6 +1361,7 @@ case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in *"Your terminal hand
 printf 'PLANNER=a\nDEV=b\n' > "$RP/.git/orca-roles.env"; printf 'PLANNER=wt@@a\nDEV=wt@@b\n' > "$RP/.git/orca-roles.pty"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
 (cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1)
 check "close-role.sh: drops the identity of the closed role" "$(cat "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "PLANNER=wt@@a "
+rm -f "$KIT/prompts/programmer/tst.md"
 }
 
 sec_trust_folder() {
@@ -1132,7 +1370,7 @@ tf_setup
 # 1. C1: the mode never widens (family of modes)
 for m in 600 640 644 400 664 755; do
   H="$TF/h-m$m"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod "$m" "$H/.claude.json"; tf_run "$H"
-  check "trust_folder: mode $m kept" "$(mode_of "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(jq -c .oauthAccount "$H/.claude.json") $(jq -r '.projects["/other"].hasTrustDialogAccepted' "$H/.claude.json")" "$m true {\"email\":\"a@b\"} true"
+  check "trust_folder: mode $m kept" "$(file_mode_of "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(jq -c .oauthAccount "$H/.claude.json") $(jq -r '.projects["/other"].hasTrustDialogAccepted' "$H/.claude.json")" "$m true {\"email\":\"a@b\"} true"
 done
 # 2. C1: while the temp exists it is never wider than the original
 for m in 600 640 400; do
@@ -1144,7 +1382,7 @@ done
 H="$TF/h-l"; mkdir -p "$H/real" "$H/sub" "$H/o"
 echo "$TFJ" > "$H/real/c.json"; chmod 640 "$H/real/c.json"
 ln -s "$H/real/c.json" "$H/.claude.json"; tf_run "$H"
-check "trust_folder: absolute link kept" "$(readlink "$H/.claude.json") $(tf_trusted "$H/real/c.json") $(mode_of "$H/real/c.json")" "$H/real/c.json true 640"
+check "trust_folder: absolute link kept" "$(readlink "$H/.claude.json") $(tf_trusted "$H/real/c.json") $(file_mode_of "$H/real/c.json")" "$H/real/c.json true 640"
 rm "$H/.claude.json"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"; tf_run "$H"
 check "trust_folder: relative link kept" "$(readlink "$H/.claude.json") $(tf_trusted "$H/real/c.json")" "real/c.json true"
 rm "$H/.claude.json"; echo "$TFJ" > "$H/real/c.json"; ln -s ../real/c.json "$H/o/a"; ln -s o/a "$H/.claude.json"; tf_run "$H"
@@ -1160,7 +1398,7 @@ check "trust_folder: a directory instead of the file, silent, no lock" "$(cat "$
 H="$TF/h-c1"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod 600 "$H/.claude.json"
 HK="[ -e '$H/seen' ] || { touch '$H/seen'; jq '.x=1' '$H/.claude.json' > '$H/w' && cat '$H/w' > '$H/.claude.json'; }"
 tf_run "$H" "$HK"
-check "trust_folder: change during the write is not lost" "$(jq -r .x "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(jq -c .oauthAccount "$H/.claude.json") $(cat "$TF/rc") $(tf_left "$H") $(mode_of "$H/.claude.json")" "1 true {\"email\":\"a@b\"} 0 0 600"
+check "trust_folder: change during the write is not lost" "$(jq -r .x "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(jq -c .oauthAccount "$H/.claude.json") $(cat "$TF/rc") $(tf_left "$H") $(file_mode_of "$H/.claude.json")" "1 true {\"email\":\"a@b\"} 0 0 600"
 # 6. C3: file changes on every attempt -> left exactly as the other writer left it, with a warning
 H="$TF/h-c2"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"
 tf_run "$H" "n=\$(cat '$H/n' 2>/dev/null || echo 0); echo \$((n+1)) > '$H/n'; jq --argjson n \$n '.x=\$n' '$H/.claude.json' > '$H/w' && cat '$H/w' > '$H/.claude.json'"
@@ -1200,7 +1438,7 @@ check "trust_folder: symlinked HOME, physical target edited, decoy untouched" "$
 for m in 400 440 600 640; do
   H="$TF/h-r$m"; mkdir -p "$H/real"; echo "$TFJ" > "$H/real/c.json"; chmod "$m" "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"
   tf_run "$H" "for t in '$H'/real/.c.json.orca-roles.*; do echo \$(stat -c %a \"\$t\" 2>/dev/null || stat -f %Lp \"\$t\") >> '$H/modes'; done; ls '$H'/.c* '$H'/.claude.json.orca-roles.* >/dev/null 2>&1 && echo in-home >> '$H/modes'; [ -e '$H/seen' ] || { touch '$H/seen'; chmod u+w '$H/real/c.json'; jq '.x=1' '$H/real/c.json' > '$H/w' && cat '$H/w' > '$H/real/c.json'; chmod $m '$H/real/c.json'; }"
-  check "trust_folder: temp mode on both tries and in the target's folder ($m)" "$(tr '\n' ' ' < "$H/modes") $(jq -r .x "$H/real/c.json") $(tf_trusted "$H/real/c.json") $(mode_of "$H/real/c.json") $(tf_left "$H/real") $(tf_left "$H")" "$m $m  1 true $m 0 0"
+  check "trust_folder: temp mode on both tries and in the target's folder ($m)" "$(tr '\n' ' ' < "$H/modes") $(jq -r .x "$H/real/c.json") $(tf_trusted "$H/real/c.json") $(file_mode_of "$H/real/c.json") $(tf_left "$H/real") $(tf_left "$H")" "$m $m  1 true $m 0 0"
 done
 # 13. (T3) the lock is the LINK's path (~/.claude.json.lock), never the target's; ours is gone afterwards
 H="$TF/h-lp"; mkdir -p "$H/real"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"
@@ -1271,7 +1509,7 @@ tc_ok() { jq -r --arg d "$TFD" '.t[$d] // false' "$1" 2>/dev/null; }
 # 17. (S6) edit: mode kept, symlink kept, other keys kept, two roles with the same file+filter -> one edit, non-custom roles ignored; second run leaves the file alone
 H="$TF/h-c"; mkdir -p "$H/real"; echo '{"keep":1}' > "$H/real/c.json"; chmod 640 "$H/real/c.json"; ln -s real/c.json "$H/cust.json"; echo '{}' > "$H/other.json"
 tc_run "$H" "$TR1" "a b c"
-R1="$(tc_ok "$H/real/c.json") $(jq -r .keep "$H/real/c.json") $(mode_of "$H/real/c.json") $(readlink "$H/cust.json") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(cat "$H/other.json") $(ls -A "$H" | tr '\n' ' ')$(ls -A "$H/real" | tr '\n' ' ')"
+R1="$(tc_ok "$H/real/c.json") $(jq -r .keep "$H/real/c.json") $(file_mode_of "$H/real/c.json") $(readlink "$H/cust.json") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(cat "$H/other.json") $(ls -A "$H" | tr '\n' ' ')$(ls -A "$H/real" | tr '\n' ' ')"
 ino="$(ls -i "$H/real/c.json" | cut -d' ' -f1)"; mt="$(stat -c %Y "$H/real/c.json" 2>/dev/null || stat -f %m "$H/real/c.json")"; sleep 1.1; tc_run "$H" "$TR1" "a b c"
 mt2="$(stat -c %Y "$H/real/c.json" 2>/dev/null || stat -f %m "$H/real/c.json")"
 check "custom trust: edited (mode, link, other keys kept; one edit; claude role ignored) and not rewritten when applied" "$R1 | $([ "$ino" = "$(ls -i "$H/real/c.json" | cut -d' ' -f1)" ] && [ "$mt" = "$mt2" ] && echo same) [$(cat "$TF/out" "$TF/err")]" "true 1 640 real/c.json 1 0 {} cust.json other.json real c.json  | same []"

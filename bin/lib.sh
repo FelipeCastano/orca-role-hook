@@ -37,14 +37,59 @@ project_config() {
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
-# Enabled roles in order; the planner always runs
-enabled_roles() { jq -r '.roles | to_entries[] | select(.key == "planner" or .value.enabled != false) | .key' "$1"; }
+# The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
+MODE_IDS="programmer pr-reviewer academic-writer"
+MODES_JSON='["programmer","pr-reviewer","academic-writer"]'
+MODE_LIST="programmer, pr-reviewer, academic-writer"
+# Why a mode id is unusable (empty output if it is fine): the match is exact against the list, so nothing like ../x or a path reaches a prompt path.
+mode_error() {  # <id>
+  local m
+  for m in $MODE_IDS; do
+    if [ "$m" = "$1" ]; then
+      [ -f "$KIT/prompts/$1/planner.md" ] || echo "mode '$1' is not available yet"
+      return 0
+    fi
+  done
+  echo "unknown mode '$1' (modes: $MODE_LIST)"
+}
+# The effective mode of a configuration (settings.mode, "programmer" if unset); 1 with the reason on stderr if it is invalid or unavailable.  mode_of <config>
+mode_of() {
+  local m e
+  m="$(jq -j '(if has("settings") then .settings else {} end) | if type != "object" then error("settings must be an object") else (if has("mode") then .mode else "programmer" end) end | if type == "string" then . else tojson end' "$1" 2>/dev/null; rc=$?; printf x; exit $rc)" \
+    || { echo "invalid settings in the configuration: settings must be an object" >&2; return 1; }
+  m="${m%x}"   # the sentinel keeps a trailing newline in the id, which then fails the exact match
+  e="$(mode_error "$m")"
+  [ -z "$e" ] || { echo "$e" >&2; return 1; }
+  printf '%s\n' "$m"
+}
+# Enabled roles of the configuration's mode, in order; the planner always runs. A role without "modes" belongs to programmer only.
+enabled_roles() {
+  local m; m="$(mode_of "$1")" || return 1
+  jq -r --arg m "$m" '.roles | to_entries[]
+    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then index($m) != null else false end)))
+    | .key' "$1"
+}
+# The enabled roles that can start: a worker whose prompt file for the mode is missing is skipped with a warning.  launchable_roles <config>
+launchable_roles() {
+  local id m f; m="$(mode_of "$1")" || return 1
+  for id in $(enabled_roles "$1"); do
+    f="$(prompt_of "$1" "$id")"
+    if [ "$id" != planner ] && [ ! -f "$f" ]; then echo "Warning: role $id is skipped: it has no prompt for mode $m (expected $f)." >&2; continue; fi
+    echo "$id"
+  done
+}
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
-# The kit's prompts folder for the current mode (only "programmer" exists for now)
-prompts_dir_of() { echo "$KIT/prompts/programmer"; }
-# A role's prompt file: the "prompt" field (accepts ~), or the mode's prompts/programmer/<role>.md
-prompt_of() { local p; p="$(jq -r --arg r "$2" '.roles[$r].prompt // empty' "$1")"; p="${p/#\~/$HOME}"; echo "${p:-$(prompts_dir_of "$1")/$2.md}"; }
+# The kit's prompts folder for the configuration's mode
+prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
+# A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~), or the mode's prompts/<mode>/<role>.md
+prompt_of() {
+  local m p; m="$(mode_of "$1" 2>/dev/null)" || return 1
+  p="$(jq -r --arg r "$2" --arg m "$m" '.roles[$r].prompt as $p
+    | if ($p | type) == "string" then (if $m == "programmer" then $p else empty end)
+      elif ($p | type) == "object" then ($p[$m] // empty | strings) else empty end' "$1")"
+  p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$m/$2.md}"
+}
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
@@ -55,20 +100,25 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → 
                      | map({key: ., value: $m.roles[.]}) | from_entries)' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
-#   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}]}
-# overrides_from_args [--only a,b] [--enable a,b] [--disable a,b] [--set dotted.path=value] ...  → stdout; 1 on error
+#   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}], "mode": "<mode id>"}
+# overrides_from_args [--only a,b] [--enable a,b] [--disable a,b] [--set dotted.path=value] [--mode id] ...  → stdout; 1 on error
 # Lists add up if an option repeats. In --set the value is read as JSON if it is JSON (true, 10, ["x"]) and as text otherwise.
 overrides_from_args() {
-  local o='{"only":[],"enable":[],"disable":[],"set":[]}' opt val k
+  local o='{"only":[],"enable":[],"disable":[],"set":[]}' opt val k explicit=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --only=*|--enable=*|--disable=*|--set=*) opt="${1%%=*}"; val="${1#*=}";;
-      --only|--enable|--disable|--set) opt="$1"; [ $# -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; return 1; }; val="$2"; shift;;
+      --only=*|--enable=*|--disable=*|--set=*|--mode=*) opt="${1%%=*}"; val="${1#*=}";;
+      --only|--enable|--disable|--set|--mode) opt="$1"; [ $# -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; return 1; }; val="$2"; shift;;
       *) echo "ERROR: unknown option: $1" >&2; return 1;;
     esac
     shift
     k="${opt#--}"
-    if [ "$k" = set ]; then
+    if [ "$k" = mode ]; then
+      o="$(jq -c --arg v "$val" '.mode = $v' <<<"$o")"; explicit=1
+    elif [ "$k" = set ] && [ "${val%%=*}" = settings.mode ]; then
+      # --set settings.mode=x is the same request as --mode x (and --mode wins if both are given)
+      [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" '.mode = $v' <<<"$o")"
+    elif [ "$k" = set ]; then
       case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
       o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" --argjson l "$LEGACY_ROLES" '.set += [{path: ($p | split(".") | if .[0] == "roles" and $l[.[1]] then .[1] = $l[.[1]] else . end), value: ($v | try fromjson catch $v)}]' <<<"$o")"
     else
@@ -84,13 +134,41 @@ check_overrides() {
        | if length > 0 then "ERROR: unknown roles: \(join(", ")). Available: \($ks | join(", "))" else empty end),
       (if ($o.disable | index("planner")) then "ERROR: the planner cannot be disabled" else empty end)' "$1"
 }
-# Applies the exceptions to a configuration: --only (the planner always stays), then --enable, --disable and --set.  apply_overrides <config> <overrides>
+# Checks the configuration the exceptions produce: its mode, the "modes" and "prompt" of every role, and that the roles named by
+# --only/--enable/--disable are part of the mode. One "ERROR: ..." line per problem, nothing if it is fine.  check_config <applied config> [<overrides>]
+check_config() {
+  local m out
+  out="$(jq -r --argjson ms "$MODES_JSON" --arg ml "$MODE_LIST" '.roles | to_entries[] | .key as $r | .value as $v
+    | (if ($v | has("modes")) then
+        ($v.modes | if . == "all" then empty
+          elif type == "array" and length > 0 then
+            (map(select(type != "string" or (. as $x | $ms | index($x) | not))) | if length > 0 then "ERROR: role \($r): modes has unknown mode ids (\(map(tostring) | join(", "))); modes: \($ml)" else empty end)
+          else "ERROR: role \($r): modes must be \"all\" or a non-empty list of mode ids (modes: \($ml))" end)
+      else empty end),
+      (if ($v | has("prompt")) then
+        ($v.prompt | if . == null or type == "string" then empty
+          elif type == "object" then
+            (to_entries | map(select((.key as $k | $ms | index($k) | not) or (.value | type) != "string")) | if length > 0 then "ERROR: role \($r): prompt must map mode ids to file paths (invalid: \(map(.key) | join(", ")); modes: \($ml))" else empty end)
+          else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
+      else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
+  [ -n "${2:-}" ] || return 0
+  out="$(jq -r --slurpfile o "$2" --arg m "$m" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
+    | select(. != "planner" and $R[.] != null)
+    | . as $r | ($R[$r].modes // ["programmer"]) as $rm
+    | select($rm | if . == "all" then false elif type == "array" then index($m) == null else false end)
+    | "ERROR: role \($r) is not part of mode \($m) (its modes: \($rm | if type == "array" then join(", ") else tostring end))"' "$1")" || { echo "ERROR: could not check the exceptions against the mode"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+}
+# Applies the exceptions to a configuration: --only (the planner always stays), then --enable, --disable, --set and --mode.  apply_overrides <config> <overrides>
 apply_overrides() {
   jq --slurpfile o "$2" '$o[0] as $o
     | if ($o.only | length) > 0 then .roles |= with_entries(.value.enabled = (.key == "planner" or (.key as $k | $o.only | index($k)) != null)) else . end
     | reduce $o.enable[] as $r (.; .roles[$r].enabled = true)
     | reduce $o.disable[] as $r (.; .roles[$r].enabled = false)
-    | reduce $o.set[] as $s (.; setpath($s.path; $s.value))' "$1"
+    | reduce $o.set[] as $s (.; setpath($s.path; $s.value))
+    | if ($o.mode // null) != null then .settings.mode = $o.mode else . end' "$1"
 }
 # Escapes a text to use it literally inside a regular expression
 regex_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|\\]/\\&/g'; }
@@ -166,7 +244,7 @@ planner_msg() {
   extra="$(jq -r --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
     '[.roles | to_entries[] | select(.key != "planner" and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
-  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Active roles in this workspace:${active:- none}. Handles:${handles%,}."
+  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of "$cfg"). Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
   [ -n "$params" ] && msg="$msg Configuration parameters: $params."
@@ -286,8 +364,8 @@ resolve_target() {
   dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd -P)" || return 1
   printf '%s/%s\n' "${dir%/}" "$(basename "$p")"
 }
-# A file's permission bits in octal (GNU stat, then BSD stat); empty if they cannot be read.  mode_of <file>
-mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+# A file's permission bits in octal (GNU stat, then BSD stat); empty if they cannot be read.  file_mode_of <file>
+file_mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
 # Edits a JSON file the user or other programs also write (~/.claude.json holds the user's account and Claude Code sessions rewrite it),
 # applying a jq filter ($dir is available in it) with care.  safe_json_edit <file> <jq filter> <dir> [lock path]
 #  - the new content goes to a temp file in the TARGET's folder (rename is atomic only on one filesystem; if the file is a
@@ -325,7 +403,7 @@ safe_json_edit() (
       printf '%s\n' "$orig" | jq --arg dir "$dir" "$filter" > "$tmp" 2>/dev/null || break
       jq -e -s 'length == 1 and (.[0] | type) == "object"' "$tmp" >/dev/null 2>&1 || break   # the filter must return the whole object, once
       if [ "$(printf '%s\n' "$orig" | jq -S -c . 2>/dev/null)" = "$(jq -S -c . "$tmp" 2>/dev/null)" ]; then status=3; break; fi
-      mode="$(mode_of "$f")"
+      mode="$(file_mode_of "$f")"
       if [ -n "$mode" ] && [ "$mode" != 600 ]; then chmod "$mode" "$tmp" || break; fi
       [ -n "${ORCA_ROLES_TRUST_HOOK:-}" ] && { bash -c "$ORCA_ROLES_TRUST_HOOK" || true; }
       if [ "$(cat "$f" 2>/dev/null)" = "$orig" ]; then

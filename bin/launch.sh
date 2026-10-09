@@ -5,11 +5,14 @@
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
+#   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-writer); beats .orca-roles.json and settings.mode;
+#                    saved, and kept when later options omit it
 #   --reset          forgets this worktree's saved exceptions
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming.
+# The mode of a worktree cannot change while its team is open: close the team first (close-role.sh, or its tabs).
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,10p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,13p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
@@ -17,7 +20,7 @@ WT=""; RESET=0; FLAGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
-    --only|--enable|--disable|--set) FLAGS+=("$1" "${2:-}"); shift;;
+    --only|--enable|--disable|--set|--mode) FLAGS+=("$1" "${2:-}"); shift;;
     -*) FLAGS+=("$1");;
     *) WT="$1";;
   esac
@@ -34,21 +37,31 @@ LOG="$GITDIR/orca-roles-launch.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "== $(date '+%F %T') launch.sh in $WT"
 
-merged_config . > "$CFG" || { echo "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"; exit 1; }
-[ "$RESET" = 1 ] && rm -f "$OVR" && echo "This worktree's exceptions were forgotten."
+# The new configuration and exceptions are prepared aside and only replace the saved ones once every check has passed
+NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
+fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWOVR" "$NEWOVR.x"; echo "$1"; exit 1; }
+merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
+PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
 if [ ${#FLAGS[@]} -gt 0 ]; then
-  NEWOVR="$(overrides_from_args "${FLAGS[@]}")" || exit 1
-  printf '%s\n' "$NEWOVR" > "$OVR.tmp"
-  ERR="$(check_overrides "$CFG" "$OVR.tmp")"
-  [ -z "$ERR" ] || { rm -f "$OVR.tmp"; echo "$ERR"; exit 1; }
-  mv "$OVR.tmp" "$OVR"
-elif [ -f "$OVR" ]; then
+  overrides_from_args "${FLAGS[@]}" > "$NEWOVR" || { rm -f "$NEWCFG" "$NEWOVR"; exit 1; }
+  ERR="$(check_overrides "$NEWCFG" "$NEWOVR")"
+  [ -z "$ERR" ] || fail "$ERR"
+  # the saved mode stays unless --mode (or --set settings.mode, which overrides_from_args turns into --mode) names another one, or --reset drops it
+  if [ "$RESET" != 1 ] && [ -f "$OVR" ] && ! jq -e '.mode != null' "$NEWOVR" >/dev/null 2>&1; then
+    SAVED_MODE="$(jq -c '.mode // empty' "$OVR" 2>/dev/null)"
+    [ -z "$SAVED_MODE" ] || { jq -c --argjson m "$SAVED_MODE" '.mode = $m' "$NEWOVR" > "$NEWOVR.x" && mv "$NEWOVR.x" "$NEWOVR"; }
+  fi
+  OVRSRC="$NEWOVR"
+elif [ -f "$OVR" ] && [ "$RESET" != 1 ]; then
   echo "Applying this worktree's saved exceptions ($OVR)."
+  OVRSRC="$OVR"
 fi
-if [ -f "$OVR" ]; then
-  echo "Exceptions: $(jq -c '{only, enable, disable, set: [.set[] | "\(.path | join(".")): \(.value | tojson)"]} | with_entries(select(.value | length > 0))' "$OVR")"
-  apply_overrides "$CFG" "$OVR" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG" || { echo "ERROR: could not apply the exceptions in $OVR"; exit 1; }
+if [ -n "$OVRSRC" ]; then
+  apply_overrides "$NEWCFG" "$OVRSRC" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG" || fail "ERROR: could not apply the exceptions in $OVRSRC"
 fi
+ERR="$(check_config "$NEWCFG" "$OVRSRC")"
+[ -z "$ERR" ] || fail "$ERR"
+NEWMODE="$(mode_of "$NEWCFG")"
 
 FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
 # Whether a role's tab is still working: 0 alive, 1 no tab, 2 the tab exists but its agent is gone (e.g. after Ctrl+C),
@@ -86,12 +99,35 @@ session_of_handle() {
   done
   return 0
 }
-WAIT="$(setting "$CFG" launchWaitSeconds 15)"
-LIST=""
+WAIT="$(setting "$NEWCFG" launchWaitSeconds 15)"
+LIST=""; LISTOK=0
 for i in $(seq 1 "$WAIT"); do
-  LIST="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && break
+  LIST="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && { LISTOK=1; break; }
   echo "Waiting for Orca to have the worktree ready ($i/$WAIT)..."; sleep 1
 done
+# The mode cannot change under an open team: its tabs belong to the previous mode. Any tab of the saved team that still exists counts: its saved
+# handle, or, after a restart of Orca or the computer (new handles), the tab that has the role's saved ptyId.
+if [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ] && [ -s "$STATE" ]; then
+  [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether this worktree's team (mode '$PREV_MODE') is still open: 'orca terminal list' failed. Mode '$NEWMODE' was requested; nothing was changed. Try again once Orca is ready."
+  for line in $(cat "$STATE"); do
+    OPEN=0
+    [ -n "${line#*=}" ] || continue
+    role_alive "$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')" "${line#*=}"; [ $? -eq 1 ] || OPEN=1
+    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p")" ] && OPEN=1
+    [ "$OPEN" = 1 ] || continue
+    fail "ERROR: this worktree's team is open in mode '$PREV_MODE' and mode '$NEWMODE' was requested. Close the team first (close-role.sh on each worker, or close its tabs), then run roles again. Nothing was changed."
+  done
+fi
+# Everything checked: the new configuration and exceptions become the saved ones
+jq --arg m "$NEWMODE" '.settings.mode = $m' "$NEWCFG" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG"   # the effective mode, explicit for the other scripts
+mv "$NEWCFG" "$CFG"
+if [ "$RESET" = 1 ]; then rm -f "$OVR"; echo "This worktree's exceptions were forgotten."; fi
+[ "$OVRSRC" = "$NEWOVR" ] && mv "$NEWOVR" "$OVR"
+if [ -f "$OVR" ]; then
+  echo "Exceptions: $(jq -c '{only, enable, disable, mode, set: [.set[] | "\(.path | join(".")): \(.value | tojson)"]} | with_entries(select(.value | length > 0))' "$OVR")"
+fi
+echo "Mode: $NEWMODE"
+
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
 # title (Claude Code renames it soon after). kickoff.sh uses this snapshot to recognize and close it.
 PRE="$GITDIR/orca-roles.preexisting.json"; rm -f "$PRE"
@@ -117,7 +153,7 @@ fi
 
 # shellcheck source=/dev/null
 [ -f "$STATE" ] && . "$STATE"
-ROLES="$(enabled_roles "$CFG" | tr '\n' ' ')"
+ROLES="$(launchable_roles "$CFG" | tr '\n' ' ')"
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
 for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
 trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
