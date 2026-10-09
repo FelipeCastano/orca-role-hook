@@ -249,3 +249,100 @@ role_context() {
 }
 # Creates an empty browser state if none exists (Playwright accepts {"cookies":[],"origins":[]}); browser-login.sh fills it.
 ensure_browser_state() { [ -f "$1" ] || { mkdir -p "$(dirname "$1")"; echo '{"cookies":[],"origins":[]}' > "$1"; }; }
+# The final target of a path, following symlinks (relative, chains, other folders; dangling links too) as an absolute physical path.
+# No 'readlink -f' (macOS lacks it); 1 on a link loop or a missing folder. The path is handed to the kernel as it is (a ".." after a
+# linked folder means the folder's real parent) and the last folder is entered with cd -P.  resolve_target <path>
+resolve_target() {
+  local p="$1" dir n=0 l
+  while [ -L "$p" ]; do
+    n=$((n+1)); [ "$n" -le 40 ] || return 1
+    l="$(readlink "$p")" || return 1
+    case "$l" in /*) p="$l";; *) p="$(dirname "$p")/$l";; esac
+  done
+  dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "${dir%/}" "$(basename "$p")"
+}
+# A file's permission bits in octal (GNU stat, then BSD stat); empty if they cannot be read.  mode_of <file>
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+# Edits a JSON file the user or other programs also write (~/.claude.json holds the user's account and Claude Code sessions rewrite it),
+# applying a jq filter ($dir is available in it) with care.  safe_json_edit <file> <jq filter> <dir> [lock path]
+#  - the new content goes to a temp file in the TARGET's folder (rename is atomic only on one filesystem; if the file is a
+#    link, the target is what is replaced and the link stays). mktemp makes it 0600; the original mode is applied AFTER writing it
+#    (a 400 original would block the write), so nobody else can read it at any moment;
+#  - the optional lock is a directory taken with mkdir; Claude Code locks "<path it was given>.lock", i.e. the link's path, not the
+#    target's, so that is the path to pass. A lock we did not create is never removed;
+#  - the lock can be ignored (Claude Code writes without it if it stays busy), so right before the rename the file is compared with
+#    what was read: if it changed, we start over once; if it changed again, nothing is written.
+# The filter must print exactly one JSON object (the whole, modified file); anything else (nothing, several values, an array, null...)
+# counts as a failure and nothing is written.
+# Never fatal. Exit status: 0 edited; 3 nothing to do (missing file, not a regular file, or the filter changes nothing: it is not
+# rewritten); 2 the file kept changing; 1 it could not be read or written (invalid JSON or filter, no permission...). In 1 and 2 the
+# original is left as it was and the temp and our lock are removed.
+# Test hook: ORCA_ROLES_TRUST_HOOK=<command> runs (in a bash -c) after the temp is written and before the comparison, to change the file
+# at that moment and reproduce the race. Inert when unset.
+safe_json_edit() (
+  link="$1"; filter="$2"; dir="$3"; lock="${4:-}"; got=0; tmp=""; status=1
+  [ -e "$link" ] || exit 3
+  f="$(resolve_target "$link")" && [ -f "$f" ] || exit 3
+  cur="$(jq -S -c . "$f" 2>/dev/null)"
+  [ -z "$cur" ] || [ "$cur" != "$(jq -S -c --arg dir "$dir" "$filter" "$f" 2>/dev/null)" ] || exit 3
+  cleanup() { [ -n "$tmp" ] && rm -f "$tmp"; [ "$got" = 1 ] && rmdir "$lock" 2>/dev/null; return 0; }   # only the lock we created
+  trap cleanup EXIT; trap 'exit 1' INT TERM HUP
+  if [ -n "$lock" ]; then
+    for _ in $(seq 1 20); do mkdir "$lock" 2>/dev/null && { got=1; break; }; sleep 0.25; done
+    [ "$got" = 1 ] || echo "Note: $lock is held by another process; continuing without it." >&2
+  fi
+  b="$(basename "$f")"
+  if tmp="$(mktemp "$(dirname "$f")/.${b#.}.orca-roles.XXXXXX" 2>/dev/null)"; then
+    for _ in 1 2; do
+      status=1
+      chmod 600 "$tmp" || break
+      orig="$(cat "$f")" || break
+      printf '%s\n' "$orig" | jq --arg dir "$dir" "$filter" > "$tmp" 2>/dev/null || break
+      jq -e -s 'length == 1 and (.[0] | type) == "object"' "$tmp" >/dev/null 2>&1 || break   # the filter must return the whole object, once
+      if [ "$(printf '%s\n' "$orig" | jq -S -c . 2>/dev/null)" = "$(jq -S -c . "$tmp" 2>/dev/null)" ]; then status=3; break; fi
+      mode="$(mode_of "$f")"
+      if [ -n "$mode" ] && [ "$mode" != 600 ]; then chmod "$mode" "$tmp" || break; fi
+      [ -n "${ORCA_ROLES_TRUST_HOOK:-}" ] && { bash -c "$ORCA_ROLES_TRUST_HOOK" || true; }
+      if [ "$(cat "$f" 2>/dev/null)" = "$orig" ]; then
+        mv -f "$tmp" "$f" && status=0
+        break
+      fi
+      status=2
+    done
+  fi
+  exit "$status"
+)
+# Claude Code asks "Do you trust the files in this folder?" the first time it starts in a folder, and a tab stuck in that dialog never
+# gets its role. Registering the kit in the project is that answer, so the worktree is marked as trusted before the agents start.
+# Never fatal: on a failure ~/.claude.json is left as it was and a warning is printed.
+trust_folder() {
+  local link="$HOME/.claude.json" d rc=0; d="$(pwd -P)"
+  safe_json_edit "$link" '.projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true})' "$d" "$link.lock" || rc=$?
+  case "$rc" in
+    0) echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents.";;
+    1|2) echo "Warning: could not mark $d as trusted for Claude Code ($([ "$rc" = 2 ] && echo 'the file kept changing' || echo 'it could not be read or written')); $link was left untouched and the agent will show the trust dialog." >&2;;
+  esac
+  return 0
+}
+# The trust of the custom agents (role field "trust": {"file": ..., "jq": "<filter using $dir>"}): applies it to each enabled custom
+# role that defines it, once per distinct file and filter, with $dir = this worktree. Never fatal.  trust_custom_roles <config> <roles>
+trust_custom_roles() {
+  local cfg="$1" id t file filt d seen="" rc
+  d="$(pwd -P)"
+  for id in $2; do
+    [ "$(rstr "$cfg" "$id" agent)" = custom ] || continue
+    t="$(rcfg "$cfg" "$id" trust)"; [ -n "$t" ] || continue
+    file="$(printf '%s' "$t" | jq -r '.file // empty' 2>/dev/null)"; filt="$(printf '%s' "$t" | jq -r '.jq // empty' 2>/dev/null)"
+    [ -n "$file" ] && [ -n "$filt" ] || { echo "Warning: the trust of role $id needs both 'file' and 'jq'; ignored." >&2; continue; }
+    file="$(expand_path "$file")"
+    printf '%s\n' "$seen" | grep -qxF "$file|$filt" && continue
+    seen="$seen$file|$filt"$'\n'
+    rc=0; safe_json_edit "$file" "$filt" "$d" || rc=$?
+    case "$rc" in
+      0) echo "Marked $d as trusted in $file (role $id).";;
+      1|2) echo "Warning: could not mark $d as trusted in $file (role $id; $([ "$rc" = 2 ] && echo 'the file kept changing' || echo 'invalid file or filter, or no permission')); the file was left untouched." >&2;;
+    esac
+  done
+  return 0
+}

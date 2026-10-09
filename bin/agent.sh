@@ -59,7 +59,14 @@ case "$AGENT" in
     ;;
   codex)
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
-    [ "$PERM" = auto ] && ARGS+=(--full-auto)
+    # auto = what --full-auto was (codex >= 0.126 rejects it): writes inside the worktree and the --add-dir folders, asks for the rest
+    [ "$PERM" = auto ] && ARGS+=(--sandbox workspace-write --ask-for-approval on-request)
+    # --add-dir only has an effect with workspace-write; the role's scratch folder is outside the worktree
+    SD="$(scratch_dir "$ROLE")" && mkdir -p "$SD" && ARGS+=(--add-dir "$SD")
+    add_list extraDirs --add-dir path
+    # Trust answered with a configuration override instead of the "Do you trust this folder?" dialog; nothing is written.
+    # It must be one inline table: the dotted form (projects."<path>".trust_level) is not read.
+    ARGS+=(-c "$(jq -nr --arg p "$(pwd -P)" '"projects={\($p | @json) = {trust_level = \"trusted\"}}"')")
     # MCP servers as configuration overrides (-c mcp_servers.<name>.<field>=...), without touching ~/.codex/config.toml
     if [ -n "$MCPFILE" ]; then while IFS= read -r o; do [ -n "$o" ] && ARGS+=(-c "$o"); done < <(codex_mcp_overrides "$MCPFILE"); fi
     add_list extraArgs
@@ -69,12 +76,21 @@ case "$AGENT" in
     # The command runs in a login shell (your profile's PATH). Placeholders:
     #   {model} → model field;  {prompts} → the kit's prompts folder;  {prompt} → the role's prompt file
     #   {mcp}   → {"mcpServers": {...}} file with the role's servers (empty if mcp="all"); also in $ORCA_ROLES_MCP
-    # extraArgs are appended. permissionMode, allowedTools and extraDirs do not apply (they are claude's).
+    #   {scratch} → the role's scratch folder (created before); also in $ORCA_ROLES_SCRATCH
+    # extraArgs are appended. If the role has addDirFlag (e.g. "--add-dir"), "<flag> <scratch>" and "<flag> <dir>" for each of
+    # its extraDirs are appended too. permissionMode and allowedTools do not apply (they are claude's), nor does extraDirs without addDirFlag.
     CMD="$(rstr "$CFG" "$ROLE" command)"
     [ -n "$CMD" ] || { echo "Role $ROLE is 'custom' but has no 'command'." >&2; exit 1; }
+    SD="$(scratch_dir "$ROLE")" && mkdir -p "$SD" && export ORCA_ROLES_SCRATCH="$SD"
     Q_MODEL="$(printf '%q' "$MODEL")"; Q_PROMPTS="$(printf '%q' "$KIT/prompts")"; Q_PROMPT="$(printf '%q' "$PROMPT")"
     Q_MCP=""; [ -n "$MCPFILE" ] && Q_MCP="$(printf '%q' "$MCPFILE")"
-    CMD="${CMD//\{model\}/$Q_MODEL}"; CMD="${CMD//\{prompts\}/$Q_PROMPTS}"; CMD="${CMD//\{prompt\}/$Q_PROMPT}"; CMD="${CMD//\{mcp\}/$Q_MCP}"
+    Q_SCRATCH=""; [ -n "${SD:-}" ] && Q_SCRATCH="$(printf '%q' "$SD")"
+    CMD="${CMD//\{model\}/$Q_MODEL}"; CMD="${CMD//\{prompts\}/$Q_PROMPTS}"; CMD="${CMD//\{prompt\}/$Q_PROMPT}"; CMD="${CMD//\{mcp\}/$Q_MCP}"; CMD="${CMD//\{scratch\}/$Q_SCRATCH}"
+    DIRFLAG="$(rstr "$CFG" "$ROLE" addDirFlag)"
+    if [ -n "$DIRFLAG" ]; then
+      [ -n "${SD:-}" ] && ARGS+=("$DIRFLAG" "$SD")
+      add_list extraDirs "$DIRFLAG" path
+    fi
     add_list extraArgs
     for a in "${ARGS[@]+"${ARGS[@]}"}"; do CMD="$CMD $(printf '%q' "$a")"; done
     exec "${RUN[@]+"${RUN[@]}"}" bash -lc "$CMD"

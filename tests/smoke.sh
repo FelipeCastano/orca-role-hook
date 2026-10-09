@@ -403,7 +403,7 @@ cat > "$KIT/config.json" <<'J'
 { "defaults": {}, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "cx": { "agent": "codex", "mcp": "all" } } }
 J
 printf '#!/bin/sh\necho "codex:$#"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/codex"
-check "agent.sh codex without arguments" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:0"
+check "agent.sh codex without options: only --add-dir <scratch> and the trust -c" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:4"
 printf 'PLANNER=t1\n' > "$TMP/state.env"
 check "clean.sh --all without workers" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/clean.sh" --all 2>&1)" "There are no workers to clean in this workspace."
 
@@ -701,7 +701,7 @@ OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG
 case "$OUT" in *"--add-dir $SDT "*) echo "ok   agent.sh claude: --add-dir <scratch>";; *) echo "FAIL agent.sh claude scratch: $OUT"; FAIL=1;; esac
 check "agent.sh claude creates the scratch folder" "$([ -d "$SDT" ] && echo y)" "y"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" cx | tr '\n' ' ')"
-case "$OUT" in *"$KIT/tmp"*|*"$TMP/home/.orca-roles/tmp"*|*"--add-dir"*) echo "FAIL agent.sh codex got the scratch folder: $OUT"; FAIL=1;; *) echo "ok   agent.sh codex: no --add-dir <scratch>";; esac
+case "$OUT" in *"--add-dir $(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir cx) "*) echo "ok   agent.sh codex: --add-dir <scratch>";; *) echo "FAIL agent.sh codex scratch: $OUT"; FAIL=1;; esac
 check "agent.sh leaves pre-seeded scratch content intact" "$([ -f "$SDT/f" ] && [ -f "$SDT/sub/g" ] && [ -f "$SDT/.hidden" ] && echo y)" "y"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 # After a restart, Orca restores the tabs with new handles: the kit finds each one by its ptyId, reads the resumed session and reopens the role with it
@@ -744,6 +744,187 @@ case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in *"Your terminal hand
 printf 'PLANNER=a\nDEV=b\n' > "$RP/.git/orca-roles.env"; printf 'PLANNER=wt@@a\nDEV=wt@@b\n' > "$RP/.git/orca-roles.pty"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
 (cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1)
 check "close-role.sh: drops the identity of the closed role" "$(cat "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "PLANNER=wt@@a "
+
+# trust_folder: edits ~/.claude.json without widening its mode, keeping links, losing concurrent writes or leaving files behind
+TF="$TMP/tf"; mkdir -p "$TF/wt"
+TFD="$(cd "$TF/wt" && pwd -P)"
+tf_run() { # <home> [hook]: runs trust_folder in the worktree with that fake HOME; stdout -> $TF/out, stderr -> $TF/err, rc -> $TF/rc
+  (cd "$TF/wt" && HOME="$1" ORCA_ROLES_TRUST_HOOK="${2:-}" trust_folder >"$TF/out" 2>"$TF/err"; echo $? >"$TF/rc") || true
+}
+tf_trusted() { jq -r --arg d "$TFD" '.projects[$d].hasTrustDialogAccepted // false' "$1" 2>/dev/null; }
+tf_left() { find "$1" -name '.claude.json.orca-roles.*' 2>/dev/null | wc -l | tr -d ' '; }
+TFJ='{"oauthAccount":{"email":"a@b"},"projects":{"/other":{"hasTrustDialogAccepted":true}}}'
+# 1. C1: the mode never widens (family of modes)
+for m in 600 640 644 400 664 755; do
+  H="$TF/h-m$m"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod "$m" "$H/.claude.json"; tf_run "$H"
+  check "trust_folder: mode $m kept" "$(mode_of "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(jq -c .oauthAccount "$H/.claude.json") $(jq -r '.projects["/other"].hasTrustDialogAccepted' "$H/.claude.json")" "$m true {\"email\":\"a@b\"} true"
+done
+# 2. C1: while the temp exists it is never wider than the original
+for m in 600 640 400; do
+  H="$TF/h-t$m"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod "$m" "$H/.claude.json"
+  tf_run "$H" "stat -c %a '$H'/.claude.json.orca-roles.* > '$TF/tmpmode' 2>/dev/null || stat -f %Lp '$H'/.claude.json.orca-roles.* > '$TF/tmpmode'"
+  check "trust_folder: temp mode while it exists ($m)" "$(cat "$TF/tmpmode")" "$m"
+done
+# 3. C2: links are kept and their final target is the one edited
+H="$TF/h-l"; mkdir -p "$H/real" "$H/sub" "$H/o"
+echo "$TFJ" > "$H/real/c.json"; chmod 640 "$H/real/c.json"
+ln -s "$H/real/c.json" "$H/.claude.json"; tf_run "$H"
+check "trust_folder: absolute link kept" "$(readlink "$H/.claude.json") $(tf_trusted "$H/real/c.json") $(mode_of "$H/real/c.json")" "$H/real/c.json true 640"
+rm "$H/.claude.json"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"; tf_run "$H"
+check "trust_folder: relative link kept" "$(readlink "$H/.claude.json") $(tf_trusted "$H/real/c.json")" "real/c.json true"
+rm "$H/.claude.json"; echo "$TFJ" > "$H/real/c.json"; ln -s ../real/c.json "$H/o/a"; ln -s o/a "$H/.claude.json"; tf_run "$H"
+check "trust_folder: chain of links kept" "$(readlink "$H/.claude.json") $(readlink "$H/o/a") $(tf_trusted "$H/real/c.json") $([ -L "$H/real/c.json" ] && echo link || echo file)" "o/a ../real/c.json true file"
+rm "$H/.claude.json"; echo "$TFJ" > "$H/sub/x.json"; ln -s ../sub/x.json "$H/o/b"; ln -s o/b "$H/.claude.json"; tf_run "$H"
+check "trust_folder: link into another folder kept" "$(readlink "$H/.claude.json") $(readlink "$H/o/b") $(tf_trusted "$H/sub/x.json") $(tf_left "$H/sub")" "o/b ../sub/x.json true 0"
+# 4. C2: dangling link -> nothing created
+H="$TF/h-d"; mkdir -p "$H"; ln -s "$H/nowhere.json" "$H/.claude.json"; tf_run "$H"
+check "trust_folder: dangling link, nothing created, silent, no lock" "$(cat "$TF/rc") $([ -e "$H/nowhere.json" ] && echo created || echo none) $([ -L "$H/.claude.json" ] && echo link) $(ls -A "$H" | tr '\n' ' ') [$(cat "$TF/err" "$TF/out")]" "0 none link .claude.json  []"
+H="$TF/h-dir"; mkdir -p "$H/.claude.json"; tf_run "$H"
+check "trust_folder: a directory instead of the file, silent, no lock" "$(cat "$TF/rc") $(ls -A "$H" | tr '\n' ' ') $(ls -A "$H/.claude.json" | wc -l | tr -d ' ') [$(cat "$TF/err" "$TF/out")]" "0 .claude.json  0 []"
+# 5. C3: file changed once during our write -> both changes survive
+H="$TF/h-c1"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod 600 "$H/.claude.json"
+HK="[ -e '$H/seen' ] || { touch '$H/seen'; jq '.x=1' '$H/.claude.json' > '$H/w' && cat '$H/w' > '$H/.claude.json'; }"
+tf_run "$H" "$HK"
+check "trust_folder: change during the write is not lost" "$(jq -r .x "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(jq -c .oauthAccount "$H/.claude.json") $(cat "$TF/rc") $(tf_left "$H") $(mode_of "$H/.claude.json")" "1 true {\"email\":\"a@b\"} 0 0 600"
+# 6. C3: file changes on every attempt -> left exactly as the other writer left it, with a warning
+H="$TF/h-c2"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"
+tf_run "$H" "n=\$(cat '$H/n' 2>/dev/null || echo 0); echo \$((n+1)) > '$H/n'; jq --argjson n \$n '.x=\$n' '$H/.claude.json' > '$H/w' && cat '$H/w' > '$H/.claude.json'"
+check "trust_folder: constant change -> untouched, warning" "$(jq -r .x "$H/.claude.json") $(tf_trusted "$H/.claude.json") $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc") $(tf_left "$H") $([ -d "$H/.claude.json.lock" ] && echo lock)" "1 false 1 0 0 "
+# 7. C4: failures are clean (invalid JSON, unreadable file, unwritable target folder)
+H="$TF/h-f1"; mkdir -p "$H"; printf '{ not json' > "$H/.claude.json"; cp "$H/.claude.json" "$TF/orig1"; tf_run "$H"
+check "trust_folder: invalid JSON untouched" "$(cmp -s "$H/.claude.json" "$TF/orig1" && echo same) $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc") $(ls -A "$H" | tr '\n' ' ')" "same 1 0 .claude.json "
+if [ "$(id -u)" != 0 ]; then
+  H="$TF/h-f2"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod 000 "$H/.claude.json"; tf_run "$H"; chmod 600 "$H/.claude.json"
+  check "trust_folder: unreadable file untouched, one warning, rc 0, clean" "$(grep -c '^Warning' "$TF/err") $(cat "$TF/rc") $(ls -A "$H" | tr '\n' ' ') $(echo "$TFJ" | cmp -s - "$H/.claude.json" && echo same)" "1 0 .claude.json  same"
+  H="$TF/h-f3"; mkdir -p "$H/ro"; echo "$TFJ" > "$H/ro/c.json"; ln -s ro/c.json "$H/.claude.json"; cp "$H/ro/c.json" "$TF/orig3"; chmod 500 "$H/ro"; tf_run "$H"; chmod 700 "$H/ro"
+  check "trust_folder: unwritable folder untouched, one warning, rc 0, clean" "$(cmp -s "$H/ro/c.json" "$TF/orig3" && echo same) $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc") $(tf_left "$H/ro") $(tf_left "$H")" "same 1 0 0 0"
+else echo "ok   trust_folder: unreadable/unwritable cases skipped (root)"; fi
+# 8. C4: a foreign lock is waited for, never removed; the write still happens
+H="$TF/h-lk"; mkdir -p "$H/.claude.json.lock"; echo "$TFJ" > "$H/.claude.json"; chmod 600 "$H/.claude.json"; tf_run "$H"
+check "trust_folder: foreign lock waited for and kept" "$(tf_trusted "$H/.claude.json") $([ -d "$H/.claude.json.lock" ] && echo lock-kept) $(cat "$TF/rc") $(tf_left "$H")" "true lock-kept 0 0"
+# 9. C4/C5: our lock is removed; no-op cases
+H="$TF/h-n"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; tf_run "$H"
+LK1="$([ -d "$H/.claude.json.lock" ] && echo lock || echo nolock)"
+ino="$(ls -i "$H/.claude.json" | cut -d' ' -f1)"; mt="$(stat -c %Y "$H/.claude.json" 2>/dev/null || stat -f %m "$H/.claude.json")"; sleep 1.1
+tf_run "$H"; ino2="$(ls -i "$H/.claude.json" | cut -d' ' -f1)"; mt2="$(stat -c %Y "$H/.claude.json" 2>/dev/null || stat -f %m "$H/.claude.json")"
+H0="$TF/h-none"; mkdir -p "$H0"; tf_run "$H0"
+check "trust_folder: our lock removed, already trusted not rewritten, missing file not created" "$LK1 $([ "$ino" = "$ino2" ] && [ "$mt" = "$mt2" ] && echo same) $(ls -A "$H0" | wc -l | tr -d ' ') $(cat "$TF/rc") $(wc -c <"$TF/out" | tr -d ' ')" "nolock same 0 0 0"
+# 10. C5/C6: launch.sh still gates on claude and survives a warning; the new code stays portable
+check "trust_folder: launch.sh calls it only when a role uses claude" "$(grep -c 'trust_folder' "$ROOT/bin/launch.sh") $(grep -B3 'trust_folder' "$ROOT/bin/launch.sh" | grep -c claude)" "1 1"
+TFCODE="$(sed -n '/^resolve_target()/,/^  exit 0$/p' "$ROOT/bin/lib.sh" | grep -v '^ *#')"
+check "trust_folder: no readlink -f / chmod --reference" "$(printf '%s\n' "$TFCODE" | grep -c 'readlink -f\|chmod --reference')" "0"
+check "trust_folder: every GNU stat has the BSD fallback" "$(printf '%s\n' "$TFCODE" | grep 'stat -c' | grep -vc 'stat -f')" "0"
+
+# safe_json_edit step 2: physical resolution, temp mode on every try, lock path, temp location
+# 11. (T1) HOME is a symlinked folder and ~/.claude.json -> ../shared/c.json: the physical target is edited, the decoy at the logical path is not
+mkdir -p "$TF/phys/home" "$TF/phys/shared" "$TF/shared"; ln -sfn phys/home "$TF/hl"
+echo "$TFJ" > "$TF/phys/shared/c.json"; echo '{"decoy":true}' > "$TF/shared/c.json"; ln -sf ../shared/c.json "$TF/phys/home/.claude.json"
+tf_run "$TF/hl"
+check "trust_folder: symlinked HOME, physical target edited, decoy untouched" "$(tf_trusted "$TF/phys/shared/c.json") $(cat "$TF/shared/c.json") $(readlink "$TF/phys/home/.claude.json") $(tf_left "$TF/shared") $(tf_left "$TF/phys/shared") $(cat "$TF/rc")" 'true {"decoy":true} ../shared/c.json 0 0 0'
+# 12. (T2/T4) the temp is 0600-or-original mode at every try (a restrictive original must not break the retry), and lives in the target's folder
+for m in 400 440 600 640; do
+  H="$TF/h-r$m"; mkdir -p "$H/real"; echo "$TFJ" > "$H/real/c.json"; chmod "$m" "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"
+  tf_run "$H" "for t in '$H'/real/.c.json.orca-roles.*; do echo \$(stat -c %a \"\$t\" 2>/dev/null || stat -f %Lp \"\$t\") >> '$H/modes'; done; ls '$H'/.c* '$H'/.claude.json.orca-roles.* >/dev/null 2>&1 && echo in-home >> '$H/modes'; [ -e '$H/seen' ] || { touch '$H/seen'; chmod u+w '$H/real/c.json'; jq '.x=1' '$H/real/c.json' > '$H/w' && cat '$H/w' > '$H/real/c.json'; chmod $m '$H/real/c.json'; }"
+  check "trust_folder: temp mode on both tries and in the target's folder ($m)" "$(tr '\n' ' ' < "$H/modes") $(jq -r .x "$H/real/c.json") $(tf_trusted "$H/real/c.json") $(mode_of "$H/real/c.json") $(tf_left "$H/real") $(tf_left "$H")" "$m $m  1 true $m 0 0"
+done
+# 13. (T3) the lock is the LINK's path (~/.claude.json.lock), never the target's; ours is gone afterwards
+H="$TF/h-lp"; mkdir -p "$H/real"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"
+tf_run "$H" "[ -d '$H/.claude.json.lock' ] && echo link-lock >> '$H/seen'; [ -e '$H/real/c.json.lock' ] && echo target-lock >> '$H/seen'; true"
+check "trust_folder: lock taken at the link's path, not the target's, and removed" "$(cat "$H/seen") $(tf_trusted "$H/real/c.json") $(ls -A "$H" | tr '\n' ' ') $(ls -A "$H/real" | tr '\n' ' ')" "link-lock true .claude.json real seen  c.json "
+H="$TF/h-lq"; mkdir -p "$H/real" "$H/.claude.json.lock"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"; tf_run "$H"
+check "trust_folder: foreign lock at the link's path kept (link target)" "$(tf_trusted "$H/real/c.json") $([ -d "$H/.claude.json.lock" ] && echo kept) $([ -e "$H/real/c.json.lock" ] && echo target-lock)" "true kept "
+
+# codex / custom agents: argv through fake executables
+FB2="$TMP/fb2"; mkdir -p "$FB2"
+printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\0" "$a"; done > "%s/argv"\n' "$FB2" > "$FB2/codex"
+printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; echo "ENV=$ORCA_ROLES_SCRATCH"; exit 0; }\nexec /bin/bash "$@"\n' > "$FB2/bash"; chmod +x "$FB2/codex" "$FB2/bash"
+cat > "$TMP/cfg2.json" <<'J'
+{ "defaults": {}, "mcpServers": { "pw": { "command": "npx", "args": ["-y", "x"] } },
+  "roles": {
+    "cxa": { "agent": "codex", "permissionMode": "auto", "mcp": ["pw"], "extraDirs": ["~/a b", "{kit}/z", "/c"] },
+    "cxn": { "agent": "codex", "permissionMode": "acceptEdits", "mcp": "all" },
+    "cs": { "agent": "custom", "command": "run {scratch} --s", "mcp": "all", "addDirFlag": "--add-dir", "extraDirs": ["~/a b", "/c"] },
+    "cp": { "agent": "custom", "command": "run {scratch}", "mcp": "all", "extraDirs": ["/c"] },
+    "cn": { "agent": "custom", "command": "run --x", "mcp": "all", "extraDirs": ["/c"] } } }
+J
+agent2() { (cd "$WT2" && HOME="$TMP/home" PATH="$FB2:$PATH" ORCA_ROLES_CONFIG="$TMP/cfg2.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1); }
+tomlkey() { python3 -c 'import sys,tomllib; d=tomllib.loads(sys.argv[1]); print(*d["projects"])' "$1" 2>/dev/null; }
+WT2="$TMP/w t.x\"q"; mkdir -p "$WT2"; WT2P="$(cd "$WT2" && pwd -P)"
+SD2="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cxa)"
+# 14. (S1/S2/S3) codex auto: sandbox flags, no --full-auto, add-dir per element, one trust override (parses as TOML), MCP overrides kept
+agent2 cxa >/dev/null; CA=(); while IFS= read -r -d '' a; do CA+=("$a"); done < "$FB2/argv"; J="|$(IFS='|'; echo "${CA[*]}")|"
+check "codex auto: --sandbox workspace-write --ask-for-approval on-request, no --full-auto" "$(case "$J" in *'|--sandbox|workspace-write|--ask-for-approval|on-request|'*) echo flags;; esac)$(case "$J" in *full-auto*) echo FULL;; esac)" "flags"
+check "codex auto: --add-dir scratch + each extraDir as one element, expanded" "$(case "$J" in *"|--add-dir|$SD2|--add-dir|$TMP/home/a b|--add-dir|$TMP/home/.orca-roles/z|--add-dir|/c|"*) echo ok;; esac) $([ -d "$SD2" ] && echo exists)" "ok exists"
+NP=0; TV=""; for a in "${CA[@]}"; do case "$a" in projects=*) NP=$((NP+1)); TV="$a";; esac; done
+check "codex auto: exactly one projects override, with -c before it, key = physical worktree (spaces, dot, quote)" "$NP $(for i in "${!CA[@]}"; do [ "${CA[$i]}" = "$TV" ] && echo "${CA[$((i-1))]}"; done) $(tomlkey "$TV" | cmp -s - <(printf '%s\n' "$WT2P") && echo key-ok) $(case "$TV" in *'{trust_level = "trusted"}}') echo trusted;; esac)" "1 -c key-ok trusted"
+check "codex auto: MCP -c overrides still present" "$(case "$J" in *'|-c|mcp_servers.pw.command="npx"|-c|'*) echo ok;; esac)" "ok"
+# 15. (S1/S3) codex non-auto: no sandbox / approval / full-auto, still scratch + one trust override
+agent2 cxn >/dev/null; CN=(); while IFS= read -r -d '' a; do CN+=("$a"); done < "$FB2/argv"; J="|$(IFS='|'; echo "${CN[*]}")|"
+NP=0; for a in "${CN[@]}"; do case "$a" in projects=*) NP=$((NP+1));; esac; done
+check "codex non-auto: no --sandbox/--ask-for-approval/--full-auto; scratch and one trust" "$(case "$J" in *--sandbox*|*--ask-for-approval*|*full-auto*) echo BAD;; *) echo clean;; esac) $(case "$J" in *"|--add-dir|$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cxn)|"*) echo scratch;; esac) $NP" "clean scratch 1"
+# 16. (S4/S5) custom: {scratch} quoted, ORCA_ROLES_SCRATCH exported, addDirFlag appends flag+scratch and flag+each extraDir; without addDirFlag nothing appended
+SDS="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cs)"; QS="$(printf '%q' "$SDS")"
+OUT="$(agent2 cs)"
+check "custom: {scratch} quoted, env set, addDirFlag appends scratch and extraDirs quoted" "$OUT" "run $QS --s --add-dir $QS --add-dir $(printf '%q' "$TMP/home/a b") --add-dir /c
+ENV=$SDS"
+SDP="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cp)"
+check "custom: no addDirFlag, extraDirs/trust absent -> exactly as before" "$(agent2 cp | head -1) | $(agent2 cn | head -1)" "run $(printf '%q' "$SDP") | run --x"
+
+# custom trust (trust {file, jq}) through trust_custom_roles
+tc_run() { # <home> <roles json> <role ids> [hook]: stdout -> $TF/out, stderr -> $TF/err, rc -> $TF/rc
+  jq -n --argjson r "$2" '{defaults:{},mcpServers:{},roles:$r}' > "$TF/tcfg.json"
+  (cd "$TF/wt" && HOME="$1" ORCA_ROLES_TRUST_HOOK="${4:-}" trust_custom_roles "$TF/tcfg.json" "$3" >"$TF/out" 2>"$TF/err"; echo $? >"$TF/rc") || true
+}
+TCF='.t[$dir] = true'
+TR1="{\"a\":{\"agent\":\"custom\",\"command\":\"x\",\"trust\":{\"file\":\"~/cust.json\",\"jq\":$(jq -Rn --arg f "$TCF" '$f')}},\"b\":{\"agent\":\"custom\",\"command\":\"x\",\"trust\":{\"file\":\"~/cust.json\",\"jq\":$(jq -Rn --arg f "$TCF" '$f')}},\"c\":{\"agent\":\"claude\",\"trust\":{\"file\":\"~/other.json\",\"jq\":\".z=1\"}}}"
+tc_ok() { jq -r --arg d "$TFD" '.t[$d] // false' "$1" 2>/dev/null; }
+# 17. (S6) edit: mode kept, symlink kept, other keys kept, two roles with the same file+filter -> one edit, non-custom roles ignored; second run leaves the file alone
+H="$TF/h-c"; mkdir -p "$H/real"; echo '{"keep":1}' > "$H/real/c.json"; chmod 640 "$H/real/c.json"; ln -s real/c.json "$H/cust.json"; echo '{}' > "$H/other.json"
+tc_run "$H" "$TR1" "a b c"
+R1="$(tc_ok "$H/real/c.json") $(jq -r .keep "$H/real/c.json") $(mode_of "$H/real/c.json") $(readlink "$H/cust.json") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(cat "$H/other.json") $(ls -A "$H" | tr '\n' ' ')$(ls -A "$H/real" | tr '\n' ' ')"
+ino="$(ls -i "$H/real/c.json" | cut -d' ' -f1)"; mt="$(stat -c %Y "$H/real/c.json" 2>/dev/null || stat -f %m "$H/real/c.json")"; sleep 1.1; tc_run "$H" "$TR1" "a b c"
+mt2="$(stat -c %Y "$H/real/c.json" 2>/dev/null || stat -f %m "$H/real/c.json")"
+check "custom trust: edited (mode, link, other keys kept; one edit; claude role ignored) and not rewritten when applied" "$R1 | $([ "$ino" = "$(ls -i "$H/real/c.json" | cut -d' ' -f1)" ] && [ "$mt" = "$mt2" ] && echo same) [$(cat "$TF/out" "$TF/err")]" "true 1 640 real/c.json 1 0 {} cust.json other.json real c.json  | same []"
+# 18. (S6) concurrent change: once -> kept via retry; every time -> untouched with a warning; no temp left
+H="$TF/h-cc"; mkdir -p "$H"; echo '{"keep":1}' > "$H/cust.json"; chmod 600 "$H/cust.json"
+tc_run "$H" "$TR1" "a" "[ -e '$H/seen' ] || { touch '$H/seen'; jq '.x=1' '$H/cust.json' > '$H/w' && cat '$H/w' > '$H/cust.json'; }"
+R1="$(tc_ok "$H/cust.json") $(jq -r .x "$H/cust.json") $(jq -r .keep "$H/cust.json") $(cat "$TF/rc")"
+H="$TF/h-cd"; mkdir -p "$H"; echo '{"keep":1}' > "$H/cust.json"
+tc_run "$H" "$TR1" "a" "n=\$(cat '$H/n' 2>/dev/null || echo 0); echo \$((n+1)) > '$H/n'; jq --argjson n \$n '.x=\$n' '$H/cust.json' > '$H/w' && cat '$H/w' > '$H/cust.json'"
+check "custom trust: change during the write kept; constant change -> untouched, warning, clean" "$R1 | $(tc_ok "$H/cust.json") $(jq -r .x "$H/cust.json") $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc") $(find "$H" -name '*orca-roles*' | wc -l | tr -d ' ')" "true 1 1 0 | false 1 1 0 0"
+# 19. (S6) failures never abort: missing file, invalid filter, invalid JSON file, incomplete trust field -> warning or silence, file untouched, rc 0, nothing left
+H="$TF/h-cf"; mkdir -p "$H"; BAD="{\"a\":{\"agent\":\"custom\",\"command\":\"x\",\"trust\":{\"file\":\"~/cust.json\",\"jq\":\".[\"}}}"
+tc_run "$H" "$TR1" "a"; R0="$(ls -A "$H" | wc -l | tr -d ' ') [$(cat "$TF/out" "$TF/err")] $(cat "$TF/rc")"
+echo '{"keep":1}' > "$H/cust.json"; cp "$H/cust.json" "$TF/o2"; tc_run "$H" "$BAD" "a"; R1="$(cmp -s "$H/cust.json" "$TF/o2" && echo same) $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc")"
+printf '{ nope' > "$H/cust.json"; cp "$H/cust.json" "$TF/o3"; tc_run "$H" "$TR1" "a"; R2="$(cmp -s "$H/cust.json" "$TF/o3" && echo same) $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc")"
+tc_run "$H" '{"a":{"agent":"custom","command":"x","trust":{"file":"~/cust.json"}}}' "a"; R3="$(cmp -s "$H/cust.json" "$TF/o3" && echo same) $(grep -c '^Warning' "$TF/err") $(cat "$TF/rc")"
+check "custom trust: missing file / invalid filter / invalid JSON / incomplete field never abort and leave no trace" "$R0 | $R1 | $R2 | $R3 | $(find "$H" -name '*orca-roles*' -o -name '*.lock' | wc -l | tr -d ' ') $(grep -c 'trust_custom_roles' "$ROOT/bin/launch.sh")" "0 [] 0 | same 1 0 | same 1 0 | same 1 0 | 0 1"
+
+# 20. (TT2) {scratch}/addDirFlag with a HOME that has a space and a double quote: every path is one shell word
+H2="$TMP/h o\"me"; mkdir -p "$H2"; ln -sfn "$KIT" "$H2/.orca-roles"
+SDQ="$(cd "$WT2" && KIT="$H2/.orca-roles" scratch_dir cs)"; QQ="$(printf '%q' "$SDQ")"
+OUT="$(cd "$WT2" && HOME="$H2" PATH="$FB2:$PATH" ORCA_ROLES_CONFIG="$TMP/cfg2.json" "$H2/.orca-roles/bin/agent.sh" cs 2>&1)"
+check "custom: {scratch} and addDirFlag quoted with a space and a quote in HOME" "$OUT" "run $QQ --s --add-dir $QQ --add-dir $(printf '%q' "$H2/a b") --add-dir /c
+ENV=$SDQ"
+check "custom: the odd scratch path really has a space and a quote and exists" "$(case "$SDQ" in *' '*'"'*) echo odd;; esac) $([ -d "$SDQ" ] && echo exists)" "odd exists"
+# 21. (TT1) the filter must produce exactly one JSON object: anything else leaves the file byte-identical, warns, never says "Marked"
+tjq() { jq -Rn --arg f "$1" '$f'; }
+tcr() { echo "{\"a\":{\"agent\":\"custom\",\"command\":\"x\",\"trust\":{\"file\":\"~/cust.json\",\"jq\":$(tjq "$1")}}}"; }
+H="$TF/h-o"; mkdir -p "$H"; echo '{"keep":1,"trustedWorkspaces":["/z"]}' > "$H/cust.json"
+tc_run "$H" "$(tcr '.trustedWorkspaces = ((.trustedWorkspaces // []) + [$dir] | unique)')" a
+check "custom trust: a filter returning the whole object edits" "$(jq -c --arg d "$TFD" '(.trustedWorkspaces | index($d) != null), .keep' "$H/cust.json" | tr '\n' ' ') $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc")" "true 1  1 0"
+BADF=0; BADL=""
+for flt in 'empty' 'select(.x)' '.a, .b' '.missing' '.trustedWorkspaces + [$dir]' '"str"' '1' '[.]' 'true' '(.,.)'; do
+  H="$TF/h-o2"; mkdir -p "$H"; rm -f "$H"/cust.json; echo '{"keep":1}' > "$H/cust.json"; cp "$H/cust.json" "$TF/oo"
+  tc_run "$H" "$(tcr "$flt")" a
+  r="$(cmp -s "$H/cust.json" "$TF/oo" && echo same) $(grep -c '^Warning' "$TF/err") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(find "$H" -name '*orca-roles*' -o -name '*.lock' | wc -l | tr -d ' ')"
+  [ "$r" = "same 1 0 0 0" ] || { BADF=1; BADL="$BADL [$flt => $r]"; }
+done
+check "custom trust: non-object / multi-value / empty filters rejected, file untouched, warning, no Marked, rc 0" "$BADF$BADL" "0"
+# a filter fine on the first read whose second try (after a concurrent change) yields a non-object
+H="$TF/h-o3"; mkdir -p "$H"; echo '{"keep":1}' > "$H/cust.json"
+tc_run "$H" "$(tcr 'if has("flip") then 1 else .t[$dir] = true end')" a "[ -e '$H/seen' ] || { touch '$H/seen'; jq '.flip=1' '$H/cust.json' > '$H/w' && cat '$H/w' > '$H/cust.json'; }"
+check "custom trust: filter that turns non-object on the retry -> untouched (as the other writer left it), warning, no Marked" "$(jq -c . "$H/cust.json") $(grep -c '^Warning' "$TF/err") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(find "$H" -name '*orca-roles*' | wc -l | tr -d ' ')" '{"keep":1,"flip":1} 1 0 0 0'
 
 sleep 1
 
