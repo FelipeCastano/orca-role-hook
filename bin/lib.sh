@@ -41,8 +41,10 @@ setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "
 enabled_roles() { jq -r '.roles | to_entries[] | select(.key == "planner" or .value.enabled != false) | .key' "$1"; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
-# A role's prompt file: the "prompt" field (accepts ~), or the kit's prompts/<role>.md
-prompt_of() { local p; p="$(jq -r --arg r "$2" '.roles[$r].prompt // empty' "$1")"; p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$2.md}"; }
+# The kit's prompts folder for the current mode (only "programmer" exists for now)
+prompts_dir_of() { echo "$KIT/prompts/programmer"; }
+# A role's prompt file: the "prompt" field (accepts ~), or the mode's prompts/programmer/<role>.md
+prompt_of() { local p; p="$(jq -r --arg r "$2" '.roles[$r].prompt // empty' "$1")"; p="${p/#\~/$HOME}"; echo "${p:-$(prompts_dir_of "$1")/$2.md}"; }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
@@ -217,7 +219,7 @@ worker_msg() {
   local p n notes="" fg=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  printf '%s' "Read $KIT/prompts/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
+  printf '%s' "Read $(prompts_dir_of "$1")/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
 }
 # A path with ~, {kit} or {home} expanded
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }

@@ -46,9 +46,9 @@ section() { echo; echo "── $1 ──"; }
 # ---------- where it is saved ----------
 if [ -n "$REPO" ]; then
   REPO="$(cd "$REPO" && pwd)"
-  [ -f "$REPO/config.default.json" ] && [ -d "$REPO/prompts" ] || { echo "$REPO does not look like a clone of orca-roles." >&2; exit 1; }
+  [ -f "$REPO/config.default.json" ] && [ -d "$REPO/prompts/programmer" ] || { echo "$REPO does not look like a clone of orca-roles." >&2; exit 1; }
   TARGET_CFG="$REPO/config.default.json"
-  PROMPT_DIR="$REPO/prompts"
+  PROMPT_DIR="$REPO/prompts/programmer"
   echo "Repo mode: the role is saved in $REPO (remember to commit)."
 else
   [ -f "$KIT/config.json" ] || cp "$KIT/config.default.json" "$KIT/config.json"
@@ -90,7 +90,7 @@ if [ -n "$REMOVE" ]; then
   TMPC="$(mktemp)"
   jq --arg r "$ID" 'del(.roles[$r])' "$TARGET_CFG" > "$TMPC" && jq empty "$TMPC" && mv "$TMPC" "$TARGET_CFG"
   echo "Removed role '$ID' from $TARGET_CFG (previous copy in $TARGET_CFG.bak)."
-  # Only the prompt the kit manages is deleted (roles/<id>.md, or prompts/<id>.md in the repo), never a file elsewhere
+  # Only the prompt the kit manages is deleted (roles/<id>.md, or prompts/programmer/<id>.md in the repo), never a file elsewhere
   if [ "$P" = "$PROMPT_DIR/$ID.md" ] && [ -f "$P" ]; then rm -f "$P"; echo "Deleted its prompt: $P"
   elif [ -f "$P" ]; then echo "Its prompt is outside the kit and was left alone: $P"; fi
   [ -n "$REPO" ] && echo "Remember: reinstall (bash $REPO/install.sh) and commit."
@@ -287,7 +287,7 @@ case "$PMODE" in
 esac
 
 # ---------- build the role and save ----------
-PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"   # in the repo the default path (prompts/<id>.md) works
+PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"   # in the repo the default path (prompts/programmer/<id>.md) works
 ROLE_JSON="$(jq -n \
   --arg title "$TITLE" --arg desc "$DESC" --argjson enabled "$ENABLED" \
   --arg agent "$AGENT" --arg model "$MODEL" --arg perm "$PERM" --arg command "$COMMAND" --arg clear "$CLEAR" --arg adddir "$ADDDIR" \

@@ -27,7 +27,7 @@ orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Re
 |---|---|
 | `~/.orca-roles/config.json` | The user's configuration: the everyday one. The kit reads it for every new worktree. |
 | `~/.orca-roles/config.default.json` | The kit's default configuration (do not edit: it is rewritten on update). |
-| `~/.orca-roles/prompts/<role>.md` | Default prompts (rewritten on update). |
+| `~/.orca-roles/prompts/programmer/<role>.md` | Default prompts (rewritten on update). |
 | `~/.orca-roles/roles/<role>.md` | Prompts of the roles the user created (kept on update). |
 | `<repo root>/.orca-roles.json` | Configuration for that project only, merged on top of the global one. |
 | The project's setup script | The `launch.sh` line with its options: the project's exceptions. |
@@ -148,7 +148,7 @@ Always ask how long the change should last and explain the difference:
 |---|---|---|
 | **On the fly** | Include the instruction in the spec of every task you assign to that role during the session. Do not touch files. | Until your session ends. If you lose your context (restart), it is lost. |
 | **This worktree** | Write the instruction in `<git dir>/orca-roles.notes/<role>.md` (create it with `mkdir -p`). The kit adds it to the worker's role message and it takes precedence over its prompt. To apply it now, clean its context (section 7). | As long as the worktree exists, even if the worker is cleaned or restarted. Other worktrees are not affected. |
-| **Permanent** | Default role: change its configuration in `config.json` or create your own prompt in `~/.orca-roles/roles/<role>.md` starting from the default one and point its `prompt` field there (the ones in `prompts/` are rewritten on update). Role created by the user: `new-role.sh --from-json` with `overwrite: true`, or edit its file in `roles/`. | Every new worktree. In this one, apply it with section 7. |
+| **Permanent** | Default role: change its configuration in `config.json` or create your own prompt in `~/.orca-roles/roles/<role>.md` starting from the default one and point its `prompt` field there (the ones in `prompts/programmer/` are rewritten on update). Role created by the user: `new-role.sh --from-json` with `overwrite: true`, or edit its file in `roles/`. | Every new worktree. In this one, apply it with section 7. |
 
 Worktree-level instructions are short, direct text: they go inside the message the worker receives. To remove them, delete the file and clean the worker's context.
 

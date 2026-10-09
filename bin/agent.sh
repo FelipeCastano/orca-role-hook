@@ -44,7 +44,7 @@ case "$AGENT" in
     ARGS+=(--add-dir "$KIT/prompts")
     SD="$(scratch_dir "$ROLE")" && mkdir -p "$SD" && ARGS+=(--add-dir "$SD")   # the role's scratch folder, outside the worktree
     PDIR="$(dirname "$PROMPT")"
-    [ "$PDIR" != "$KIT/prompts" ] && [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR")
+    case "$PDIR/" in "$KIT/prompts/"*) ;; *) [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR");; esac
     add_list extraDirs --add-dir path
     add_list pluginDirs --plugin-dir path   # Claude Code plugins for this role only (the Planner's skill)
     ARGS+=(--append-system-prompt "$(role_anchor "$CFG" "$ROLE")")   # survives /clear, unlike the role message

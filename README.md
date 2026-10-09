@@ -50,7 +50,7 @@ By default:
 | **E2E-Tester** | Opus 5.5 | Playwright | Proposes an E2E test plan for the application (front end or API) and, once you approve it, runs it in a headless browser with your session, with screenshots at the key points. |
 | **Deployer** | Sonnet 5.5 | None | Starts and stops the application locally (API, front end and required services) when asked, and maintains `DEPLOYMENT.md` with the step-by-step guide for dev and prod. Never deploys. |
 
-They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
+They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/programmer/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
 
 ### Prompt structure
 
@@ -91,7 +91,7 @@ Clone the repo and run the installer from the clone:
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings.
+It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings. Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
 
 ```bash
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
@@ -209,9 +209,9 @@ Before saving it shows you a summary. It keeps a copy of the previous configurat
 | Mode | Prompt | Configuration |
 |---|---|---|
 | Local | `~/.orca-roles/roles/<id>.md` (not deleted when the kit is updated) | `~/.orca-roles/config.json` |
-| `--repo` | `prompts/<id>.md` in the clone | `config.default.json` in the clone; offers to reinstall and reminds you to commit |
+| `--repo` | `prompts/programmer/<id>.md` in the clone | `config.default.json` in the clone; offers to reinstall and reminds you to commit |
 
-Every worker also receives the common rules in `prompts/common-workers.md`. To edit a role later, change its entry in the configuration and its prompt file, or run `new-role` again with the same id to overwrite it.
+Every worker also receives the common rules in `prompts/programmer/common-workers.md`. To edit a role later, change its entry in the configuration and its prompt file, or run `new-role` again with the same id to overwrite it.
 
 **Removing a role:** `new-role --remove <id>` removes a role you created (its entry and its prompt; previous configuration in `.bak`). Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
 
@@ -291,7 +291,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `enabled` | Enables or disables the role (the `planner` is always enabled). |
 | `title` | Name of the tab and of the role the Planner sees. |
 | `description` | What the role does and when to use it. The Planner receives it at startup; essential in roles you create. |
-| `prompt` | The role's instructions file (by default `prompts/<role>.md`). Accepts `~`. |
+| `prompt` | The role's instructions file (by default `prompts/programmer/<role>.md`). Accepts `~`. |
 | `agent` | Which CLI is launched: `claude`, `codex` or `custom`. |
 | `model` | Exact model passed to the agent. |
 | `permissionMode` | In `claude`, the `--permission-mode` (`auto`, `acceptEdits`, `manual`...). `default` means not passing the flag. In `codex`, `auto` is `--sandbox workspace-write --ask-for-approval on-request` (what `--full-auto` was); any other value passes nothing. |
@@ -450,14 +450,15 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 ├── plugin/                      # Claude Code plugin the Planner loads
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
 ├── prompts/
-│   ├── common-workers.md        # rules common to all workers
-│   └── <role>.md                # each role's instructions (with its review method, if it has one)
+│   └── programmer/
+│       ├── common-workers.md    # rules common to all workers
+│       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── tests/
 │   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
 └── .github/workflows/ci.yml     # shellcheck + smoke on every push to main and every PR
 ```
 
-To change a role's behavior, edit `prompts/<role>.md` in the repo and run the installer again. Whatever you edit directly in `~/.orca-roles/prompts/` is overwritten on update; your `config.json` and your roles in `~/.orca-roles/roles/` are not.
+To change a role's behavior, edit `prompts/programmer/<role>.md` in the repo and run the installer again. Whatever you edit directly in `~/.orca-roles/prompts/` is overwritten on update; your `config.json` and your roles in `~/.orca-roles/roles/` are not.
 
 Inside each worktree:
 
