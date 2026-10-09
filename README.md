@@ -509,6 +509,8 @@ The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshr
 
 ```bash
 tests/smoke.sh                                   # does not touch ~/.orca-roles
+tests/smoke.sh --list                            # section names
+tests/smoke.sh roles-yaml mcp                    # only those sections, in that order
 shellcheck -S warning install.sh bin/*.sh tests/*.sh
 ```
 

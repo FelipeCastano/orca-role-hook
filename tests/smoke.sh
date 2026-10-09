@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # orca-roles smoke tests: configuration, inheritance, per-project merge, update and the kit's scripts.
-# Usage: tests/smoke.sh   (does not touch ~/.orca-roles)
+# Usage: tests/smoke.sh                  all sections, in order (does not touch ~/.orca-roles)
+#        tests/smoke.sh <section>...     only those sections, in the given order
+#        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
+SECTIONS="syntax prompts config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
+if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
+for s in "$@"; do
+  known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
+  [ "$known" = 1 ] || { echo "smoke.sh: unknown section '$s'. Sections:"; printf '  %s\n' $SECTIONS; } >&2
+  [ "$known" = 1 ] || exit 2
+done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d)"; DONE=0
+on_exit() { local rc=$?; rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; }
+trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
 export KIT="$TMP/kit"; mkdir -p "$KIT"
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
@@ -11,11 +22,84 @@ FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; }
 blk_start() { F0=$FAIL; FAIL=0; }
 blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0; }
+try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
+mkdir -p "$TMP/fakebin" "$TMP/home"; ln -sfn "$KIT" "$TMP/home/.orca-roles"   # fake HOME: ~/.orca-roles → test kit
+PROJ="$TMP/proj"; mkdir -p "$PROJ"; git -C "$PROJ" init -q
+echo '{ "roles": { "dev": { "mcp": [] }, "tester": { "enabled": true } }, "settings": { "jiraHandoff": false } }' > "$PROJ/.orca-roles.json"
+newrole() { (cd "$TMP" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/new-role.sh" --from-json "$1" 2>&1); }
 
+write_clean_config() {
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1 }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": {
+    "planner": { "title": "Planner" },
+    "dev": { "title": "Dev", "params": { "a": 1 } },
+    "cx": { "title": "Codex", "agent": "codex" },
+    "cu": { "title": "Custom", "agent": "custom", "command": "x" },
+    "cc": { "title": "Custom2", "agent": "custom", "command": "x", "clearCommand": "/reset" } } }
+J
+}
+write_placeholders_config() {
+cat > "$KIT/config.json" <<'J'
+{ "defaults": { "mcp": [] }, "mcpServers": {
+    "pw": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless", "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"], "env": { "P": "{project}", "K": "{kit}" } },
+    "h": { "type": "http", "url": "http://{home}/x" } },
+  "roles": { "vt": { "agent": "custom", "command": "run {mcp}", "mcp": ["pw", "h"], "params": { "evidenceDir": "ev" } },
+             "other": { "agent": "custom", "command": "run {mcp}", "mcp": ["pw"] } } }
+J
+}
+write_launch_config() {
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" },
+             "tester": { "title": "Tester", "enabled": false }, "deployer": { "title": "Deployer" } } }
+J
+}
+fake_bash() {   # bash -lc prints the command instead of running it
+printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; exit 0; }\nexec /bin/bash "$@"\n' > "$TMP/fakebin/bash"; chmod +x "$TMP/fakebin/bash"
+}
+pk_setup() {
+PK="$TMP/pk"; PH="$TMP/pkhome"; mkdir -p "$PK" "$PH" "$TMP/pkbin"
+cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PK/"; chmod +x "$PK"/bin/*.sh
+ln -sfn "$PK" "$PH/.orca-roles"; PKL="$PH/.orca-roles"
+PKC="$PK/config.default.json"
+}
+cli_shim_dir() {
+mkdir -p "$TMP/cli"; printf '#!/bin/sh\necho "orca-ide:$*"\n' > "$TMP/cli/orca-ide"; chmod +x "$TMP/cli/orca-ide"
+}
+
+clean_fixture() {
+write_clean_config
+C="$KIT/config.json"
+printf 'PLANNER=t1\nDEV=t2\nCX=t3\nCU=t4\n' > "$TMP/state.env"
+LOGF="$TMP/orca.log"; : > "$LOGF"
+cat > "$TMP/fakebin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LOGF"
+case "\$*" in *"--terminal t3 "*) [ "\$2" = show ] && exit 1;; esac
+exit 0
+EOS
+chmod +x "$TMP/fakebin/orca"
+run_clean() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$C" "$TMP/home/.orca-roles/bin/clean.sh" "$@" 2>&1); }
+}
+tf_setup() {
+TF="$TMP/tf"; mkdir -p "$TF/wt"
+TFD="$(cd "$TF/wt" && pwd -P)"
+tf_run() { # <home> [hook]: runs trust_folder in the worktree with that fake HOME; stdout -> $TF/out, stderr -> $TF/err, rc -> $TF/rc
+  (cd "$TF/wt" && HOME="$1" ORCA_ROLES_TRUST_HOOK="${2:-}" trust_folder >"$TF/out" 2>"$TF/err"; echo $? >"$TF/rc") || true
+}
+tf_trusted() { jq -r --arg d "$TFD" '.projects[$d].hasTrustDialogAccepted // false' "$1" 2>/dev/null; }
+tf_left() { find "$1" -name '.claude.json.orca-roles.*' 2>/dev/null | wc -l | tr -d ' '; }
+TFJ='{"oauthAccount":{"email":"a@b"},"projects":{"/other":{"hasTrustDialogAccepted":true}}}'
+}
+
+sec_syntax() {
 # Syntax and JSON
 for f in "$ROOT"/install.sh "$ROOT"/bin/*.sh "$ROOT"/tests/*.sh; do bash -n "$f"; done; echo "ok   bash syntax"
 jq empty "$ROOT/config.default.json"; echo "ok   config.default.json is JSON"
+}
 
+sec_prompts() {
 # Every prompt follows the pattern
 for p in "$ROOT"/prompts/programmer/*.md; do
   n="$(basename "$p" .md)"; [ "$n" = common-workers ] && continue
@@ -69,7 +153,9 @@ echo "ok   rules: key content pinned, examples use placeholders"
 for r in $(jq -r '.roles | keys_unsorted[]' "$KIT/config.default.json"); do
   [ -f "$(prompt_of "$KIT/config.default.json" "$r")" ] || { echo "FAIL role $r without a prompt"; FAIL=1; }
 done; echo "ok   prompts of the default roles"
+}
 
+sec_config() {
 # Inheritance from defaults and the planner always enabled
 cat > "$KIT/config.json" <<'J'
 { "settings": { "launchWaitSeconds": 3 },
@@ -103,8 +189,6 @@ check "prompt_of with ~" "$(prompt_of "$C" extra)" "$HOME/x/extra.md"
 check "regex_escape" "$(regex_escape 'feat/DEV-1.x+(y)')" 'feat/DEV-1\.x\+\(y\)'
 
 # Merge with the project's .orca-roles.json (objects field by field, lists whole)
-PROJ="$TMP/proj"; mkdir -p "$PROJ"; git -C "$PROJ" init -q
-echo '{ "roles": { "dev": { "mcp": [] }, "tester": { "enabled": true } }, "settings": { "jiraHandoff": false } }' > "$PROJ/.orca-roles.json"
 M="$(merged_config "$PROJ")"
 check "merge: list replaced" "$(echo "$M" | jq -c '.roles.dev.mcp')" '[]'
 check "merge: field kept" "$(echo "$M" | jq -r '.roles.dev.model')" 'm-dev'
@@ -121,7 +205,9 @@ check "upgrade: user's value kept" "$(echo "$U" | jq -r '.roles.dev.model')" "m-
 check "upgrade: user's enabled kept" "$(echo "$U" | jq -r '.roles.tester.enabled')" "false"
 check "upgrade: new setting added" "$(echo "$U" | jq -r '.settings.kickoffTimeoutSeconds')" "180"
 check "upgrade: mcpServers merged" "$(echo "$U" | jq -r '.mcpServers | keys | join(" ")')" "atlassian context7 ctx playwright"
+}
 
+sec_planner_msg() {
 # The Planner's startup message: handles, Jira, additional roles and resume mode
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "params": {} }, "mcpServers": {}, "roles": {
@@ -145,35 +231,17 @@ grep -q '^## After your conversation was cleared' "$ROOT/prompts/programmer/plan
 jq '.settings.language = "Spanish"' "$KIT/config.json" > "$TMP/lang.json"
 case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in *"Always reply to the user in Spanish, whatever language they write in."*) echo "ok   planner_msg: settings.language";; *) echo "FAIL planner_msg language"; FAIL=1;; esac
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
+}
 
+sec_clean() {
 # Worker cleanup: worker_msg, clear_command and clean.sh with a fake 'orca'
-cat > "$KIT/config.json" <<'J'
-{ "settings": { "kickoffTimeoutSeconds": 1 }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": {
-    "planner": { "title": "Planner" },
-    "dev": { "title": "Dev", "params": { "a": 1 } },
-    "cx": { "title": "Codex", "agent": "codex" },
-    "cu": { "title": "Custom", "agent": "custom", "command": "x" },
-    "cc": { "title": "Custom2", "agent": "custom", "command": "x", "clearCommand": "/reset" } } }
-J
-C="$KIT/config.json"
+clean_fixture
 check "worker_msg with parameters" "$(cd "$TMP" && worker_msg "$C" dev)" "Read $KIT/prompts/programmer/common-workers.md and $KIT/prompts/programmer/dev.md and adopt that role from now on. Follow its instructions to the letter. Configuration parameters: a=1, scratchDir=$(cd "$TMP" && scratch_dir dev)."
 case "$(cd "$TMP" && worker_msg "$C" cx)" in *"a=1"*) echo "FAIL worker_msg without params shows another role's"; FAIL=1;; *"Configuration parameters: scratchDir=$KIT/tmp/"*) echo "ok   worker_msg without parameters (only scratchDir)";; *) echo "FAIL worker_msg without params: $(cd "$TMP" && worker_msg "$C" cx)"; FAIL=1;; esac
 check "clear_command claude" "$(clear_command "$C" dev)" "/clear"
 check "clear_command codex" "$(clear_command "$C" cx)" "/new"
 check "clear_command custom undefined" "$(clear_command "$C" cu)" ""
 check "clear_command explicit" "$(clear_command "$C" cc)" "/reset"
-printf 'PLANNER=t1\nDEV=t2\nCX=t3\nCU=t4\n' > "$TMP/state.env"
-mkdir -p "$TMP/fakebin" "$TMP/home"; ln -sfn "$KIT" "$TMP/home/.orca-roles"   # fake HOME: ~/.orca-roles → test kit
-LOGF="$TMP/orca.log"; : > "$LOGF"
-cat > "$TMP/fakebin/orca" <<EOS
-#!/bin/sh
-echo "\$*" >> "$LOGF"
-case "\$*" in *"--terminal t3 "*) [ "\$2" = show ] && exit 1;; esac
-exit 0
-EOS
-chmod +x "$TMP/fakebin/orca"
-run_clean() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$C" "$TMP/home/.orca-roles/bin/clean.sh" "$@" 2>&1); }
-try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
 try run_clean dev
 check "clean.sh dev: result" "$RC:$OUT" "0:Dev: context cleaned (/clear) and role resent."
 check "clean.sh dev: sends /clear, waits and resends the role" "$(grep -c -E 'terminal send --terminal t2 --text /clear --enter|terminal wait --terminal t2 --for tui-idle|terminal send --terminal t2 --text Read .*dev.md.*a=1, scratchDir=.*\. --enter' "$LOGF")" "3"
@@ -192,7 +260,10 @@ check "clean.sh --msg planner: Jira ticket of this worktree" "$(case "$OUT" in (
 check "clean.sh --all excludes the planner" "$(grep -c 'terminal show --terminal t1' "$LOGF" || true)" "0"
 check "clean.sh --all goes through the workers" "$(grep -c 'terminal show' "$LOGF")" "3"
 check "clean.sh --msg" "$(run_clean --msg dev | sed "s#$TMP/home/.orca-roles#$KIT#g")" "$(cd "$TMP" && worker_msg "$C" dev)"
+}
 
+sec_scratch() {
+clean_fixture
 # Scratch folders: fixed per worktree and role, outside the worktree; the kit creates them and never empties or deletes them
 SW="$TMP/scratch"; mkdir -p "$SW/main"; git -C "$SW/main" init -q; git -C "$SW/main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 git -C "$SW/main" worktree add -q "$SW/linked" -b other
@@ -219,6 +290,9 @@ check "common-workers.md: earlier versions in rev-<full sha>, read-only, copy-re
 check "planner.md: earlier versions go to the Researcher's scratchDir rev-<full sha>" "$(grep -c 'scratchDir.*rev-<full sha>.*rev-parse "<commit>^{commit}"' "$ROOT/prompts/programmer/planner.md")" "1"
 check "tester.md: mutation in place, no copy" "$(grep -c 'in place in the worktree' "$ROOT/prompts/programmer/tester.md")$(grep -c 'rsync' "$ROOT/prompts/programmer/tester.md")" "10"
 check "auditor.md: Experiments block uses <scratchDir>/copy/" "$(grep -c '^rsync -a --delete --exclude .git ./ <scratchDir>/copy/' "$ROOT/prompts/programmer/auditor.md")" "1"
+}
+
+sec_prompt_rules() {
 blk_start
 t=$(awk '/^5\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$ROOT/prompts/programmer/tester.md")
 a2=$(grep '^2\. \*\*Baseline' "$ROOT/prompts/programmer/auditor.md" || true)
@@ -296,11 +370,17 @@ for p in common-workers planner; do
 done
 blk_end "commit rule: no double parenthesis, merge-subject warning in its own sentence"
 check "no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
+}
+
+sec_cleanup_msg() {
+clean_fixture
 rm -rf "$KIT/tmp"
 rm -f "$TMP/fakebin/orca"
 M3="$(planner_msg "$C" "planner dev" "$TMP/state.env" "" "" 0)"
 case "$M3" in *"propose to the user cleaning the workers' context"*) echo "ok   planner_msg: cleanup when closing a step";; *) echo "FAIL planner_msg cleanup: $M3"; FAIL=1;; esac
+}
 
+sec_mcp() {
 # MCP for any agent: mcpServers file, Codex overrides, {mcp} placeholder in custom, --mcp-config in claude
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "mcp": [] }, "mcpServers": {
@@ -320,7 +400,7 @@ mcp_file "$C" cx > "$TMP/mcp.json"
 check "codex overrides" "$(codex_mcp_overrides "$TMP/mcp.json" | tr '\n' '|')" 'mcp_servers.ctx.url="http://ctx"|mcp_servers.pw.command="npx"|mcp_servers.pw.args=["-y","@playwright/mcp@latest"]|mcp_servers.pw.env={A = "1"}|'
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/codex"
 cp "$TMP/fakebin/codex" "$TMP/fakebin/claude"
-printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; exit 0; }\nexec /bin/bash "$@"\n' > "$TMP/fakebin/bash"; chmod +x "$TMP/fakebin/bash"   # bash -lc → prints the command
+fake_bash
 run_agent() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$C" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1); }
 OUT="$(run_agent cx | tr '\n' ' ')"
 case "$OUT" in *'-c mcp_servers.ctx.url="http://ctx" -c mcp_servers.pw.command="npx" -c mcp_servers.pw.args=["-y","@playwright/mcp@latest"] -c mcp_servers.pw.env={A = "1"} '*) echo "ok   agent.sh codex: -c per server";; *) echo "FAIL agent.sh codex: $OUT"; FAIL=1;; esac
@@ -333,15 +413,12 @@ OUT="$(run_agent cu)"; F="${OUT#run --mcp }"
 check "agent.sh custom: {mcp} points to a file with the servers" "$(jq -c '.mcpServers | keys' "$F" 2>/dev/null)" '["pw"]'
 check "agent.sh custom: {mcp} empty with all" "$(run_agent cua)" "run --mcp "
 rm -f "$TMP/fakebin/codex" "$TMP/fakebin/claude"
+}
 
+sec_mcp_placeholders() {
+fake_bash
 # mcpServers placeholders, project name and browser state
-cat > "$KIT/config.json" <<'J'
-{ "defaults": { "mcp": [] }, "mcpServers": {
-    "pw": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless", "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"], "env": { "P": "{project}", "K": "{kit}" } },
-    "h": { "type": "http", "url": "http://{home}/x" } },
-  "roles": { "vt": { "agent": "custom", "command": "run {mcp}", "mcp": ["pw", "h"], "params": { "evidenceDir": "ev" } },
-             "other": { "agent": "custom", "command": "run {mcp}", "mcp": ["pw"] } } }
-J
+write_placeholders_config
 C="$KIT/config.json"
 check "project_name in a worktree" "$(project_name "$PROJ")" "proj"
 mkdir -p "$TMP/plain"; check "project_name without git" "$(project_name "$TMP/plain")" "plain"
@@ -364,15 +441,19 @@ for sec in '^## Your browser' 'browser-login.sh' 'browser_evaluate'; do grep -q 
 grep -q 'browser-login.sh' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md without browser-login"; FAIL=1; }
 grep -q 'orca-<service>.pid' "$ROOT/prompts/programmer/deployer.md" || { echo "FAIL deployer.md without services"; FAIL=1; }
 echo "ok   E2E test prompts"
+}
 
+sec_custom_command() {
 # agent.sh custom: placeholders and extraArgs (bash is replaced by an echo)
 cat > "$KIT/config.json" <<J
 { "defaults": {}, "mcpServers": {}, "roles": { "x": { "agent": "custom", "command": "run --m {model} --p {prompts} --f {prompt}", "model": "a b", "extraArgs": ["--k", "v w"] } } }
 J
-printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; exit 0; }\nexec /bin/bash "$@"\n' > "$TMP/fakebin/bash"; chmod +x "$TMP/fakebin/bash"
+fake_bash
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" x)"
 check "custom: command with placeholders and extraArgs" "$OUT" "run --m a\\ b --p $TMP/home/.orca-roles/prompts --f $TMP/home/.orca-roles/prompts/programmer/x.md --k v\\ w"
+}
 
+sec_jira_key() {
 # Jira key: Orca's (linkedWorkItem) wins; without a link, only from the branch and in uppercase at the start of a segment
 check "jira: Orca's jiraIdentifier" "$(jira_key feature/other-thing devgd-220 "")" "DEVGD-220"
 check "jira: URL if there is no identifier" "$(jira_key feature/ABC-1 "" "https://jira.company.com/browse/devgd-7")" "DEVGD-7"
@@ -383,7 +464,9 @@ check "jira: release-1.4 is not a ticket" "$(jira_key release-1.4 "" "")" ""
 check "jira: branch without key" "$(jira_key main "" "")" ""
 JSON='{"worktree":{"branch":"x","linkedWorkItem":{"provider":"jira","type":"issue","number":0,"title":"t","url":"https://jira.company.com/browse/DEVGD-9","jiraIdentifier":"DEVGD-9"}}}'
 check "jira: jiraIdentifier in orca worktree show" "$(printf '%s' "$JSON" | jq -r '[.. | objects | select(.provider? == "jira") | .jiraIdentifier // empty] | first // empty')" "DEVGD-9"
+}
 
+sec_composer_title() {
 # Title of the composer's extra session: exact branch or starts with the key
 RE="$(composer_title_regex DEVGD-220 api)"
 t_match() { jq -nr --arg re "$RE" --arg t "$1" '$t | test($re; "i")'; }
@@ -394,7 +477,9 @@ check "composer: exact branch" "$(t_match api)" "true"
 check "composer: branch as substring" "$(t_match 'api tests')" "false"
 check "composer: branch with regex characters" "$(composer_title_regex "" feat/a.b)" '^(feat/a\.b)$'
 check "composer: neither key nor branch" "$(composer_title_regex "" "")" ""
+}
 
+sec_project_config() {
 # An uncommitted .orca-roles.json in the main checkout also applies to its worktrees
 MAIN="$TMP/main"; mkdir -p "$MAIN"; git -C "$MAIN" init -q
 git -C "$MAIN" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
@@ -403,10 +488,16 @@ echo '{ "settings": { "jiraHandoff": false } }' > "$MAIN/.orca-roles.json"
 check "project config from the main checkout" "$(merged_config "$TMP/wt" | jq -r '.settings.jiraHandoff')" "false"
 echo '{ "settings": { "jiraHandoff": true } }' > "$TMP/wt/.orca-roles.json"
 check "project config: the worktree's wins" "$(merged_config "$TMP/wt" | jq -r '.settings.jiraHandoff')" "true"
+}
 
+sec_mcp_gitdir() {
+write_placeholders_config; C="$KIT/config.json"; fake_bash
+OUT="$(cd "$PROJ" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$C" "$TMP/home/.orca-roles/bin/agent.sh" vt 2>&1)"; F="${OUT#run }"
 # MCP file in the worktree's git dir (temporary files do not pile up)
 check "agent.sh: MCP file in the git dir" "$F" "$(cd "$PROJ/.git" && pwd)/orca-roles-mcp-vt.json"
+}
 
+sec_empty_lists() {
 # Empty lists (macOS bash 3.2 fails with an empty "${A[@]}" and set -u)
 cat > "$KIT/config.json" <<'J'
 { "defaults": {}, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "cx": { "agent": "codex", "mcp": "all" } } }
@@ -415,15 +506,19 @@ printf '#!/bin/sh\necho "codex:$#"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fak
 check "agent.sh codex without options: only --add-dir <scratch>, the trust -c and the anchor -c" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:6"
 printf 'PLANNER=t1\n' > "$TMP/state.env"
 check "clean.sh --all without workers" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/clean.sh" --all 2>&1)" "There are no workers to clean in this workspace."
+}
 
+sec_cli_shim() {
+cli_shim_dir
 # Orca CLI under another name (WSL: ORCA_CLI_COMMAND=orca-ide): 'orca' wrapper in $KIT/shim
-mkdir -p "$TMP/cli"; printf '#!/bin/sh\necho "orca-ide:$*"\n' > "$TMP/cli/orca-ide"; chmod +x "$TMP/cli/orca-ide"
 check "shim: 'orca' calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c '. "$KIT/bin/lib.sh"; orca terminal list')" "orca-ide:terminal list"
 rm -f "$KIT/shim/orca"
 check "shim: not created without ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c '. "$KIT/bin/lib.sh"; command -v orca || echo none')" "none"
 check "shim: not created if 'orca' already exists" "$(PATH="$TMP/fakebin:$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c 'printf "#!/bin/sh\n" > "$0/orca"; chmod +x "$0/orca"; . "$KIT/bin/lib.sh"; command -v orca' "$TMP/fakebin")" "$TMP/fakebin/orca"
 rm -f "$TMP/fakebin/orca"
+}
 
+sec_roles_yaml() {
 # roles-yaml: local orca.yaml, ignored and listed in .worktreeinclude, nothing to commit
 Y="$TMP/ymain"; mkdir -p "$Y"; git -C "$Y" init -q; git -C "$Y" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 git -C "$Y" worktree add -q "$TMP/ywt" -b ybranch 2>/dev/null
@@ -594,24 +689,25 @@ check "roles-yaml local-only + kit + our orca.yaml: not needed, no TWICE" "$RC:$
 
 # roles-yaml: the error text does not say that saving a script sets local-only
 yfor local-only "npm i"; check "roles-yaml error text: no claim that saving sets local-only" "$([[ "$OUT" == *"Saving anything"* || "$OUT" == *"sets the source to local-only"* ]] && echo claim || echo none)" "none"
+}
 
+sec_launch_overrides() {
 # launch.sh exceptions (the project's setup script): --only, --enable, --disable, --set, saved per worktree
 check "overrides: lists and typed --set" "$(overrides_from_args --only planner,dev --disable 'x, y' --set roles.dev.model=m1 --set=settings.jiraHandoff=false --set roles.t.params.n=5)" \
   '{"only":["planner","dev"],"enable":[],"disable":["x","y"],"set":[{"path":["roles","dev","model"],"value":"m1"},{"path":["settings","jiraHandoff"],"value":false},{"path":["roles","t","params","n"],"value":5}]}'
 try overrides_from_args --nope 2>/dev/null; check "overrides: unknown option" "$RC" "1"
 try overrides_from_args --set novalue 2>/dev/null; check "overrides: --set without =" "$RC" "1"
-cat > "$KIT/config.json" <<'J'
-{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
-  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" },
-             "tester": { "title": "Tester", "enabled": false }, "deployer": { "title": "Deployer" } } }
-J
+write_launch_config
 overrides_from_args --only dev --enable tester --set roles.dev.model=m2 > "$TMP/ovr.json"
 check "apply_overrides: --only keeps planner and dev, --enable adds tester" "$(apply_overrides "$KIT/config.json" "$TMP/ovr.json" > "$TMP/c.json"; enabled_roles "$TMP/c.json" | tr '\n' ' ')" "planner dev tester "
 check "apply_overrides: --set" "$(jq -r '.roles.dev.model' "$TMP/c.json")" "m2"
 overrides_from_args --disable planner,nobody > "$TMP/ovr.json"
 check "check_overrides: unknown role" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: unknown roles: nobody\. Available: ')" "1"
 check "check_overrides: the planner cannot be disabled" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: the planner cannot be disabled$')" "1"
+}
+
+sec_launch() {
+write_launch_config
 # launch.sh end to end with a fake 'orca' (each tab is called h-<title>; none is alive when relaunching)
 L="$TMP/lproj"; mkdir -p "$L" "$TMP/lbin"; git -C "$L" init -q
 cat > "$TMP/lbin/orca" <<'EOS'
@@ -637,7 +733,9 @@ check "launch.sh leaves pre-seeded scratch content intact" "$(for r in planner d
 try launch --enable nobody; check "launch: unknown role fails" "$RC" "1"
 check "launch: an error does not overwrite the saved exceptions" "$(jq -c .only "$L/.git/orca-roles.overrides.json")" '["dev"]'
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
+}
 
+sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
 check "skill: name in the frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/team/SKILL.md")" "name: team"
@@ -646,7 +744,6 @@ check "default config: the planner's plugin" "$(jq -c '.roles.planner.pluginDirs
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester" } } }
 J
-newrole() { (cd "$TMP" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/new-role.sh" --from-json "$1" 2>&1); }
 printf '%s' '{"id":"sec-review","description":"reviews security","model":"m-sec","params":{"maxFindings":20},"after":"dev","prompt":"# Role: SEC\n\n## Report\nx\n"}' > "$TMP/role.json"
 try newrole "$TMP/role.json"; check "from-json: creates the role" "$RC" "0"
 check "from-json: position after dev" "$(jq -r '.roles | keys_unsorted | join(" ")' "$KIT/config.json")" "planner dev sec-review tester"
@@ -659,6 +756,9 @@ try newrole "$TMP/role2.json"; check "from-json: overwrite" "$RC:$(jq -r '.roles
 printf '%s' '{"id":"cu-agent","description":"custom","agent":"custom","command":"agy {scratch}","addDirFlag":"--add-dir","trust":{"file":"~/s.json","jq":".t = [$dir]"},"clearCommand":"/new","nice":5,"pluginDirs":["{kit}/p"],"prompt":"# Role: CU\n\n## Report\nx\n"}' > "$TMP/role4.json"
 try newrole "$TMP/role4.json"; check "from-json: custom keeps addDirFlag, trust, clearCommand, nice and pluginDirs" "$RC $(jq -c '.roles["cu-agent"] | [.addDirFlag, .trust, .clearCommand, .nice, .pluginDirs]' "$KIT/config.json")" '0 ["--add-dir",{"file":"~/s.json","jq":".t = [$dir]"},"/new",5,["{kit}/p"]]'
 jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/cu-agent.md"
+}
+
+sec_wizard() {
 # The wizard, for a custom agent: clearCommand, addDirFlag and its extra folders (answers in order, one per line)
 printf '# Role: CW\n\n## Report\nx\n' > "$TMP/cw.md"
 # shellcheck disable=SC2088  # "~/a b" is what the user types; the wizard expands it
@@ -669,11 +769,17 @@ jq 'del(.roles["cu-wiz"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" 
 printf '%s' '{"id":"Bad Id","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: invalid id" "$RC" "1"
 printf '%s' '{"id":"no-desc","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: without description" "$RC" "1"
 printf '%s' '{"id":"planner","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: planner reserved" "$RC" "1"
+}
+
+sec_role_notes() {
 # A role's instructions for this worktree only, inside its role message
 N="$TMP/nproj"; mkdir -p "$N"; git -C "$N" init -q; mkdir -p "$N/.git/orca-roles.notes"
 printf 'Use pnpm.\nDo not touch the legacy folder.\n' > "$N/.git/orca-roles.notes/dev.md"
 case "$(cd "$N" && worker_msg "$KIT/config.json" dev)" in *"Additional instructions for this worktree, which take precedence over your prompt if they conflict: Use pnpm. Do not touch the legacy folder." ) echo "ok   worker_msg includes the worktree's instructions";; *) echo "FAIL worker_msg notes: $(cd "$N" && worker_msg "$KIT/config.json" dev)"; FAIL=1;; esac
 case "$(cd "$N" && worker_msg "$KIT/config.json" tester)" in *"Additional instructions"*) echo "FAIL worker_msg: notes in a role without notes"; FAIL=1;; *) echo "ok   worker_msg without notes adds nothing";; esac
+}
+
+sec_plugin_dirs() {
 # agent.sh passes the plugin and the extra folders with ~ and {kit} expanded
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "mcp": [] }, "mcpServers": {}, "roles": { "planner": { "agent": "claude", "mcp": "all", "extraDirs": ["{kit}", "~/x"], "pluginDirs": ["{kit}/plugin"] } } }
@@ -682,7 +788,9 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; chmod +x "$T
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
 case "$OUT" in *"--add-dir $TMP/home/.orca-roles --add-dir $TMP/home/x --plugin-dir $TMP/home/.orca-roles/plugin "*) echo "ok   agent.sh: --plugin-dir and --add-dir expanded";; *) echo "FAIL agent.sh plugin: $OUT"; FAIL=1;; esac
 rm -f "$TMP/fakebin/claude"
+}
 
+sec_composer_session() {
 # The composer's extra session is recognized by its FIRST title (Claude Code renames it to "done") and closed by handle
 printf '%s' '{"terminals":[{"handle":"x1","title":"VATE-40 Prueba","agentIdentity":"claude","preview":""},{"handle":"s1","title":"bash","agentIdentity":"","preview":""}]}' | seen_merge "" > "$TMP/seen.json"
 printf '%s' '{"terminals":[{"handle":"x1","title":"done","agentIdentity":"claude","preview":""},{"handle":"x2","title":"other","agentIdentity":"claude","preview":"working on VATE-40 now"}]}' | seen_merge "$TMP/seen.json" > "$TMP/seen2.json"
@@ -719,14 +827,19 @@ check "composer: never touches a shell with the same title" "$(grep -c 'terminal
 claunch
 for _ in 1 2 3 4 5; do grep -q "Not a new worktree" "$CP/.git/orca-roles-kickoff.log" 2>/dev/null && break; sleep 1; done
 check "composer: not looked for when resuming" "$(grep -c 'Not a new worktree' "$CP/.git/orca-roles-kickoff.log")" "1"
+}
 
+sec_orca_alias() {
+cli_shim_dir
 # The 'orca' alias the installer adds to ~/.bashrc: points to $ORCA_CLI_COMMAND in Orca's WSL terminals, nothing elsewhere
 ALIAS_LINE="$(grep 'orca-roles: orca alias' "$ROOT/install.sh" | sed -e "s/^grep -q 'orca-roles: orca alias' \"\$RC\" 2>\/dev\/null || echo '//" -e "s/' >> \"\$RC\"\$//")"
 check "orca alias: calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c "shopt -s expand_aliases; $ALIAS_LINE
 orca worktree list")" "orca-ide:worktree list"
 check "orca alias: nothing outside Orca" "$(PATH="/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c "shopt -s expand_aliases; $ALIAS_LINE
 command -v orca || echo none")" "none"
+}
 
+sec_remove_role() {
 # Removing a role: new-role --remove (only roles you created) and close-role.sh (closes its tab in this workspace)
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" } } }
@@ -759,7 +872,9 @@ try closerole dev; check "close-role: a dead tab is just forgotten" "$RC" "0"; c
 try closerole planner; check "close-role: never the planner" "$RC" "1"
 try closerole nobody; check "close-role: unknown role" "$RC" "1"
 rm -f "$TMP/fakebin/orca"
+}
 
+sec_prompts_misc() {
 # The Planner does not block waiting for the workers
 grep -q 'Never block waiting for the workers' "$ROOT/prompts/programmer/planner.md" && ! grep -q 'check --wait --types' "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md: waits without blocking" || { echo "FAIL planner.md still blocks in check --wait"; FAIL=1; }
 
@@ -777,7 +892,9 @@ grep -q 'Reject only from the threshold' "$ROOT/prompts/programmer/auditor.md" &
 grep -q 'family with its boundaries' "$ROOT/prompts/programmer/dev.md" || { echo "FAIL dev.md without boundaries"; FAIL=1; }
 check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[5,"high"]'
 echo "ok   prompts carry the review's rules"
+}
 
+sec_composer_tab() {
 # The composer's tab without Jira ("✳ Claude Code"): closed when Orca's setup script started the kit, never on a manual run
 printf '%s' '[{"handle":"x1","title":"✳ Claude Code","agentIdentity":"claude"},{"handle":"s1","title":"bash","agentIdentity":null},{"handle":"h1","title":"Planner","agentIdentity":"claude"}]' > "$TMP/pre.json"
 check "preexisting_agents: agent tabs outside the team only" "$(preexisting_agents "$TMP/pre.json" '["h1"]' | tr '\n' ' ')" "x1 "
@@ -817,6 +934,9 @@ grep -q "Not a worktree Orca is creating right now" "$(gd "$SP3")/orca-roles-lau
 SP4="$TMP/sproj4"; mkdir -p "$SP4"; git -C "$SP4" init -q -b main; : > "$SLOG"; slaunch "$SP4" "$SP4"
 waitlog "$SP4/.git/orca-roles-kickoff.log" 'Closed x1|No composer|Not a new'
 check "composer: a main checkout is never taken for a new worktree" "$(grep -c 'terminal close' "$SLOG" || true)" "0"
+}
+
+sec_dead_tab() {
 # A tab whose agent is gone (Ctrl+C) counts as dead: roles closes it and opens a new one; custom agents are not checked
 DP="$TMP/dproj"; mkdir -p "$DP" "$TMP/dbin"; git -C "$DP" init -q -b main
 printf 'PLANNER=t-pl\nDEV=t-dev\nCU=t-cu\nTST=t-orp\n' > "$DP/.git/orca-roles.env"
@@ -846,6 +966,9 @@ check "orphaned session: ended" "$(grep -c 'terminal close --terminal t-orp' "$D
 check "E1: non-Claude workers run Orca's commands in the foreground" "$(worker_msg "$KIT/config.json" cu | grep -c 'in the foreground')" "1"
 check "E1: Claude workers get no extra instruction" "$(worker_msg "$KIT/config.json" dev | grep -c 'in the foreground' || true)" "0"
 grep -q 'Watch for silent workers' "$ROOT/prompts/programmer/planner.md" && echo "ok   G: the Planner watches for silent workers" || { echo "FAIL planner.md without silent workers"; FAIL=1; }
+}
+
+sec_agent_flags() {
 # Jira/GitHub only with the user's yes; resource caps for the Tester and the Auditor
 grep -q "Nothing leaves the worktree without the user's explicit yes" "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md: Jira/GitHub only with approval" || { echo "FAIL planner.md: approval rule"; FAIL=1; }
 grep -q 'Never write to Jira, GitHub' "$ROOT/prompts/programmer/common-workers.md" && echo "ok   common-workers.md: workers never write to Jira/GitHub" || { echo "FAIL common-workers.md: Jira/GitHub rule"; FAIL=1; }
@@ -881,6 +1004,9 @@ check "agent.sh claude: one line in the system prompt that asks for the role aft
 case "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)" in (*"after /clear"*"$TMP/home/.orca-roles/bin/clean.sh --msg tester"*) echo "ok   role_anchor: names the role and the command";; (*) echo "FAIL role_anchor"; FAIL=1;; esac
 check "agent.sh leaves pre-seeded scratch content intact" "$([ -f "$SDT/f" ] && [ -f "$SDT/sub/g" ] && [ -f "$SDT/.hidden" ] && echo y)" "y"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
+}
+
+sec_restart() {
 # After a restart, Orca restores the tabs with new handles: the kit finds each one by its ptyId, reads the resumed session and reopens the role with it
 RP="$TMP/rproj"; mkdir -p "$RP" "$TMP/rbin"; git -C "$RP" init -q -b main
 printf 'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' > "$RP/.git/orca-roles.env"
@@ -921,16 +1047,11 @@ case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in *"Your terminal hand
 printf 'PLANNER=a\nDEV=b\n' > "$RP/.git/orca-roles.env"; printf 'PLANNER=wt@@a\nDEV=wt@@b\n' > "$RP/.git/orca-roles.pty"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
 (cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1)
 check "close-role.sh: drops the identity of the closed role" "$(cat "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "PLANNER=wt@@a "
-
-# trust_folder: edits ~/.claude.json without widening its mode, keeping links, losing concurrent writes or leaving files behind
-TF="$TMP/tf"; mkdir -p "$TF/wt"
-TFD="$(cd "$TF/wt" && pwd -P)"
-tf_run() { # <home> [hook]: runs trust_folder in the worktree with that fake HOME; stdout -> $TF/out, stderr -> $TF/err, rc -> $TF/rc
-  (cd "$TF/wt" && HOME="$1" ORCA_ROLES_TRUST_HOOK="${2:-}" trust_folder >"$TF/out" 2>"$TF/err"; echo $? >"$TF/rc") || true
 }
-tf_trusted() { jq -r --arg d "$TFD" '.projects[$d].hasTrustDialogAccepted // false' "$1" 2>/dev/null; }
-tf_left() { find "$1" -name '.claude.json.orca-roles.*' 2>/dev/null | wc -l | tr -d ' '; }
-TFJ='{"oauthAccount":{"email":"a@b"},"projects":{"/other":{"hasTrustDialogAccepted":true}}}'
+
+sec_trust_folder() {
+# trust_folder: edits ~/.claude.json without widening its mode, keeping links, losing concurrent writes or leaving files behind
+tf_setup
 # 1. C1: the mode never widens (family of modes)
 for m in 600 640 644 400 664 755; do
   H="$TF/h-m$m"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; chmod "$m" "$H/.claude.json"; tf_run "$H"
@@ -1010,7 +1131,10 @@ tf_run "$H" "[ -d '$H/.claude.json.lock' ] && echo link-lock >> '$H/seen'; [ -e 
 check "trust_folder: lock taken at the link's path, not the target's, and removed" "$(cat "$H/seen") $(tf_trusted "$H/real/c.json") $(ls -A "$H" | tr '\n' ' ') $(ls -A "$H/real" | tr '\n' ' ')" "link-lock true .claude.json real seen  c.json "
 H="$TF/h-lq"; mkdir -p "$H/real" "$H/.claude.json.lock"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"; tf_run "$H"
 check "trust_folder: foreign lock at the link's path kept (link target)" "$(tf_trusted "$H/real/c.json") $([ -d "$H/.claude.json.lock" ] && echo kept) $([ -e "$H/real/c.json.lock" ] && echo target-lock)" "true kept "
+}
 
+sec_codex_custom() {
+tf_setup
 # codex / custom agents: argv through fake executables
 FB2="$TMP/fb2"; mkdir -p "$FB2"
 printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\0" "$a"; done > "%s/argv"\n' "$FB2" > "$FB2/codex"
@@ -1112,12 +1236,11 @@ check "custom trust: non-object / multi-value / empty filters rejected, file unt
 H="$TF/h-o3"; mkdir -p "$H"; echo '{"keep":1}' > "$H/cust.json"
 tc_run "$H" "$(tcr 'if has("flip") then 1 else .t[$dir] = true end')" a "[ -e '$H/seen' ] || { touch '$H/seen'; jq '.flip=1' '$H/cust.json' > '$H/w' && cat '$H/w' > '$H/cust.json'; }"
 check "custom trust: filter that turns non-object on the retry -> untouched (as the other writer left it), warning, no Marked" "$(jq -c . "$H/cust.json") $(grep -c '^Warning' "$TF/err") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(find "$H" -name '*orca-roles*' | wc -l | tr -d ' ')" '{"keep":1,"flip":1} 1 0 0 0'
+}
 
+sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
-PK="$TMP/pk"; PH="$TMP/pkhome"; mkdir -p "$PK" "$PH" "$TMP/pkbin"
-cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PK/"; chmod +x "$PK"/bin/*.sh
-ln -sfn "$PK" "$PH/.orca-roles"; PKL="$PH/.orca-roles"
-PKC="$PK/config.default.json"
+pk_setup
 check "prompts: 8 files in prompts/programmer/, none flat" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "8:0"
 NROLES="$(jq -r '.roles | length' "$PKC")"
 [ "$NROLES" -ge 7 ] || { echo "FAIL default config has only $NROLES roles"; FAIL=1; }
@@ -1161,6 +1284,10 @@ done
 check "agent.sh prompt in another kit subfolder: no extra --add-dir" "$(pk_adddirs sub | grep -c -x -- "$PKL/prompts")$(pk_adddirs sub | grep -c 'prompts/.')" "10"
 check "agent.sh prompt outside the kit: its folder is added" "$(pk_adddirs ext | grep -c -x -- "$TMP/pkext")$(pk_adddirs ext | grep -c -x -- "$PKL/prompts")" "11"
 check "agent.sh prompt in a sibling folder of the kit prompts (prompts-mine): its folder is added" "$(pk_adddirs sib | grep -c -x -- "$PKL/prompts-mine")$(pk_adddirs sib | grep -c -x -- "$PKL/prompts")" "11"
+}
+
+sec_new_role_repo() {
+pk_setup
 # new-role.sh --repo on a copy of the repo: the prompt goes to prompts/programmer/ and --remove deletes only it
 NR="$TMP/nr-repo"; NRH="$TMP/nr-home"; mkdir -p "$NR" "$NRH"
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NR/"
@@ -1172,13 +1299,52 @@ check "new-role --repo: prompt in prompts/programmer/, none flat" "$([ -f "$NR/p
 check "new-role --repo: prompt_of resolves to an existing file" "$(p="$(KIT="$NR" prompt_of "$NR/config.default.json" repo-sec)"; [ "$p" = "$NR/prompts/programmer/repo-sec.md" ] && [ -f "$p" ] && echo y)" "y"
 try nr_run --remove repo-sec --repo "$NR"; check "new-role --remove --repo: removes the role" "$RC:$(jq -r '.roles | has("repo-sec")' "$NR/config.default.json")" "0:false"
 check "new-role --remove --repo: only its prompt is deleted, the 8 defaults remain" "$([ -e "$NR/prompts/programmer/repo-sec.md" ] && echo left):$(find "$NR/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" ":8"
+}
 
+sec_install_flat() {
 # install.sh over a kit that still has the old flat prompts leaves only prompts/programmer/
 IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
 check "install.sh: no flat prompt left, 8 in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:8"
+}
 
+sec_guard() {
+# A section that dies on an unbound variable must not end the script with exit 0 (bash 3.2 does)
+GR="$TMP/guard-root"; mkdir -p "$GR/tests"; ln -sfn "$ROOT/bin" "$GR/bin"; ln -sfn "$ROOT/prompts" "$GR/prompts"; ln -sfn "$ROOT/config.default.json" "$GR/config.default.json"; ln -sfn "$ROOT/install.sh" "$GR/install.sh"
+sed 's/^sec_syntax() {$/&\
+echo "$SMOKE_UNBOUND_PROBE"/' "$ROOT/tests/smoke.sh" > "$GR/tests/smoke.sh"
+check "guard: the probe is injected into the copy" "$(cmp -s "$ROOT/tests/smoke.sh" "$GR/tests/smoke.sh" && echo same || echo changed)" "changed"
+try bash -c 'bash "$0" syntax 2>&1' "$GR/tests/smoke.sh"
+check "guard: unbound variable inside a section -> exit non-zero, no ALL OK" "$([ "$RC" != 0 ] && echo nonzero):$(printf '%s\n' "$OUT" | grep -c '^ALL OK')" "nonzero:0"
+check "guard: it died on the probe" "$(printf '%s\n' "$OUT" | grep -c 'SMOKE_UNBOUND_PROBE: unbound variable')" "1"
+try bash "$ROOT/tests/smoke.sh" syntax
+check "guard: the same section unmodified -> exit 0 with ALL OK" "$RC:$(printf '%s\n' "$OUT" | grep -c '^ALL OK')" "0:1"
+}
+
+sec_cli() {
+# The runner contract (all / some in order / --list / unknown -> exit 2), on a copy whose sections are stubs
+CR="$TMP/cli-root"; mkdir -p "$CR/tests"; ln -sfn "$ROOT/bin" "$CR/bin"; ln -sfn "$ROOT/prompts" "$CR/prompts"; ln -sfn "$ROOT/config.default.json" "$CR/config.default.json"
+sed -e 's/^SECTIONS=.*/SECTIONS="alpha beta-x gamma"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_alpha() { echo "marker alpha"; }; sec_beta_x() { echo "marker beta-x"; }; sec_gamma() { echo "marker gamma"; }\
+&/' "$ROOT/tests/smoke.sh" > "$CR/tests/smoke.sh"
+check "cli: the stub copy differs from the real runner" "$(cmp -s "$ROOT/tests/smoke.sh" "$CR/tests/smoke.sh" && echo same || echo changed)" "changed"
+cli_run() { CRC=0; bash "$CR/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
+cli_markers() { grep '^marker ' "$TMP/cli.out" | sed 's/^marker //' | tr '\n' ' '; }
+cli_run --list; check "cli: --list prints the names, exit 0" "$CRC:$(tr '\n' ' ' < "$TMP/cli.out")" "0:alpha beta-x gamma "
+cli_run; check "cli: no arguments runs every listed section, in order" "$CRC:$(cli_markers):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:alpha beta-x gamma :1"
+cli_run gamma alpha alpha; check "cli: named sections run only those, in the given order" "$CRC:$(cli_markers)" "0:gamma alpha alpha "
+cli_bad() { cli_run "$@"; echo "$CRC:$(wc -l < "$TMP/cli.out" | tr -d ' '):$(wc -l < "$TMP/cli.err" | tr -d ' '):$(grep -c '^  alpha$' "$TMP/cli.err")"; }
+check "cli: unknown name alone -> exit 2, empty stdout, list on stderr" "$(cli_bad bogus)" "2:0:4:1"
+check "cli: unknown name among valid ones -> exit 2, nothing ran" "$(cli_bad alpha bogus gamma)" "2:0:4:1"
+check "cli: valid name first, unknown last -> exit 2, nothing ran" "$(cli_bad gamma bogus)" "2:0:4:1"
+check "cli: one argument made of two valid names -> exit 2" "$(cli_bad 'alpha beta-x')" "2:0:4:1"
+check "cli: empty argument -> exit 2" "$(cli_bad '')" "2:0:4:1"
+check "cli: every listed section has a function, and no function is unlisted" "$(for k in $SECTIONS; do [ "$(type -t "sec_${k//-/_}")" = function ] || echo "$k"; done | wc -l | tr -d ' '):$(compgen -A function sec_ | wc -l | tr -d ' '):$(printf '%s\n' $SECTIONS | wc -l | tr -d ' ')" "0:$(printf '%s\n' $SECTIONS | wc -l | tr -d ' '):$(printf '%s\n' $SECTIONS | wc -l | tr -d ' ')"
+}
+
+[ $# -gt 0 ] || set -- $SECTIONS
+for s in "$@"; do "sec_${s//-/_}"; done
 sleep 1
 
+DONE=1
 [ "$FAIL" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
