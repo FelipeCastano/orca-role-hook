@@ -186,14 +186,14 @@ scratch_dir() {
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
 }
-# A worker's startup message.  worker_msg <config> <role>
-# If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
-# Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
-# background subagent task that never finished, so Orca never got its report.
 # A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
   printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
 }
+# A worker's startup message.  worker_msg <config> <role>
+# If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
+# Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
+# background subagent task that never finished, so Orca never got its report.
 worker_msg() {
   local p n notes="" fg=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
