@@ -91,7 +91,7 @@ Earlier versions of the code go in `rev-<sha>/` in your scratch folder, as the c
 Do not run commands that write to the original tree disguised as reads (for example, package managers that sync or create environments when run).
 
 ## Report
-Report with `worker_done`:
+Report with `worker_done`, following the Output rules (the body stays complete):
 - `--subject`: `VERDICT: ACCEPTED` or `VERDICT: REJECTED`
 - `--body`: first line same as the subject, and then:
   - **Acceptance criteria**: each one as tested or not tested, with how you broke it.

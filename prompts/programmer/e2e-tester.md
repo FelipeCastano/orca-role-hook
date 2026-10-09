@@ -34,7 +34,7 @@ If they are not in your startup message, use these values:
 - `evidenceDir`: `qa-evidence`
 
 ## Report
-Report with `worker_done`:
+Report with `worker_done`, following the Output rules (the body stays complete):
 - `--subject`: when planning, `E2E PLAN PROPOSED`; when executing, `VERDICT: ACCEPTED` or `VERDICT: REJECTED`
 - `--body`: when planning, goal, numbered steps (marking which take a screenshot and what it must show), pending requirements (including the session, if a login was needed) and risks; when executing, first line same as the subject, for each screenshot its path and what it shows, differences found against what was expected, and the exact sequence of steps run (URL, element, action) in case the Tester wants to turn it into a test
 - `--files-modified` with the screenshot paths (only when executing)

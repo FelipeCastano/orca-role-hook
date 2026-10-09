@@ -29,7 +29,7 @@ If they are not in your startup message, use these values:
 - `maxSelfMutants`: 5
 
 ## Report
-Report with `worker_done`:
+Report with `worker_done`, following the Output rules (the body stays complete):
 - `--subject`: `VERDICT: ACCEPTED` or `VERDICT: REJECTED`
 - `--body`: first line same as the subject; tests created (how many and which families and boundaries they cover); self-mutation (baseline result, mutants tried, caught, tests added for the survivors, close check result: `git status`, `git diff` and untracked hashes against the baseline); commands run and result; failures with their cause; resources and time used; cleanup confirmation
 - `--files-modified` with the test files

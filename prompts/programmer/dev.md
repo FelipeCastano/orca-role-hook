@@ -17,7 +17,7 @@ You are the developer: you implement the production code the Planner assigns to 
 None.
 
 ## Report
-Report with `worker_done`:
+Report with `worker_done`, following the Output rules (the body stays complete):
 - `--subject`: short status
 - `--body`: what you implemented; how to test it; decisions made; deployment impact; what is left
 - `--files-modified` with the changed paths

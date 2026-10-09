@@ -110,7 +110,7 @@ When to recommend each: something for good → `config.json`; something for one 
    None.   (or the list with their default values)
 
    ## Report
-   Report with `worker_done`:
+   Report with `worker_done`, following the Output rules (the body stays complete):
    - `--subject`: result in one line (or `VERDICT: ACCEPTED|REJECTED` if it issues a verdict)
    - `--body`: ...
    - `--files-modified` with the paths you created or changed
