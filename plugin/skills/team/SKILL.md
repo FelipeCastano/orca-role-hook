@@ -67,7 +67,7 @@ Where the hook does not fire (main checkout, existing worktrees, after a restart
 - `settings`: general behavior (`launchWaitSeconds`, `kickoffTimeoutSeconds`, `jiraHandoff`, `closeComposerAgent`, `cleanWorkersAfterStep`, `language`: the language you reply to the user in, `"auto"` to use theirs...).
 - `defaults`: what each role inherits if it does not define it.
 - `mcpServers`: MCP servers defined once; each role picks which ones with `mcp` (`"all"` = the agent's own).
-- `roles.<id>`: `enabled`, `title`, `description`, `prompt`, `agent` (`claude`, `codex`, `custom`), `model`, `permissionMode`, `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `pluginDirs`, `command`, `clearCommand`. The order of the tabs is the order of the roles.
+- `roles.<id>`: `enabled`, `title`, `description`, `prompt`, `agent` (`claude`, `codex`, `custom`), `model`, `permissionMode`, `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `pluginDirs`, `command`, `addDirFlag`, `trust`, `clearCommand`. With `custom`, `addDirFlag` (e.g. `"--add-dir"`) passes it the scratch folder and `extraDirs`, and `trust` (`{"file": ..., "jq": ...}`) marks the worktree as trusted in a JSON settings file; the README has the details. The order of the tabs is the order of the roles.
 
 For a single project, `.orca-roles.json` at the repo root, with the same shape (objects are merged field by field; lists are replaced whole):
 
@@ -137,7 +137,7 @@ When to recommend each: something for good → `config.json`; something for one 
    ~/.orca-roles/bin/new-role.sh --from-json /tmp/new-role.json
    ```
 
-   Required: `id` (lowercase and hyphens), `description` and `prompt`. Optional: `title`, `agent`, `model`, `permissionMode`, `command` (required with `custom`), `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `enabled` (default `true`), `after` (default: last) and `overwrite: true` to replace an existing role. It leaves a copy in `config.json.bak`. With `--repo <clone>` it saves it in the repo clone to version it (the user reinstalls and commits).
+   Required: `id` (lowercase and hyphens), `description` and `prompt`. Optional: `title`, `agent`, `model`, `permissionMode`, `command` (required with `custom`), `addDirFlag` and `trust` (only `custom`), `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `enabled` (default `true`), `after` (default: last) and `overwrite: true` to replace an existing role. It leaves a copy in `config.json.bak`. With `--repo <clone>` it saves it in the repo clone to version it (the user reinstalls and commits).
 5. **If they also want it in this workspace**, go to section 7.
 
 ## 6. Changing a role's behavior

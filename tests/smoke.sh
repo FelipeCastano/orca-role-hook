@@ -494,6 +494,9 @@ check "from-json: prompt in roles/" "$(head -1 "$KIT/roles/sec-review.md"):$(jq 
 try newrole "$TMP/role.json"; check "from-json: does not overwrite without overwrite" "$RC" "1"
 jq '. + {overwrite: true, model: "m2"}' "$TMP/role.json" > "$TMP/role2.json"
 try newrole "$TMP/role2.json"; check "from-json: overwrite" "$RC:$(jq -r '.roles["sec-review"].model' "$KIT/config.json")" "0:m2"
+printf '%s' '{"id":"cu-agent","description":"custom","agent":"custom","command":"agy {scratch}","addDirFlag":"--add-dir","trust":{"file":"~/s.json","jq":".t = [$dir]"},"prompt":"# Role: CU\n\n## Report\nx\n"}' > "$TMP/role4.json"
+try newrole "$TMP/role4.json"; check "from-json: custom keeps addDirFlag and trust" "$RC $(jq -c '.roles["cu-agent"] | [.addDirFlag, .trust]' "$KIT/config.json")" '0 ["--add-dir",{"file":"~/s.json","jq":".t = [$dir]"}]'
+jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/cu-agent.md"
 printf '%s' '{"id":"Bad Id","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: invalid id" "$RC" "1"
 printf '%s' '{"id":"no-desc","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: without description" "$RC" "1"
 printf '%s' '{"id":"planner","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: planner reserved" "$RC" "1"
