@@ -18,6 +18,47 @@ has_line()    { [ -f "$2" ] && grep -qxF "$1" "$2"; }
 remove_line() { [ -f "$2" ] || return 0; local t; t="$(mktemp)"; grep -vxF "$1" "$2" > "$t" || true; cat "$t" > "$2"; rm -f "$t"; }
 ours()        { [ -f "$YAML" ] && grep -qxF "$MARK" "$YAML"; }
 
+# Would Orca run launch.sh from orca.yaml? Reads only the repo's hookSettings through the Orca CLI (best effort).
+# Mirrors Orca's policy resolution (see research/roles-yaml-policy.md). Prints "<policy> <local launches the kit> <setupRunPolicy>".
+IFS= read -r -d '' POLICY_JQ <<'EOF' || true
+def trim: if type == "string" then sub("^\\s+"; "") | sub("\\s+$"; "") else "" end;
+(.result.repo.hookSettings // {}) as $h
+| (($h.scripts // {}).setup | trim) as $local
+| (if ($h.commandSourcePolicy | IN("local-only", "run-both", "shared-only")) then $h.commandSourcePolicy
+   elif ($h | has("commandSourcePolicy") | not) and $local != "" then "local-only"
+   else "shared-only" end) as $policy
+| ($local | split("\n") | map(select(test("^\\s*#") | not) | sub("\\s#.*$"; "") | [splits("[;&|]+")] | map(trim | select(test("^(echo|printf)(\\s|$)") | not)))
+   | flatten | any(test("/[\"']?\\.orca-roles/bin/launch\\.sh[\"']?(\\s|$)"))) as $kit
+| "\($policy) \($kit) \($h.setupRunPolicy // "run-by-default")"
+EOF
+orca_cli() {
+  if command -v orca >/dev/null 2>&1; then orca "$@"
+  elif [ -n "${ORCA_CLI_COMMAND:-}" ] && command -v "$ORCA_CLI_COMMAND" >/dev/null 2>&1; then "$ORCA_CLI_COMMAND" "$@"
+  else return 127; fi
+}
+# Sets POLICY_INFO on success, POLICY_WHY (reason) on failure.
+lookup_policy() {
+  local out id
+  POLICY_INFO=""; POLICY_WHY=""
+  command -v jq >/dev/null 2>&1 || { POLICY_WHY="jq not found"; return 1; }
+  if [ -z "${ORCA_CLI_COMMAND:-}" ]; then command -v orca >/dev/null 2>&1 || { POLICY_WHY="Orca CLI not found"; return 1; }
+  else command -v orca >/dev/null 2>&1 || command -v "$ORCA_CLI_COMMAND" >/dev/null 2>&1 || { POLICY_WHY="Orca CLI not found"; return 1; }; fi
+  out="$(orca_cli repo show --repo "path:$ROOT" --json 2>/dev/null)" || true
+  if ! jq -e '.result.repo | type == "object"' <<<"$out" >/dev/null 2>&1; then
+    if [ "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)" = runtime_unavailable ]; then POLICY_WHY="Orca is not running"; return 1; fi
+    out="$(orca_cli worktree show --worktree current --json 2>/dev/null)" || true
+    id="$(jq -r '.result.worktree.repoId // empty' <<<"$out" 2>/dev/null)" || true
+    if [ -z "$id" ]; then
+      [ "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)" = runtime_unavailable ] && POLICY_WHY="Orca is not running" || POLICY_WHY="project not registered in Orca"
+      return 1
+    fi
+    out="$(orca_cli repo show --repo "id:$id" --json 2>/dev/null)" || true
+    jq -e '.result.repo | type == "object"' <<<"$out" >/dev/null 2>&1 || { POLICY_WHY="unexpected response from Orca"; return 1; }
+  fi
+  POLICY_INFO="$(jq -r "$POLICY_JQ" <<<"$out" 2>/dev/null)" || true
+  [ -n "$POLICY_INFO" ] || { POLICY_WHY="unexpected response from Orca"; return 1; }
+}
+
 if [ "${1:-}" = --remove ]; then
   if ours; then rm -f "$YAML"; echo "Deleted $YAML"; fi
   if ! tracked .worktreeinclude; then
@@ -45,6 +86,35 @@ if tracked .worktreeinclude && ! has_line orca.yaml "$INCLUDE"; then
   echo "or configure the setup script in Settings → Repository → Setup script." >&2; exit 1
 fi
 
+# Does Orca run orca.yaml at all? Only checked when adding; nothing is written if it would not help.
+CHECKED=0
+if lookup_policy; then
+  CHECKED=1; read -r POLICY LOCAL_KIT RUNPOL <<<"$POLICY_INFO"
+  case "$RUNPOL" in
+    ask) echo "WARNING: this project's setup policy is 'ask': Orca asks each time, and 'orca worktree create' needs '--setup run'. The kit does not start by itself." >&2;;
+    skip-by-default) echo "WARNING: this project's setup policy is 'skip-by-default': setup does not run automatically, so the kit will not start by itself." >&2;;
+  esac
+  if [ "$POLICY" = local-only ] && [ "$LOCAL_KIT" != true ]; then
+    echo "ERROR: this project's setup source is local-only (set explicitly, or implied: no source was chosen and Settings has a script): Orca ignores orca.yaml, so roles-yaml would do nothing. Nothing was written." >&2
+    echo "Either:" >&2
+    echo "  1. put \$HOME/.orca-roles/bin/launch.sh as the FIRST line of the local setup script (Settings → Repository → $(basename "$ROOT") → Setup script), or" >&2
+    echo "  2. switch the setup source to \"run both\" in that same place, so orca.yaml runs next to the local script." >&2
+    echo "With no source chosen, any script in the local box makes it local-only." >&2; exit 1
+  fi
+  if [ "$LOCAL_KIT" = true ] && { [ "$POLICY" = local-only ] || [ "$POLICY" = run-both ]; }; then
+    echo "roles-yaml is not needed: the project's local setup script already runs launch.sh."
+    if [ "$POLICY" = run-both ] && ours; then
+      echo "With \"run both\" and the orca.yaml roles-yaml created earlier, the kit is running TWICE in new worktrees now. Fix it with: roles-yaml --remove (or drop launch.sh from the local setup script). Nothing was written."
+    else
+      echo "Nothing was written."
+      [ "$POLICY" = run-both ] && echo "With \"run both\", orca.yaml would make the kit run twice."
+    fi
+    exit 0
+  fi
+else
+  echo "Note: could not check Orca's setup policy ($POLICY_WHY)."
+fi
+
 if ! ours; then
   cat > "$YAML" <<EOF
 $MARK
@@ -66,4 +136,4 @@ fi
 # Check: Orca only copies what git considers ignored
 git -C "$ROOT" check-ignore -q orca.yaml || { echo "ERROR: git does not consider orca.yaml ignored; Orca would not copy it." >&2; exit 1; }
 echo "Done: new worktrees of $(basename "$ROOT") will run the kit. There is nothing to commit."
-echo "Note: if this project already has its own setup script in Settings → Repository, Orca uses that one and ignores orca.yaml."
+[ "$CHECKED" = 1 ] || echo "Note: what runs depends on the project's setup source (Settings → Repository): local-only uses only the Settings script and ignores orca.yaml, run-both runs both, shared-only runs only orca.yaml."
