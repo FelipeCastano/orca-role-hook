@@ -9,6 +9,8 @@ cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x 
 . "$KIT/bin/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; }
+blk_start() { F0=$FAIL; FAIL=0; }
+blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0; }
 
 # Syntax and JSON
 for f in "$ROOT"/install.sh "$ROOT"/bin/*.sh "$ROOT"/tests/*.sh; do bash -n "$f"; done; echo "ok   bash syntax"
@@ -206,8 +208,84 @@ check "bin/ has no empty_scratch left" "$(grep -c 'empty_scratch' "$ROOT"/bin/*.
 # prompts: earlier versions go to rev-<sha> folders, copies of the tree to copy/, and nobody deletes in scratchDir
 check "common-workers.md: earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$ROOT/prompts/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$ROOT/prompts/common-workers.md")$(grep -c -- '--short' "$ROOT/prompts/common-workers.md" || true)$(grep -c 'copy-rev/' "$ROOT/prompts/common-workers.md")" "1101"
 check "planner.md: earlier versions go to the Researcher's scratchDir rev-<full sha>" "$(grep -c 'scratchDir.*rev-<full sha>.*rev-parse "<commit>^{commit}"' "$ROOT/prompts/planner.md")" "1"
-check "tester.md: its copy is <scratchDir>/copy/" "$(grep -c 'rsync -a --delete --exclude .git ./ <scratchDir>/copy/' "$ROOT/prompts/tester.md")" "1"
+check "tester.md: mutation in place, no copy" "$(grep -c 'in place in the worktree' "$ROOT/prompts/tester.md")$(grep -c 'rsync' "$ROOT/prompts/tester.md")" "10"
 check "auditor.md: Experiments block uses <scratchDir>/copy/" "$(grep -c '^rsync -a --delete --exclude .git ./ <scratchDir>/copy/' "$ROOT/prompts/auditor.md")" "1"
+blk_start
+t=$(awk '/^5\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$ROOT/prompts/tester.md")
+a2=$(grep '^2\. \*\*Baseline' "$ROOT/prompts/auditor.md" || true)
+a7=$(grep '^7\. \*\*Mutation, in place' "$ROOT/prompts/auditor.md" || true)
+a27="$a2$a7"
+for k in 'in place in the worktree' 'Recovery first' 'restore any leftover `*.orca-bak`' 'mv <f>.orca-bak <f>' 'cp <f> <f>.orca-bak' 'Baseline.' 'baseline-status.txt' 'baseline.diff' 'do not mutate' 'give no mutation-based verdict' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'never have two mutants applied at once' 'only when a specific test fails because of it' 'Verified close' 'equal the baseline' 'say so at once'; do
+  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: the in-place mutation step lost: $k"; FAIL=1; }
+done
+for k in 'in place in the worktree' 'restore any leftover `*.orca-bak`' 'mv <f>.orca-bak <f>' 'cp <f> <f>.orca-bak' 'Baseline' 'baseline-status.txt' 'baseline.diff' 'baseline-untracked.txt' 'do not mutate' 'give no mutation-based verdict' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'never have two applied at once' 'only when a specific test fails because of it' 'equal the baseline' 'say so at once'; do
+  printf '%s' "$a27" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 7 lost: $k"; FAIL=1; }
+done
+for k in 'baseline-untracked.txt' 'git ls-files -o --exclude-standard' "find . -name '*.orca-bak' -not -path './.git/*'" 'sha1sum' 'do not mutate'; do
+  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: recovery and baseline lost: $k"; FAIL=1; }
+  printf '%s' "$a2" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 2 (recovery and baseline) lost: $k"; FAIL=1; }
+done
+for k in 'never `cp` over it' 'never chained with `&&`' 'whatever the test result was' 'a chained `mv` would be skipped'; do
+  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: the mutant mechanics lost: $k"; FAIL=1; }
+  printf '%s' "$a7" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 7 mechanics lost: $k"; FAIL=1; }
+done
+for k in 'look again for leftovers with the `find`' 'untracked hashes'; do
+  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: the verified close lost: $k"; FAIL=1; }
+  printf '%s' "$a7" | grep -qF -- "$k" || { echo "FAIL auditor.md: the close in pass 7 lost: $k"; FAIL=1; }
+done
+printf '%s' "$t" | grep -qF 'the only allowed difference is the tests you deliver' || { echo "FAIL tester.md: the close lost 'the only allowed difference is the tests you deliver'"; FAIL=1; }
+printf '%s' "$t$a7" | grep -qF '&& mv' && { echo "FAIL the restore mv is chained with && in the mutation text"; FAIL=1; }
+printf '%s' "$a7" | grep -qF 'Relies on the recovery and the baseline of pass 2' || { echo "FAIL auditor.md: pass 7 no longer relies on pass 2 for recovery and baseline"; FAIL=1; }
+l2=$(grep -n 'baseline-status.txt' "$ROOT/prompts/auditor.md" | head -1 | cut -d: -f1 || true)
+l3=$(grep -n '^3\. \*\*Criteria before findings' "$ROOT/prompts/auditor.md" | cut -d: -f1 || true)
+{ [ -n "$l2" ] && [ -n "$l3" ] && [ "$l2" -lt "$l3" ]; } || { echo "FAIL auditor.md: the recovery and baseline must come before pass 3 (first baseline-status.txt line [$l2], pass 3 line [$l3])"; FAIL=1; }
+printf '%s' "$a2" | grep -qF 'Before any pass that edits files (3 and 7)' || { echo "FAIL auditor.md: pass 2 lost that it precedes every pass that edits files (3 and 7)"; FAIL=1; }
+blk_end "tester.md step 5 and auditor.md passes 2 and 7: in-place mutation mechanics pinned"
+blk_start
+for p in tester auditor; do
+  grep -qF 'check that `git status --porcelain`, `git diff` and the untracked hashes' "$ROOT/prompts/$p.md" || { echo "FAIL $p.md: the closing step lost the *.orca-bak restore and the git status/diff check"; FAIL=1; }
+  grep -qF 'git checkout' "$ROOT/prompts/$p.md" && ! grep -F 'git checkout' "$ROOT/prompts/$p.md" | grep -qF 'Never use' && { echo "FAIL $p.md: mentions git checkout without forbidding it"; FAIL=1; }
+  grep -iE 'mutat[a-z]* .*in (a|your|the) copy|copy .*mutat' "$ROOT/prompts/$p.md" | grep -v 'in place' && { echo "FAIL $p.md: still tells to mutate in a copy"; FAIL=1; }
+done
+grep -qF 'in your copy' "$ROOT/prompts/auditor.md" && { echo "FAIL auditor.md: still says 'in your copy' (breaking a criterion is mutation, in place)"; FAIL=1; }
+p3=$(grep '^3\. \*\*Criteria before findings' "$ROOT/prompts/auditor.md" || true)
+for k in '**breaking it** in place' 'mechanics of pass 7' 'backup with `cp`' 'one change at a time' 'restore with `mv`'; do
+  printf '%s' "$p3" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 3 lost: $k"; FAIL=1; }
+done
+rr=$(grep -F '| **Auditor** |' "$ROOT/README.md" || true)
+printf '%s' "$rr" | grep -qF 'in place' || { echo "FAIL README.md: the Auditor row does not say mutation is in place"; FAIL=1; }
+printf '%s' "$rr" | grep -qiF 'copy' && { echo "FAIL README.md: the Auditor row still mentions a copy"; FAIL=1; }
+blk_end "tester.md and auditor.md: close step, git checkout forbidden, no mutation in a copy"
+blk_start
+v=$(grep '^- The reviewer verifies, it does not change' "$ROOT/prompts/auditor.md" || true)
+for k in 'only files of the worktree you may modify are those you mutate, temporarily' 'mechanics of pass 7' 'proving at the end with `git diff`' 'Never edit Dev'"'"'s or the Tester'"'"'s files in any other way' 'goes in your scratch folder'; do
+  printf '%s' "$v" | grep -qF -- "$k" || { echo "FAIL auditor.md: the reviewer-verifies rule lost: $k"; FAIL=1; }
+done
+grep -qF 'Mutation is done in place (pass 7). Every other pass that edits files' "$ROOT/prompts/auditor.md" || { echo "FAIL auditor.md: Experiments no longer says mutation is in place and the rest goes in a copy"; FAIL=1; }
+blk_end "auditor.md: reviewer modifies only to mutate, Experiments consistent with pass 7"
+blk_start
+o=$(grep '^- \*\*One step at a time\.\*\*' "$ROOT/prompts/planner.md" || true)
+for k in 'Only one code task is in flight at any moment' 'Dev, Tester or Auditor' 'dispatch no other task to any worker in that worktree' 'mutate the tree in place' 'Never start the next step'"'"'s Dev task while the current step is open'; do
+  printf '%s' "$o" | grep -qF -- "$k" || { echo "FAIL planner.md: One step at a time lost: $k"; FAIL=1; }
+done
+for k in 'the Deployer'"'"'s guide and a Researcher measurement wait until the code task reports' 'The one exception: when the in-flight Tester or Auditor itself asks for services, dispatch the Deployer to start or stop them (it edits no code), as part of that task; nothing else is dispatched until the code task reports.'; do
+  printf '%s' "$o" | grep -qF -- "$k" || { echo "FAIL planner.md: One step at a time lost: $k"; FAIL=1; }
+done
+check "planner.md: One step at a time has exactly one exception" "$(printf '%s' "$o" | grep -o 'exception' | wc -l | tr -d ' ')" "1"
+check "planner.md: One step at a time names the Deployer only for the guide and the exception" "$(printf '%s' "$o" | grep -o 'Deployer' | wc -l | tr -d ' ')" "2"
+check "planner.md: One step at a time names the Researcher only as waiting" "$(printf '%s' "$o" | grep -o 'Researcher' | wc -l | tr -d ' ')" "1"
+grep -qF 'ask the Planner before you start mutating (the Deployer, who edits no code, starts and stops them as part of your task)' "$ROOT/prompts/tester.md" || { echo "FAIL tester.md: the Services rule lost that the Deployer starts and stops services for the Tester"; FAIL=1; }
+grep -qF 'ask the Planner: the Deployer, who edits no code, starts and stops them as part of your task' "$ROOT/prompts/auditor.md" || { echo "FAIL auditor.md: the Limits lost that the Deployer starts and stops services for the Auditor"; FAIL=1; }
+blk_end "planner.md: one exception (the Deployer's services for the in-flight Tester or Auditor), guide and Researcher wait"
+blk_start
+for p in common-workers planner; do
+  cr=$(grep '^- Commit messages follow the repository' "$ROOT/prompts/$p.md" || true)
+  printf '%s' "$cr" | grep -qF ') (' && { echo "FAIL $p.md: the commit rule has a double parenthesis"; FAIL=1; }
+  printf '%s' "$cr" | grep -qF 'ticket key) and the depth of its body' || { echo "FAIL $p.md: the commit rule lost 'ticket key) and the depth of its body'"; FAIL=1; }
+  printf '%s' "$cr" | grep -qF 'what is left out. GitHub'"'"'s own merge subjects (' || { echo "FAIL $p.md: the GitHub merge-subject warning must be its own sentence"; FAIL=1; }
+  printf '%s' "$cr" | grep -qF 'your subjects never carry a handle. A subject-only commit is not acceptable' || { echo "FAIL $p.md: the commit rule lost its closing sentences"; FAIL=1; }
+done
+blk_end "commit rule: no double parenthesis, merge-subject warning in its own sentence"
 check "no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
 rm -rf "$KIT/tmp"
 rm -f "$TMP/fakebin/orca"
