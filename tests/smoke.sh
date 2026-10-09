@@ -427,7 +427,8 @@ rm -f "$TMP/fakebin/orca"
 # roles-yaml: local orca.yaml, ignored and listed in .worktreeinclude, nothing to commit
 Y="$TMP/ymain"; mkdir -p "$Y"; git -C "$Y" init -q; git -C "$Y" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 git -C "$Y" worktree add -q "$TMP/ywt" -b ybranch 2>/dev/null
-yaml() { (cd "$1" && shift && "$ROOT/bin/orca-yaml.sh" "$@" 2>&1); }
+mkdir -p "$TMP/yoff"; printf '#!/bin/sh\nexit 1\n' > "$TMP/yoff/orca"; chmod +x "$TMP/yoff/orca"
+yaml() { (cd "$1" && shift && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" "$@" 2>&1); }
 try yaml "$TMP/ywt"; check "roles-yaml: succeeds from a worktree" "$RC" "0"
 check "roles-yaml: orca.yaml in the main checkout" "$(grep -c 'orca-roles/bin/launch.sh' "$Y/orca.yaml")" "1"
 check "roles-yaml: listed in .worktreeinclude" "$(grep -cx orca.yaml "$Y/.worktreeinclude")" "1"
@@ -441,6 +442,158 @@ printf 'scripts:\n  setup: npm i\n' > "$Y/orca.yaml"
 try yaml "$Y"; check "roles-yaml: leaves someone else's orca.yaml alone" "$RC:$(cat "$Y/orca.yaml" | tr '\n' ' ')" "1:scripts:   setup: npm i "
 git -C "$Y" add orca.yaml; git -C "$Y" -c user.name=t -c user.email=t@t commit -q -m yaml
 try yaml "$Y"; check "roles-yaml: leaves a committed orca.yaml alone" "$RC" "1"; case "$OUT" in *committed*) echo "ok   roles-yaml explains the committed orca.yaml";; *) echo "FAIL roles-yaml: $OUT"; FAIL=1;; esac
+
+# roles-yaml: checks Orca's setup policy through a fake 'orca'
+YF="$TMP/yfake"; mkdir -p "$YF"; printf '#!/bin/sh\ncat "$FAKE_JSON"\n' > "$YF/orca"; chmod +x "$YF/orca"
+ypol() { printf '{"ok":true,"result":{"repo":{"hookSettings":%s}}}' "$1" > "$TMP/yp.json"; rm -f "$Y/orca.yaml" "$Y/.worktreeinclude"; : > "$Y/.git/info/exclude"
+  try env PATH="$YF:$PATH" FAKE_JSON="$TMP/yp.json" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>&1' "$Y" "$ROOT"; }
+git -C "$Y" rm -q -f orca.yaml; git -C "$Y" -c user.name=t -c user.email=t@t commit -q -m rm-yaml
+ypol '{"scripts":{"setup":"npm i"}}'; check "roles-yaml: local-only without the kit stops and writes nothing" "$RC:$(ls -A "$Y" | tr '\n' ' ')" "1:.git "
+ypol '{"scripts":{"setup":"# $HOME/.orca-roles/bin/launch.sh"}}'; check "roles-yaml: a commented launch.sh does not count" "$RC" "1"
+ypol '{"scripts":{"setup":"$HOME/.orca-roles/bin/launch.sh"}}'; check "roles-yaml: local already launches the kit" "$RC:$(ls -A "$Y" | tr '\n' ' ')" "0:.git "
+ypol '{"commandSourcePolicy":"run-both","scripts":{"setup":"npm i"}}'; check "roles-yaml: run-both without the kit proceeds" "$RC:$(ls "$Y" | tr '\n' ' ')" "0:orca.yaml "
+ypol '{"commandSourcePolicy":null,"scripts":{"setup":"npm i"}}'; check "roles-yaml: null policy is shared-only" "$RC" "0"
+ypol '{"setupRunPolicy":"ask"}'; case "$OUT" in *WARNING*) echo "ok   roles-yaml warns on setupRunPolicy ask";; *) echo "FAIL roles-yaml ask: $OUT"; FAIL=1;; esac
+ypol '{}'; case "$OUT" in *WARNING*|*"could not"*) echo "FAIL roles-yaml run-by-default is not silent: $OUT"; FAIL=1;; *) echo "ok   roles-yaml run-by-default is silent";; esac
+printf 'x' > "$TMP/yp.json"; rm -f "$Y/orca.yaml"; try env PATH="$YF:$PATH" FAKE_JSON="$TMP/yp.json" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>&1' "$Y" "$ROOT"
+check "roles-yaml: unreadable Orca answer still proceeds" "$RC" "0"; case "$OUT" in *"could not check"*) echo "ok   roles-yaml says it could not check";; *) echo "FAIL roles-yaml: $OUT"; FAIL=1;; esac
+
+# roles-yaml and the setup source policy: a fake 'orca' on a PATH without the real one, its own repo
+Y2="$TMP/ypol"; mkdir -p "$Y2"; git -C "$Y2" init -q; git -C "$Y2" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+FB="$TMP/yfake2"; mkdir -p "$FB"
+cat > "$FB/orca" <<'FEOF'
+#!/bin/sh
+echo "$*" >> "$FAKE_LOG"
+case "$1 $2 $3 $4" in
+  "repo show --repo path:"*) cat "$FAKE_PATH" 2>/dev/null; exit "${FAKE_PATH_RC:-0}";;
+  "worktree show --worktree current") cat "$FAKE_WT" 2>/dev/null; exit "${FAKE_WT_RC:-0}";;
+  "repo show --repo id:"*) cat "$FAKE_ID" 2>/dev/null; exit "${FAKE_ID_RC:-0}";;
+esac
+exit 1
+FEOF
+chmod +x "$FB/orca"
+YLOG="$TMP/y2.log"; YP="$TMP/y2-path.json"; YW="$TMP/y2-wt.json"; YI="$TMP/y2-id.json"
+hsjson() { jq -nc --arg p "$1" --arg l "$2" --arg r "${3:-}" '{ok:true,result:{repo:{hookSettings:({scripts:{setup:$l}}
+  + (if $p == "MISSING" then {} elif $p == "null" then {commandSourcePolicy: null} else {commandSourcePolicy: $p} end)
+  + (if $r == "" then {} else {setupRunPolicy: $r} end))}}}'; }
+yreset() { rm -f "$Y2/orca.yaml" "$Y2/.worktreeinclude" "$YLOG" "$YP" "$YW" "$YI"; : > "$Y2/.git/info/exclude"; }
+yrun() { try env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" FAKE_PATH_RC="${FAKE_PATH_RC:-0}" FAKE_WT_RC="${FAKE_WT_RC:-0}" FAKE_ID_RC="${FAKE_ID_RC:-0}" \
+  bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" "${@:2}" 2>&1' "$Y2" "$ROOT" "$@"; }
+yclass() { local f; f="$(LC_ALL=C ls -A "$Y2" | tr '\n' ' ')"
+  if [ "$RC" = 1 ] && [ "$f" = ".git " ] && [[ "$OUT" == *"Nothing was written"* ]]; then echo a
+  elif [ "$RC" = 0 ] && [ "$f" = ".git " ] && [[ "$OUT" == *"not needed"* ]]; then echo b
+  elif [ "$RC" = 0 ] && [ "$f" = ".git .worktreeinclude orca.yaml " ]; then echo c
+  else echo "?$RC:$f"; fi; }
+KITL='$HOME/.orca-roles/bin/launch.sh'
+yfor() { yreset; hsjson "$1" "$2" "${3:-}" > "$YP"; yrun; }
+
+# roles-yaml: every policy against every local script gives the right outcome (error, not needed, or written)
+M=""; for p in MISSING null bogus local-only run-both shared-only; do
+  for li in 0 1 2 3 4; do
+    case $li in 0) l="";; 1) l=$' \n\t ';; 2) l="npm install";; 3) l="$KITL";; 4) l=$'npm install\n'"$KITL";; esac
+    yfor "$p" "$l"; M="$M$p/$li=$(yclass) "
+  done; done
+check "roles-yaml policy x local matrix" "$M" "MISSING/0=c MISSING/1=c MISSING/2=a MISSING/3=b MISSING/4=b null/0=c null/1=c null/2=c null/3=c null/4=c bogus/0=c bogus/1=c bogus/2=c bogus/3=c bogus/4=c local-only/0=a local-only/1=a local-only/2=a local-only/3=b local-only/4=b run-both/0=c run-both/1=c run-both/2=c run-both/3=b run-both/4=b shared-only/0=c shared-only/1=c shared-only/2=c shared-only/3=c shared-only/4=c "
+
+# roles-yaml: when it writes nothing, the project is byte-identical (git status, exclude, an existing .worktreeinclude)
+for l in "npm install" "$KITL"; do
+  yreset; printf 'foo\n' > "$Y2/.git/info/exclude"; printf 'keep\n' > "$Y2/.worktreeinclude"; hsjson local-only "$l" > "$YP"
+  S1="$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/.git/info/exclude" "$Y2/.worktreeinclude")"; yrun
+  check "roles-yaml writes nothing when local-only ($l): rc, files" "$RC:$([ -e "$Y2/orca.yaml" ] && echo yaml || echo none)" "$([ "$l" = "$KITL" ] && echo 0 || echo 1):none"
+  check "roles-yaml writes nothing when local-only ($l): bytes" "$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/.git/info/exclude" "$Y2/.worktreeinclude")" "$S1"
+done
+yreset; hsjson local-only "npm i" > "$YP"; yrun; check "roles-yaml error offers both fixes" "$(printf '%s' "$OUT" | grep -c -E '^  [12]\. ')" "2"
+yreset; hsjson local-only "npm i" > "$YP"; yrun; check "roles-yaml error goes to stderr, not stdout" "$(env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>/dev/null' "$Y2" "$ROOT" | wc -c | tr -d ' ')" "0"
+
+# roles-yaml: which local script lines count as launching the kit
+# shellcheck disable=SC2088
+POS=( '$HOME/.orca-roles/bin/launch.sh' '${HOME}/.orca-roles/bin/launch.sh' '~/.orca-roles/bin/launch.sh' '/Users/x/.orca-roles/bin/launch.sh'
+  '"$HOME/.orca-roles/bin/launch.sh"' "'\$HOME/.orca-roles/bin/launch.sh'" '$HOME/.orca-roles/bin/launch.sh --disable e2e-tester' '  $HOME/.orca-roles/bin/launch.sh' )
+NEG=( '# $HOME/.orca-roles/bin/launch.sh' '   # $HOME/.orca-roles/bin/launch.sh' 'echo $HOME/.orca-roles/bin/launch.sh' 'roles' '/x/other-launch.sh'
+  '$HOME/.orca-roles/bin/launch.sh.bak' '$HOME/.orca-roles/bin/other.sh' )
+M=""; for l in "${POS[@]}"; do yfor local-only "$l"; M="$M$(yclass)"; done
+check "roles-yaml kit detection: forms that count" "$M" "bbbbbbbb"
+M=""; for l in "${NEG[@]}"; do yfor local-only "$l"; M="$M$(yclass)"; done
+check "roles-yaml kit detection: forms that do not count" "$M" "aaaaaaa"
+yfor local-only $'# note\n   # $HOME/.orca-roles/bin/launch.sh\nnpm i'; M="$(yclass)"; yfor local-only $'# note\nnpm i\n$HOME/.orca-roles/bin/launch.sh'; check "roles-yaml kit detection: comment vs real line" "$M$(yclass)" "ab"
+
+# roles-yaml: setupRunPolicy warnings, alone and with each outcome
+M=""; for r in "" run-by-default ask skip-by-default; do
+  for pl in "local-only|npm i" "local-only|$KITL" "shared-only|npm i"; do
+    yfor "${pl%%|*}" "${pl#*|}" "$r"; w=0; [[ "$OUT" == *WARNING* ]] && w=1; M="$M${r:-none}/${pl%%|*}:$(yclass):w$w "
+  done; done
+check "roles-yaml setupRunPolicy warnings" "$M" "none/local-only:a:w0 none/local-only:b:w0 none/shared-only:c:w0 run-by-default/local-only:a:w0 run-by-default/local-only:b:w0 run-by-default/shared-only:c:w0 ask/local-only:a:w1 ask/local-only:b:w1 ask/shared-only:c:w1 skip-by-default/local-only:a:w1 skip-by-default/local-only:b:w1 skip-by-default/shared-only:c:w1 "
+yfor shared-only "npm i" ask; check "roles-yaml silent about the lookup when it worked" "$([[ "$OUT" == *"could not check"* ]] && echo note || echo quiet)" "quiet"
+
+# roles-yaml: how the repo is looked up and what happens when it fails (generic note, proceeds)
+OKJ="$(hsjson local-only "npm i")"; MISS='{"ok":false,"error":{"code":"repo_not_found","message":"repo_not_found"}}'
+NOTRUN='{"ok":false,"error":{"code":"runtime_unavailable","message":"x"}}'; WTJ='{"ok":true,"result":{"worktree":{"repoId":"r123"}}}'
+yreset; printf '%s' "$OKJ" > "$YP"; yrun; check "roles-yaml lookup: path hit uses one call" "$(yclass):$(wc -l < "$YLOG" | tr -d ' ')" "a:1"
+yreset; printf '%s' "$MISS" > "$YP"; printf '%s' "$WTJ" > "$YW"; printf '%s' "$OKJ" > "$YI"; FAKE_PATH_RC=1 yrun
+check "roles-yaml lookup: path miss falls back to the repo id" "$(yclass):$(sed -n 3p "$YLOG")" "a:repo show --repo id:r123 --json"
+yreset; printf '%s' "$MISS" > "$YP"; printf '%s' "$WTJ" > "$YW"; printf '%s' "$MISS" > "$YI"; FAKE_PATH_RC=1 FAKE_ID_RC=1 yrun
+check "roles-yaml lookup: id miss too proceeds with a note" "$(yclass):$([[ "$OUT" == *"could not check"* ]] && echo note)" "c:note"
+yreset; printf '%s' "$MISS" > "$YP"; printf '%s' '{"ok":false,"error":{"code":"selector_not_found"}}' > "$YW"; FAKE_PATH_RC=1 FAKE_WT_RC=1 yrun
+check "roles-yaml lookup: not registered proceeds with a note" "$(yclass):$([[ "$OUT" == *"could not check Orca's setup policy (project not registered"* ]] && echo note)" "c:note"
+yreset; printf '%s' "$NOTRUN" > "$YP"; FAKE_PATH_RC=1 yrun
+check "roles-yaml lookup: runtime_unavailable proceeds, no fallback" "$(yclass):$([[ "$OUT" == *"could not check Orca's setup policy (Orca is not running)"* ]] && echo note):$(wc -l < "$YLOG" | tr -d ' ')" "c:note:1"
+yreset; printf '%s' "$MISS" > "$YP"; printf '%s' "$NOTRUN" > "$YW"; FAKE_PATH_RC=1 FAKE_WT_RC=1 yrun
+check "roles-yaml lookup: runtime_unavailable on the fallback" "$(yclass):$([[ "$OUT" == *"(Orca is not running)"* ]] && echo note)" "c:note"
+yreset; printf 'not json at all' > "$YP"; printf 'nope' > "$YW"; yrun
+check "roles-yaml lookup: non-JSON answers proceed with a note" "$(yclass):$([[ "$OUT" == *"could not check"* ]] && echo note)" "c:note"
+if ! PATH=/usr/bin:/bin command -v orca >/dev/null 2>&1; then
+  yreset; try env -u ORCA_CLI_COMMAND PATH=/usr/bin:/bin bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>&1' "$Y2" "$ROOT"
+  check "roles-yaml lookup: no orca on PATH proceeds with a note" "$(yclass):$([[ "$OUT" == *"could not check Orca's setup policy (Orca CLI not found)"* ]] && echo note)" "c:note"
+fi
+
+# roles-yaml --remove does not consult the policy
+yreset; hsjson shared-only "x" > "$YP"; yrun; hsjson local-only "npm i" > "$YP"; rm -f "$YLOG"; yrun --remove
+check "roles-yaml --remove ignores the policy" "$RC:$(LC_ALL=C ls -A "$Y2" | tr '\n' ' '):$([ -e "$YLOG" ] && echo asked || echo not-asked)" "0:.git :not-asked"
+
+# roles-yaml: kit detection in chained commands, the $ORCA_CLI_COMMAND route, guards and messages
+POS2=( '$HOME/.orca-roles/bin/launch.sh;' 'npm i && $HOME/.orca-roles/bin/launch.sh' 'npm i; $HOME/.orca-roles/bin/launch.sh' 'false || $HOME/.orca-roles/bin/launch.sh'
+  '"/Users/John Doe/.orca-roles/bin/launch.sh"' 'bash -l $HOME/.orca-roles/bin/launch.sh' 'bash $HOME/.orca-roles/bin/launch.sh' 'exec $HOME/.orca-roles/bin/launch.sh'
+  'source $HOME/.orca-roles/bin/launch.sh' '. $HOME/.orca-roles/bin/launch.sh' 'echo hi; $HOME/.orca-roles/bin/launch.sh --disable e2e-tester' 'echo hi && $HOME/.orca-roles/bin/launch.sh' )
+NEG2=( '# $HOME/.orca-roles/bin/launch.sh' '   # $HOME/.orca-roles/bin/launch.sh' 'npm i # $HOME/.orca-roles/bin/launch.sh' 'echo $HOME/.orca-roles/bin/launch.sh'
+  'printf %s $HOME/.orca-roles/bin/launch.sh' 'echo $HOME/.orca-roles/bin/launch.sh && npm i' '/x/other-launch.sh' '$HOME/.orca-roles/bin/launch.sh.bak' 'roles'  'npm i && echo $HOME/.orca-roles/bin/launch.sh' )
+M=""; for l in "${POS2[@]}"; do yfor local-only "$l"; M="$M$(yclass)"; done
+check "roles-yaml kit detection: chained, quoted and wrapped forms count" "$M" "bbbbbbbbbbbb"
+M=""; for l in "${NEG2[@]}"; do yfor local-only "$l"; M="$M$(yclass)"; done
+check "roles-yaml kit detection: comments, echo/printf and look-alikes do not count" "$M" "aaaaaaaaaa"
+M=""; for l in "${POS2[@]}"; do yfor run-both "$l"; M="$M$(yclass)"; done
+check "roles-yaml kit detection: same forms under run-both write nothing" "$M" "bbbbbbbbbbbb"
+
+# roles-yaml: the $ORCA_CLI_COMMAND route (the only one on WSL) when there is no 'orca' on PATH
+FB2="$TMP/yfake3"; mkdir -p "$FB2"; cp "$FB/orca" "$FB2/orca-ide"
+yrun2() { try env PATH="$FB2:/usr/bin:/bin" ORCA_CLI_COMMAND="$1" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" \
+  bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>&1' "$Y2" "$ROOT"; }
+if ! PATH=/usr/bin:/bin command -v orca >/dev/null 2>&1; then
+  yreset; hsjson local-only "npm i" > "$YP"; yrun2 orca-ide
+  check "roles-yaml uses \$ORCA_CLI_COMMAND when there is no orca on PATH" "$(yclass):$(sed -n 1p "$YLOG")" "a:repo show --repo path:$Y2 --json"
+  yreset; hsjson local-only "npm i" > "$YP"; yrun2 no-such-orca
+  check "roles-yaml: \$ORCA_CLI_COMMAND that does not exist is a generic note" "$(yclass):$([[ "$OUT" == *"could not check Orca's setup policy (Orca CLI not found)"* ]] && echo note):$([ -e "$YLOG" ] && echo called || echo none)" "c:note:none"
+fi
+
+# roles-yaml: the final note only when unchecked, jq missing, hookSettings of the wrong shape
+yfor shared-only "npm i"; M="$([[ "$OUT" == *"what runs depends"* ]] && echo note || echo quiet)"
+yreset; printf 'x' > "$YP"; yrun; check "roles-yaml final note: only when the policy was not checked" "$M:$([[ "$OUT" == *"what runs depends"* ]] && echo note || echo quiet)" "quiet:note"
+NJ="$TMP/ynojq"; mkdir -p "$NJ"; for t in bash git grep mktemp dirname basename cat rm touch mkdir; do ln -sf "$(command -v $t)" "$NJ/$t"; done
+yreset; hsjson local-only "npm i" > "$YP"; try env -u ORCA_CLI_COMMAND PATH="$FB:$NJ" FAKE_LOG="$YLOG" FAKE_PATH="$YP" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>&1' "$Y2" "$ROOT"
+check "roles-yaml without jq: says so and proceeds" "$(yclass):$([[ "$OUT" == *"(jq not found)"* ]] && echo note)" "c:note"
+yreset; printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":"oops"}}}' > "$YP"; yrun
+check "roles-yaml unusable hookSettings: note and final note, proceeds" "$(yclass):$([[ "$OUT" == *"(unexpected response from Orca)"* ]] && echo note):$([[ "$OUT" == *"what runs depends"* ]] && echo final)" "c:note:final"
+yfor local-only "npm i" ask; check "roles-yaml ask warning text" "$([[ "$OUT" == *"policy is 'ask'"* && "$OUT" == *"--setup run"* ]] && echo ok)" "ok"
+yfor shared-only "npm i" skip-by-default; check "roles-yaml skip-by-default warning text" "$([[ "$OUT" == *"policy is 'skip-by-default'"* && "$OUT" == *"will not start by itself"* ]] && echo ok)" "ok"
+
+# roles-yaml: run-both with the kit in the local script and an orca.yaml created earlier says the kit runs twice and how to fix it
+yfor shared-only "npm i"; hsjson run-both "$KITL" > "$YP"; S2="$(shasum "$Y2/orca.yaml" "$Y2/.worktreeinclude")"; yrun
+check "roles-yaml run-both + kit + our orca.yaml: running twice, with the fix" "$RC:$([[ "$OUT" == *"is running TWICE"* || "$OUT" == *"running TWICE"* ]] && echo twice):$([[ "$OUT" == *"roles-yaml --remove"* ]] && echo hint):$([ "$(shasum "$Y2/orca.yaml" "$Y2/.worktreeinclude")" = "$S2" ] && echo same)" "0:twice:hint:same"
+yfor run-both "$KITL"; check "roles-yaml run-both + kit without our orca.yaml: would run twice, no TWICE" "$([[ "$OUT" == *"would make the kit run twice"* ]] && echo would):$([[ "$OUT" == *TWICE* ]] && echo twice || echo no)" "would:no"
+yfor shared-only "npm i"; hsjson local-only "$KITL" > "$YP"; yrun
+check "roles-yaml local-only + kit + our orca.yaml: not needed, no TWICE" "$RC:$([[ "$OUT" == *"not needed"* ]] && echo ok):$([[ "$OUT" == *TWICE* ]] && echo twice || echo no)" "0:ok:no"
+
+# roles-yaml: the error text does not say that saving a script sets local-only
+yfor local-only "npm i"; check "roles-yaml error text: no claim that saving sets local-only" "$([[ "$OUT" == *"Saving anything"* || "$OUT" == *"sets the source to local-only"* ]] && echo claim || echo none)" "none"
 
 # launch.sh exceptions (the project's setup script): --only, --enable, --disable, --set, saved per worktree
 check "overrides: lists and typed --set" "$(overrides_from_args --only planner,dev --disable 'x, y' --set roles.dev.model=m1 --set=settings.jiraHandoff=false --set roles.t.params.n=5)" \
