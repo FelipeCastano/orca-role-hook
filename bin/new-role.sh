@@ -6,7 +6,8 @@
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
 #   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompt
 #     The JSON has: id, description and prompt (Markdown text) required; title, agent, model, permissionMode,
-#     command, addDirFlag, trust, mcp, allowedTools, extraDirs, extraArgs, env, params, enabled, after and overwrite optional.
+#     command, addDirFlag, trust, clearCommand, mcp, allowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs,
+#     enabled, after and overwrite optional.
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
@@ -121,7 +122,7 @@ if [ -n "$FROM_JSON" ]; then
   PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"
   ROLE_JSON="$(jq --arg prompt "$PROMPT_FIELD" --arg agent "$AGENT" '
     {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
-    + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","trust","mcp","allowedTools","extraDirs","extraArgs","env","params"))))
+    + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","trust","clearCommand","mcp","allowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs"))))
     + (if $prompt != "" then {prompt: $prompt} else {} end)' "$FROM_JSON")"
   NEW_SERVERS='{}'
   save_role
@@ -154,10 +155,12 @@ ask AGENT "Agent (claude | codex | custom)" "claude"
 case "$AGENT" in claude|codex|custom) ;; *) echo "Invalid agent: $AGENT" >&2; exit 1;; esac
 DEF_MODEL=""; [ "$AGENT" = claude ] && DEF_MODEL="claude-sonnet-5-5"
 ask MODEL "Exact model (empty = the agent's default)" "$DEF_MODEL"
-COMMAND=""
+COMMAND=""; CLEAR=""; ADDDIR=""
 if [ "$AGENT" = custom ]; then
-  ask COMMAND "Command to run (accepts {model} and {prompts})"
+  ask COMMAND "Command to run (accepts {model}, {prompts}, {prompt}, {mcp} and {scratch})"
   [ -n "$COMMAND" ] || { echo "A custom agent needs a command." >&2; exit 1; }
+  ask CLEAR "Command that opens a new conversation in it, e.g. /new (empty = its context is never cleaned)"
+  ask ADDDIR "Its flag to give it access to a folder, e.g. --add-dir (empty = none: no scratch folder or extra folders)"
 fi
 ask PERM "Permission mode (auto | acceptEdits | default)" "auto"
 
@@ -194,6 +197,8 @@ if [ "$AGENT" = claude ]; then
     ask_lines TOOLS "Tools allowed without asking (e.g. Bash(npm test:*))"
     TOOLS_JSON="$(lines_to_json "$TOOLS")"
   fi
+fi
+if [ "$AGENT" != custom ] || [ -n "$ADDDIR" ]; then
   ask_lines DIRS "Extra folders it can access"
   DIRS_JSON="$(lines_to_json "$DIRS")"
 fi
@@ -285,7 +290,7 @@ esac
 PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"   # in the repo the default path (prompts/<id>.md) works
 ROLE_JSON="$(jq -n \
   --arg title "$TITLE" --arg desc "$DESC" --argjson enabled "$ENABLED" \
-  --arg agent "$AGENT" --arg model "$MODEL" --arg perm "$PERM" --arg command "$COMMAND" \
+  --arg agent "$AGENT" --arg model "$MODEL" --arg perm "$PERM" --arg command "$COMMAND" --arg clear "$CLEAR" --arg adddir "$ADDDIR" \
   --argjson mcp "$MCP_JSON" --argjson tools "$TOOLS_JSON" --argjson dirs "$DIRS_JSON" \
   --argjson extra "$EXTRA_JSON" --argjson env "$ENV_JSON" --argjson params "$PARAMS_JSON" \
   --arg prompt "$PROMPT_FIELD" '
@@ -293,6 +298,8 @@ ROLE_JSON="$(jq -n \
   + (if $model != "" then {model:$model} else {} end)
   + (if $perm != "auto" then {permissionMode:$perm} else {} end)
   + (if $command != "" then {command:$command} else {} end)
+  + (if $clear != "" then {clearCommand:$clear} else {} end)
+  + (if $adddir != "" then {addDirFlag:$adddir} else {} end)
   + {mcp:$mcp}
   + (if $tools != null then {allowedTools:$tools} else {} end)
   + (if ($dirs | length) > 0 then {extraDirs:$dirs} else {} end)
