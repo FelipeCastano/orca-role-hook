@@ -15,7 +15,6 @@ The kit ships a Claude Code plugin with a guide to everything below (installing,
 
 Choose the user scope when asked, and run `/reload-plugins` if the install says so. Then just ask, for example: "help me install orca-roles", or invoke the guide with `/orca-roles:team`.
 
-- The repo is private for now: adding the marketplace clones it with your git credentials, so you need access to it on GitHub (the same as for cloning it).
 - The marketplace is read from the repo's default branch (`main`). If `/plugin marketplace add` says `Marketplace file not found`, your `main` does not have it yet; add it from a local clone instead: `/plugin marketplace add ~/orca-role-hook`.
 - Without the marketplace: clone the repo and start Claude Code with `claude --plugin-dir orca-role-hook/plugin`.
 - Once the kit is installed, its Planner loads this same guide by itself; the plugin is only needed to get help outside the kit's sessions.
@@ -98,7 +97,7 @@ It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, add
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
 ```
 
-If the repo were public, it could also be installed without cloning (for now it is private and GitHub does not serve its files without authentication):
+It can also be installed without cloning:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/main/install.sh | bash
