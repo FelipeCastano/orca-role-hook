@@ -70,6 +70,7 @@ Consequences:
 12. **Families in masks and enumerations.** If the code checks a bit, a method or an enumeration value, list in the library's real code every value it treats differently, and also test the legitimate values (a mask that is too wide is a false rejection).
 13. **Re-measure.** Every cited measurement (in docs, tests or reports) is run again against the current code; if an assertion was tightened, the counts in its description change.
 14. **Reproduce every finding before it counts**, including those from others: rebuild the input, pass it through the real entry point and note the number that comes out. Also check that the **mechanism** matches the description, because it changes the fix.
+15. **Names and stray comments.** A name of a person (including a handle or an email address) in code, tests, commit messages, PR text or Jira, or a comment that goes against the repo's convention (a comment narrating the change, or comments in a repo whose code carries none), is a finding of **low** severity. Owner: **Dev** for code, **Tester** for tests. Names of products, libraries, companies and services are fine.
 
 ### Experiments
 

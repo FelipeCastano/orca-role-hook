@@ -31,6 +31,37 @@ grep -q 'No heartbeats' "$ROOT/prompts/common-workers.md" || { echo "FAIL common
 grep -q 'lastOutputAt' "$ROOT/prompts/planner.md" || { echo "FAIL planner.md: la detección de workers silenciosos debe usar lastOutputAt"; FAIL=1; }
 grep -q 'last_heartbeat_at' "$ROOT/prompts/planner.md" && { echo "FAIL planner.md: aún depende de last_heartbeat_at"; FAIL=1; }
 echo "ok   heartbeats: workers no laten, planner vigila por lastOutputAt"
+for p in common-workers planner; do grep -q 'No names of people anywhere you write' "$ROOT/prompts/$p.md" || { echo "FAIL $p.md: missing the no-names-of-people rule"; FAIL=1; }; done
+grep -q 'No new code comments unless the repo' "$ROOT/prompts/common-workers.md" || { echo "FAIL common-workers.md: missing the comments rule"; FAIL=1; }
+grep -q 'Names and stray comments' "$ROOT/prompts/auditor.md" || { echo "FAIL auditor.md: missing the names/comments finding"; FAIL=1; }
+echo "ok   rules: no names of people, comments only if the repo uses them, auditor finding"
+for p in common-workers planner; do
+  r=$(grep 'No names of people anywhere you write' "$ROOT/prompts/$p.md" || true)
+  for k in 'Handles (`@user`) and email addresses count as names' '"the repo owner"' 'not `<name>_test_user`' 'not "as <name> asked"' 'Names of products, libraries, companies and services'; do
+    printf '%s' "$r" | grep -qF -- "$k" || { echo "FAIL $p.md: the no-names rule lost: $k"; FAIL=1; }
+  done
+done
+grep 'No new code comments unless the repo' "$ROOT/prompts/common-workers.md" | grep -qF 'Never delete existing comments' || { echo "FAIL common-workers.md: the comments rule lost 'never delete existing comments'"; FAIL=1; }
+grep 'No new code comments unless the repo' "$ROOT/prompts/common-workers.md" | grep -qF 'narrates the change' || { echo "FAIL common-workers.md: the comments rule lost 'never narrate the change'"; FAIL=1; }
+a=$(grep 'Names and stray comments' "$ROOT/prompts/auditor.md" || true)
+for k in 'handle or an email address' '**low** severity' 'Owner: **Dev** for code, **Tester** for tests'; do
+  printf '%s' "$a" | grep -qF -- "$k" || { echo "FAIL auditor.md: the names/comments finding lost: $k"; FAIL=1; }
+done
+# the examples use placeholders, not real people
+grep -rEq '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' "$ROOT/prompts/" && { echo "FAIL prompts contain an email address"; FAIL=1; }
+for p in common-workers planner; do
+  at=$(grep -n 'never carry attribution to an AI' "$ROOT/prompts/$p.md" | head -1 | cut -d: -f1 || true)
+  nn=$(grep -n 'No names of people anywhere you write' "$ROOT/prompts/$p.md" | head -1 | cut -d: -f1 || true)
+  [ -n "$at" ] && [ -n "$nn" ] && [ "$nn" -eq $((at + 1)) ] || { echo "FAIL $p.md: the no-names rule must sit right after the AI-attribution rule"; FAIL=1; }
+  grep -qF "Merge pull request #N from <handle>/<branch>" "$ROOT/prompts/$p.md" || { echo "FAIL $p.md: the commit rule lost the GitHub merge-subject warning"; FAIL=1; }
+done
+c=$(grep 'No new code comments unless the repo' "$ROOT/prompts/common-workers.md" || true)
+for k in 'comment density' 'CLAUDE.md' 'CONTRIBUTING' 'linter' 'none at all in a repo whose code carries none'; do
+  printf '%s' "$c" | grep -qF -- "$k" || { echo "FAIL common-workers.md: the comments rule lost: $k"; FAIL=1; }
+done
+pass=$(awk '/^### Passes/{f=1;next} /^### /{f=0} f' "$ROOT/prompts/auditor.md" | grep 'Names and stray comments' || true)
+printf '%s' "$pass" | grep -qF 'Jira' || { echo "FAIL auditor.md: the names/comments pass must live under '### Passes' and cover Jira"; FAIL=1; }
+echo "ok   rules: key content pinned, examples use placeholders"
 
 # Every role in the config has a prompt
 for r in $(jq -r '.roles | keys_unsorted[]' "$KIT/config.default.json"); do
