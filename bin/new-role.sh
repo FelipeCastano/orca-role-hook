@@ -6,7 +6,7 @@
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
 #   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompt
 #     The JSON has: id, description and prompt (Markdown text) required; title, agent, model, permissionMode,
-#     command, mcp, allowedTools, extraDirs, extraArgs, env, params, enabled, after and overwrite optional.
+#     command, addDirFlag, trust, mcp, allowedTools, extraDirs, extraArgs, env, params, enabled, after and overwrite optional.
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
@@ -121,7 +121,7 @@ if [ -n "$FROM_JSON" ]; then
   PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"
   ROLE_JSON="$(jq --arg prompt "$PROMPT_FIELD" --arg agent "$AGENT" '
     {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
-    + (with_entries(select(.key | IN("model","permissionMode","command","mcp","allowedTools","extraDirs","extraArgs","env","params"))))
+    + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","trust","mcp","allowedTools","extraDirs","extraArgs","env","params"))))
     + (if $prompt != "" then {prompt: $prompt} else {} end)' "$FROM_JSON")"
   NEW_SERVERS='{}'
   save_role

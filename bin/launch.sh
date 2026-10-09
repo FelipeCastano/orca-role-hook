@@ -86,17 +86,6 @@ session_of_handle() {
   done
   return 0
 }
-# Claude Code asks "Do you trust the files in this folder?" the first time it starts in a folder, and a tab stuck in that dialog never
-# gets its role. Registering the kit in the project is that answer, so the worktree is marked as trusted before the agents start.
-trust_folder() {
-  local f="$HOME/.claude.json" d; d="$(pwd -P)"
-  [ -f "$f" ] || return 0
-  jq -e --arg d "$d" '.projects[$d].hasTrustDialogAccepted == true' "$f" >/dev/null 2>&1 && return 0
-  if jq --arg d "$d" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' "$f" > "$f.orca-roles.tmp" 2>/dev/null && mv "$f.orca-roles.tmp" "$f"; then
-    echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents."
-  else rm -f "$f.orca-roles.tmp"; fi
-}
-
 WAIT="$(setting "$CFG" launchWaitSeconds 15)"
 LIST=""
 for i in $(seq 1 "$WAIT"); do
@@ -131,6 +120,7 @@ fi
 ROLES="$(enabled_roles "$CFG" | tr '\n' ' ')"
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
 for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
+trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
 NEW=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
