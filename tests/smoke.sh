@@ -169,6 +169,45 @@ PL="$(grep 'Specs are written in English and stay compact' "$ROOT/prompts/progra
 for frag in 'Do not repeat rules the worker prompts already carry' 'point to files and lines' 'self-contained about the task' 'threat model and rejection threshold' 'with the user you talk as usual' 'Literal strings stay in their original language'; do
   printf '%s' "$PL" | grep -qF "$frag" || { echo "FAIL planner.md: compact-specs bullet lost '$frag'"; FAIL=1; }
 done
+PLP="$ROOT/prompts/programmer/planner.md"
+CONV="$(grep 'follows the repository.s own conventions, checked every time' "$PLP" || true)"
+for frag in 'checked every time' 'git log -15' 'gh pr list --state merged' 'gh pr view' 'pull_request_template.md' 'glab mr list --merged' '.gitlab/merge_request_templates/' 'subTaskIssueTypes()' 'gh pr view <n> --comments' 'pulls/<n>/comments' 'Jira issue or subtask' 'For a Jira comment' 'Never reuse a format remembered' 'without re-reading'; do
+  printf '%s' "$CONV" | grep -qF "$frag" || { echo "FAIL planner.md: convention-check bullet lost '$frag'"; FAIL=1; }
+done
+for frag in 'no history to read' 'the command fails or returns nothing' 'tell the user so and propose a format for them to confirm'; do
+  printf '%s' "$CONV" | grep -qF "$frag" || { echo "FAIL planner.md: convention-check bullet lost the no-history fallback '$frag'"; FAIL=1; }
+done
+CMT="$(grep 'One commit per step, made at close' "$PLP" || true)"
+printf '%s' "$CMT" | grep -qF "only on the user's explicit yes to that commit, before the next step opens" || { echo "FAIL planner.md: the one-commit rule lost the explicit yes"; FAIL=1; }
+CMT2="$(grep 'One commit per step, now' "$PLP" || true)"
+for frag in 'show the user the full message and the list of files' 'commit only on a clear yes to that commit' 'Approving the plan, the step or the Auditor' 'is not approving the commit' 'If they ask for changes, show it again' '"ok, continue"' 'ask again' 'decline or defer the commit, ask what to do with the uncommitted changes' 'after the convention check in "Limits"' '`git status`, `git diff --stat`'; do
+  printf '%s' "$CMT2" | grep -qF "$frag" || { echo "FAIL planner.md: step-close commit rule lost '$frag'"; FAIL=1; }
+done
+for pat in 'A step is \*\*open\*\* from its first task' 'Only one code task is in flight'; do
+  printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qE 'commit is made|its commit is not made' || { echo "FAIL planner.md: '$pat' no longer keeps the step open until its commit is made"; FAIL=1; }
+done
+printf '%s' "$(grep 'Report to the user (see' "$PLP" || true)" | grep -qF "with the step's commit made, open the next step" || { echo "FAIL planner.md: the next step opens before the commit"; FAIL=1; }
+printf '%s' "$(grep '\*\*Jira subtasks\.\*\*' "$PLP" || true)" | grep -qF 'after the convention check in "Limits"' || { echo "FAIL planner.md: Jira subtasks do not point to the convention check"; FAIL=1; }
+[ "$(grep -cF 're-propose its close commit (re-running the convention check in "Limits")' "$PLP")" = 3 ] || { echo "FAIL planner.md: the recovery paths (resumed, back, cleared) must re-propose an uncommitted ACCEPTED step's commit"; FAIL=1; }
+printf '%s' "$(grep '^- \*\*Nothing leaves the worktree' "$PLP" || true)" | grep -qF 'Approving the plan, a step or a commit is not approving a push or a Jira update' || { echo "FAIL planner.md: the nothing-leaves rule lost its approval sentence"; FAIL=1; }
+grep -qF 'Nobody commits while the step is open' "$PLP" && { echo "FAIL planner.md: 'Nobody commits while the step is open' forbids the close commit"; FAIL=1; }
+grep -qF "Nobody commits before the Auditor's ACCEPTED" "$PLP" || { echo "FAIL planner.md: the one-commit bullet lost 'Nobody commits before the Auditor's ACCEPTED'"; FAIL=1; }
+for pat in '^8\. \*\*Close and report' '^- A step only closes with ACCEPTED'; do
+  printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and its commit made' || { echo "FAIL planner.md: '$pat' lost 'and its commit made'"; FAIL=1; }
+done
+printf '%s' "$(grep '^Steps are atomic' "$ROOT/README.md" || true)" | grep -qF "Nobody commits before the Auditor's ACCEPTED" || { echo "FAIL README: lost the commit-after-ACCEPTED definition"; FAIL=1; }
+for pat in '^5\. Tell the user, in a few lines: where you were' '^3\. Tell the user, in a few lines: the Run'; do
+  printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and wait for the yes' || { echo "FAIL planner.md: recovery summary '$pat' lost 'wait for the yes'"; FAIL=1; }
+done
+for frag in 'open the next step only once the tree holds no changes from the previous step' '(commit, stash or branch, discard: the user decides and approves)' 'A step with nothing to commit (research only, no change needed) closes when the user agrees there is nothing to commit'; do
+  printf '%s' "$CMT2" | grep -qF "$frag" || { echo "FAIL planner.md: step-close commit rule lost '$frag'"; FAIL=1; }
+done
+RPT="$(grep -A1 '^## Report to the user' "$PLP" | tail -1)"
+printf '%s' "$RPT" | grep -qF 'the proposed commit, awaiting their yes' || { echo "FAIL planner.md: Report to the user lost the proposed commit awaiting the yes"; FAIL=1; }
+RS="$(grep '^Steps are atomic and strictly sequential' "$ROOT/README.md" || true)"
+for frag in 'and you say yes to it' 'match the format of the repo'"'"'s recent history, and Jira texts that of the Jira project'"'"'s recent ones' 're-reads them every time' 'The next step does not start until the commit is made'; do
+  printf '%s' "$RS" | grep -qF "$frag" || { echo "FAIL README steps paragraph lost '$frag'"; FAIL=1; }
+done
 for p in dev tester auditor researcher e2e-tester deployer; do
   grep -qF 'following the Output rules' "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: Report lost the pointer to the Output rules"; FAIL=1; }
 done
@@ -392,7 +431,8 @@ grep -qF 'ask the Planner: the Deployer, who edits no code, starts and stops the
 blk_end "planner.md: one exception (the Deployer's services for the in-flight Tester or Auditor), guide and Researcher wait"
 blk_start
 for p in common-workers planner; do
-  cr=$(grep '^- Commit messages follow the repository' "$ROOT/prompts/programmer/$p.md" || true)
+  case $p in planner) pre='^- Everything you draft for outside the worktree';; *) pre='^- Commit messages follow the repository';; esac
+  cr=$(grep "$pre" "$ROOT/prompts/programmer/$p.md" || true)
   printf '%s' "$cr" | grep -qF ') (' && { echo "FAIL $p.md: the commit rule has a double parenthesis"; FAIL=1; }
   printf '%s' "$cr" | grep -qF 'ticket key) and the depth of its body' || { echo "FAIL $p.md: the commit rule lost 'ticket key) and the depth of its body'"; FAIL=1; }
   printf '%s' "$cr" | grep -qF 'what is left out. GitHub'"'"'s own merge subjects (' || { echo "FAIL $p.md: the GitHub merge-subject warning must be its own sentence"; FAIL=1; }
