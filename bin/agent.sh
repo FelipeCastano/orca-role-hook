@@ -90,7 +90,7 @@ case "$AGENT" in
     Q_MODEL="$(printf '%q' "$MODEL")"; Q_PROMPTS="$(printf '%q' "$KIT/prompts")"; Q_PROMPT="$(printf '%q' "$PROMPT")"
     Q_MCP=""; [ -n "$MCPFILE" ] && Q_MCP="$(printf '%q' "$MCPFILE")"
     Q_SCRATCH=""; [ -n "${SD:-}" ] && Q_SCRATCH="$(printf '%q' "$SD")"
-    export ORCA_ROLES_ANCHOR="$(role_anchor "$CFG" "$ROLE")"; Q_ANCHOR="$(printf '%q' "$ORCA_ROLES_ANCHOR")"
+    ORCA_ROLES_ANCHOR="$(role_anchor "$CFG" "$ROLE")"; export ORCA_ROLES_ANCHOR; Q_ANCHOR="$(printf '%q' "$ORCA_ROLES_ANCHOR")"
     CMD="${CMD//\{model\}/$Q_MODEL}"; CMD="${CMD//\{prompts\}/$Q_PROMPTS}"; CMD="${CMD//\{prompt\}/$Q_PROMPT}"; CMD="${CMD//\{mcp\}/$Q_MCP}"; CMD="${CMD//\{scratch\}/$Q_SCRATCH}"
     CMD="${CMD//\{anchor\}/$Q_ANCHOR}"
     DIRFLAG="$(rstr "$CFG" "$ROLE" addDirFlag)"
