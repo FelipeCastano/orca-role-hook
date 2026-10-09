@@ -173,6 +173,8 @@ In both cases the Planner first explains what it will do and what is lost, exclu
 
 Under the hood it runs `~/.orca-roles/bin/clean.sh <role> [...]` (or `--all`), which you can also run yourself from a worktree terminal. It accepts the role id, the tab title or the handle.
 
+If you run `/clear` yourself in a Claude role's tab, the Planner's included, its role message is gone with the rest of the conversation. Each Claude role gets one line in its system prompt, which `/clear` keeps, telling it to ask for that message again: on your next message it runs `~/.orca-roles/bin/clean.sh --msg <role>` and follows what it prints. The Planner gets the current handles and a "cleared" mode: it recovers the Run, the tasks, the latest communications and the state of the code, leaves the work in flight running, and gives you a summary before dispatching anything. Codex and `custom` agents have no such line: after clearing one by hand, use `clean.sh <role>` or tell it to run `clean.sh --msg <role>`.
+
 ## Resuming after a restart
 
 If you shut down the computer or close Orca, the roles' tabs die, but the state does not: Orca Orchestration's tasks, messages and Runs persist, and the code is in the worktree. What is lost is each agent's conversation memory.

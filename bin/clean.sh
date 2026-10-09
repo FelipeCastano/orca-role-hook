@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cleans the context of one or more workers: opens a new conversation in their agent and resends their role.
-# Usage (from the worktree):  clean.sh <role|title|handle> [...]   |   clean.sh --all   |   clean.sh --msg <role>  (only prints the role message)
+# Usage (from the worktree):  clean.sh <role|title|handle> [...]   |   clean.sh --all   |   clean.sh --msg <role>  (only prints the role message;
+# for the Planner, the one for after its conversation was cleared: each claude role is told in its system prompt to ask for it)
 # The Planner runs it after the user confirms. It never cleans the Planner or a worker with a task in flight (the Planner ensures that).
 set -uo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
@@ -22,7 +23,14 @@ resolve() {  # <role|title|handle> → role id
   done
 }
 
-if [ "$1" = --msg ]; then id="$(resolve "${2:-}")"; [ -n "$id" ] || { echo "Unknown role: ${2:-}" >&2; exit 1; }; worker_msg "$CFG" "$id"; echo; exit 0; fi
+if [ "$1" = --msg ]; then
+  id="$(resolve "${2:-}")"; [ -n "$id" ] || { echo "Unknown role: ${2:-}" >&2; exit 1; }
+  if [ "$id" = planner ]; then
+    wt="${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}"; { IFS= read -r key; IFS= read -r url; } < <(worktree_jira "${wt:-active}" "$CFG")
+    planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3
+  else worker_msg "$CFG" "$id"; fi
+  echo; exit 0
+fi
 TARGETS=()
 if [ "$1" = --all ]; then
   for id in $IDS; do [ "$id" = planner ] || TARGETS+=("$id"); done

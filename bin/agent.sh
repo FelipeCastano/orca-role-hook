@@ -47,6 +47,7 @@ case "$AGENT" in
     [ "$PDIR" != "$KIT/prompts" ] && [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR")
     add_list extraDirs --add-dir path
     add_list pluginDirs --plugin-dir path   # Claude Code plugins for this role only (the Planner's skill)
+    ARGS+=(--append-system-prompt "$(role_anchor "$CFG" "$ROLE")")   # survives /clear, unlike the role message
     if [ -n "$MCPFILE" ]; then
       ARGS+=(--strict-mcp-config --mcp-config "$MCPFILE")
       export ENABLE_CLAUDEAI_MCP_SERVERS=false

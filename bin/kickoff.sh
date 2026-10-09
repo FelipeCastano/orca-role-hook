@@ -28,11 +28,7 @@ remembers() { case " $REMEMBERED " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 # The worktree's identity: branch and, if any, Jira key (Orca's linkedWorkItem or, without a link, the branch; see jira_key)
 BRANCH="$(git branch --show-current 2>/dev/null)"
-WT_JSON="$(orca worktree show --worktree "$WT" --json 2>/dev/null)"
-JIRA_ID=$(printf '%s' "$WT_JSON" | jq -r '[.. | objects | select(.provider? == "jira") | .jiraIdentifier // empty] | first // empty' 2>/dev/null)
-JIRA_URL=$(printf '%s' "$WT_JSON" | jq -r '[.. | objects | select(.provider? == "jira") | .url // empty] | first // ([.. | strings | select(test("atlassian\\.net/browse/"))] | first) // empty' 2>/dev/null)
-JIRA_KEY="$(jira_key "$BRANCH" "$JIRA_ID" "$JIRA_URL")"
-[ "$(setting "$CFG" jiraHandoff true)" = true ] || JIRA_KEY=""
+{ IFS= read -r JIRA_KEY; IFS= read -r JIRA_URL; } < <(worktree_jira "$WT" "$CFG")
 
 # Closing the extra session Orca's composer opens when a worktree is created (the "done" tab). It runs in the background from the
 # start, in parallel with the kickoff, because Claude Code renames that tab soon after. Only in a new worktree (launch.sh left
