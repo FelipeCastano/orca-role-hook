@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -107,6 +107,7 @@ for p in "$ROOT"/prompts/programmer/*.md; do
     [ "$n" = planner ] && case "$sec" in '^## When you receive a task'|'^## Report'|'^Now reply only') continue;; esac
     grep -qE "$sec" "$p" || { echo "FAIL prompts/programmer/$n.md: missing section $sec"; FAIL=1; }
   done
+  [ "$n" = planner ] || awk '/^## Report/{f=1;next} /^## /{f=0} f' "$p" | grep -qF 'following the Output rules' || { echo "FAIL prompts/programmer/$n.md: its Report does not point to the Output rules"; FAIL=1; }
 done
 grep -q '^## Code review method' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md without its method"; FAIL=1; }
 grep -q '^## Plan review method' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md without its method"; FAIL=1; }
@@ -153,6 +154,35 @@ echo "ok   rules: key content pinned, examples use placeholders"
 for r in $(jq -r '.roles | keys_unsorted[]' "$KIT/config.default.json"); do
   [ -f "$(prompt_of "$KIT/config.default.json" "$r")" ] || { echo "FAIL role $r without a prompt"; FAIL=1; }
 done; echo "ok   prompts of the default roles"
+}
+
+# The Output rules: pinned inside the section (not anywhere in the file), by anchor phrases
+sec_output_rules() {
+CW="$ROOT/prompts/programmer/common-workers.md"
+OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$CW")"
+[ -n "$OUTSEC" ] || { echo "FAIL common-workers.md: missing the Output section"; FAIL=1; }
+for frag in 'Always write in English' 'Repo artifacts (code, commits, docs) still follow' 'no narration between tool calls' 'no recap' 'keep negations, numbers, units, paths, file:line and ids' 'is not written in telegraphic style' 'self-contained and complete' 'Never write "see the file in scratchDir"' 'full, unambiguous sentences'; do
+  printf '%s' "$OUTSEC" | grep -qF "$frag" || { echo "FAIL common-workers.md: Output section lost '$frag'"; FAIL=1; }
+done
+grep -qF "3-sentence" "$CW" && grep -qF -- '--report-path' "$CW" || { echo "FAIL common-workers.md: lost the override of the preamble's report instructions"; FAIL=1; }
+PL="$(grep 'Specs are written in English and stay compact' "$ROOT/prompts/programmer/planner.md" || true)"
+for frag in 'Do not repeat rules the worker prompts already carry' 'point to files and lines' 'self-contained about the task' 'threat model and rejection threshold' 'with the user you talk as usual' 'Literal strings stay in their original language'; do
+  printf '%s' "$PL" | grep -qF "$frag" || { echo "FAIL planner.md: compact-specs bullet lost '$frag'"; FAIL=1; }
+done
+for p in dev tester auditor researcher e2e-tester deployer; do
+  grep -qF 'following the Output rules' "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: Report lost the pointer to the Output rules"; FAIL=1; }
+done
+grep -qF 'following the Output rules' "$ROOT/bin/new-role.sh" || { echo "FAIL new-role.sh: skeleton Report lacks the Output pointer"; FAIL=1; }
+grep -qF 'following the Output rules' "$ROOT/plugin/skills/team/SKILL.md" || { echo "FAIL team SKILL.md: Report template lacks the Output pointer"; FAIL=1; }
+RD="$(grep '^| `language` |' "$ROOT/README.md" || true)"
+for frag in 'workers always write in English' '"language":"english"' "Claude Code's own \`language\` setting"; do
+  printf '%s' "$RD" | grep -qF "$frag" || { echo "FAIL README language row lost '$frag'"; FAIL=1; }
+done
+# Anchor: workers get the English rule, the Planner does not
+. "$ROOT/bin/lib.sh"
+printf '%s' "$(role_anchor "$KIT/config.default.json" dev)" | grep -qF 'Always write in English' || { echo "FAIL role_anchor: workers lack the English rule"; FAIL=1; }
+printf '%s' "$(role_anchor "$KIT/config.default.json" planner)" | grep -qF 'Always write in English' && { echo "FAIL role_anchor: the Planner got the English rule"; FAIL=1; }
+echo "ok   output rules: pinned in their section, planner bullet, README, report pointers, anchor"
 }
 
 sec_config() {
@@ -787,6 +817,7 @@ J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; chmod +x "$TMP/fakebin/claude"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
 case "$OUT" in *"--add-dir $TMP/home/.orca-roles --add-dir $TMP/home/x --plugin-dir $TMP/home/.orca-roles/plugin "*) echo "ok   agent.sh: --plugin-dir and --add-dir expanded";; *) echo "FAIL agent.sh plugin: $OUT"; FAIL=1;; esac
+case "$OUT" in *'"language":"english"'*) echo "FAIL agent.sh: the Planner got the English language override"; FAIL=1;; *) echo "ok   agent.sh: the Planner keeps the user's language (no --settings override)";; esac
 rm -f "$TMP/fakebin/claude"
 }
 
@@ -979,12 +1010,18 @@ check "default config: thread caps and no GPU" "$(jq -r '.roles.auditor.env | [.
 check "default config: auditor maxWorkers" "$(jq -r '.roles.auditor.params.maxWorkers' "$ROOT/config.default.json")" "2"
 # agent.sh: nice -n and --resume
 cat > "$KIT/config.json" <<'J'
-{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "cx": { "agent": "codex" } } }
+{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "planner": {}, "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] }, "cx": { "agent": "codex" } } }
 J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; cp "$TMP/fakebin/claude" "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/claude" "$TMP/fakebin/codex"
 printf '#!/bin/sh\nprintf "nice %%s %%s\\n" "$1" "$2"; shift 2; echo "GOMAXPROCS=$GOMAXPROCS"; exec "$@"\n' > "$TMP/fakebin/nice"; chmod +x "$TMP/fakebin/nice"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester | tr '\n' ' ')"
 case "$OUT" in "nice -n 10 GOMAXPROCS=2 --add-dir "*) echo "ok   agent.sh: nice -n and the role's env";; *) echo "FAIL agent.sh nice: $OUT"; FAIL=1;; esac
+case "$OUT" in *'--settings {"language":"english"} '*) echo "ok   agent.sh: claude workers launch with the English language setting";; *) echo "FAIL agent.sh worker without the English setting: $OUT"; FAIL=1;; esac
+case "$OUT" in *'Always write in English'*) echo "ok   agent.sh: the worker's system prompt carries the English rule";; *) echo "FAIL agent.sh worker anchor without the English rule: $OUT"; FAIL=1;; esac
+OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tx | tr '\n' ' ')"
+case "$OUT" in *'--settings {"language":"english"} --settings {"language":"spanish"} '*) echo "ok   agent.sh: a role's own --settings in extraArgs comes after (and wins over) the English one";; *) echo "FAIL agent.sh extraArgs --settings order: $OUT"; FAIL=1;; esac
+OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
+case "$OUT" in *--settings*|*'Always write in English'*) echo "FAIL agent.sh: the Planner got the English setting or rule: $OUT"; FAIL=1;; *) echo "ok   agent.sh: the Planner gets neither --settings nor the English rule";; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" dev --resume abc-123 | tr '\n' ' ')"
 case "$OUT" in "--add-dir "*"--resume abc-123 "*) echo "ok   agent.sh: --resume passes the session to claude";; *) echo "FAIL agent.sh resume: $OUT"; FAIL=1;; esac
 case "$OUT" in nice*) echo "FAIL agent.sh: nice without the option"; FAIL=1;; *) echo "ok   agent.sh: no nice without the option";; esac
@@ -1169,6 +1206,8 @@ check "codex non-auto: no --sandbox/--ask-for-approval/--full-auto; scratch and 
 agent2 cxa >/dev/null; DI="$(tr '\0' '\n' < "$FB2/argv" | grep '^developer_instructions=')"; ANC="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" cxa)"
 check "codex: developer_instructions is the anchor, once, after -c" "$(printf '%s\n' "$DI" | grep -c .) $(tr '\0' '\n' < "$FB2/argv" | grep -B1 -x -- "$DI" | head -1) $(python3 -c 'import sys,tomllib; print(tomllib.loads(sys.argv[1])["developer_instructions"] == sys.argv[2])' "$DI" "$ANC")" "1 -c True"
 ANC="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" ca)"
+case "$DI" in *'Always write in English'*) echo "ok   codex: developer_instructions carries the English rule";; *) echo "FAIL codex developer_instructions without the English rule: $DI"; FAIL=1;; esac
+case "$ANC" in *'Always write in English'*) echo "ok   custom: the anchor carries the English rule";; *) echo "FAIL custom anchor without the English rule: $ANC"; FAIL=1;; esac
 check "custom: {anchor} is the quoted anchor" "$(agent2 ca | head -1)" "run $(printf '%q' "$ANC")"
 (cd "$WT2" && HOME="$TMP/home" ORCA_ROLES_CONFIG="$TMP/cfg2.json" bash -c '. "$HOME/.orca-roles/bin/lib.sh"; jq '"'"'.roles.ca.command = "printf %s \"$ORCA_ROLES_ANCHOR\" > anchor.out"'"'"' "$ORCA_ROLES_CONFIG" > cfg-a.json' && HOME="$TMP/home" ORCA_ROLES_CONFIG="$WT2/cfg-a.json" "$TMP/home/.orca-roles/bin/agent.sh" ca >/dev/null 2>&1)
 check "custom: \$ORCA_ROLES_ANCHOR in the agent's environment" "$(cat "$WT2/anchor.out" 2>/dev/null)" "$ANC"

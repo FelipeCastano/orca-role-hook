@@ -54,6 +54,10 @@ case "$AGENT" in
     fi
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
+    # Claude Code's own `language` setting (user settings) outranks the prompt: workers override it to English. Not the Planner, which
+    # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
+    # extraArgs replaces this one and should carry its own "language".
+    [ "$ROLE" != planner ] && ARGS+=(--settings '{"language":"english"}')
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"

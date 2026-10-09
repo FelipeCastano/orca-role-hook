@@ -248,7 +248,7 @@ write_skeleton() {  # write_skeleton <mission> <steps> <limits> <report> <verdic
     fi
     echo
     echo "## Report"
-    echo "Report with \`worker_done\`:"
+    echo "Report with \`worker_done\`, following the Output rules (the body stays complete):"
     if [ "$verdict" = 1 ]; then
       echo '- `--subject`: `VERDICT: ACCEPTED` or `VERDICT: REJECTED`'
       echo '- `--body`: first line same as the subject, and also:'
