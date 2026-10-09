@@ -412,7 +412,7 @@ cat > "$KIT/config.json" <<'J'
 { "defaults": {}, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "cx": { "agent": "codex", "mcp": "all" } } }
 J
 printf '#!/bin/sh\necho "codex:$#"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/codex"
-check "agent.sh codex without options: only --add-dir <scratch> and the trust -c" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:4"
+check "agent.sh codex without options: only --add-dir <scratch>, the trust -c and the anchor -c" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:6"
 printf 'PLANNER=t1\n' > "$TMP/state.env"
 check "clean.sh --all without workers" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/clean.sh" --all 2>&1)" "There are no workers to clean in this workspace."
 
@@ -714,7 +714,7 @@ case "$OUT" in *"--add-dir $SDT "*) echo "ok   agent.sh claude: --add-dir <scrat
 check "agent.sh claude creates the scratch folder" "$([ -d "$SDT" ] && echo y)" "y"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" cx | tr '\n' ' ')"
 case "$OUT" in *"--add-dir $(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir cx) "*) echo "ok   agent.sh codex: --add-dir <scratch>";; *) echo "FAIL agent.sh codex scratch: $OUT"; FAIL=1;; esac
-case "$OUT" in (*--append-system-prompt*) echo "FAIL agent.sh codex got the claude anchor: $OUT"; FAIL=1;; (*) echo "ok   agent.sh codex: no system prompt anchor";; esac
+case "$OUT" in (*--append-system-prompt*) echo "FAIL agent.sh codex got claude's flag: $OUT"; FAIL=1;; (*) echo "ok   agent.sh codex: not claude's flag";; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester)"
 check "agent.sh claude: one line in the system prompt that asks for the role after /clear" "$(printf '%s\n' "$OUT" | grep -A1 -x -- --append-system-prompt | tail -1)" "$(KIT="$TMP/home/.orca-roles" role_anchor "$KIT/config.json" tester)"
 case "$(KIT="$TMP/home/.orca-roles" role_anchor "$KIT/config.json" tester)" in (*"after /clear"*"$TMP/home/.orca-roles/bin/clean.sh --msg tester"*) echo "ok   role_anchor: names the role and the command";; (*) echo "FAIL role_anchor"; FAIL=1;; esac
@@ -861,7 +861,8 @@ cat > "$TMP/cfg2.json" <<'J'
     "cxn": { "agent": "codex", "permissionMode": "acceptEdits", "mcp": "all" },
     "cs": { "agent": "custom", "command": "run {scratch} --s", "mcp": "all", "addDirFlag": "--add-dir", "extraDirs": ["~/a b", "/c"] },
     "cp": { "agent": "custom", "command": "run {scratch}", "mcp": "all", "extraDirs": ["/c"] },
-    "cn": { "agent": "custom", "command": "run --x", "mcp": "all", "extraDirs": ["/c"] } } }
+    "cn": { "agent": "custom", "command": "run --x", "mcp": "all", "extraDirs": ["/c"] },
+    "ca": { "agent": "custom", "command": "run {anchor}", "mcp": "all" } } }
 J
 agent2() { (cd "$WT2" && HOME="$TMP/home" PATH="$FB2:$PATH" ORCA_ROLES_CONFIG="$TMP/cfg2.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1); }
 tomlkey() { python3 -c 'import sys,tomllib; d=tomllib.loads(sys.argv[1]); print(*d["projects"])' "$1" 2>/dev/null; }
@@ -878,6 +879,15 @@ check "codex auto: MCP -c overrides still present" "$(case "$J" in (*'|-c|mcp_se
 agent2 cxn >/dev/null; CN=(); while IFS= read -r -d '' a; do CN+=("$a"); done < "$FB2/argv"; J="|$(IFS='|'; echo "${CN[*]}")|"
 NP=0; for a in "${CN[@]}"; do case "$a" in projects=*) NP=$((NP+1));; esac; done
 check "codex non-auto: no --sandbox/--ask-for-approval/--full-auto; scratch and one trust" "$(case "$J" in (*--sandbox*|*--ask-for-approval*|*full-auto*) echo BAD;; (*) echo clean;; esac) $(case "$J" in (*"|--add-dir|$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cxn)|"*) echo scratch;; esac) $NP" "clean scratch 1"
+# The anchor that makes a role ask for its role again after its conversation is cleared: codex as developer_instructions (one
+# override that parses as TOML to the exact line), custom through {anchor} and $ORCA_ROLES_ANCHOR
+agent2 cxa >/dev/null; DI="$(tr '\0' '\n' < "$FB2/argv" | grep '^developer_instructions=')"; ANC="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" cxa)"
+check "codex: developer_instructions is the anchor, once, after -c" "$(printf '%s\n' "$DI" | grep -c .) $(tr '\0' '\n' < "$FB2/argv" | grep -B1 -x -- "$DI" | head -1) $(python3 -c 'import sys,tomllib; print(tomllib.loads(sys.argv[1])["developer_instructions"] == sys.argv[2])' "$DI" "$ANC")" "1 -c True"
+ANC="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" ca)"
+check "custom: {anchor} is the quoted anchor" "$(agent2 ca | head -1)" "run $(printf '%q' "$ANC")"
+(cd "$WT2" && HOME="$TMP/home" ORCA_ROLES_CONFIG="$TMP/cfg2.json" bash -c '. "$HOME/.orca-roles/bin/lib.sh"; jq '"'"'.roles.ca.command = "printf %s \"$ORCA_ROLES_ANCHOR\" > anchor.out"'"'"' "$ORCA_ROLES_CONFIG" > cfg-a.json' && HOME="$TMP/home" ORCA_ROLES_CONFIG="$WT2/cfg-a.json" "$TMP/home/.orca-roles/bin/agent.sh" ca >/dev/null 2>&1)
+check "custom: \$ORCA_ROLES_ANCHOR in the agent's environment" "$(cat "$WT2/anchor.out" 2>/dev/null)" "$ANC"
+rm -f "$WT2/cfg-a.json" "$WT2/anchor.out"
 # 16. (S4/S5) custom: {scratch} quoted, ORCA_ROLES_SCRATCH exported, addDirFlag appends flag+scratch and flag+each extraDir; without addDirFlag nothing appended
 SDS="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cs)"; QS="$(printf '%q' "$SDS")"
 OUT="$(agent2 cs)"

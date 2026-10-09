@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cleans the context of one or more workers: opens a new conversation in their agent and resends their role.
 # Usage (from the worktree):  clean.sh <role|title|handle> [...]   |   clean.sh --all   |   clean.sh --msg <role>  (only prints the role message;
-# for the Planner, the one for after its conversation was cleared: each claude role is told in its system prompt to ask for it)
+# for the Planner, the one for after its conversation was cleared: see role_anchor, which tells each role to ask for it)
 # The Planner runs it after the user confirms. It never cleans the Planner or a worker with a task in flight (the Planner ensures that).
 set -uo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"

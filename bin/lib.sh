@@ -183,10 +183,11 @@ planner_msg() {
   fi
   printf '%s' "$msg"
 }
-# The line each claude role gets in its system prompt (--append-system-prompt), which a /clear does not erase. The role itself
-# arrives as a message, so when that message is gone the agent asks the kit for it again.  role_anchor <config> <role>
+# The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt
+# (--append-system-prompt), codex as developer_instructions, custom through {anchor} / $ORCA_ROLES_ANCHOR if its command uses them.
+# The role itself arrives as a message, so when that message is gone the agent asks the kit for it again.  role_anchor <config> <role>
 role_anchor() {
-  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear), before doing anything else run \`$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you."
+  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you."
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
