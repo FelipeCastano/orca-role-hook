@@ -508,6 +508,7 @@ try newrole "$TMP/role4.json"; check "from-json: custom keeps addDirFlag, trust,
 jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/cu-agent.md"
 # The wizard, for a custom agent: clearCommand, addDirFlag and its extra folders (answers in order, one per line)
 printf '# Role: CW\n\n## Report\nx\n' > "$TMP/cw.md"
+# shellcheck disable=SC2088  # "~/a b" is what the user types; the wizard expands it
 printf '%s\n' cu-wiz "" "custom wizard" custom "" "agy {scratch}" /new --add-dir "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
 try sh -c "cd '$TMP' && HOME='$TMP/home' NEW_ROLE_TTY='$TMP/wiz.in' '$TMP/home/.orca-roles/bin/new-role.sh' < /dev/null"
 check "wizard: custom asks clearCommand, addDirFlag and extra folders" "$RC $(jq -c '.roles["cu-wiz"] | [.command, .clearCommand, .addDirFlag, .extraDirs]' "$KIT/config.json")" '0 ["agy {scratch}","/new","--add-dir",["~/a b"]]'
