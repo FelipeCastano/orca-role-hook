@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -894,6 +894,82 @@ FAKE_SHOW='{"result":{"terminal":{"agentIdentity":"claude"}}}' try launch2; chec
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
 }
 
+sec_status() {
+# launch.sh --status: read-only report of the saved team
+write_launch_config
+S="$TMP/sproj"; mkdir -p "$S" "$TMP/sbin"; git -C "$S" init -q; G="$S/.git"
+SLOG="$TMP/sorca.log"; : > "$SLOG"
+cat > "$TMP/sbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$SLOG"
+case "\$1 \$2" in
+  "terminal show") case "\$4" in
+    h-up) echo '{"result":{"terminal":{"agentIdentity":"claude"}}}';;
+    h-gone) echo '{"result":{"terminal":{"title":"x"}}}';;
+    *) exit 1;; esac;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/sbin/orca"
+status() { (cd "$S" && HOME="$TMP/home" PATH="$TMP/sbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+try status --status; check "status: no state" "$RC:$OUT" "0:No team launched in this worktree."
+: > "$G/orca-roles.env"; try status --status; check "status: empty state" "$RC:$OUT" "0:No team launched in this worktree."
+jq '.settings.mode = "programmer"' "$KIT/config.json" > "$G/orca-roles.config.json"
+jq '.roles.dev.model = "m-dev"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+printf 'PLANNER=h-up\nDEV=h-none\nDEPLOYER=h-gone\n' > "$G/orca-roles.env"
+printf 'XDEV=m-x\nPLANNER=m-ok\nDEPLOYER=FAILED:m-bad\n' > "$G/orca-roles.models"
+printf 'PLANNER=pty-1\n' > "$G/orca-roles.pty"; printf '{"only":["dev"],"enable":[],"disable":[],"set":[]}' > "$G/orca-roles.overrides.json"
+ssum() { cat "$G/orca-roles.config.json" "$G/orca-roles.overrides.json" "$G/orca-roles.env" "$G/orca-roles.pty" "$G/orca-roles.models" | cksum; ls "$G" | cksum; }
+S0="$(ssum)"; : > "$SLOG"
+try status --status
+check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Planner|h-up|alive|-|m-ok/Dev|h-none|no tab|m-dev|-/Deployer|h-gone|agent gone|-|FAILED:m-bad"
+check "status: writes nothing" "$([ "$(ssum)" = "$S0" ] && echo unchanged || echo CHANGED):$([ -e "$G/orca-roles-launch.log" ] && echo log)" "unchanged:"
+check "status: only reads terminals" "$(grep -vc '^terminal show ' "$SLOG")" "0"
+try status -h; case "$OUT" in *"--status "*"changes nothing"*) echo "ok   status: -h prints the --status line";; *) echo "FAIL status -h: $OUT"; FAIL=1;; esac
+# orphaned tab, a custom agent (only its tab counts) and a saved state without a saved config (falls back to the merged config)
+cat > "$TMP/sbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$SLOG"
+case "\$1 \$2" in
+  "terminal show") case "\$4" in
+    h-orph) echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}';;
+    h-cust) echo '{"result":{"terminal":{"title":"x"}}}';;
+    *) exit 1;; esac;;
+esac
+exit 0
+EOS
+jq '.roles.dev.agent = "custom" | .roles.dev.command = "c" | .settings.mode = "programmer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+printf 'PLANNER=h-orph\nDEV=h-cust\nGHOST=h-cust\n' > "$G/orca-roles.env"; rm -f "$G/orca-roles.models"; S0="$(ssum 2>/dev/null)"
+try status --status
+check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Planner|h-orph|orphaned|-|-/Dev|h-cust|alive|m-dev|-/ghost|h-cust|agent gone|-|-"
+mv "$G/orca-roles.config.json" "$G/cfg.saved"
+printf '{"roles":{"dev":{"title":"Developer","model":"m-proj"}},"settings":{"mode":"programmer"}}' > "$S/.orca-roles.json"
+printf 'DEV=h-none\n' > "$G/orca-roles.env"
+try status --status
+check "status: without a saved config uses the merged one" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Developer|h-none|no tab|m-proj|-"
+check "status: no saved config is not created" "$([ -e "$G/orca-roles.config.json" ] && echo created || echo absent):$([ -e "$G/orca-roles-launch.log" ] && echo log || echo nolog)" "absent:nolog"
+# no saved config: the project's mode, a saved --mode, no jq error with an answering tab, nothing written, temp file gone
+mkdir -p "$TMP/stmp"; printf 'DEV=h-cust\n' > "$G/orca-roles.env"
+printf '{"settings":{"mode":"pr-reviewer"}}' > "$S/.orca-roles.json"; S0="$(ssum 2>/dev/null)"
+OUT="$(cd "$S" && HOME="$TMP/home" PATH="$TMP/sbin:$PATH" TMPDIR="$TMP/stmp" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" --status 2>"$TMP/status.err")"
+check "status: no saved config, the project's mode" "$(printf '%s' "$OUT" | head -1)" "Mode: pr-reviewer"
+check "status: no saved config, an answering tab prints no jq error" "$(grep -c 'jq: error' "$TMP/status.err")" "0"
+check "status: no saved config writes nothing and removes its temp file" "$([ "$(ssum 2>/dev/null)" = "$S0" ] && echo unchanged || echo CHANGED):$(ls "$TMP/stmp" | wc -l | tr -d ' ')" "unchanged:0"
+rm -f "$S/.orca-roles.json"
+printf '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}' > "$G/orca-roles.overrides.json"
+try status --status; check "status: no saved config, a saved --mode" "$RC:$(printf '%s' "$OUT" | head -1)" "0:Mode: pr-reviewer"
+rm -f "$G/orca-roles.overrides.json"
+rm -f "$S/.orca-roles.json"; mv "$G/cfg.saved" "$G/orca-roles.config.json"
+jq '.settings.mode = "pr-reviewer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+try status --status; check "status: shows the saved mode" "$RC:$(printf '%s' "$OUT" | head -1)" "0:Mode: pr-reviewer"
+# a hyphenated role (E2E_TESTER) and the model inherited from defaults
+jq '.roles["e2e-tester"] = {title: "E2E-Tester"} | .defaults.model = "m-def"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+printf 'E2E_TESTER=h-up\nPLANNER=h-up\n' > "$G/orca-roles.env"
+printf '#!/bin/sh\necho '"'"'{"result":{"terminal":{"agentIdentity":"claude"}}}'"'"'\n' > "$TMP/sbin/orca"
+try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +2 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-/Planner|h-up|alive|m-def|-"
+try status -h; check "status: -h prints the whole header, ending at the open-team rule" "$(printf '%s\n' "$OUT" | tail -1 | cut -c1-38)" "# The mode of a worktree cannot change"
+}
+
 sec_modes() {
 # Modes: selection (config < .orca-roles.json < --mode), roles per mode, prompts per mode and the open-team rule.
 # Own test kit (never the clone) with a fake second mode, pr-reviewer: planner + rv, and a role with "modes":"all" that has no prompt for it.
@@ -1321,10 +1397,39 @@ sec_wizard() {
 # The wizard, for a custom agent: clearCommand, addDirFlag and its extra folders (answers in order, one per line)
 printf '# Role: CW\n\n## Report\nx\n' > "$TMP/cw.md"
 # shellcheck disable=SC2088  # "~/a b" is what the user types; the wizard expands it
-printf '%s\n' cu-wiz "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
+printf '%s\n' cu-wiz "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "" "" "" "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
 try sh -c "cd '$TMP' && HOME='$TMP/home' NEW_ROLE_TTY='$TMP/wiz.in' '$TMP/home/.orca-roles/bin/new-role.sh' < /dev/null"
 check "wizard: custom asks clearCommand, addDirFlag and extra folders" "$RC $(jq -c '.roles["cu-wiz"] | [.command, .clearCommand, .addDirFlag, .extraDirs]' "$KIT/config.json")" '0 ["agy {scratch}","/new","--add-dir",["~/a b"]]'
 jq 'del(.roles["cu-wiz"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-wiz.md"
+# custom agent with model fields: the four answers after --add-dir are modelError, list, parse (only with a list) and probe
+wiz_custom() {  # <id> <answers between --add-dir and the permission mode>
+  local id="$1"; shift
+  printf '%s\n' "$id" "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "$@" "" n "" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
+  try sh -c "cd '$TMP' && HOME='$TMP/home' NEW_ROLE_TTY='$TMP/wiz.in' '$TMP/home/.orca-roles/bin/new-role.sh' < /dev/null 2>&1"
+}
+wiz_custom cu-m1 "no such model: {model}" "agy models" "json:.[]" "agy -m {model} ok"
+check "wizard: custom with all four model answers" "$RC $(jq -c '.roles["cu-m1"] | [.modelError, .models]' "$KIT/config.json")" '0 ["no such model: {model}",{"list":"agy models","parse":"json:.[]","probe":"agy -m {model} ok"}]'
+wiz_custom cu-m2 "" "" ""
+check "wizard: custom with empty model answers has neither key" "$RC $(jq -c '.roles["cu-m2"] | [has("modelError"), has("models")]' "$KIT/config.json")" '0 [false,false]'
+wiz_custom cu-m3 "" "" "agy -m {model} ok"
+check "wizard: list empty but probe set gives only probe" "$RC $(jq -c '.roles["cu-m3"] | [has("modelError"), .models]' "$KIT/config.json")" '0 [false,{"probe":"agy -m {model} ok"}]'
+jq 'del(.roles["cu-m1"], .roles["cu-m2"], .roles["cu-m3"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer"/cu-m?.md
+# from-json: modelError and models are copied; invalid ones stop with nothing written
+printf '%s' '{"id":"fj-m","description":"x","agent":"custom","command":"c","modelError":"bad {model}","models":{"list":"l","parse":"lines","probe":"p {model}"},"prompt":"# x\n## Report\n"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"
+check "from-json: modelError and models are copied" "$RC $(jq -c '.roles["fj-m"] | [.modelError, .models]' "$KIT/config.json")" '0 ["bad {model}",{"list":"l","parse":"lines","probe":"p {model}"}]'
+jq 'del(.roles["fj-m"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/fj-m.md"
+fj_snap() { { cat "$KIT/config.json"; find "$KIT/roles" -type f 2>/dev/null | sort; } | cksum; }
+FJ0="$(fj_snap)"
+for bad in '"models":{"probes":"x"}' '"modelError":""' '"models":{"list":""}' '"models":"x"'; do
+  printf '%s' '{"id":"fj-bad","description":"x","agent":"custom","command":"c",'"$bad"',"prompt":"# x\n## Report\n"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"
+  check "from-json: $bad rejected, nothing written" "$RC:$([ "$(fj_snap)" = "$FJ0" ] && echo unchanged || echo CHANGED):$(printf '%s' "$OUT" | grep -c '^ERROR')" "1:unchanged:1"
+done
+# wizard: an invalid parse stops before any prompt file is written; an empty parse answer takes the default "lines"
+wiz_custom cu-bad "" "agy models" "bogus" ""
+check "wizard: invalid parse, nothing written" "$RC:$([ "$(fj_snap)" = "$FJ0" ] && echo unchanged || echo CHANGED)" "1:unchanged"
+wiz_custom cu-def "" "agy models" "" ""
+check "wizard: parse defaults to lines" "$RC $(jq -c '.roles["cu-def"].models' "$KIT/config.json")" '0 {"list":"agy models","parse":"lines"}'
+jq 'del(.roles["cu-def"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-def.md"
 printf '%s' '{"id":"Bad Id","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: invalid id" "$RC" "1"
 printf '%s' '{"id":"no-desc","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: without description" "$RC" "1"
 printf '%s' '{"id":"planner","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: planner reserved" "$RC" "1"

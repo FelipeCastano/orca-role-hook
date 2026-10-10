@@ -8,18 +8,20 @@
 #   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-writer); beats .orca-roles.json and settings.mode;
 #                    saved, and kept when later options omit it
 #   --reset          forgets this worktree's saved exceptions
+#   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming.
 # The mode of a worktree cannot change while its team is open: close the team first (close-role.sh, or its tabs).
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,13p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,14p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
-WT=""; RESET=0; FLAGS=()
+WT=""; RESET=0; STATUS=0; FLAGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
+    --status) STATUS=1;;
     --only|--enable|--disable|--set|--mode) FLAGS+=("$1" "${2:-}"); shift;;
     -*) FLAGS+=("$1");;
     *) WT="$1";;
@@ -34,6 +36,43 @@ PTY="$GITDIR/orca-roles.pty"             # each role's ptyId: stable across rest
 KICKOFF="${ORCA_ROLES_KICKOFF:-$KIT/bin/kickoff.sh}"
 CFG="$GITDIR/orca-roles.config.json"     # copy of the effective config for this worktree
 LOG="$GITDIR/orca-roles-launch.log"
+# Whether a role's tab is still working: 0 alive, 1 no tab, 2 the tab exists but its agent is gone (e.g. after Ctrl+C),
+# 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned").
+# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
+# An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
+agent_in()   { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
+role_alive() {  # role_alive <role> <handle>
+  [ -n "${2:-}" ] || return 1
+  local js; js="$(orca terminal show --terminal "$2" --json 2>/dev/null)" || return 1
+  printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
+  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac
+  local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
+    [ -n "$(agent_in "$2")" ] && return 0
+    [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
+  done
+  return 2
+}
+if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launch log
+  if [ ! -s "$STATE" ]; then echo "No team launched in this worktree."; exit 0; fi
+  SCFG="$CFG"
+  if [ ! -f "$CFG" ]; then   # no saved copy: the effective configuration, built aside and removed on exit
+    SCFG="$(mktemp "${TMPDIR:-/tmp}/orca-roles-status.XXXXXX")"; trap 'rm -f "$SCFG" "$SCFG.x"' EXIT
+    merged_config . > "$SCFG" 2>/dev/null || echo '{}' > "$SCFG"
+    if [ -f "$OVR" ] && apply_overrides "$SCFG" "$OVR" > "$SCFG.x" 2>/dev/null; then mv "$SCFG.x" "$SCFG"; fi
+  fi
+  CFG="$SCFG"
+  echo "Mode: $(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    var="${line%%=*}"; handle="${line#*=}"; role="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
+    title="$(title_of "$SCFG" "$role")"; cm="$(rstr "$SCFG" "$role" model)"
+    role_alive "$role" "$handle"
+    case $? in 0) st="alive";; 1) st="no tab";; 2) st="agent gone";; *) st="orphaned";; esac
+    used="$(grep "^$var=" "$GITDIR/orca-roles.models" 2>/dev/null | head -1 | cut -d= -f2-)"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$title" "$handle" "$st" "${cm:--}" "${used:--}"
+  done < "$STATE"
+  exit 0
+fi
 exec > >(tee -a "$LOG") 2>&1
 echo "== $(date '+%F %T') launch.sh in $WT"
 
@@ -64,22 +103,6 @@ ERR="$(check_config "$NEWCFG" "$OVRSRC")"
 NEWMODE="$(mode_of "$NEWCFG")"
 
 FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
-# Whether a role's tab is still working: 0 alive, 1 no tab, 2 the tab exists but its agent is gone (e.g. after Ctrl+C),
-# 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned").
-# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
-# An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
-agent_in()   { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
-role_alive() {  # role_alive <role> <handle>
-  [ -n "${2:-}" ] || return 1
-  local js; js="$(orca terminal show --terminal "$2" --json 2>/dev/null)" || return 1
-  printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
-  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac
-  local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
-    [ -n "$(agent_in "$2")" ] && return 0
-    [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
-  done
-  return 2
-}
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
 pty_of_handle() { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("ptyId")) | .ptyId] | first // empty' 2>/dev/null; }
 saved_pty() { grep "^$1=" "$PTY" 2>/dev/null | head -1 | cut -d= -f2-; }
