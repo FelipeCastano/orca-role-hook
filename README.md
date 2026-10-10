@@ -204,23 +204,24 @@ new-role --repo ~/path/orca-role-hook  # saves it in your clone of the repo, to 
 The wizard asks everything it needs and updates the configuration:
 
 - **Identity:** id, tab title and a **description** for the Planner (what it does and when to use it). The Planner receives that description at startup and fits the role into the flow.
+- **Modes:** whether the role belongs to all [modes](#modes) or to one (`1` all, `2` one, then the mode). A mode that does not exist yet can be chosen: the wizard notes that the role will launch once that mode exists.
 - **Agent:** `claude`, `codex` or `custom` (with its command), exact model and permission mode.
 - **MCP and tools** (with `claude`): which servers it loads, with the option to define new servers; allowed tools and extra folders.
 - **Other:** extra arguments, environment variables, role parameters, tab position and whether it is enabled.
-- **Prompt:** generated from a few questions (steps, limits, report contents and whether it issues a verdict), copied from a file of yours, or written in your editor (`$EDITOR`, `nano` by default). In all three cases the result follows the [common prompt structure](#prompt-structure); if you copy a file that does not follow it, the wizard warns you.
+- **Prompt, one per mode** (all three for a role in all modes): generated from a few questions (steps, limits, report contents and whether it issues a verdict), copied from a file of yours, or written in your editor (`$EDITOR`, `nano` by default); from the second mode on you can also copy the prompt of the previous mode. In every case the result follows the [common prompt structure](#prompt-structure); if you copy a file that does not follow it, the wizard warns you.
 
 Before saving it shows you a summary. It keeps a copy of the previous configuration (`.bak`).
 
 | Mode | Prompt | Configuration |
 |---|---|---|
-| Local | `~/.orca-roles/roles/<id>.md` (not deleted when the kit is updated) | `~/.orca-roles/config.json` |
-| `--repo` | `prompts/programmer/<id>.md` in the clone | `config.default.json` in the clone; offers to reinstall and reminds you to commit |
+| Local | `~/.orca-roles/roles/<mode>/<id>.md`, one per mode (not deleted when the kit is updated); the `prompt` field maps each mode to its file | `~/.orca-roles/config.json` |
+| `--repo` | `prompts/<mode>/<id>.md` in the clone (the folder is created if missing); no `prompt` field, the default path works | `config.default.json` in the clone; offers to reinstall and reminds you to commit |
 
 Every worker also receives the common rules in `prompts/programmer/common-workers.md`. To edit a role later, change its entry in the configuration and its prompt file, or run `new-role` again with the same id to overwrite it.
 
-**Removing a role:** `new-role --remove <id>` removes a role you created (its entry and its prompt; previous configuration in `.bak`). Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
+**Removing a role:** `new-role --remove <id>` removes a role you created (its entry and the prompt it has for every mode, plus the old `roles/<id>.md` of earlier versions; previous configuration in `.bak`). Only those exact kit paths are deleted: a prompt your configuration points to elsewhere is left alone and reported. Overwriting a role (same id) that now has fewer modes deletes the prompts of the modes it lost in your installation; with `--repo` it only lists them with the `git rm` command, since they are versioned files. The ids `planner` and `common-workers` are reserved, and with `--repo` a new role cannot take over an existing `prompts/<mode>/<id>.md`. Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
 
-**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` (Markdown text) required, and the same optional fields as a role in the configuration, plus `after` (position) and `overwrite: true` to replace an existing one. It is what the Planner uses with its skill.
+**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration, plus `after` (position) and `overwrite: true` to replace an existing one. `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
 
 ## The Planner's skill
 

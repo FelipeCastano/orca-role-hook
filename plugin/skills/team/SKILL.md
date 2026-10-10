@@ -28,7 +28,7 @@ orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Re
 | `~/.orca-roles/config.json` | The user's configuration: the everyday one. The kit reads it for every new worktree. |
 | `~/.orca-roles/config.default.json` | The kit's default configuration (do not edit: it is rewritten on update). |
 | `~/.orca-roles/prompts/programmer/<role>.md` | Default prompts (rewritten on update). |
-| `~/.orca-roles/roles/<role>.md` | Prompts of the roles the user created (kept on update). |
+| `~/.orca-roles/roles/<mode>/<role>.md` | Prompts of the roles the user created, one per mode (kept on update). |
 | `<repo root>/.orca-roles.json` | Configuration for that project only, merged on top of the global one. |
 | The project's setup script | The `launch.sh` line with its options: the project's exceptions. |
 | The worktree's git dir (`git rev-parse --git-dir`) | `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (saved exceptions), `orca-roles.env` (handles), `orca-roles.notes/<role>.md` (instructions for this worktree), logs `orca-roles-launch.log` and `orca-roles-kickoff.log`. |
@@ -134,13 +134,14 @@ When to recommend each: something for good → `config.json`; something for one 
      "mcp": [],
      "params": { "maxFindings": 20 },
      "after": "auditor",
+     "modes": "programmer",
      "prompt": "# Role: SECURITY\n\n..."
    }
    EOF
    ~/.orca-roles/bin/new-role.sh --from-json /tmp/new-role.json
    ```
 
-   Required: `id` (lowercase and hyphens), `description` and `prompt`. Optional: `title`, `agent`, `model`, `permissionMode`, `command` (required with `custom`), `addDirFlag` and `trust` (only `custom`), `clearCommand` (a `custom` role without it is never cleaned), `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `nice`, `pluginDirs`, `enabled` (default `true`), `after` (default: last) and `overwrite: true` to replace an existing role. It leaves a copy in `config.json.bak`. With `--repo <clone>` it saves it in the repo clone to version it (the user reinstalls and commits).
+   Required: `id` (lowercase and hyphens), `description` and `prompt`. `modes` is `"all"` or one mode id (`programmer`, `pr-reviewer`, `academic-writer`; missing = `programmer`); never a list of several. `prompt` is the Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` with exactly one entry per mode of the role (all three for `"all"`; write each mode's own prompt, or the same text if it applies equally). The file of each mode goes to `roles/<mode>/<id>.md`. A mode that does not exist yet is accepted with a note: the role launches once it does. Optional: `title`, `agent`, `model`, `permissionMode`, `command` (required with `custom`), `addDirFlag` and `trust` (only `custom`), `clearCommand` (a `custom` role without it is never cleaned), `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `nice`, `pluginDirs`, `enabled` (default `true`), `after` (default: last) and `overwrite: true` to replace an existing role. It leaves a copy in `config.json.bak`. With `--repo <clone>` it saves it in the repo clone to version it (the user reinstalls and commits).
 5. **If they also want it in this workspace**, go to section 7.
 
 ## 6. Changing a role's behavior
@@ -151,7 +152,7 @@ Always ask how long the change should last and explain the difference:
 |---|---|---|
 | **On the fly** | Include the instruction in the spec of every task you assign to that role during the session. Do not touch files. | Until your session ends. If you lose your context (restart), it is lost. |
 | **This worktree** | Write the instruction in `<git dir>/orca-roles.notes/<role>.md` (create it with `mkdir -p`). The kit adds it to the worker's role message and it takes precedence over its prompt. To apply it now, clean its context (section 7). | As long as the worktree exists, even if the worker is cleaned or restarted. Other worktrees are not affected. |
-| **Permanent** | Default role: change its configuration in `config.json` or create your own prompt in `~/.orca-roles/roles/<role>.md` starting from the default one and point its `prompt` field there (the ones in `prompts/programmer/` are rewritten on update). Role created by the user: `new-role.sh --from-json` with `overwrite: true`, or edit its file in `roles/`. | Every new worktree. In this one, apply it with section 7. |
+| **Permanent** | Default role: change its configuration in `config.json` or create your own prompt in `~/.orca-roles/roles/<mode>/<role>.md` starting from the default one and point its `prompt` field there (the ones in `prompts/programmer/` are rewritten on update). Role created by the user: `new-role.sh --from-json` with `overwrite: true`, or edit its files in `roles/<mode>/`. | Every new worktree. In this one, apply it with section 7. |
 
 Worktree-level instructions are short, direct text: they go inside the message the worker receives. To remove them, delete the file and clean the worker's context.
 
@@ -168,7 +169,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 
 1. **This workspace**: close its tab as above (`close-role.sh`).
 2. **For good**:
-   - A role the user created: `~/.orca-roles/bin/new-role.sh --remove <id>` (removes its entry and its prompt, leaves `config.json.bak`).
+   - A role the user created: `~/.orca-roles/bin/new-role.sh --remove <id>` (removes its entry and its prompt of every mode, leaves `config.json.bak`).
    - A default role (planner, researcher, dev, tester, auditor, e2e-tester, deployer): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
 
 ## 8. Diagnosis

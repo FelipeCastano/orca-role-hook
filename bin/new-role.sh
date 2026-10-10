@@ -4,10 +4,13 @@
 #   new-role                       # saves the role in your installation (~/.orca-roles)
 #   new-role --repo <clone-path>   # saves it in your clone of the repo (versioned) and reinstalls
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
-#   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompt
-#     The JSON has: id, description and prompt (Markdown text) required; title, agent, model, permissionMode,
-#     command, addDirFlag, trust, clearCommand, mcp, allowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs,
-#     enabled, after and overwrite optional.
+#   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompts
+#     The JSON has: id, description and prompt required; modes, title, agent, model, permissionMode, command,
+#     addDirFlag, trust, clearCommand, mcp, allowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs, enabled,
+#     after and overwrite optional.
+#     modes: "all", or one mode id (a string or a one-element list); missing = "programmer". prompt: Markdown text
+#     (a role with one mode) or {"<mode>": "<Markdown>"} covering exactly the role's modes ("all" = every mode).
+#     Each mode has its own prompt file: roles/<mode>/<id>.md (local) or prompts/<mode>/<id>.md (--repo).
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
@@ -18,7 +21,7 @@ while [ $# -gt 0 ]; do
     --repo) REPO="${2:-}"; shift 2;;
     --from-json) FROM_JSON="${2:-}"; shift 2;;
     --remove) REMOVE="${2:-}"; shift 2;;
-    -h|--help) sed -n 2,9p "$0"; exit 0;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "$0"; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 1;;
   esac
 done
@@ -48,18 +51,51 @@ if [ -n "$REPO" ]; then
   REPO="$(cd "$REPO" && pwd)"
   [ -f "$REPO/config.default.json" ] && [ -d "$REPO/prompts/programmer" ] || { echo "$REPO does not look like a clone of orca-roles." >&2; exit 1; }
   TARGET_CFG="$REPO/config.default.json"
-  PROMPT_DIR="$REPO/prompts/programmer"
+  PROMPT_ROOT="$REPO/prompts"      # <mode>/<id>.md
   echo "Repo mode: the role is saved in $REPO (remember to commit)."
 else
   [ -f "$KIT/config.json" ] || cp "$KIT/config.default.json" "$KIT/config.json"
   TARGET_CFG="$KIT/config.json"
-  PROMPT_DIR="$KIT/roles"          # not deleted when the kit is updated
+  PROMPT_ROOT="$KIT/roles"         # <mode>/<id>.md, not deleted when the kit is updated
   echo "Local mode: the role is saved in your installation ($TARGET_CFG)."
 fi
-mkdir -p "$PROMPT_DIR"
 
-# Saves the role in the configuration (previous copy in .bak), after $AFTER.  Uses ID, AFTER, ROLE_JSON and NEW_SERVERS.
+# Whether $1 is one of the words of the list $2
+in_list() { case " $2 " in *" $1 "*) return 0;; esac; return 1; }
+# Ids that are kit files, not roles: prompts/<mode>/common-workers.md and the planner's prompt
+reserved_id() { [ "$1" = planner ] || [ "$1" = common-workers ]; }
+# A mode counts as unavailable when it has no planner prompt: in the clone with --repo, in the installation otherwise
+mode_unavailable() { if [ -n "$REPO" ]; then [ ! -f "$REPO/prompts/$1/planner.md" ]; else [ -n "$(mode_error "$1")" ]; fi; }
+# In the clone a new role must not take over a prompt file that is already there (a kit file): refuses with the first one found
+repo_collision_check() {  # uses ID and NEW_MODES
+  local m
+  [ -n "$REPO" ] || return 0
+  jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null && return 0
+  for m in $NEW_MODES; do
+    if [ -e "$REPO/prompts/$m/$ID.md" ] || [ -L "$REPO/prompts/$m/$ID.md" ]; then
+      echo "$REPO/prompts/$m/$ID.md already exists and '$ID' is not a role of config.default.json: choose another id" >&2; return 1
+    fi
+  done
+}
+# Overwriting a role leaves no orphans. Local: deletes the kit-managed prompts (exact paths) of the modes it no longer has, and the legacy roles/<id>.md.
+# In the repo: only lists them (they are versioned files, the user removes them with git).
+drop_orphan_prompts() {
+  local m f
+  for m in $MODE_IDS; do
+    in_list "$m" "$NEW_MODES" && continue
+    f="$PROMPT_ROOT/$m/$ID.md"
+    [ -f "$f" ] || [ -L "$f" ] || continue
+    if [ -n "$REPO" ]; then echo "prompts/$m/$ID.md is no longer used by '$ID'; remove it with: git -C $REPO rm prompts/$m/$ID.md"
+    else rm -f "$f"; echo "Deleted the prompt of a mode the role no longer has: $f"; fi
+  done
+  f="$KIT/roles/$ID.md"
+  if [ -z "$REPO" ] && { [ -f "$f" ] || [ -L "$f" ]; }; then rm -f "$f"; echo "Deleted its old prompt: $f"; fi
+}
+
+# Saves the role in the configuration (previous copy in .bak), after $AFTER.  Uses ID, AFTER, ROLE_JSON, NEW_SERVERS and NEW_MODES.
 save_role() {
+  local existed=0
+  jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null && existed=1
   cp "$TARGET_CFG" "$TARGET_CFG.bak"
   TMPC="$(mktemp)"
   jq --arg id "$ID" --arg after "$AFTER" --argjson role "$ROLE_JSON" --argjson servers "$NEW_SERVERS" '
@@ -69,6 +105,7 @@ save_role() {
         | (.[0:$i+1] + [{key:$id, value:$role}] + .[$i+1:]) | from_entries)' "$TARGET_CFG" > "$TMPC"
   jq empty "$TMPC" && mv "$TMPC" "$TARGET_CFG"
   echo "Configuration updated: $TARGET_CFG (previous copy in $TARGET_CFG.bak)"
+  [ "$existed" = 0 ] || drop_orphan_prompts
   if [ -n "$REPO" ]; then
     if [ -n "$FROM_JSON" ]; then echo "To apply it now, reinstall the kit: bash $REPO/install.sh"
     elif ask_yn "Reinstall the kit from the repo to apply it now?" y; then bash "$REPO/install.sh"; fi
@@ -80,19 +117,29 @@ save_role() {
 if [ -n "$REMOVE" ]; then
   ID="$REMOVE"
   [ "$ID" != planner ] || { echo "'planner' cannot be removed" >&2; exit 1; }
+  [ "$ID" != common-workers ] || { echo "'common-workers' is a kit file, not a role" >&2; exit 1; }
   jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null || { echo "Role '$ID' does not exist in $TARGET_CFG" >&2; exit 1; }
   if [ -z "$REPO" ] && jq -e --arg r "$ID" '.roles | has($r)' "$KIT/config.default.json" >/dev/null; then
     echo "'$ID' is a default role: removed from config.json, it would come back on the next update." >&2
     echo "Disable it instead: \"enabled\": false in $TARGET_CFG (or --disable $ID in a project's setup script)." >&2; exit 1
   fi
-  P="$(jq -r --arg r "$ID" '.roles[$r].prompt // empty' "$TARGET_CFG")"; P="${P/#\~/$HOME}"; P="${P:-$PROMPT_DIR/$ID.md}"
+  [[ "$ID" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "Invalid id: '$ID'" >&2; exit 1; }
+  # Only the prompts the kit manages are deleted, at their exact paths (<mode>/<id>.md under roles/ or prompts/, and the legacy roles/<id>.md), never a file elsewhere
+  MANAGED=""; for m in $MODE_IDS; do MANAGED="$MANAGED$PROMPT_ROOT/$m/$ID.md"$'\n'; done
+  [ -n "$REPO" ] || MANAGED="$MANAGED$KIT/roles/$ID.md"$'\n'
+  CFG_PROMPTS="$(jq -r --arg r "$ID" '.roles[$r].prompt | if type == "string" then . elif type == "object" then (.[] | strings) else empty end' "$TARGET_CFG")"
   cp "$TARGET_CFG" "$TARGET_CFG.bak"
   TMPC="$(mktemp)"
   jq --arg r "$ID" 'del(.roles[$r])' "$TARGET_CFG" > "$TMPC" && jq empty "$TMPC" && mv "$TMPC" "$TARGET_CFG"
   echo "Removed role '$ID' from $TARGET_CFG (previous copy in $TARGET_CFG.bak)."
-  # Only the prompt the kit manages is deleted (roles/<id>.md, or prompts/programmer/<id>.md in the repo), never a file elsewhere
-  if [ "$P" = "$PROMPT_DIR/$ID.md" ] && [ -f "$P" ]; then rm -f "$P"; echo "Deleted its prompt: $P"
-  elif [ -f "$P" ]; then echo "Its prompt is outside the kit and was left alone: $P"; fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -f "$f" ] || [ -L "$f" ]; then rm -f "$f"; echo "Deleted its prompt: $f"; fi
+  done <<<"$MANAGED"
+  while IFS= read -r f; do
+    f="${f/#\~/$HOME}"
+    if [ -f "$f" ] && ! printf '%s' "$MANAGED" | grep -Fxq -- "$f"; then echo "Its prompt is outside the kit and was left alone: $f"; fi
+  done <<<"$CFG_PROMPTS"
   [ -n "$REPO" ] && echo "Remember: reinstall (bash $REPO/install.sh) and commit."
   echo "If its tab is open in a workspace, close it from that worktree with: ~/.orca-roles/bin/close-role.sh $ID"
   exit 0
@@ -105,9 +152,34 @@ if [ -n "$FROM_JSON" ]; then
   J() { jq -r --arg k "$1" '.[$k] // empty | if type == "string" then . else tojson end' "$FROM_JSON"; }
   ID="$(J id)"; DESC="$(J description)"
   [[ "$ID" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "Invalid id (lowercase and hyphens): '$ID'" >&2; exit 1; }
-  [ "$ID" != planner ] || { echo "'planner' is reserved" >&2; exit 1; }
+  ! reserved_id "$ID" || { echo "'$ID' is reserved" >&2; exit 1; }
   [ -n "$DESC" ] || { echo "Missing description (the Planner uses it to fit the role into the flow)" >&2; exit 1; }
-  [ -n "$(J prompt)" ] || { echo "Missing prompt" >&2; exit 1; }
+  # modes: "all", one mode id (string or one-element list); missing = programmer. Mode ids are matched exactly (mode_error), never used as a path before that.
+  MODES_FIELD="$(jq -c 'if has("modes") then .modes else "programmer" end
+    | if . == "all" then . elif type == "string" then [.]
+      elif type == "array" and length == 1 and (.[0] | type) == "string" then .
+      else error("x") end' "$FROM_JSON" 2>/dev/null)" \
+    || { echo "Invalid modes: use \"all\" or one mode id (modes: $MODE_LIST)" >&2; exit 1; }
+  if [ "$MODES_FIELD" = '"all"' ]; then NEW_MODES="$MODE_IDS"
+  else
+    NEW_MODES="$(jq -j '.[0]' <<<"$MODES_FIELD"; printf x)"; NEW_MODES="${NEW_MODES%x}"   # the sentinel keeps a trailing newline in the id
+    case "$(mode_error "$NEW_MODES")" in unknown*) echo "Invalid modes: $(mode_error "$NEW_MODES")" >&2; exit 1;; esac
+  fi
+  NEW_MODES_JSON="$(tr ' ' '\n' <<<"$NEW_MODES" | jq -R . | jq -sc .)"
+  PROMPT_ERR="$(jq -r --argjson modes "$NEW_MODES_JSON" '.prompt as $p
+    | if $p == null then "Missing prompt"
+      elif ($p | type) == "string" then
+        (if ($modes | length) != 1 then "A string prompt is only for a role with one mode; use an object {\"<mode>\": prompt} with every mode of the role (\($modes | join(", ")))"
+         elif ($p | test("\\S") | not) then "Missing prompt" else empty end)
+      elif ($p | type) == "object" then
+        (($p | keys) as $k | ($k - $modes) as $extra | ($modes - $k) as $miss
+         | if ($extra | length) > 0 then "The prompt has modes the role does not have: \($extra | join(", "))"
+           elif ($miss | length) > 0 then "The prompt is missing the mode(s): \($miss | join(", "))"
+           elif ([$p[] | select((type != "string") or (test("\\S") | not))] | length) > 0 then "The prompt of every mode must be non-empty Markdown text"
+           else empty end)
+      else "The prompt must be Markdown text or an object {\"<mode>\": Markdown}" end' "$FROM_JSON")"
+  [ -z "$PROMPT_ERR" ] || { echo "$PROMPT_ERR" >&2; exit 1; }
+  repo_collision_check || exit 1
   AGENT="$(J agent)"; AGENT="${AGENT:-claude}"
   case "$AGENT" in claude|codex|custom) ;; *) echo "Invalid agent: $AGENT" >&2; exit 1;; esac
   [ "$AGENT" != custom ] || [ -n "$(J command)" ] || { echo "A custom agent needs a command" >&2; exit 1; }
@@ -116,17 +188,24 @@ if [ -n "$FROM_JSON" ]; then
   fi
   AFTER="$(J after)"; [ -n "$AFTER" ] || AFTER="$(jq -r --arg id "$ID" '.roles | keys_unsorted | map(select(. != $id)) | last' "$TARGET_CFG")"
   jq -e --arg r "$AFTER" '.roles | has($r)' "$TARGET_CFG" >/dev/null || { echo "Role '$AFTER' does not exist (after)" >&2; exit 1; }
-  PROMPT_FILE="$PROMPT_DIR/$ID.md"
-  J prompt > "$PROMPT_FILE"
-  grep -q '^## Report' "$PROMPT_FILE" || echo "Warning: the prompt has no '## Report' section; check that it follows the pattern of the other roles."
-  PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"
-  ROLE_JSON="$(jq --arg prompt "$PROMPT_FIELD" --arg agent "$AGENT" '
+  PROMPT_OBJ='{}'; PROMPT_FILES=""
+  for m in $NEW_MODES; do
+    f="$PROMPT_ROOT/$m/$ID.md"; mkdir -p "$PROMPT_ROOT/$m"
+    jq -r --arg m "$m" '.prompt | if type == "string" then . else .[$m] end' "$FROM_JSON" > "$f"
+    grep -q '^## Report' "$f" || echo "Warning: the prompt for mode $m has no '## Report' section; check that it follows the pattern of the other roles."
+    PROMPT_OBJ="$(jq -c --arg m "$m" --arg f "$f" '. + {($m): $f}' <<<"$PROMPT_OBJ")"
+    PROMPT_FILES="$PROMPT_FILES  $m: $f"$'\n'
+    ! mode_unavailable "$m" || echo "Note: mode '$m' is not available yet; the role will launch once that mode exists."
+  done
+  [ -z "$REPO" ] || PROMPT_OBJ='{}'   # in the repo the default path (prompts/<mode>/<id>.md) works
+  ROLE_JSON="$(jq --argjson prompt "$PROMPT_OBJ" --argjson modes "$MODES_FIELD" --arg agent "$AGENT" '
     {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
     + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","trust","clearCommand","mcp","allowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs"))))
-    + (if $prompt != "" then {prompt: $prompt} else {} end)' "$FROM_JSON")"
+    + {modes: $modes}
+    + (if ($prompt | length) > 0 then {prompt: $prompt} else {} end)' "$FROM_JSON")"
   NEW_SERVERS='{}'
   save_role
-  echo "Prompt: $PROMPT_FILE"
+  printf 'Prompts:\n%s' "$PROMPT_FILES"
   echo "Done. The role '$(jq -r .title <<<"$ROLE_JSON")' will appear in the worktrees you create from now on (or with 'roles' in an existing one)."
   exit 0
 fi
@@ -138,7 +217,7 @@ section "Identity"
 while :; do
   ask ID "Role id (lowercase and hyphens, e.g. security-reviewer)"
   [[ "$ID" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "  Invalid format."; continue; }
-  [ "$ID" = planner ] && { echo "  'planner' is reserved."; continue; }
+  reserved_id "$ID" && { echo "  '$ID' is reserved."; continue; }
   if jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null; then
     ask_yn "  '$ID' already exists. Overwrite it?" n && break || continue
   fi
@@ -148,6 +227,26 @@ DEF_TITLE="$(echo "$ID" | awk -F- '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)
 ask TITLE "Tab title" "$DEF_TITLE"
 ask DESC "Description for the Planner: what it does and when to use it"
 while [ -z "$DESC" ]; do ask DESC "  The description is required (the Planner uses it to fit the role into the flow)"; done
+
+# ---------- modes ----------
+section "Modes"
+echo "1) All modes"
+echo "2) Only one"
+ask MSEL "In all modes or in one?" "2"
+case "$MSEL" in
+  1) MODES_FIELD='"all"'; NEW_MODES="$MODE_IDS";;
+  2)
+    i=0; for m in $MODE_IDS; do i=$((i+1)); if mode_unavailable "$m"; then echo "  $i) $m (not available yet)"; else echo "  $i) $m"; fi; done
+    ask MPICK "Mode (number)" "1"
+    NEW_MODES=""; i=0; for m in $MODE_IDS; do i=$((i+1)); if [ "$MPICK" = "$i" ] || [ "$MPICK" = "$m" ]; then NEW_MODES="$m"; fi; done
+    [ -n "$NEW_MODES" ] || { echo "Invalid mode" >&2; exit 1; }
+    MODES_FIELD="[\"$NEW_MODES\"]";;
+  *) echo "Invalid option" >&2; exit 1;;
+esac
+repo_collision_check || exit 1
+for m in $NEW_MODES; do
+  ! mode_unavailable "$m" || echo "  Note: mode '$m' is not available yet; the role will launch once that mode exists."
+done
 
 # ---------- agent and model ----------
 section "Agent"
@@ -221,11 +320,6 @@ ENABLED=true; ask_yn "Enable it now?" y || ENABLED=false
 # ---------- prompt ----------
 # Every prompt follows the same pattern: mission, "When you receive a task", "Limits", "Parameters", "Report" and closing line.
 section "Prompt"
-PROMPT_FILE="$PROMPT_DIR/$ID.md"
-echo "1) Generate it from a few questions"
-echo "2) Use a file I already have"
-echo "3) Write it in the editor (${EDITOR:-nano})"
-ask PMODE "Option" "1"
 write_skeleton() {  # write_skeleton <mission> <steps> <limits> <report> <verdict 0|1>
   local mission="$1" resp="$2" limits="$3" report="$4" verdict="$5"
   {
@@ -263,38 +357,58 @@ write_skeleton() {  # write_skeleton <mission> <steps> <limits> <report> <verdic
     echo; echo "Now reply only \"$TITLE ready\" and wait for tasks."
   } > "$PROMPT_FILE"
 }
-case "$PMODE" in
-  1)
-    ask MISSION "The role's mission in one sentence" "$DESC"
-    ask_lines RESP "What it does when it receives a task (steps)"
-    ask_lines LIMITS "Limits: what it must NOT do"
-    ask_lines REPORT "What its report must include"
-    ask_yn "Does it issue an ACCEPTED/REJECTED verdict?" n && VERDICT=1 || VERDICT=0
-    write_skeleton "$MISSION" "$RESP" "$LIMITS" "$REPORT" "$VERDICT"
-    ask_yn "Open it in the editor to review it?" n && "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"
-    ;;
-  2)
-    ask SRCF "File path"; SRCF="${SRCF/#\~/$HOME}"
-    [ -f "$SRCF" ] || { echo "$SRCF does not exist" >&2; exit 1; }
-    cp "$SRCF" "$PROMPT_FILE"
-    grep -q '^## Report' "$PROMPT_FILE" || echo "Warning: the prompt has no '## Report' section; check that it follows the pattern of the other roles (see README → Creating a new role)."
-    ;;
-  3)
-    write_skeleton "$DESC" "" "" "" 0
-    "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"
-    ;;
-  *) echo "Invalid option" >&2; exit 1;;
-esac
+ask_prompt() {  # ask_prompt <mode> <previous mode, if any>: writes $PROMPT_FILE
+  echo "Prompt for mode $1:"
+  echo "1) Generate it from a few questions"
+  echo "2) Use a file I already have"
+  echo "3) Write it in the editor (${EDITOR:-nano})"
+  [ -z "$2" ] || echo "4) Copy the prompt of $2"
+  ask PMODE "Option" "1"
+  case "$PMODE" in
+    1)
+      ask MISSION "The role's mission in one sentence" "$DESC"
+      ask_lines RESP "What it does when it receives a task (steps)"
+      ask_lines LIMITS "Limits: what it must NOT do"
+      ask_lines REPORT "What its report must include"
+      ask_yn "Does it issue an ACCEPTED/REJECTED verdict?" n && VERDICT=1 || VERDICT=0
+      write_skeleton "$MISSION" "$RESP" "$LIMITS" "$REPORT" "$VERDICT"
+      ask_yn "Open it in the editor to review it?" n && "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"
+      ;;
+    2)
+      ask SRCF "File path"; SRCF="${SRCF/#\~/$HOME}"
+      [ -f "$SRCF" ] || { echo "$SRCF does not exist" >&2; exit 1; }
+      cp "$SRCF" "$PROMPT_FILE"
+      grep -q '^## Report' "$PROMPT_FILE" || echo "Warning: the prompt has no '## Report' section; check that it follows the pattern of the other roles (see README → Creating a new role)."
+      ;;
+    3)
+      write_skeleton "$DESC" "" "" "" 0
+      "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"
+      ;;
+    4)
+      [ -n "$2" ] || { echo "Invalid option" >&2; exit 1; }
+      cp "$PREV_FILE" "$PROMPT_FILE"
+      ;;
+    *) echo "Invalid option" >&2; exit 1;;
+  esac
+}
+PROMPT_OBJ='{}'; PROMPT_FILES=""; PREV_MODE=""; PREV_FILE=""
+for m in $NEW_MODES; do
+  PROMPT_FILE="$PROMPT_ROOT/$m/$ID.md"; mkdir -p "$PROMPT_ROOT/$m"
+  ask_prompt "$m" "$PREV_MODE"
+  PROMPT_OBJ="$(jq -c --arg m "$m" --arg f "$PROMPT_FILE" '. + {($m): $f}' <<<"$PROMPT_OBJ")"
+  PROMPT_FILES="$PROMPT_FILES  $m: $PROMPT_FILE"$'\n'
+  PREV_MODE="$m"; PREV_FILE="$PROMPT_FILE"
+done
 
 # ---------- build the role and save ----------
-PROMPT_FIELD=""; [ -z "$REPO" ] && PROMPT_FIELD="$PROMPT_FILE"   # in the repo the default path (prompts/programmer/<id>.md) works
+[ -z "$REPO" ] || PROMPT_OBJ='{}'   # in the repo the default path (prompts/<mode>/<id>.md) works
 ROLE_JSON="$(jq -n \
   --arg title "$TITLE" --arg desc "$DESC" --argjson enabled "$ENABLED" \
   --arg agent "$AGENT" --arg model "$MODEL" --arg perm "$PERM" --arg command "$COMMAND" --arg clear "$CLEAR" --arg adddir "$ADDDIR" \
   --argjson mcp "$MCP_JSON" --argjson tools "$TOOLS_JSON" --argjson dirs "$DIRS_JSON" \
   --argjson extra "$EXTRA_JSON" --argjson env "$ENV_JSON" --argjson params "$PARAMS_JSON" \
-  --arg prompt "$PROMPT_FIELD" '
-  {title:$title, description:$desc, enabled:$enabled, agent:$agent}
+  --argjson prompt "$PROMPT_OBJ" --argjson modes "$MODES_FIELD" '
+  {title:$title, description:$desc, enabled:$enabled, agent:$agent, modes:$modes}
   + (if $model != "" then {model:$model} else {} end)
   + (if $perm != "auto" then {permissionMode:$perm} else {} end)
   + (if $command != "" then {command:$command} else {} end)
@@ -306,14 +420,14 @@ ROLE_JSON="$(jq -n \
   + (if ($extra | length) > 0 then {extraArgs:$extra} else {} end)
   + (if ($env | length) > 0 then {env:$env} else {} end)
   + (if ($params | length) > 0 then {params:$params} else {} end)
-  + (if $prompt != "" then {prompt:$prompt} else {} end)')"
+  + (if ($prompt | length) > 0 then {prompt:$prompt} else {} end)')"
 
 section "Summary"
 echo "Role '$ID' (after '$AFTER'):"
 jq . <<<"$ROLE_JSON"
 [ "$NEW_SERVERS" != "{}" ] && { echo "New MCP servers:"; jq . <<<"$NEW_SERVERS"; }
-echo "Prompt: $PROMPT_FILE"
-ask_yn "Save?" y || { echo "Cancelled (the prompt was left in $PROMPT_FILE)."; exit 1; }
+printf 'Prompts:\n%s' "$PROMPT_FILES"
+ask_yn "Save?" y || { echo "Cancelled (the prompts were left in the files above)."; exit 1; }
 
 save_role
 echo "Done. The role '$TITLE' will appear in the worktrees you create from now on (or with 'roles' in an existing one)."

@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -1032,6 +1032,154 @@ sleep 1
 rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config.json"   # the kit copy is shared with other sections
 }
 
+sec_new_role_modes() {
+# new-role.sh with modes: one prompt per mode (wizard and --from-json), --repo layout, --remove, overwrite and launching.
+# Own test kit (never the clone) with a fake second mode, pr-reviewer.
+pk_setup
+mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
+cat > "$PK/config.json" <<'J'
+{ "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all" }, "dev": { "title": "Dev" } } }
+J
+rm -rf "$PK/roles"
+NRC="$PK/config.json"
+nrj() { (cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --from-json "$1" 2>&1); }
+nrm() { (cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --remove "$1" 2>&1); }
+snap() { { cat "$NRC"; find "$PK/roles" -type f 2>/dev/null | sort; ls "$PK"; } | cksum; }
+RP='# x\n## Report\n'
+nr_mode_cfg() { jq --arg m "$1" '.settings.mode = $m' "$NRC" > "$TMP/nrm-$1.json"; echo "$TMP/nrm-$1.json"; }
+
+# --from-json: pass
+printf '%s' '{"id":"rv","description":"d","modes":"pr-reviewer","prompt":"'"$RP"'"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: one mode (string)" "$RC:$(jq -c '.roles.rv | [.modes, .prompt]' "$NRC")" "0:[[\"pr-reviewer\"],{\"pr-reviewer\":\"$PH/.orca-roles/roles/pr-reviewer/rv.md\"}]"
+check "modes from-json: file in roles/<mode>/, none for programmer" "$(head -1 "$PK/roles/pr-reviewer/rv.md"):$([ -e "$PK/roles/programmer/rv.md" ] && echo left):$([ -e "$PK/roles/rv.md" ] && echo flat)" "# x::"
+check "modes from-json: launched in pr-reviewer, not in programmer" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')|$(KIT="$PK" launchable_roles "$(nr_mode_cfg programmer)" 2>&1 | tr '\n' ' ')" "planner rv |planner dev "
+printf '%s' '{"id":"rv-list","description":"d","modes":["pr-reviewer"],"prompt":"'"$RP"'"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: one-element list" "$RC:$(jq -c '.roles["rv-list"].modes' "$NRC")" '0:["pr-reviewer"]'
+printf '%s' '{"id":"al","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: all with an object" "$RC:$(jq -c '.roles.al | [.modes, (.prompt | keys)]' "$NRC")" '0:["all",["academic-writer","pr-reviewer","programmer"]]'
+check "modes from-json: all writes three files" "$(for m in programmer pr-reviewer academic-writer; do head -n1 "$PK/roles/$m/al.md"; done | tr '\n' ' ')" "# p # r # a "
+case "$OUT" in *"mode 'academic-writer' is not available yet"*) echo "ok   modes from-json: notes the unavailable mode";; *) echo "FAIL unavailable note: $OUT"; FAIL=1;; esac
+printf '%s' '{"id":"legacy","description":"d","prompt":"# p\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: no modes + string prompt = programmer" "$RC:$(jq -c '.roles.legacy.modes' "$NRC"):$([ -f "$PK/roles/programmer/legacy.md" ] && echo y)" '0:["programmer"]:y'
+printf '%s' '{"id":"nowarn","description":"d","prompt":"# no report"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; case "$OUT" in *"prompt for mode programmer has no '## Report'"*) echo "ok   modes from-json: Report warning per file";; *) echo "FAIL Report warning: $OUT"; FAIL=1;; esac
+
+# --from-json: fail, nothing written
+S0="$(snap)"
+nr_fail() {  # <name> <json>
+  printf '%s' "$2" > "$TMP/nj.json"; try nrj "$TMP/nj.json"
+  check "modes from-json rejects $1" "$RC:$([ "$(snap)" = "$S0" ] && echo unchanged || echo CHANGED)" "1:unchanged"
+}
+nr_fail "all with a string prompt" '{"id":"f1","description":"d","modes":"all","prompt":"# x\n## Report\n"}'
+nr_fail "an object missing a mode" '{"id":"f2","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r"}}'
+nr_fail "an object with an extra mode" '{"id":"f3","description":"d","modes":"pr-reviewer","prompt":{"pr-reviewer":"# r","programmer":"# p"}}'
+nr_fail "an object for one mode with another key" '{"id":"f3b","description":"d","modes":"pr-reviewer","prompt":{"programmer":"# p"}}'
+nr_fail "modes ../x" '{"id":"f4","description":"d","modes":"../x","prompt":"# x"}'
+nr_fail "modes Programmer" '{"id":"f5","description":"d","modes":"Programmer","prompt":"# x"}'
+nr_fail "two modes in a list" '{"id":"f6","description":"d","modes":["programmer","pr-reviewer"],"prompt":{"programmer":"# p","pr-reviewer":"# r"}}'
+nr_fail "a prompt value that is not a string" '{"id":"f7","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":5,"academic-writer":"# a"}}'
+nr_fail "a mode with a trailing newline" '{"id":"f8","description":"d","modes":"programmer\n","prompt":"# x"}'
+nr_fail "an empty modes list" '{"id":"f9","description":"d","modes":[],"prompt":"# x"}'
+nr_fail "modes null" '{"id":"f10","description":"d","modes":null,"prompt":"# x"}'
+nr_fail "a path as a prompt key" '{"id":"f11","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a","../x":"# b"}}'
+nr_fail "an array prompt" '{"id":"f12","description":"d","prompt":["# x"]}'
+nr_fail "a two-mode list with a string prompt" '{"id":"f13","description":"d","modes":["programmer","pr-reviewer"],"prompt":"# x\n## Report\n"}'
+nr_fail "a blank prompt" '{"id":"f14","description":"d","prompt":"   "}'
+nr_fail "the id common-workers (local)" '{"id":"common-workers","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}'
+nr_fail "the id planner" '{"id":"planner","description":"d","prompt":"# x"}'
+nr_fail "a path as id" '{"id":"../x","description":"d","prompt":"# x"}'
+
+printf '%s' '{"id":"aw","description":"d","modes":"academic-writer","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: a single not-available mode is accepted with the note" "$RC:$(jq -c '.roles.aw.modes' "$NRC"):$([ -f "$PK/roles/academic-writer/aw.md" ] && echo y)" '0:["academic-writer"]:y'
+case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes from-json: the note for a single unavailable mode";; *) echo "FAIL single unavailable note: $OUT"; FAIL=1;; esac
+
+# overwrite shrinks the modes: no orphans
+touch "$PK/roles/al.md"
+printf '%s' '{"id":"al","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes overwrite: the modes it no longer has lose their prompts" "$RC:$([ -e "$PK/roles/pr-reviewer/al.md" ] && echo left):$([ -e "$PK/roles/academic-writer/al.md" ] && echo left):$([ -e "$PK/roles/al.md" ] && echo legacy):$(head -1 "$PK/roles/programmer/al.md"):$(jq -c '.roles.al.modes' "$NRC")" '0::::# p2:["programmer"]'
+printf '%s' '{"id":"fresh","description":"d","modes":"pr-reviewer","prompt":"# f\n## Report\n"}' > "$TMP/nj.json"; mkdir -p "$PK/roles/programmer"; echo keep > "$PK/roles/programmer/fresh.md"
+try nrj "$TMP/nj.json"; check "modes: a new role does not delete a stray file of another mode" "$RC:$(cat "$PK/roles/programmer/fresh.md")" "0:keep"
+rm -f "$PK/roles/programmer/fresh.md"
+
+# --remove
+printf '%s' '{"id":"rm-a","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"; nrj "$TMP/nj.json" >/dev/null
+touch "$PK/roles/rm-a.md" "$PK/roles/programmer/rm-b.md" "$TMP/outside.md"
+jq --arg o "$TMP/outside.md" '.roles["rm-a"].prompt["academic-writer"] = $o' "$NRC" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$NRC"
+try nrm rm-a; check "modes remove: per-mode and legacy prompts are deleted" "$RC:$(ls "$PK/roles/programmer/rm-a.md" "$PK/roles/pr-reviewer/rm-a.md" "$PK/roles/academic-writer/rm-a.md" "$PK/roles/rm-a.md" 2>/dev/null | wc -l | tr -d ' '):$(jq -r '.roles | has("rm-a")' "$NRC")" "0:0:false"
+check "modes remove: a prompt outside the kit and other roles' files stay" "$([ -f "$TMP/outside.md" ] && echo y)$([ -f "$PK/roles/programmer/rm-b.md" ] && echo y)" "yy"
+case "$OUT" in *"outside the kit and was left alone: $TMP/outside.md"*) echo "ok   modes remove: says the outside prompt was left alone";; *) echo "FAIL remove outside: $OUT"; FAIL=1;; esac
+try nrm ../x; check "modes remove: an id with a path is refused" "$RC" "1"
+jq '.roles["../x"] = {"title": "X"}' "$NRC" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$NRC"; S2="$(snap)"
+try nrm ../x; check "modes remove: a '../x' role in the config reaches the id check, nothing changes" "$RC:$([ "$(snap)" = "$S2" ] && echo unchanged)" "1:unchanged"; case "$OUT" in *"Invalid id"*) echo "ok   modes remove: invalid id message";; *) echo "FAIL remove invalid id: $OUT"; FAIL=1;; esac
+jq 'del(.roles["../x"])' "$NRC" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$NRC"
+try nrm common-workers; check "modes remove: common-workers is refused" "$RC" "1"
+
+# wizard (answers: id, title, description, modes, then the claude defaults up to the prompts)
+SRC="$TMP/nw-src.md"; printf '# Role: W\n\n## Report\nx\n' > "$SRC"
+nrw() {  # nrw <answers file>
+  (cd "$TMP" && HOME="$PH" NEW_ROLE_TTY="$1" "$PKL/bin/new-role.sh" < /dev/null 2>&1)
+}
+printf '%s\n' wz-one "" "wizard one" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" y > "$TMP/nw1.in"
+try nrw "$TMP/nw1.in"; check "modes wizard: one mode" "$RC:$(jq -c '.roles["wz-one"] | [.modes, .prompt]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-one.md" && echo same)" "0:[[\"pr-reviewer\"],{\"pr-reviewer\":\"$PH/.orca-roles/roles/pr-reviewer/wz-one.md\"}]:same"
+check "modes wizard: launched in its mode" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')" "planner rv rv-list fresh wz-one "
+printf '%s\n' wz-all "" "wizard all" 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 4 4 y > "$TMP/nw2.in"
+try nrw "$TMP/nw2.in"; check "modes wizard: all, the copy option for the 2nd and 3rd" "$RC:$(jq -c '.roles["wz-all"] | [.modes, (.prompt | keys)]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/programmer/wz-all.md" && cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-all.md" && cmp -s "$SRC" "$PK/roles/academic-writer/wz-all.md" && echo same)" '0:["all",["academic-writer","pr-reviewer","programmer"]]:same'
+case "$OUT" in *"4) Copy the prompt of pr-reviewer"*) echo "ok   modes wizard: offers the copy option";; *) echo "FAIL wizard options: $OUT"; FAIL=1;; esac
+case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes wizard: notes the unavailable mode";; *) echo "FAIL wizard note: $OUT"; FAIL=1;; esac
+case "$OUT" in *"programmer: $PH/.orca-roles/roles/programmer/wz-all.md"*"academic-writer: $PH/.orca-roles/roles/academic-writer/wz-all.md"*) echo "ok   modes wizard: the summary lists each mode's file";; *) echo "FAIL wizard summary: $OUT"; FAIL=1;; esac
+SRC2="$TMP/nw-src2.md"; printf '# Role: W2\n\n## Report\ny\n' > "$SRC2"
+printf '%s\n' wz-chain "" "wizard chain" 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 2 "$SRC2" 4 y > "$TMP/nw4.in"
+try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous mode's prompt, not the first" "$RC:$(cmp -s "$SRC" "$PK/roles/programmer/wz-chain.md" && echo p):$(cmp -s "$SRC2" "$PK/roles/pr-reviewer/wz-chain.md" && echo r):$(cmp -s "$SRC2" "$PK/roles/academic-writer/wz-chain.md" && echo a)" "0:p:r:a"
+printf '%s\n' wz-bad "" "x" 2 9 > "$TMP/nw3.in"; S1="$(snap)"
+try nrw "$TMP/nw3.in"; check "modes wizard: an invalid mode is refused, nothing written" "$RC:$([ "$(snap)" = "$S1" ] && echo unchanged)" "1:unchanged"
+
+# --repo layout
+NR="$TMP/nrm-repo"; mkdir -p "$NR"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NR/"
+nrr() { (cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" "$@" 2>&1); }
+nrr_w() { (cd "$TMP" && HOME="$PH" NEW_ROLE_TTY="$1" "$PKL/bin/new-role.sh" --repo "$NR" < /dev/null 2>&1); }
+printf '%s' '{"id":"rp","description":"d","modes":"pr-reviewer","prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: prompts/<mode>/<id>.md (folder created), no prompt field" "$RC:$([ -f "$NR/prompts/pr-reviewer/rp.md" ] && echo y):$(jq -c '.roles.rp | [.modes, .prompt]' "$NR/config.default.json")" '0:y:[["pr-reviewer"],null]'
+check "modes --repo: nothing in the installation" "$([ -e "$PK/roles/pr-reviewer/rp.md" ] && echo local)" ""
+printf '%s' '{"id":"rp-all","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: all writes three files" "$RC:$(ls "$NR/prompts/programmer/rp-all.md" "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-writer/rp-all.md" | wc -l | tr -d ' ')" "0:3"
+# the installed kit's own files are left alone by --repo overwrite/remove (T3), and the clone's availability decides the note (D4)
+mkdir -p "$PK/roles"; echo inst > "$PK/roles/rp-all.md"
+printf '%s' '{"id":"rp-all","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"
+check "modes --repo overwrite: lost modes are listed, not deleted; the installed legacy file stays" "$RC:$(ls "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-writer/rp-all.md" | wc -l | tr -d ' '):$(cat "$PK/roles/rp-all.md")" "0:2:inst"
+case "$OUT" in *"prompts/pr-reviewer/rp-all.md is no longer used by 'rp-all'; remove it with: git -C $NR rm prompts/pr-reviewer/rp-all.md"*"prompts/academic-writer/rp-all.md is no longer used"*) echo "ok   modes --repo overwrite: tells how to remove them with git";; *) echo "FAIL repo overwrite listing: $OUT"; FAIL=1;; esac
+printf '%s' '{"id":"rp-pr","description":"d","modes":"pr-reviewer","prompt":"# r\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'pr-reviewer' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
+try nrr --remove rp-pr --repo "$NR"
+# D1: kit files cannot be taken over
+echo kit > "$NR/prompts/programmer/common-workers.md"; echo kit > "$NR/prompts/pr-reviewer/common-workers.md"; echo kit > "$NR/prompts/programmer/lone.md"
+R0="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
+printf '%s' '{"id":"common-workers","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: common-workers is refused, nothing written" "$RC:$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R0" ] && echo unchanged)" "1:unchanged"
+printf '%s' '{"id":"lone","description":"d","prompt":"# l\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: an existing prompts file blocks a new role, nothing written" "$RC:$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R0" ] && echo unchanged)" "1:unchanged"
+try nrr --remove common-workers --repo "$NR"; check "modes --repo: --remove never deletes common-workers" "$RC:$(cat "$NR/prompts/programmer/common-workers.md")" "1:kit"
+rm -f "$NR/prompts/programmer/lone.md"
+# the wizard in the repo: no prompt field, collision and reserved ids
+printf '%s\n' wz-repo "" "wizard repo" 2 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" y n > "$TMP/nw4.in"
+try nrr_w "$TMP/nw4.in"; check "modes wizard --repo: modes, no prompt field, file in prompts/<mode>/" "$RC:$(jq -c '.roles["wz-repo"] | [.modes, .prompt]' "$NR/config.default.json"):$([ -f "$NR/prompts/programmer/wz-repo.md" ] && echo y)" '0:[["programmer"],null]:y'
+printf '%s\n' common-workers wz-x "x" 2 1 > "$TMP/nw5.in"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
+try nrr_w "$TMP/nw5.in"; case "$OUT" in *"'common-workers' is reserved"*) echo "ok   modes wizard: common-workers is reserved";; *) echo "FAIL wizard reserved: $OUT"; FAIL=1;; esac
+printf '%s\n' lone "" "x" 2 1 > "$TMP/nw6.in"; echo kit > "$NR/prompts/programmer/lone.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
+try nrr_w "$TMP/nw6.in"; check "modes wizard --repo: an existing prompts file blocks a new role" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/programmer/lone.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
+echo kit > "$NR/prompts/academic-writer/lone2.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
+printf '%s' '{"id":"lone2","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in a later mode blocks a new role, nothing written" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/academic-writer/lone2.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
+rm -f "$NR/prompts/academic-writer/lone2.md"
+rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
+try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
+check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:8"
+printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":true,"prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
+rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy is shared with other sections
+}
+
 sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
@@ -1045,24 +1193,24 @@ printf '%s' '{"id":"sec-review","description":"reviews security","model":"m-sec"
 try newrole "$TMP/role.json"; check "from-json: creates the role" "$RC" "0"
 check "from-json: position after dev" "$(jq -r '.roles | keys_unsorted | join(" ")' "$KIT/config.json")" "planner dev sec-review tester"
 check "from-json: fields and default title" "$(jq -c '.roles["sec-review"] | {title, description, enabled, agent, model, params}' "$KIT/config.json")" '{"title":"Sec-Review","description":"reviews security","enabled":true,"agent":"claude","model":"m-sec","params":{"maxFindings":20}}'
-check "from-json: prompt in roles/" "$(head -1 "$KIT/roles/sec-review.md"):$(jq -r '.roles["sec-review"].prompt' "$KIT/config.json")" "# Role: SEC:$TMP/home/.orca-roles/roles/sec-review.md"
+check "from-json: prompt in roles/<mode>/, modes programmer" "$(head -1 "$KIT/roles/programmer/sec-review.md"):$(jq -c '.roles["sec-review"] | [.modes, .prompt]' "$KIT/config.json")" "# Role: SEC:[[\"programmer\"],{\"programmer\":\"$TMP/home/.orca-roles/roles/programmer/sec-review.md\"}]"
 [ -f "$KIT/config.json.bak" ] && echo "ok   from-json: .bak copy" || { echo "FAIL from-json without .bak"; FAIL=1; }
 try newrole "$TMP/role.json"; check "from-json: does not overwrite without overwrite" "$RC" "1"
 jq '. + {overwrite: true, model: "m2"}' "$TMP/role.json" > "$TMP/role2.json"
 try newrole "$TMP/role2.json"; check "from-json: overwrite" "$RC:$(jq -r '.roles["sec-review"].model' "$KIT/config.json")" "0:m2"
 printf '%s' '{"id":"cu-agent","description":"custom","agent":"custom","command":"agy {scratch}","addDirFlag":"--add-dir","trust":{"file":"~/s.json","jq":".t = [$dir]"},"clearCommand":"/new","nice":5,"pluginDirs":["{kit}/p"],"prompt":"# Role: CU\n\n## Report\nx\n"}' > "$TMP/role4.json"
 try newrole "$TMP/role4.json"; check "from-json: custom keeps addDirFlag, trust, clearCommand, nice and pluginDirs" "$RC $(jq -c '.roles["cu-agent"] | [.addDirFlag, .trust, .clearCommand, .nice, .pluginDirs]' "$KIT/config.json")" '0 ["--add-dir",{"file":"~/s.json","jq":".t = [$dir]"},"/new",5,["{kit}/p"]]'
-jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/cu-agent.md"
+jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-agent.md"
 }
 
 sec_wizard() {
 # The wizard, for a custom agent: clearCommand, addDirFlag and its extra folders (answers in order, one per line)
 printf '# Role: CW\n\n## Report\nx\n' > "$TMP/cw.md"
 # shellcheck disable=SC2088  # "~/a b" is what the user types; the wizard expands it
-printf '%s\n' cu-wiz "" "custom wizard" custom "" "agy {scratch}" /new --add-dir "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
+printf '%s\n' cu-wiz "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
 try sh -c "cd '$TMP' && HOME='$TMP/home' NEW_ROLE_TTY='$TMP/wiz.in' '$TMP/home/.orca-roles/bin/new-role.sh' < /dev/null"
 check "wizard: custom asks clearCommand, addDirFlag and extra folders" "$RC $(jq -c '.roles["cu-wiz"] | [.command, .clearCommand, .addDirFlag, .extraDirs]' "$KIT/config.json")" '0 ["agy {scratch}","/new","--add-dir",["~/a b"]]'
-jq 'del(.roles["cu-wiz"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/cu-wiz.md"
+jq 'del(.roles["cu-wiz"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-wiz.md"
 printf '%s' '{"id":"Bad Id","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: invalid id" "$RC" "1"
 printf '%s' '{"id":"no-desc","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: without description" "$RC" "1"
 printf '%s' '{"id":"planner","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: planner reserved" "$RC" "1"
@@ -1145,7 +1293,7 @@ J
 printf '%s' '{"id":"sec-review","description":"reviews security","prompt":"# Role: SEC\n\n## Report\nx\n"}' > "$TMP/role.json"
 newrole "$TMP/role.json" >/dev/null
 rmrole() { (cd "$TMP" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/new-role.sh" --remove "$1" 2>&1); }
-try rmrole sec-review; check "remove: a role you created" "$RC:$(jq -r '.roles | keys_unsorted | join(" ")' "$KIT/config.json"):$([ -f "$KIT/roles/sec-review.md" ] && echo prompt-left || echo prompt-gone)" "0:planner dev:prompt-gone"
+try rmrole sec-review; check "remove: a role you created" "$RC:$(jq -r '.roles | keys_unsorted | join(" ")' "$KIT/config.json"):$([ -f "$KIT/roles/programmer/sec-review.md" ] && echo prompt-left || echo prompt-gone)" "0:planner dev:prompt-gone"
 [ -f "$KIT/config.json.bak" ] && jq -e '.roles["sec-review"]' "$KIT/config.json.bak" >/dev/null && echo "ok   remove: .bak keeps the role" || { echo "FAIL remove .bak"; FAIL=1; }
 try rmrole dev; check "remove: a default role is refused" "$RC" "1"; case "$OUT" in *'"enabled": false'*) echo "ok   remove: suggests enabled false for a default role";; *) echo "FAIL remove default: $OUT"; FAIL=1;; esac
 try rmrole planner; check "remove: the planner is refused" "$RC" "1"
