@@ -138,6 +138,10 @@ done
 grep -rEq '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' "$ROOT/prompts/" && { echo "FAIL prompts contain an email address"; FAIL=1; }
 for p in common-workers planner; do
   at=$(grep -n 'never carry attribution to an AI' "$ROOT/prompts/programmer/$p.md" | head -1 | cut -d: -f1 || true)
+  al=$(grep 'never carry attribution to an AI' "$ROOT/prompts/programmer/$p.md" | head -1 || true)
+  for k in 'git log -1 --format=%B' 'git commit --amend'; do
+    printf '%s' "$al" | grep -qF -- "$k" || { echo "FAIL $p.md: the AI-attribution rule lost: $k"; FAIL=1; }
+  done
   nn=$(grep -n 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" | head -1 | cut -d: -f1 || true)
   [ -n "$at" ] && [ -n "$nn" ] && [ "$nn" -eq $((at + 1)) ] || { echo "FAIL $p.md: the no-names rule must sit right after the AI-attribution rule"; FAIL=1; }
   grep -qF "Merge pull request #N from <handle>/<branch>" "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: the commit rule lost the GitHub merge-subject warning"; FAIL=1; }
@@ -930,6 +934,9 @@ try ml --mode=Programmer; check "launch --mode=<x> form is validated too" "$RC:$
 try ml --set settings.mode=Programmer; check "launch --set settings.mode goes through the same validation" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
 try ml --set settings.mode=../x; check "launch --set settings.mode=../x fails" "$RC:$(mstate)" "1:$B"
 try ml --set 'settings.mode=["pr-reviewer"]'; check "launch --set settings.mode with a non-string fails" "$RC:$(mstate)" "1:$B"
+try ml --set settings.mode; check "launch --set settings.mode (no =) is a path=value error, nothing saved" "$RC:$(mstate):$(printf '%s' "$OUT" | grep -c 'ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): settings.mode')" "1:$B:1"
+try ml --set 'settings={"mode":"programmer"}'; check "launch --set settings={...} is refused, nothing saved" "$RC:$(mstate):$(printf '%s' "$OUT" | grep -c 'ERROR: --set replaces one value, not a whole object')" "1:$B:1"
+try ml --set 'roles={}'; check "launch --set roles={} is refused, nothing saved" "$RC:$(mstate):$(printf '%s' "$OUT" | grep -c 'ERROR: --set replaces one value, not a whole object')" "1:$B:1"
 # a role not in the mode
 rm -f "$MG/orca-roles.env"; ml --reset --mode pr-reviewer >/dev/null; rm -f "$MG/orca-roles.env"; B="$(mstate)"
 for o in --enable --disable --only; do
@@ -1175,8 +1182,30 @@ rm -f "$NR/prompts/academic-writer/lone2.md"
 rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
 try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
 check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:8"
+check "modes --repo: --remove --repo leaves the installed legacy file" "$(cat "$PK/roles/rp-all.md" 2>/dev/null)" "inst"
 printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":true,"prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
+# the git hint quotes a clone path with a space
+NS="$TMP/my clone"; mkdir -p "$NS"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NS/"
+git -C "$NS" init -q && git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m init
+printf '%s' '{"id":"rp-sp","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NS"; git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m rp-sp
+printf '%s' '{"id":"rp-sp","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NS"
+HINT="$(printf '%s\n' "$OUT" | grep '^prompts/pr-reviewer/rp-sp.md' | sed 's/.*remove it with: //')"
+case "$HINT" in "git -C "*my*clone*rm*prompts/pr-reviewer/rp-sp.md) (eval "$HINT" >/dev/null 2>&1) || true; check "modes --repo overwrite: the printed git command for a path with a space runs" "$([ -e "$NS/prompts/pr-reviewer/rp-sp.md" ] && echo left)" "";; *) echo "FAIL quoted git hint: $HINT"; FAIL=1;; esac
+# a local role created before the id was reserved can be removed; the kit's prompts and --repo stay protected
+mkdir -p "$PK/roles/programmer" "$PK/prompts/programmer"; echo kit > "$PK/prompts/programmer/common-workers.md"; echo loc > "$PK/roles/programmer/common-workers.md"
+jq '.roles["common-workers"] = {title: "CW"}' "$NRC" > "$TMP/cw.json" && mv "$TMP/cw.json" "$NRC"
+try nrr --remove common-workers --repo "$NR"; check "modes: --remove common-workers --repo is refused" "$RC:$(printf '%s' "$OUT" | grep -c "'common-workers' is a kit file, not a role"):$([ -f "$PK/roles/programmer/common-workers.md" ] && echo kept)" "1:1:kept"
+cp "$NR/config.default.json" "$TMP/nrcd.bak"; jq '.roles["common-workers"] = {title: "CW"}' "$TMP/nrcd.bak" > "$NR/config.default.json"
+try nrr --remove common-workers --repo "$NR"; check "modes: --remove common-workers --repo is refused even when the repo config lists it" "$RC:$(printf '%s' "$OUT" | grep -c "'common-workers' is a kit file, not a role"):$(jq '.roles | has("common-workers")' "$NR/config.default.json")" "1:1:true"
+cp "$TMP/nrcd.bak" "$NR/config.default.json"
+try nrm common-workers; check "modes: --remove common-workers removes a local role of that name" "$RC:$(jq '.roles | has("common-workers")' "$NRC"):$([ -e "$PK/roles/programmer/common-workers.md" ] && echo left):$(cat "$PK/prompts/programmer/common-workers.md")" "0:false::kit"
+try nrm common-workers; check "modes: --remove common-workers without a local role is refused" "$RC:$(printf '%s' "$OUT" | grep -c "'common-workers' is a kit file, not a role")" "1:1"
+# --help prints the header comment only
+HELP="$(cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --help 2>&1)"; HRC=$?
+check "new-role --help: exit 0, first and last header lines, only comment lines" "$HRC:$(printf '%s\n' "$HELP" | head -1 | grep -c '^# Wizard to create a new role'):$(printf '%s\n' "$HELP" | tail -1 | grep -c '^#     Each mode has its own prompt file'):$(printf '%s\n' "$HELP" | grep -vc '^#')" "0:1:1:0"
 rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy is shared with other sections
 }
 

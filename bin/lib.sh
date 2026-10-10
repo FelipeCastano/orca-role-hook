@@ -115,11 +115,12 @@ overrides_from_args() {
     k="${opt#--}"
     if [ "$k" = mode ]; then
       o="$(jq -c --arg v "$val" '.mode = $v' <<<"$o")"; explicit=1
-    elif [ "$k" = set ] && [ "${val%%=*}" = settings.mode ]; then
+    elif [ "$k" = set ] && case "$val" in settings.mode=*) true;; *) false;; esac; then
       # --set settings.mode=x is the same request as --mode x (and --mode wins if both are given)
       [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" '.mode = $v' <<<"$o")"
     elif [ "$k" = set ]; then
       case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
+      case "${val%%=*}" in settings|roles) echo "ERROR: --set replaces one value, not a whole object: use --set settings.<key>=value (or roles.<role>.<key>=value)" >&2; return 1;; esac
       o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" --argjson l "$LEGACY_ROLES" '.set += [{path: ($p | split(".") | if .[0] == "roles" and $l[.[1]] then .[1] = $l[.[1]] else . end), value: ($v | try fromjson catch $v)}]' <<<"$o")"
     else
       o="$(jq -c --arg k "$k" --arg v "$val" --argjson l "$LEGACY_ROLES" '.[$k] += ($v | split(",") | map(gsub("^ +| +$"; "")) | map(select(. != "")) | map($l[.] // .))' <<<"$o")"

@@ -85,7 +85,7 @@ drop_orphan_prompts() {
     in_list "$m" "$NEW_MODES" && continue
     f="$PROMPT_ROOT/$m/$ID.md"
     [ -f "$f" ] || [ -L "$f" ] || continue
-    if [ -n "$REPO" ]; then echo "prompts/$m/$ID.md is no longer used by '$ID'; remove it with: git -C $REPO rm prompts/$m/$ID.md"
+    if [ -n "$REPO" ]; then printf "prompts/%s/%s.md is no longer used by '%s'; remove it with: git -C %q rm %q\n" "$m" "$ID" "$ID" "$REPO" "prompts/$m/$ID.md"
     else rm -f "$f"; echo "Deleted the prompt of a mode the role no longer has: $f"; fi
   done
   f="$KIT/roles/$ID.md"
@@ -117,7 +117,9 @@ save_role() {
 if [ -n "$REMOVE" ]; then
   ID="$REMOVE"
   [ "$ID" != planner ] || { echo "'planner' cannot be removed" >&2; exit 1; }
-  [ "$ID" != common-workers ] || { echo "'common-workers' is a kit file, not a role" >&2; exit 1; }
+  if [ "$ID" = common-workers ] && { [ -n "$REPO" ] || ! jq -e '.roles | has("common-workers")' "$TARGET_CFG" >/dev/null; }; then
+    echo "'common-workers' is a kit file, not a role" >&2; exit 1
+  fi
   jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null || { echo "Role '$ID' does not exist in $TARGET_CFG" >&2; exit 1; }
   if [ -z "$REPO" ] && jq -e --arg r "$ID" '.roles | has($r)' "$KIT/config.default.json" >/dev/null; then
     echo "'$ID' is a default role: removed from config.json, it would come back on the next update." >&2
