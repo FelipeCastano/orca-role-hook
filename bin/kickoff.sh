@@ -10,18 +10,55 @@ KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 . "$STATE"
 ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
+SETTLE="${ORCA_ROLES_KICK_SETTLE:-2}"
+CHECK_PIDS=""
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
 press_enter() { orca terminal send --terminal "$1" --enter --json >/dev/null 2>&1 || orca terminal send --terminal "$1" --text "" --enter --json >/dev/null 2>&1; }
 
-kick() {  # $1 handle, $2 message
+MODELS="$(dirname "$STATE")/orca-roles.models"; MODELS_D="$MODELS.d"
+# Model errors on the screen (wrapped lines joined, so one error counts once).  err_count <handle> <ERE>
+err_count() { screen_of "$1" | tr -s ' \n\t' ' ' | grep -oE "$2" | wc -l | tr -d ' '; }
+record_model() {  # $1 role, $2 value; merged into $MODELS once every check is done
+  mkdir -p "$MODELS_D" && printf '%s=%s\n' "$(var_of "$1")" "$2" > "$MODELS_D/$(var_of "$1")"
+}
+merge_models() {
+  local f v
+  [ -d "$MODELS_D" ] || return 0
+  for f in "$MODELS_D"/*; do
+    [ -f "$f" ] || continue
+    v="$(basename "$f")"
+    { grep -v "^$v=" "$MODELS" 2>/dev/null || true; cat "$f"; } > "$MODELS.tmp" && mv "$MODELS.tmp" "$MODELS" && rm -f "$f"
+  done
+  rmdir "$MODELS_D" 2>/dev/null || true
+}
+tell_planner() {  # $1 subject, $2 body
+  [ -n "${PLANNER:-}" ] || return 0
+  orca orchestration send --to "$PLANNER" --type escalation --subject "$1" --body "$2" --json >/dev/null 2>&1 || echo "Could not tell the Planner: $1"
+}
+# A role whose model does not exist answers its first message with an error (see model_error_regex): the kit only detects it and tells the Planner.
+check_model() {  # $1 handle, $2 role, $3 model errors on screen before the message was sent, $4 error regex
+  local model title now text
+  model="$(rstr "$CFG" "$2" model)"; title="$(title_of "$CFG" "$2")"
+  sleep "$SETTLE"; orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+  now="$(err_count "$1" "$4")"
+  if [ "$now" -le "$3" ]; then record_model "$2" "$model"; return 0; fi
+  text="$(screen_of "$1" | tr -s ' \n\t' ' ' | grep -oE "$4" | tail -n 1 | cut -c1-200 | sed 's/^ *//; s/ *$//')"
+  echo "$2: model $model is not available ($text)"; record_model "$2" "FAILED:$model"
+  [ "$2" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $model is not available ($text). config.json is unchanged. To fix it yourself: set roles.$2.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $2 and run roles (without options, so this worktree's saved options are kept)."
+}
+
+kick() {  # $1 handle, $2 role, $3 message
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
     if screen_of "$1" | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
       press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
     else break; fi
   done
-  orca terminal send --terminal "$1" --text "$2" --enter --json >/dev/null && echo "Prompt sent to $1"
+  local before rx; rx="$(model_error_regex "$CFG" "$2" "$(rstr "$CFG" "$2" model)")"
+  [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
+  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && echo "Prompt sent to $1"
+  [ -z "$rx" ] || { check_model "$1" "$2" "$before" "$rx" & CHECK_PIDS="$CHECK_PIDS $!"; }
 }
 is_new() { case " $NEW " in *" $1 "*) return 0;; *) return 1;; esac; }
 remembers() { case " $REMEMBERED " in *" $1 "*) return 0;; *) return 1;; esac; }
@@ -74,13 +111,15 @@ composer_watch & WATCH_PID=$!
 
 if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
-  kick "$PLANNER" "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+  kick "$PLANNER" planner "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
 fi
 for id in $ROLES; do
   [ "$id" = planner ] && continue
   is_new "$id" || continue
   v=$(var_of "$id")
-  if remembers "$id"; then kick "${!v}" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$(worker_msg "$CFG" "$id")"; fi
+  if remembers "$id"; then kick "${!v}" "$id" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$id" "$(worker_msg "$CFG" "$id")"; fi
 done
 
+for p in $CHECK_PIDS; do wait "$p"; done
+merge_models
 wait "$WATCH_PID"   # the composer watcher may still be polling

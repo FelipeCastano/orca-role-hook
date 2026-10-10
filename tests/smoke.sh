@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -167,6 +167,10 @@ OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$CW")"
 [ -n "$OUTSEC" ] || { echo "FAIL common-workers.md: missing the Output section"; FAIL=1; }
 for frag in 'Always write in English' 'Repo artifacts (code, commits, docs) still follow' 'no narration between tool calls' 'no recap' 'keep negations, numbers, units, paths, file:line and ids' 'is not written in telegraphic style' 'self-contained and complete' 'Never write "see the file in scratchDir"' 'full, unambiguous sentences'; do
   printf '%s' "$OUTSEC" | grep -qF "$frag" || { echo "FAIL common-workers.md: Output section lost '$frag'"; FAIL=1; }
+done
+WRAP="$(grep -F 'Never wrap commands in' "$CW" || true)"
+for frag in 'Never wrap commands in `bash -c` or `sh -c`' 'save it as a script in `scratchDir`' 'the shell may be zsh'; do
+  printf '%s' "$WRAP" | grep -qF -- "$frag" || { echo "FAIL common-workers.md: the wrapped-commands rule lost '$frag'"; FAIL=1; }
 done
 grep -qF "3-sentence" "$CW" && grep -qF -- '--report-path' "$CW" || { echo "FAIL common-workers.md: lost the override of the preamble's report instructions"; FAIL=1; }
 PL="$(grep 'Specs are written in English and stay compact' "$ROOT/prompts/programmer/planner.md" || true)"
@@ -2028,6 +2032,173 @@ pb "$(grep -F '**Briefed rounds.**' "$ROOT/README.md" || true)" "README briefed 
 pb "$(grep -F 'checkpoint.sh ' "$ROOT/README.md" | grep 'bin/\|├' || true)" "README Files" 'refs/orca-roles/checkpoints'
 pb "$(grep -F 'refs/orca-roles/checkpoints/<worktree id>' "$ROOT/README.md" || true)" "README worktree refs" '--clear <step>'
 echo "ok   checkpoint prompts"
+}
+
+sec_model_check() {
+# A role whose model does not exist is detected, recorded and escalated, never switched (kickoff.sh), with a fake orca whose screen accumulates history
+MF="$TMP/mf"; mkdir -p "$MF/gd" "$MF/bin" "$MF/wt"; git -C "$MF/wt" init -q
+cat > "$MF/bin/orca" <<EOS
+#!/bin/sh
+L="$MF/orca.log"; h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done
+case "\$1 \$2" in
+  "terminal wait") echo "WAIT \$*" >> "$MF/waits.log"; [ -f "$MF/sent.\$h" ] && sleep "\$(cat "$MF/waitdelay")";;
+  "terminal send")
+    t=""; while [ \$# -gt 0 ]; do [ "\$1" = --text ] && t="\$2"; shift; done
+    echo "SEND \$(printf '%s' "\$t" | head -n 1 | cut -c1-60)" >> "\$L"
+    : > "$MF/sent.\$h"
+    if [ -f "$MF/paste" ]; then echo "> [Pasted text #1 +3 lines]" >> "$MF/hist.\$h"; else echo "> \$(printf '%s' "\$t" | head -n 1 | cut -c1-40) hello" >> "$MF/hist.\$h"; fi
+    if [ "\$(cat "$MF/mode")" = bad ]; then
+      if [ -f "$MF/wrap" ]; then w="\$(cat "$MF/wrap")"; { printf '  ⎿  '; sed "s/ \$w/\\\\
+     \$w/" "$MF/errtxt"; } >> "$MF/hist.\$h"; else cat "$MF/errtxt" >> "$MF/hist.\$h"; fi
+    else echo ready >> "$MF/hist.\$h"; fi;;
+  "terminal read") v=1000000; [ -f "$MF/view" ] && v="\$(cat "$MF/view")"; jq -nc --arg s "\$(tail -n "\$v" "$MF/hist.\$h" 2>/dev/null)" '{text: \$s}';;
+  "orchestration send")
+    to=""; sub=""; body=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; esac; shift; done
+    echo "ESC \$to|\$sub|\$body" >> "\$L"; [ -f "$MF/failsend" ] && exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$MF/bin/orca"
+CLERR="There's an issue with the selected model (x). It may not exist or you may not have access to it."
+echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
+mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE
+  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/failsend" "$MF/waits.log"
+  printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
+  [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
+  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'PLANNER=hp\nDEV=hd\nTESTER=ht\nAUDITOR=ha\n' > "$MF/gd/orca-roles.env"
+  echo "$2" > "$MF/mode"
+  (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" > "$MF/out.log" 2>&1)
+}
+mfc() { printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner", "model": "claude-opus-5-5" }, "dev": { %s } } }' "$1"; }
+models() { cat "$MF/gd/orca-roles.models" 2>/dev/null | tr '\n' ' '; }
+nomodel() { grep -c '/model' "$MF/orca.log" || true; }
+escs() { grep '^ESC ' "$MF/orca.log" || true; }
+nesc() { escs | wc -l | tr -d ' '; }
+DEVOK='"title": "Dev", "model": "claude-opus-5-5"'
+BODY="ESC hp|Dev model unavailable|Dev did not start: its model claude-opus-5-5 is not available (There's an issue with the selected model). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles (without options, so this worktree's saved options are kept)."
+# model_error_regex
+MR="$MF/mr.json"; echo '{"defaults":{"agent":"claude"},"roles":{"c":{},"x":{"agent":"codex"},"u":{"agent":"custom"},"u2":{"agent":"custom","modelError":"boom {model}!"}}}' > "$MR"
+check "model_error_regex: claude" "$(model_error_regex "$MR" c m)" "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]"
+check "model_error_regex: no model, no detection" "$(model_error_regex "$MR" c "")" ""
+check "model_error_regex: codex escapes the model id" "$(model_error_regex "$MR" x 'gpt-5.5')" '(unexpected status|ERROR:)[^E]{0,200}gpt-5\.5[^E]{0,200}(does not exist|not supported|model_not_found)'
+check "model_error_regex: custom without modelError" "$(model_error_regex "$MR" u m)" ""
+check "model_error_regex: custom with {model} escaped" "$(model_error_regex "$MR" u2 'a.b')" 'boom a\.b!'
+# claude: bad model -> FAILED, exact escalation, nothing is switched
+mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: bad model recorded as FAILED" "$(models)" "DEV=FAILED:claude-opus-5-5 "
+check "model-check: exact escalation" "$(escs)" "$BODY"
+check "model-check: no /model is ever sent" "$(nomodel)" "0"
+check "model-check: role message sent once" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
+mf "$(mfc "$DEVOK")" clean "dev"
+check "model-check: good model recorded, no escalation" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+for how in new remembered; do
+  if [ "$how" = new ]; then STALE=1 mf "$(mfc "$DEVOK")" clean "dev"; else STALE=1 REM=dev mf "$(mfc "$DEVOK")" clean "dev"; fi
+  check "model-check: stale error, good model, $how role" "$(models):$(nesc):$(nomodel)" "DEV=claude-opus-5-5 :0:0"
+done
+STALE=1 mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: a stale error does not hide a new one" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+PASTE=1 mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: collapsed paste still detected" "$(models)" "DEV=FAILED:claude-opus-5-5 "
+ERRTXT="The model us.anthropic.claude-x is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: Bedrock text detected" "$(models):$(escs | grep -c 'The model us.anthropic.claude-x is not available on your)')" "DEV=FAILED:claude-opus-5-5 :1"
+ERRWRAP=model mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: wrapped error detected (indented continuation)" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+BREG="The model us.anthropic.claude-opus-5-5-20260101-v1:0 is not available on your bedrock deployment."
+ERRWRAP="on your" ERRTXT="$BREG" mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: wrapped Bedrock error detected" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+ERRTXT="API Error (us.anthropic.claude-opus-5-5-v9:0): The provided model identifier is invalid.. Run /model to pick a different model." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: Bedrock invalid model id detected" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+ERRTXT="API Error (500): Internal server error" mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: other API errors are not model errors" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+STALETXT="The model us.anthropic.old-1 is not available on your account." STALE=1 ERRTXT="The model us.anthropic.new-2 is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: the escalation quotes the newest error" "$(escs | grep -c 'is not available (The model us.anthropic.new-2 is not available on your)')" "1"
+ERRTXT="Warning: model x isn't described by this version's model catalog" mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: catalog warning is fine" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+VIEW=2 STALE=1 REM=dev mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: known limit: small pane at the first check" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+mf "$(mfc "$DEVOK" | jq -c 'del(.defaults.agent)')" bad "dev"
+check "model-check: a role with no agent is treated as claude" "$(models)" "DEV=FAILED:claude-opus-5-5 "
+# codex
+CXERR='ERROR: unexpected status 404 Not Found: The model `gpt-5.5` does not exist or you do not have access to it.'
+ERRTXT="$CXERR" mf "$(mfc '"title": "Dev", "agent": "codex", "model": "gpt-5.5"')" bad "dev"
+check "model-check: codex bad model -> FAILED" "$(models):$(nesc)" "DEV=FAILED:gpt-5.5 :1"
+ERRTXT="${CXERR//gpt-5.5/gpt-5x5}" mf "$(mfc '"title": "Dev", "agent": "codex", "model": "gpt-5.5"')" bad "dev"
+check "model-check: codex model id is not a regex" "$(models):$(nesc)" "DEV=gpt-5.5 :0"
+ERRTXT="$CXERR" mf "$(mfc '"title": "Dev", "agent": "codex"')" bad "dev"
+check "model-check: codex without model, no detection" "$(models)" ""
+# custom
+mf "$(mfc '"title": "Dev", "agent": "custom", "command": "x", "model": "my-model", "modelError": "boom {model}"')" bad "dev"
+ERRTXT="boom my-model" mf "$(mfc '"title": "Dev", "agent": "custom", "command": "x", "model": "my-model", "modelError": "boom {model}"')" bad "dev"
+check "model-check: custom modelError -> FAILED" "$(models)" "DEV=FAILED:my-model "
+ERRTXT="boom my-model" mf "$(mfc '"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"')" bad "dev"
+check "model-check: custom without modelError, no detection" "$(models)" ""
+# no model, planner, failed send
+mf "$(mfc '"title": "Dev"')" bad "dev"
+check "model-check: no model -> no detection, no line" "$(models)" ""
+mf "$(mfc "$DEVOK")" bad "planner"
+check "model-check: planner FAILED, no escalation" "$(models):$(nesc)" "PLANNER=FAILED:claude-opus-5-5 :0"
+RC=0; FAILSEND=1 mf "$(mfc "$DEVOK")" bad "dev" || RC=$?
+check "model-check: failed escalation send is ignored" "$RC:$(models):$(grep -c 'Could not tell the Planner: Dev model unavailable' "$MF/out.log")" "0:DEV=FAILED:claude-opus-5-5 :1"
+# parallel
+mf "$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')" bad "dev tester"
+check "model-check: two roles, both lines" "$(sort "$MF/gd/orca-roles.models" | tr '\n' ' ')" "DEV=FAILED:claude-opus-5-5 TESTER=FAILED:claude-opus-5-5 "
+check "model-check: two roles, both escalations" "$(escs | cut -d'|' -f2 | sort | tr '\n' ' ')" "Dev model unavailable Tester model unavailable "
+check "model-check: no leftover partial files" "$([ -e "$MF/gd/orca-roles.models.d" ] && echo 1 || echo 0)" "0"
+MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"} | .roles.auditor = {"title": "Auditor", "model": "claude-opus-5-5"}')"
+echo 1 > "$MF/waitdelay"; t0=$SECONDS
+mf "$MF3" bad "dev tester auditor"
+check "model-check: the checks of three roles run in parallel" "$(( SECONDS - t0 < 3 ))" "1"
+echo 2 > "$MF/waitdelay"; t0=$SECONDS
+mf "$MF3" clean "dev tester auditor"
+check "model-check: three roles are checked in parallel" "$(( SECONDS - t0 < 5 ))" "1"
+echo 0 > "$MF/waitdelay"
+# kept lines, config untouched, bounded waits
+PRE=$'AUDITOR=claude-x\nDEV=FAILED:old\n'
+mf "$(mfc "$DEVOK")" clean "dev"; unset PRE
+check "model-check: other roles' lines kept, own replaced" "$(models)" "AUDITOR=claude-x DEV=claude-opus-5-5 "
+check "model-check: config.json is never touched" "$(printf '%s' "$(mfc "$DEVOK")" | cmp -s - "$MF/cfg.json" && echo same || echo changed)" "same"
+mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: every wait is bounded by kickoffTimeoutSeconds" "$(grep -vc -e '--timeout-ms 1000 ' "$MF/waits.log" || true)" "0"
+check "model-check: waits happened" "$(( $(wc -l < "$MF/waits.log") > 1 ))" "1"
+# more edges: remembered bad role, old and new codex error, long text cut, writes confined to the git dir
+REM=dev mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: remembered role with a bad model -> FAILED" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+CXD='"title": "Dev", "agent": "codex", "model": "gpt-5.5"'
+STALE=1 STALETXT="$CXERR" ERRTXT="$CXERR" mf "$(mfc "$CXD")" bad "dev"
+check "model-check: codex stale error does not merge with the new one" "$(models):$(nesc)" "DEV=FAILED:gpt-5.5 :1"
+STALE=1 STALETXT="$CXERR" mf "$(mfc "$CXD")" clean "dev"
+check "model-check: codex stale error, good model" "$(models):$(nesc)" "DEV=gpt-5.5 :0"
+PAD="$(printf 'x%.0s' $(seq 1 150))"
+ERRTXT="ERROR: unexpected status 404 $PAD gpt-5.5 $PAD does not exist" mf "$(mfc "$CXD")" bad "dev"
+check "model-check: matched text in the escalation is cut to 200 characters" "$(escs | sed 's/^[^(]*(//; s/)\. config.json.*$//' | tr -d '\n' | wc -c | tr -d ' ')" "200"
+mkdir -p "$TMP/home"; HB="$(cd "$TMP/home" && find . | sort | shasum)"
+mf "$(mfc "$DEVOK")" bad "dev tester"
+check "model-check: nothing outside the git dir is written" "$(find "$MF/wt" -mindepth 1 -not -path "$MF/wt/.git" -not -path "$MF/wt/.git/*" | wc -l | tr -d ' '):$(ls "$MF/gd" | tr '\n' ' '):$(cd "$TMP/home" && find . | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed)" "0:orca-roles.env orca-roles.models :same"
+# check_config and docs
+cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }
+# defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
+CUD='"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"'
+ERRTXT="dflt my-model" mf "$(mfc "$CUD" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"
+check "model-check: a custom role inherits defaults.modelError" "$(models):$(nesc)" "DEV=FAILED:my-model :1"
+ERRTXT="dflt my-model" mf "$(mfc "$CUD, \"modelError\": \"own {model}\"" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"
+check "model-check: the role's modelError wins over the default" "$(models):$(nesc)" "DEV=my-model :0"
+STALETXT="The model us.anthropic.old-1 is not available on your account." STALE=1 ERRTXT="The model us.anthropic.new-2 is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: an old and a new Bedrock error are two matches" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+for bad in '""' '5'; do
+  check "check_config: defaults modelError $bad rejected" "$(cc "$(printf '{"defaults":{"modelError":%s},"roles":{}}' "$bad")")" "ERROR: invalid configuration: modelError must be a non-empty string"
+done
+for bad in '""' '5'; do
+  check "check_config: role modelError $bad rejected" "$(cc "$(printf '{"roles":{"dev":{"modelError":%s}}}' "$bad")")" "ERROR: invalid configuration: modelError must be a non-empty string"
+done
+check "check_config: modelError string accepted" "$(cc '{"roles":{"dev":{"modelError":"x {model}"}}}')" ""
+PL="$ROOT/prompts/programmer/planner.md"
+for frag in 'model unavailable' 'comes from the kit' 'fix it themselves' 'Never dispatch tasks to a role that did not start' 'close-role.sh'; do
+  grep -F 'model unavailable' "$PL" | grep -qF -- "$frag" || { echo "FAIL planner.md: the model unavailable sentence lost '$frag'"; FAIL=1; }
+done
+grep -qF 'modelError' "$ROOT/README.md" || { echo "FAIL README without modelError"; FAIL=1; }
+grep -F 'A role never answers its first message' "$ROOT/README.md" | grep -qF 'model unavailable' || { echo "FAIL README troubleshooting row without the new behaviour"; FAIL=1; }
+grep -F 'does not answer its first message' "$ROOT/plugin/skills/team/SKILL.md" | grep -qF 'modelError' || { echo "FAIL SKILL.md row without modelError"; FAIL=1; }
+echo "ok   model-check docs"
 }
 
 sec_cli() {

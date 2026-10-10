@@ -36,6 +36,17 @@ project_config() {
 # A role's value, inheriting from defaults:  rcfg <config> <role> <field>
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
+# The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
+# claude: Claude Code's own texts; codex: the API error naming the model; custom: the role's modelError with {model} as the escaped model id.
+model_error_regex() {
+  local agent esc; [ -n "$3" ] || return 0
+  agent="$(rstr "$1" "$2" agent)"; esc="$(regex_escape "$3")"
+  case "${agent:-claude}" in
+    claude) printf '%s\n' "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]";;
+    codex) printf '%s\n' "(unexpected status|ERROR:)[^E]{0,200}${esc}[^E]{0,200}(does not exist|not supported|model_not_found)";;
+    custom) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
+  esac
+}
 setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
 MODE_IDS="programmer pr-reviewer academic-writer"
@@ -152,6 +163,10 @@ check_config() {
             (to_entries | map(select((.key as $k | $ms | index($k) | not) or (.value | type) != "string")) | if length > 0 then "ERROR: role \($r): prompt must map mode ids to file paths (invalid: \(map(.key) | join(", ")); modes: \($ml))" else empty end)
           else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
       else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
+    | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: modelError must be a non-empty string"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0

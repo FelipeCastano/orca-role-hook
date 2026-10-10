@@ -330,6 +330,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `modes` | `"all"` or a list of the modes the role belongs to (default `["programmer"]`). See [Modes](#modes). |
 | `agent` | Which CLI is launched: `claude`, `codex` or `custom`. |
 | `model` | Exact model passed to the agent. |
+| `modelError` | Only with `agent: "custom"`: an ERE (`grep -E`) the agent prints when its model does not exist; `{model}` stands for the escaped model id. Without it, a missing model is not detected for that role. |
 | `permissionMode` | In `claude`, the `--permission-mode` (`auto`, `acceptEdits`, `manual`...). `default` means not passing the flag. In `codex`, `auto` is `--sandbox workspace-write --ask-for-approval on-request` (what `--full-auto` was); any other value passes nothing. |
 | `mcp` | `"all"` for the agent to use its own MCP configuration (in `claude`, all your connectors), or a list of `mcpServers` names (`[]` = none). Works with any agent: see [MCP in other agents](#mcp-in-other-agents). |
 | `allowedTools` | Tools allowed without asking. `claude` only. |
@@ -561,6 +562,7 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | "Orca CLI not found" (Windows), or `Command 'orca' not found` | Run the command from an Orca terminal (outside them neither `orca` nor `$ORCA_CLI_COMMAND` exist), opened after installing or after `source ~/.bashrc`, so it has the `orca` alias. Do not install apt's `orca` package (a screen reader) |
 | The agents do not receive their role | The worktree's `orca-roles-kickoff.log` |
 | "Invalid configuration" | Validate your JSON: `jq . ~/.orca-roles/config.json` (and the project's `.orca-roles.json`) |
+| A role never answers its first message | Its `model` may not exist: after the role message the kickoff compares the screen with what it showed before and, if a new model error appeared (Claude Code's "There's an issue with the selected model", Codex's "does not exist" API error, or the custom agent's `modelError`), records `ROLE=FAILED:<model>` in `orca-roles.models` (git dir) and sends the Planner a "model unavailable" escalation; the Planner asks you whether you fix it yourself or want it to. Nothing is switched and `config.json` is never changed: set `roles.<id>.model`, close the tab with `close-role.sh <id>` and run `roles`. In a very small pane the check can miss an error (the kit reads only what the tab shows): the role's first answer tells you. Only roles with a `model` are checked |
 | An agent starts with another model or MCP | `orca-roles.config.json` in the worktree's git dir shows the configuration that was used, and `orca-roles-launch.log` the exceptions applied |
 | A role does not appear even though `enabled` is `true` | The worktree's saved exceptions: `orca-roles.overrides.json` in its git dir. Drop them with `roles --reset` |
 | The Planner replies in another language | `settings.language` (or a `--set settings.language=...` in the setup script); with `"auto"` it replies in the language you write in |
