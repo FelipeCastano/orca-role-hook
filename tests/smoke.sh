@@ -188,7 +188,7 @@ done
 CMT="$(grep 'One commit per step, made at close' "$PLP" || true)"
 printf '%s' "$CMT" | grep -qF "only on the user's explicit yes to that commit, before the next step opens" || { echo "FAIL planner.md: the one-commit rule lost the explicit yes"; FAIL=1; }
 CMT2="$(grep 'One commit per step, now' "$PLP" || true)"
-for frag in 'show the user the full message and the list of files' 'commit only on a clear yes to that commit' 'Approving the plan, the step or the Auditor' 'is not approving the commit' 'If they ask for changes, show it again' '"ok, continue"' 'ask again' 'decline or defer the commit, ask what to do with the uncommitted changes' 'after the convention check in "Limits"' '`git status`, `git diff --stat`'; do
+for frag in 'show the user the full message and the list of files' 'commit only on a clear yes to that commit' 'Approving the plan, the step or the Tester' 'is not approving the commit' 'If they ask for changes, show it again' '"ok, continue"' 'ask again' 'decline or defer the commit, ask what to do with the uncommitted changes' 'after the convention check in "Limits"' '`git status`, `git diff --stat`'; do
   printf '%s' "$CMT2" | grep -qF "$frag" || { echo "FAIL planner.md: step-close commit rule lost '$frag'"; FAIL=1; }
 done
 for pat in 'A step is \*\*open\*\* from its first task' 'Only one code task is in flight'; do
@@ -199,11 +199,15 @@ printf '%s' "$(grep '\*\*Jira subtasks\.\*\*' "$PLP" || true)" | grep -qF 'after
 [ "$(grep -cF 're-propose its close commit (re-running the convention check in "Limits")' "$PLP")" = 3 ] || { echo "FAIL planner.md: the recovery paths (resumed, back, cleared) must re-propose an uncommitted ACCEPTED step's commit"; FAIL=1; }
 printf '%s' "$(grep '^- \*\*Nothing leaves the worktree' "$PLP" || true)" | grep -qF 'Approving the plan, a step or a commit is not approving a push or a Jira update' || { echo "FAIL planner.md: the nothing-leaves rule lost its approval sentence"; FAIL=1; }
 grep -qF 'Nobody commits while the step is open' "$PLP" && { echo "FAIL planner.md: 'Nobody commits while the step is open' forbids the close commit"; FAIL=1; }
-grep -qF "Nobody commits before the Auditor's ACCEPTED" "$PLP" || { echo "FAIL planner.md: the one-commit bullet lost 'Nobody commits before the Auditor's ACCEPTED'"; FAIL=1; }
+grep -qF "Nobody commits before the Tester's ACCEPTED" "$PLP" || { echo "FAIL planner.md: the one-commit bullet lost 'Nobody commits before the Tester's ACCEPTED'"; FAIL=1; }
+grep -qF "Nobody commits before the Auditor's ACCEPTED" "$PLP" && { echo "FAIL planner.md: still says nobody commits before the Auditor's ACCEPTED"; FAIL=1; }
+printf '%s' "$(grep '^8\. \*\*Close and report' "$PLP" || true)" | grep -qF "closes only with the Tester's ACCEPTED" || { echo "FAIL planner.md: step 8 must close on the Tester's ACCEPTED"; FAIL=1; }
+printf '%s' "$(grep '^- A step only closes with ACCEPTED' "$PLP" || true)" | grep -qF 'ACCEPTED from the Tester (and the E2E-Tester and the Researcher if they took part)' || { echo "FAIL planner.md: Limits step-close rule is not the Tester's (plus E2E-Tester/Researcher)"; FAIL=1; }
+printf '%s' "$(grep '^- A step only closes with ACCEPTED' "$PLP" || true)" | grep -qF 'Auditor' && { echo "FAIL planner.md: Limits step-close rule still names the Auditor"; FAIL=1; }
 for pat in '^8\. \*\*Close and report' '^- A step only closes with ACCEPTED'; do
   printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and its commit made' || { echo "FAIL planner.md: '$pat' lost 'and its commit made'"; FAIL=1; }
 done
-printf '%s' "$(grep '^Steps are atomic' "$ROOT/README.md" || true)" | grep -qF "Nobody commits before the Auditor's ACCEPTED" || { echo "FAIL README: lost the commit-after-ACCEPTED definition"; FAIL=1; }
+printf '%s' "$(grep '^Steps are atomic' "$ROOT/README.md" || true)" | grep -qF "Nobody commits before the Tester's ACCEPTED" || { echo "FAIL README: lost the commit-after-ACCEPTED definition"; FAIL=1; }
 for pat in '^5\. Tell the user, in a few lines: where you were' '^3\. Tell the user, in a few lines: the Run'; do
   printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and wait for the yes' || { echo "FAIL planner.md: recovery summary '$pat' lost 'wait for the yes'"; FAIL=1; }
 done
@@ -1555,7 +1559,7 @@ done
 grep -q 'maxSelfMutants' "$ROOT/prompts/programmer/tester.md" && grep -q 'family of inputs with its boundaries' "$ROOT/prompts/programmer/tester.md" || { echo "FAIL tester.md without self-mutation or families"; FAIL=1; }
 grep -q 'Reject only from the threshold' "$ROOT/prompts/programmer/auditor.md" && grep -q 'rejectSeverity' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md without the threshold"; FAIL=1; }
 grep -q 'family with its boundaries' "$ROOT/prompts/programmer/dev.md" || { echo "FAIL dev.md without boundaries"; FAIL=1; }
-check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[5,"high"]'
+check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,"high"]'
 echo "ok   prompts carry the review's rules"
 }
 
@@ -2109,19 +2113,44 @@ pb() { printf '%s' "$1" | grep -qF -- "$3" || { echo "FAIL $2 lost '$3'"; FAIL=1
 LED="$(grep '\*\*Ledger\.\*\*' "$PLP" || true)"
 for frag in 'ledger-<step>.md' 'your scratchDir' 'the base commit' 'the checkpoint refs' 'mutants killed or survived, tests added' 'findings open and closed' 'what was not audited' 'Update it after every report' 'source of every brief' 'before proposing the close commit' 'closed or accepted by the user'; do pb "$LED" "planner.md ledger bullet" "$frag"; done
 T3="$(grep '^3\. \*\*Tests\*\*' "$PLP" || true)"; A4="$(grep '^4\. \*\*Audit\*\*' "$PLP" || true)"
-pb "$T3" "planner.md step 3" 'checkpoint.sh <step> <n>'; pb "$T3" "planner.md step 3" 'after every Dev or Tester `worker_done` in the step'; pb "$T3" "planner.md step 3" '(n = 1 for the first report of the step, +1 for each later report)'; pb "$T3" "planner.md step 3" '); after Dev'"'"'s, create the Tester'"'"'s task with a brief'; pb "$T3" "planner.md step 3" 'with a brief (see "Briefed rounds") instead of a chain of dependent tasks'; pb "$A4" "planner.md step 4" "and its checkpoint"
-grep -qF '<step>-c<n-1>' "$PLP" && { echo "FAIL planner.md still has the consecutive-checkpoint wording <step>-c<n-1>"; FAIL=1; }; pb "$T3" "planner.md step 3" 'brief'
-pb "$A4" "planner.md step 4" "after the Tester's"; pb "$A4" "planner.md step 4" 'also carries what the Tester did and found'
+pb "$T3" "planner.md step 3" 'checkpoint.sh <step> <n>'; pb "$T3" "planner.md step 3" 'after every Dev or Tester `worker_done` in the step'; pb "$T3" "planner.md step 3" '(n = 1 for the first report of the step, +1 for each later report)'; pb "$T3" "planner.md step 3" '); after Dev'"'"'s, create the Tester'"'"'s task with a brief'; pb "$T3" "planner.md step 3" 'with a brief (see "Briefed rounds") instead of a chain of dependent tasks'; grep -qF '<step>-c<n-1>' "$PLP" && { echo "FAIL planner.md still has the consecutive-checkpoint wording <step>-c<n-1>"; FAIL=1; }; pb "$T3" "planner.md step 3" 'brief'
+pb "$A4" "planner.md step 4" 'the Auditor does not take part in each step'; pb "$A4" "planner.md step 4" 'Set audit'; pb "$A4" "planner.md step 4" "A step ends with the Tester's"
+[ -z "$(printf '%s' "$A4" | grep -F 'create the Auditor' || true)" ] || { echo "FAIL planner.md step 4 still creates a per-step Auditor task"; FAIL=1; }
 [ -z "$(printf '%s' "$T3$A4" | grep -F -- '--deps' || true)" ] || { echo "FAIL planner.md steps 3 and 4 still chain tasks with --deps"; FAIL=1; }
 NP="$(grep 'Never pre-create Tester or Auditor tasks' "$PLP" || true)"; pb "$NP" "planner.md no-pre-created bullet" '--deps'; pb "$NP" "planner.md no-pre-created bullet" 'generic specs'; pb "$NP" "planner.md no-pre-created bullet" 'after the previous report'
 BR="$(grep '\*\*Briefed rounds\.\*\*' "$PLP" || true)"
 for frag in 'self-contained brief' 'The task' 'acceptance criteria with their pass/fail examples' 'threat model and rejection threshold' 'The state' 'the files changed' 'what Dev did and decided' 'for the Auditor, also what the Tester did and found' 'what earlier rounds already verified' 'the findings still open' '"not audited" items carried forward' 'carries the whole step'"'"'s diff' 'with ref = the latest checkpoint' 'a later brief to a role carries' 'ref of the checkpoint its previous brief pointed to' '<latest ref>' 'since that role last looked' 'test-only rounds included' '`<step>` is lowercase letters, digits and hyphens' 'passes information only' 'never tells the Tester or the Auditor what to test, mutate or look at, or where the risks are'; do pb "$BR" "planner.md briefed-rounds bullet" "$frag"; done
 printf '%s' "$BR" | grep -qiE 'test (the|these|every)|you must mutate|focus on' && { echo "FAIL planner.md briefed-rounds bullet contains a known prescriptive phrase (a denylist of known phrases, not a proof that it never prescribes)"; FAIL=1; }
 FX="$(grep '\*\*Fix rounds carry only what changed' "$PLP" || true)"
-for frag in "never points to a task id" 'the findings assigned to that worker exactly as the reviewer wrote them' '(text, file:line, reproduction)' 'plus any contract change' 'cleaned since its previous task in this step' "also gets the step's task again" 'Tester and Auditor fix rounds also follow "Briefed rounds"'; do pb "$FX" "planner.md fix-rounds bullet" "$frag"; done
+for frag in "never points to a task id" 'the findings assigned to that worker exactly as the reviewer wrote them' '(text, file:line, reproduction)' 'plus any contract change' 'cleaned since its previous task in this step' "also gets the step's task again" 'Tester rounds and Auditor tasks also follow "Briefed rounds"'; do pb "$FX" "planner.md fix-rounds bullet" "$frag"; done
 printf '%s' "$FX" | grep -qF 'references that task' && { echo "FAIL planner.md fix-rounds bullet still points to a task id"; FAIL=1; }
 [ "$(grep -c 'Fix rounds carry only what changed' "$PLP")" = 1 ] || { echo "FAIL planner.md: fix-rounds bullet missing or duplicated"; FAIL=1; }
-pb "$(grep 'After the commit' "$PLP" || true)" "planner.md close" 'checkpoint.sh --clear <step>'
+pb "$(grep '^   - \*\*After the commit\*\*' "$PLP" || true)" "planner.md close" 'clear the step'"'"'s checkpoints: `~/.orca-roles/bin/checkpoint.sh --clear <step>`.'
+grep -qF "are not cleared after the step's commit" "$PLP" && { echo "FAIL planner.md still keeps step checkpoints after the commit"; FAIL=1; }
+SA="$(grep '\*\*Set audit\.\*\*' "$PLP" || true)"
+[ "$(grep -c '\*\*Set audit\.\*\*' "$PLP")" = 1 ] || { echo "FAIL planner.md: Set audit bullet missing or duplicated"; FAIL=1; }
+for frag in 'audits once per set, not per step' 'before proposing the push or the PR' 'the commit the branch started from' '`git diff <base> HEAD`' 'the ledger state of every step' 'Findings at or above medium' 'reviews only the corrections' 'Findings below medium (low and notes): fixed in a Dev/Tester step without a new audit' 'only after the set audit has no open finding at or above medium' 'Clear the set'"'"'s checkpoints (`~/.orca-roles/bin/checkpoint.sh --clear set`) after the set audit closes.' 'never become new commits on top' '--fixup=' '--autosquash' 'checkpoint.sh set' 'before dispatching any fix task' 'with the tree clean (everything committed), record the audited state with `~/.orca-roles/bin/checkpoint.sh set <n>`' '(n = 1 for the first set audit, +1 for each corrections review)' 'the checkpoint recorded for the audited HEAD' 'the force-push needs its own yes' 'Show the user the resulting commit list and rewrite only on their yes' 'The corrections review diffs the recorded checkpoint against the new HEAD' 'the corrections folded into the step commits' 'GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>' 'commit each correction as `git commit --fixup=<the step commit it belongs to>`' '(no interactive editor)'; do pb "$SA" "planner.md Set audit bullet" "$frag"; done
+printf '%s' "$SA" | grep -qF 'before rewriting, record' && { echo "FAIL planner.md Set audit bullet still records the checkpoint before rewriting"; FAIL=1; }
+pb "$(grep 'Threat model and rejection threshold per step' "$PLP" || true)" "planner.md threat model bullet" "Both go in the Tester's tasks and in the set audit's brief"
+AK="$(grep 'Work out which kind of task it is' "$AU" || true)"
+for frag in '**set audit**' 'the whole diff of a set of steps' 'apply the full method' '**corrections review**' 'only the diff the brief names' 'the findings those corrections answer' 're-run only the mutants that matter for the corrections' 'do not re-review the rest of the set'; do pb "$AK" "auditor.md task kinds" "$frag"; done
+pb "$(grep '^1\. Read the Planner' "$TS" || true)" "tester.md step 1" "The Auditor no longer reviews each step, so your review is the step's only one before its commit; the set audit comes later."
+check "defaults: maxMutants 8 and maxSelfMutants 3 in config, auditor.md and tester.md" "$(jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json"):$(grep -c '^- `maxMutants`: 8$' "$AU"):$(grep -c '^- `maxSelfMutants`: 3$' "$TS")" '[8,3]:1:1'
+mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]'; }
+check "upgrade_config moves the old defaults 15/5 to 8/3" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":15}},"tester":{"params":{"maxSelfMutants":5}}}}')" "[8,3]"
+check "upgrade_config keeps a user's own maxMutants/maxSelfMutants" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":12}},"tester":{"params":{"maxSelfMutants":4}}}}')" "[12,4]"
+check "upgrade_config gives 8/3 to a config without the keys" "$(mm '{"roles":{}}')" "[8,3]"
+RM="$ROOT/README.md"
+pb "$(grep '^4\. ' "$RM" || true)" "README flow step 4" 'does not take part in each step'
+pb "$(grep '^8\. The \*\*Planner\*\*' "$RM" || true)" "README flow step 8" "Tester's ACCEPTED"
+pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'Dev → Tester'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'folded into the step commits they belong to'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'once per set'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'corrections-only review'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'findings below medium (low and notes) are fixed without a new audit'
+pb "$(grep -F '| **Auditor** |' "$RM" || true)" "README Auditor row" '`maxMutants` 8'
+pb "$(grep -F '| **Auditor** |' "$RM" || true)" "README Auditor row" "Existing installs that still had the old defaults (15 and 5) move to the new ones on update; values you set yourself are kept (except exactly 15 and 5 themselves, which every update moves to the new defaults; to keep them, set them in the project's \`.orca-roles.json\`)."
+printf '%s' "$(grep -F 'Reviews the security of Dev' "$ROOT/plugin/skills/team/SKILL.md" || true)" | grep -qF 'after the audit' && { echo "FAIL SKILL example role still says 'after the audit'"; FAIL=1; }
+pb "$(grep -F 'Reviews the security of Dev' "$ROOT/plugin/skills/team/SKILL.md" || true)" "SKILL example role" 'Use it in steps that touch authentication or data.'
+pb "$(grep '^Steps are atomic' "$RM" || true)" "README steps paragraph" 'once Dev and the Tester are done'
+pb "$(grep -F '**Briefed rounds.**' "$RM" || true)" "README briefed rounds" "clears each step's checkpoints at the step's commit and the set's at the end of the set audit"
+printf '%s' "$(grep -F '**Briefed rounds.**' "$RM" || true)" | grep -qF 'only after the set audit closes' && { echo "FAIL README briefed rounds still keeps step checkpoints"; FAIL=1; }
 S2="$(grep '^2\. \*\*Development\*\*' "$PLP" || true)"
 for frag in 'a specification decided in planning' 'written for a smaller model' 'leaves nothing to decide' 'the approach, where each change goes (file, function, around which lines)' 'names, data shapes and formats, messages' 'every edge case and error path you can foresee' 'backward compatibility, other callers' 'resolved in planning (with the Researcher or the user), never left to Dev' '`orca orchestration ask`' 'every decision Dev still takes on its own is listed in its report' 'you review each one before the Tester'"'"'s brief (accepted, changed or taken to the user)' 'Fix tasks follow the same rule'; do pb "$S2" "planner.md step 2 (Development)" "$frag"; done
 DV="$(grep -A1 '^1\. Implement exactly what the spec asks' "$ROOT/prompts/programmer/dev.md" | tail -1)"

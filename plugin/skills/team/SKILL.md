@@ -129,7 +129,7 @@ When to recommend each: something for good → `config.json`; something for one 
    {
      "id": "security-reviewer",
      "title": "Security",
-     "description": "Reviews the security of Dev's code. Use it after the audit in steps that touch authentication or data.",
+     "description": "Reviews the security of Dev's code. Use it in steps that touch authentication or data.",
      "model": "claude-opus-5-5",
      "mcp": [],
      "params": { "maxFindings": 20 },
