@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -1785,6 +1785,139 @@ check "guard: unbound variable inside a section -> exit non-zero, no ALL OK" "$(
 check "guard: it died on the probe" "$(printf '%s\n' "$OUT" | grep -c 'SMOKE_UNBOUND_PROBE: unbound variable')" "1"
 try bash "$ROOT/tests/smoke.sh" syntax
 check "guard: the same section unmodified -> exit 0 with ALL OK" "$RC:$(printf '%s\n' "$OUT" | grep -c '^ALL OK')" "0:1"
+}
+
+sec_checkpoint() {
+# checkpoint.sh: records the tree under refs/orca-roles/checkpoints/ without touching HEAD, index, branch or working tree
+CP="$ROOT/bin/checkpoint.sh"; CD="$TMP/cp"; rm -rf "$CD"; mkdir -p "$CD"
+cpg() { git -C "$CD" "$@"; }
+cpg init -q -b main; cpg config user.email t@example.com; cpg config user.name tester
+printf 'ign\n' > "$CD/.gitignore"; printf 'a\n' > "$CD/f"; printf 'b\n' > "$CD/g"; mkdir "$CD/sub"; printf 's\n' > "$CD/sub/h"
+cpg add -A; cpg commit -q -m init
+cpstate() { ( cd "$CD" && echo "head=$(git rev-parse HEAD) branch=$(git symbolic-ref HEAD) idx=$(shasum < "$(git rev-parse --git-path index)" | cut -d' ' -f1)"; git diff --cached | shasum | cut -d' ' -f1; GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 -uall | shasum | cut -d' ' -f1; find . -path ./.git -prune -o -type f -print | sort | xargs shasum | shasum | cut -d' ' -f1 ); }
+cprun() { CPRC=0; CPOUT="$(cd "${CPDIR:-$CD}" && bash "$CP" "$@" 2>"$TMP/cp.err")" || CPRC=$?; CPERR="$(cat "$TMP/cp.err")"; }
+printf 'a2\n' >> "$CD/f"; printf 'staged\n' > "$CD/g"; cpg add g; printf 'n1\n' > "$CD/new1"; printf 'x\n' > "$CD/ignored"; printf 'ignored\n' >> "$CD/.gitignore"
+printf 'junk\n' > "$CD/ign"
+S0="$(cpstate)"
+cprun s1 1; R1="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: exit 0 and prints the ref" "$CPRC:$(printf '%s' "$R1" | grep -c '^refs/orca-roles/checkpoints/.*/s1-c1$')" "0:1"
+check "checkpoint: HEAD, branch, index, staged diff, status and working tree unchanged" "$(cpstate)" "$S0"
+check "checkpoint: prints the whole-step diff command and no tracked-only one" "$(printf '%s\n' "$CPOUT" | grep -cF "git diff HEAD $R1"):$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "1:1"
+check "checkpoint: records modified, staged and untracked files" "$(cpg diff --name-only HEAD "$R1" | tr '\n' ' ')" ".gitignore f g new1 "
+check "checkpoint: excludes ignored files" "$(cpg ls-tree -r --name-only "$R1" | grep -cE '^(ign|ignored)$' || true)" "0"
+check "checkpoint: the commit has HEAD as its parent and the refs live outside the branch" "$(cpg rev-parse "$R1^"):$(cpg for-each-ref --format='%(refname)' refs/heads)" "$(cpg rev-parse HEAD):refs/heads/main"
+printf 'a3\n' >> "$CD/f"; printf 'n2\n' > "$CD/sub/new2"; rm "$CD/sub/h"; S1="$(cpstate)"
+cprun s1 2; R2="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: second call exits 0 and leaves everything unchanged" "$CPRC:$([ "$(cpstate)" = "$S1" ] && echo same)" "0:same"
+check "checkpoint: diff between two checkpoints is exactly the change made between them" "$(cpg diff --name-status "$R1" "$R2" | tr '\t\n' '::' | tr ':' ' ' | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')" "A D M f sub/h sub/new2 "
+check "checkpoint: that diff has no other content" "$(cpg diff "$R1" "$R2" | grep -E '^[+-][^+-]' | LC_ALL=C sort | tr '\n' ' ')" "+a3 +n2 -s "
+check "checkpoint: the previous-checkpoint diff command for n=2 is printed, and nothing else" "$(printf '%s\n' "$CPOUT" | grep -cF "Since the previous checkpoint:"):$(printf '%s\n' "$CPOUT" | grep -cF "git diff $R1 $R2"):$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "1:1:2"
+# refusals write nothing
+REFS0="$(cpg for-each-ref refs/orca-roles | wc -l | tr -d ' ')"; S2="$(cpstate)"
+for bad in '../x 1' 's1 x' 's1 -1' 's1 1.5' 's1 01' 'S1 1' 's/1 1' '-x 1' 's1' '' 's1 1 2' '"" 1'; do
+  eval "cprun $bad"
+  check "checkpoint: rejects [$bad], nothing written" "$([ "$CPRC" != 0 ] && echo fail):$([ -n "$CPERR" ] && echo msg):$(cpg for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "fail:msg:$REFS0"
+done
+cprun s1 1; check "checkpoint: an existing ref is refused without --force" "$CPRC:$(printf '%s' "$CPERR" | grep -c 'already exists'):$(cpg rev-parse "$R1")" "1:1:$(cpg rev-parse "$R1")"
+OLD="$(cpg rev-parse "$R1")"; cprun --force s1 1
+check "checkpoint: --force overwrites it" "$CPRC:$([ "$(cpg rev-parse "$R1")" != "$OLD" ] && echo moved)" "0:moved"
+check "checkpoint: state still unchanged after refusals and --force" "$(cpstate)" "$S2"
+# from a subdirectory
+CPDIR="$CD/sub" cprun s2 1; check "checkpoint: works from a subdirectory and records the whole tree" "$CPRC:$(cpg ls-tree -r --name-only "$(printf '%s\n' "$CPOUT" | head -1)" | grep -c '^new1$')" "0:1"
+# list and clear
+cprun --list; check "checkpoint: --list shows every checkpoint" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '^refs/orca-roles/')" "0:3"
+cprun --list s1; check "checkpoint: --list <step> shows only that step" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '/s1-c')" "0:2"
+cprun --list s; check "checkpoint: --list does not match a step that is only a prefix" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '^refs/')" "0:0"
+cprun --clear ../x; check "checkpoint: --clear rejects an invalid step" "$([ "$CPRC" != 0 ] && echo fail):$(cpg for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "fail:3"
+cprun --clear s1; check "checkpoint: --clear deletes that step's refs only" "$CPRC:$(cpg for-each-ref refs/orca-roles | grep -c '/s1-c'):$(cpg for-each-ref refs/orca-roles | grep -c '/s2-c1')" "0:0:1"
+check "checkpoint: --clear leaves HEAD, index, branch and tree unchanged" "$(cpstate)" "$S2"
+# refs are per worktree: two worktrees of one repo, same step name
+cpg add -A; cpg commit -q -m two; cpg worktree add -q "$TMP/cp-linked" -b other
+printf 'l\n' > "$TMP/cp-linked/only-linked"
+CPDIR="$TMP/cp-linked" cprun s1 1; RL="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: the same step and n in another worktree does not clash" "$CPRC:$([ "$RL" != "$R1" ] && echo different)" "0:different"
+cprun s1 1; check "checkpoint: the main worktree can still record its own s1-c1" "$CPRC" "0"
+check "checkpoint: each worktree records only its own tree" "$(cpg ls-tree -r --name-only "$RL" | grep -c only-linked):$(cpg ls-tree -r --name-only "$R1" | grep -c only-linked || true)" "1:0"
+CPDIR="$TMP/cp-linked" cprun --clear s1; check "checkpoint: --clear in a worktree keeps the other's refs" "$CPRC:$(cpg for-each-ref refs/orca-roles | grep -c '/s1-c1')" "0:1"
+cpg worktree remove --force "$TMP/cp-linked"
+# a repository with no commit yet
+CE="$TMP/cp-empty"; rm -rf "$CE"; mkdir "$CE"; git -C "$CE" init -q; printf 'x\n' > "$CE/x"
+CPDIR="$CE" cprun e 1; check "checkpoint: works before the first commit" "$CPRC:$(git -C "$CE" ls-tree -r --name-only "$(printf '%s\n' "$CPOUT" | head -1)")" "0:x"
+# worktree ids: same folder name under different parents, folder names that are not valid in a ref, steps that contain -c<digits>
+PA="$TMP/cpa/proj"; PB="$TMP/cpb"; rm -rf "$TMP/cpa" "$PB"; mkdir -p "$PA" "$PB"; pa() { git -C "$PA" "$@"; }
+pa init -q -b main; pa config user.email t@example.com; pa config user.name tester; printf 'a\n' > "$PA/f"; pa add -A; pa commit -q -m init
+pa worktree add -q "$PB/proj" -b wt-proj
+CPDIR="$PA" cprun s1 1; RA="$(printf '%s\n' "$CPOUT" | head -1)"; RAC="$CPRC"
+CPDIR="$PB/proj" cprun s1 1; RB="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: two worktrees with the same folder name keep separate refs" "$RAC:$CPRC:$([ "$RA" != "$RB" ] && echo different):$(pa for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "0:0:different:2"
+i=0; for nm in 'my repo' 'x.lock' '.hidden' 'a..b' '--' 'proyecto ñ'; do
+  i=$((i + 1)); pa worktree add -q "$PB/$nm" -b "wt-n$i"; CPDIR="$PB/$nm" cprun s 1
+  check "checkpoint: a worktree folder named [$nm] gets a valid id" "$CPRC:$(printf '%s\n' "$CPOUT" | head -1 | grep -cE '^refs/orca-roles/checkpoints/[A-Za-z0-9][A-Za-z0-9-]*-[0-9a-f]{10}/s-c1$')" "0:1"
+done
+CPDIR="$PA" cprun s1-c1 1; CPDIR="$PA" cprun --list s1
+check "checkpoint: --list <step> does not match another step that contains -c<digits>" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '^refs/'):$(printf '%s\n' "$CPOUT" | grep -c '/s1-c1 ')" "0:1:1"
+CPDIR="$PA" cprun --clear s1; check "checkpoint: --clear <step> keeps the refs of a step named <step>-c<digits>" "$CPRC:$(pa for-each-ref refs/orca-roles | grep -c '/s1-c1-c1$'):$(pa rev-parse -q --verify "$RA" >/dev/null && echo kept || echo gone)" "0:1:gone"
+CPDIR="$PA" cprun gap 5; check "checkpoint: no round-diff command when the previous checkpoint does not exist" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "0:1"
+CPDIR="$PA" cprun gap 0; check "checkpoint: n=0 is accepted and has no round-diff command" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "0:1"
+CPDIR="$PA" cprun gap 999999999; check "checkpoint: the largest n (9 digits) is accepted" "$CPRC" "0"
+R9="$(pa for-each-ref refs/orca-roles | wc -l | tr -d ' ')"; CPDIR="$PA" cprun gap 1000000000
+check "checkpoint: n with 10 digits is refused and nothing is written" "$([ "$CPRC" != 0 ] && echo fail):$(pa for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "fail:$R9"
+for nm in 'my repo' 'x.lock' '.hidden' 'a..b' '--' 'proyecto ñ' proj; do pa worktree remove --force "$PB/$nm"; done
+# a merge in progress (unmerged index entries) and an intent-to-add entry
+CM="$TMP/cp-merge"; rm -rf "$CM"; mkdir "$CM"; cm() { git -C "$CM" "$@"; }
+cm init -q -b main; cm config user.email t@example.com; cm config user.name tester
+printf 'base\n' > "$CM/f"; cm add -A; cm commit -q -m base; cm checkout -q -b side; printf 'side\n' > "$CM/f"; cm commit -qam side
+cm checkout -q main; printf 'main\n' > "$CM/f"; cm commit -qam main; cm merge side >/dev/null 2>&1 || true
+printf 'q\n' > "$CM/q"; cm add -N q
+CD_SAVE="$CD"; CD="$CM"; SM="$(cpstate)"; CD="$CD_SAVE"
+CPDIR="$CM" cprun mg 1
+CD_SAVE="$CD"; CD="$CM"; SM2="$(cpstate)"; CD="$CD_SAVE"
+check "checkpoint: a merge in progress and an intent-to-add entry stay untouched" "$CPRC:$(cm ls-files -u | wc -l | tr -d ' '):$([ "$SM" = "$SM2" ] && echo same)" "0:3:same"
+check "checkpoint: it records the conflicted file as it is in the working tree and the intent-to-add file" "$(cm show "$(printf '%s\n' "$CPOUT" | head -1):f" | grep -c '^<<<<<<<'):$(cm ls-tree -r --name-only "$(printf '%s\n' "$CPOUT" | head -1)" | grep -c '^q$')" "1:1"
+# identity, stale-index warning and --force
+CID="$(cpg log -1 --format='%an <%ae>|%cn <%ce>' "$R1")"
+check "checkpoint: author and committer are orca-roles even with user.name/email configured" "$CID" "orca-roles <orca-roles@localhost>|orca-roles <orca-roles@localhost>"
+cprun s3 1; check "checkpoint: no warning for a normal tree" "$CPRC:$CPERR" "0:"
+cpg update-index --assume-unchanged f; cprun s3 2
+check "checkpoint: warns about an assume-unchanged file, exit 0, ref written" "$CPRC:$(printf '%s' "$CPERR" | grep -c '^Warning: 1 file(s) marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree: f$'):$(cpg rev-parse -q --verify "$(printf '%s\n' "$CPOUT" | head -1)" >/dev/null && echo ref)" "0:1:ref"
+cpg update-index --no-assume-unchanged f; cpg update-index --skip-worktree g; cprun s3 3
+check "checkpoint: warns about a skip-worktree file" "$CPRC:$(printf '%s' "$CPERR" | grep -c '^Warning: 1 file(s).*: g$')" "0:1"
+cpg update-index --no-skip-worktree g; cprun s3 4; check "checkpoint: no warning once the flags are cleared" "$CPRC:$CPERR" "0:"
+cprun s3 4; check "checkpoint: an existing ref is refused without --force (again)" "$CPRC:$(printf '%s' "$CPERR" | grep -c 'already exists')" "1:1"
+# the prompts
+PLP="$ROOT/prompts/programmer/planner.md"; TS="$ROOT/prompts/programmer/tester.md"; AU="$ROOT/prompts/programmer/auditor.md"
+pb() { printf '%s' "$1" | grep -qF -- "$3" || { echo "FAIL $2 lost '$3'"; FAIL=1; }; }
+LED="$(grep '\*\*Ledger\.\*\*' "$PLP" || true)"
+for frag in 'ledger-<step>.md' 'your scratchDir' 'the base commit' 'the checkpoint refs' 'mutants killed or survived, tests added' 'findings open and closed' 'what was not audited' 'Update it after every report' 'source of every brief' 'before proposing the close commit' 'closed or accepted by the user'; do pb "$LED" "planner.md ledger bullet" "$frag"; done
+T3="$(grep '^3\. \*\*Tests\*\*' "$PLP" || true)"; A4="$(grep '^4\. \*\*Audit\*\*' "$PLP" || true)"
+pb "$T3" "planner.md step 3" 'checkpoint.sh <step> <n>'; pb "$T3" "planner.md step 3" 'after every Dev or Tester `worker_done` in the step'; pb "$T3" "planner.md step 3" '(n = 1 for the first report of the step, +1 for each later report)'; pb "$T3" "planner.md step 3" '); after Dev'"'"'s, create the Tester'"'"'s task with a brief'; pb "$T3" "planner.md step 3" 'with a brief (see "Briefed rounds") instead of a chain of dependent tasks'; pb "$A4" "planner.md step 4" "and its checkpoint"
+grep -qF '<step>-c<n-1>' "$PLP" && { echo "FAIL planner.md still has the consecutive-checkpoint wording <step>-c<n-1>"; FAIL=1; }; pb "$T3" "planner.md step 3" 'brief'
+pb "$A4" "planner.md step 4" "after the Tester's"; pb "$A4" "planner.md step 4" 'also carries what the Tester did and found'
+[ -z "$(printf '%s' "$T3$A4" | grep -F -- '--deps' || true)" ] || { echo "FAIL planner.md steps 3 and 4 still chain tasks with --deps"; FAIL=1; }
+NP="$(grep 'Never pre-create Tester or Auditor tasks' "$PLP" || true)"; pb "$NP" "planner.md no-pre-created bullet" '--deps'; pb "$NP" "planner.md no-pre-created bullet" 'generic specs'; pb "$NP" "planner.md no-pre-created bullet" 'after the previous report'
+BR="$(grep '\*\*Briefed rounds\.\*\*' "$PLP" || true)"
+for frag in 'self-contained brief' 'The task' 'acceptance criteria with their pass/fail examples' 'threat model and rejection threshold' 'The state' 'the files changed' 'what Dev did and decided' 'for the Auditor, also what the Tester did and found' 'what earlier rounds already verified' 'the findings still open' '"not audited" items carried forward' 'carries the whole step'"'"'s diff' 'with ref = the latest checkpoint' 'a later brief to a role carries' 'ref of the checkpoint its previous brief pointed to' '<latest ref>' 'since that role last looked' 'test-only rounds included' '`<step>` is lowercase letters, digits and hyphens' 'passes information only' 'never tells the Tester or the Auditor what to test, mutate or look at, or where the risks are'; do pb "$BR" "planner.md briefed-rounds bullet" "$frag"; done
+printf '%s' "$BR" | grep -qiE 'test (the|these|every)|you must mutate|focus on' && { echo "FAIL planner.md briefed-rounds bullet contains a known prescriptive phrase (a denylist of known phrases, not a proof that it never prescribes)"; FAIL=1; }
+FX="$(grep '\*\*Fix rounds carry only what changed' "$PLP" || true)"
+for frag in "never points to a task id" 'the findings assigned to that worker exactly as the reviewer wrote them' '(text, file:line, reproduction)' 'plus any contract change' 'cleaned since its previous task in this step' "also gets the step's task again" 'Tester and Auditor fix rounds also follow "Briefed rounds"'; do pb "$FX" "planner.md fix-rounds bullet" "$frag"; done
+printf '%s' "$FX" | grep -qF 'references that task' && { echo "FAIL planner.md fix-rounds bullet still points to a task id"; FAIL=1; }
+[ "$(grep -c 'Fix rounds carry only what changed' "$PLP")" = 1 ] || { echo "FAIL planner.md: fix-rounds bullet missing or duplicated"; FAIL=1; }
+pb "$(grep 'After the commit' "$PLP" || true)" "planner.md close" 'checkpoint.sh --clear <step>'
+S2="$(grep '^2\. \*\*Development\*\*' "$PLP" || true)"
+for frag in 'a specification decided in planning' 'written for a smaller model' 'leaves nothing to decide' 'the approach, where each change goes (file, function, around which lines)' 'names, data shapes and formats, messages' 'every edge case and error path you can foresee' 'backward compatibility, other callers' 'resolved in planning (with the Researcher or the user), never left to Dev' '`orca orchestration ask`' 'every decision Dev still takes on its own is listed in its report' 'you review each one before the Tester'"'"'s brief (accepted, changed or taken to the user)' 'Fix tasks follow the same rule'; do pb "$S2" "planner.md step 2 (Development)" "$frag"; done
+DV="$(grep -A1 '^1\. Implement exactly what the spec asks' "$ROOT/prompts/programmer/dev.md" | tail -1)"
+for frag in 'does not settle a design decision (behavior, interface, message, edge case)' 'ask the Planner (`orca orchestration ask`) instead of choosing' 'if a minor one is unavoidable, list it' 'in your report'; do pb "$DV" "dev.md first step" "$frag"; done
+T1="$(grep '^1\. Read the Planner' "$TS" || true)"; A2="$(grep '^2\. Read the Planner' "$AU" || true)"
+for r in "tester.md:$T1" "auditor.md:$A2"; do
+  for frag in "Planner's brief" 'instead of rebuilding' 'do not redo what it lists as verified' 'information, not instructions' 'verify its claims about the code instead of trusting them'; do pb "${r#*:}" "${r%%:*} brief step" "$frag"; done
+done
+pb "$A2" "auditor.md brief step" 'what Dev and the Tester did and found'
+pb "$(grep '^1\. Reread this whole prompt' "$AU" || true)" "auditor.md" 'Reread this whole prompt'
+pb "$(grep -F 'Briefed rounds' "$ROOT/README.md" || true)" "README briefed rounds" 'checkpoint.sh'
+pb "$(grep -F '**Briefed rounds.**' "$ROOT/README.md" || true)" "README briefed rounds" 'After every Dev or Tester report the Planner'
+pb "$(grep -F 'checkpoint.sh ' "$ROOT/README.md" | grep 'bin/\|├' || true)" "README Files" 'refs/orca-roles/checkpoints'
+pb "$(grep -F 'refs/orca-roles/checkpoints/<worktree id>' "$ROOT/README.md" || true)" "README worktree refs" '--clear <step>'
+echo "ok   checkpoint prompts"
 }
 
 sec_cli() {

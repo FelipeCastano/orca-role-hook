@@ -81,6 +81,8 @@ Steps are atomic and strictly sequential: one behavior, one commit made at close
 
 The Planner does not block while the workers run: it hands out the tasks, tells you what is running and stays free, so you can keep refining the plan with it. Orca notifies it when a worker reports, and you can ask it for the status at any time. Workers send no heartbeats: they only report when they finish, ask when blocked or escalate when something fails, so the Planner is not woken (and you are not interrupted) by "still alive" messages. It detects a stuck worker by the time its terminal last printed anything.
 
+**Briefed rounds.** After every Dev or Tester report the Planner records the tree with `checkpoint.sh <step> <n>` and creates the next worker's task with a brief: the task (goal, criteria, threat model) and the state (files changed, what Dev and the Tester did and found, what earlier rounds already verified, the findings still open). The first brief carries the whole step's diff and later ones only what changed since that role last looked (`git diff <earlier checkpoint> <latest checkpoint>`), so the Tester and the Auditor do not rebuild the step from zero in every round; the brief is information, never instructions on what to test, and they still verify the code themselves. The Planner keeps a ledger per step (`ledger-<step>.md` in its scratch folder) as the source of every brief and clears the checkpoints after the step's commit.
+
 If a role is disabled in the configuration, the Planner skips its part of the flow and tells you when a step would have needed it.
 
 ## Installation
@@ -475,6 +477,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── agent.sh                 # launches a role's agent according to the configuration
 │   ├── kickoff.sh               # sends each agent its role, passes the Jira ticket and closes the extra agent
 │   ├── clean.sh                 # cleans the workers' context and resends their role
+│   ├── checkpoint.sh            # records the tree under refs/orca-roles/checkpoints/ (the Planner's briefs diff rounds against it)
 │   ├── close-role.sh            # closes a role's tab in the current workspace
 │   ├── browser-login.sh         # saves your application session for the E2E-Tester
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
@@ -498,6 +501,7 @@ To change a role's behavior, edit `prompts/programmer/<role>.md` in the repo and
 Inside each worktree:
 
 - `research/` and `qa-evidence/`: the Researcher's work and the E2E-Tester's screenshots. They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`.
+- `refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>`: the Planner's per-round snapshots of the tree (commits kept out of every branch, made without touching HEAD, the index or the files); `checkpoint.sh --list` shows them and `--clear <step>` deletes a step's after its commit. Files marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree, and `checkpoint.sh` warns about them.
 - `DEPLOYMENT.md`: the Deployer's guide. It is not committed unless you ask.
 - In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.pty` (each role's terminal identity, to recognize the tabs Orca restores after a restart), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json`, `orca-roles.composer-seen.json` and `orca-roles.setup-context` (tabs seen when the worktree was created, and whether Orca's setup script started the kit, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
 - Outside the worktree: `~/.orca-roles/browser/<project>.json`, the browser session for the E2E-Tester.
