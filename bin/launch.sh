@@ -7,13 +7,15 @@
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
 #   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-writer); beats .orca-roles.json and settings.mode;
 #                    saved, and kept when later options omit it
-#   --reset          forgets this worktree's saved exceptions
+#   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
-# They are saved per worktree, so 'roles' without options applies them again when resuming.
+# They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
+# saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
+# --reset forgets the saved ones first. A different --mode also drops the saved --only/--enable/--disable (role selections belong to a mode).
 # The mode of a worktree cannot change while its team is open: close the team first (close-role.sh, or its tabs).
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,14p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,16p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
@@ -78,17 +80,24 @@ echo "== $(date '+%F %T') launch.sh in $WT"
 
 # The new configuration and exceptions are prepared aside and only replace the saved ones once every check has passed
 NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
-fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWOVR" "$NEWOVR.x"; echo "$1"; exit 1; }
+fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; echo "$1"; exit 1; }
 merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
 PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
 if [ ${#FLAGS[@]} -gt 0 ]; then
   overrides_from_args "${FLAGS[@]}" > "$NEWOVR" || { rm -f "$NEWCFG" "$NEWOVR"; exit 1; }
   ERR="$(check_overrides "$NEWCFG" "$NEWOVR")"
   [ -z "$ERR" ] || fail "$ERR"
-  # the saved mode stays unless --mode (or --set settings.mode, which overrides_from_args turns into --mode) names another one, or --reset drops it
-  if [ "$RESET" != 1 ] && [ -f "$OVR" ] && ! jq -e '.mode != null' "$NEWOVR" >/dev/null 2>&1; then
-    SAVED_MODE="$(jq -c '.mode // empty' "$OVR" 2>/dev/null)"
-    [ -z "$SAVED_MODE" ] || { jq -c --argjson m "$SAVED_MODE" '.mode = $m' "$NEWOVR" > "$NEWOVR.x" && mv "$NEWOVR.x" "$NEWOVR"; }
+  # the options add to the saved ones (the same option replaces its saved value; --reset forgets them first)
+  if [ "$RESET" != 1 ] && [ -f "$OVR" ]; then
+    # role selections belong to a mode: compare the new mode with the one the saved options gave this worktree
+    PREV_EFF_MODE="$(apply_overrides "$NEWCFG" "$OVR" > "$NEWCFG.prev" 2>/dev/null && mode_of "$NEWCFG.prev" 2>/dev/null)" || PREV_EFF_MODE=""
+    rm -f "$NEWCFG.prev"; [ -n "$PREV_EFF_MODE" ] || PREV_EFF_MODE="programmer"
+    if jq -e --slurpfile n "$NEWOVR" --arg p "$PREV_EFF_MODE" '($n[0].mode // null) as $m | $m != null and $m != $p and ((.only // []) + (.enable // []) + (.disable // []) | length) > 0' "$OVR" >/dev/null 2>&1; then
+      echo "Mode changed to $(jq -r .mode "$NEWOVR"): this worktree's saved role selections (--only/--enable/--disable) were dropped."
+    fi
+    merge_overrides "$OVR" "$NEWOVR" "$PREV_EFF_MODE" > "$NEWOVR.x" && mv "$NEWOVR.x" "$NEWOVR" || fail "ERROR: could not combine the options with the saved exceptions ($OVR)"
+    ERR="$(check_overrides "$NEWCFG" "$NEWOVR")"
+    [ -z "$ERR" ] || fail "$ERR"
   fi
   OVRSRC="$NEWOVR"
 elif [ -f "$OVR" ] && [ "$RESET" != 1 ]; then

@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Lists the models a role can use and, with --check, tests each one.  Usage: models.sh <role|title> [--check]
+# Lists the models a role can use and, with --check, tests each one.  Usage: models.sh <role|title> [--check] [--model <m>]
 # Without --check it prints the candidates, one per line, and spends nothing: claude's aliases (it cannot list the models of your
 # login), codex's `codex debug models`, or the role's models.list command (custom). The role's own model comes first.
 # With --check it runs one minimal probe per candidate, in parallel, and prints "<model><TAB>ok<TAB><resolved id>",
 # "<model><TAB>unavailable" or "<model><TAB>unknown<TAB><reason>" (the probe could not tell: not logged in, offline, timed out...).
 # A claude probe costs nothing for a model that does not exist and at most about 0.012 USD the first time for one that does.
+# --model <m> replaces the candidates with exactly <m>, to test or print only that one.
 # Nothing is written outside a temporary folder except the agents' own logs (Codex keeps its logs even for ephemeral runs), and no agent
 # setting is changed. The role's env is exported to the list command and the probes. At most 6 probes run at a time.
 set -uo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
-case "${1:-}" in -h|--help) sed -n 2,9p "$0"; exit 0;; esac
-ROLEARG=""; CHECK=0
-for a in "$@"; do case "$a" in --check) CHECK=1;; -*) echo "models.sh: unknown option $a" >&2; exit 1;; *) [ -z "$ROLEARG" ] && ROLEARG="$a" || { echo "models.sh: only one role at a time" >&2; exit 1; };; esac; done
+case "${1:-}" in -h|--help) sed -n 2,10p "$0"; exit 0;; esac
+ROLEARG=""; CHECK=0; ONLY=""
+while [ $# -gt 0 ]; do a="$1"; case "$a" in --check) CHECK=1;; --model) [ -n "${2:-}" ] || { echo "models.sh: --model needs a value" >&2; exit 1; }; ONLY="$2"; shift;; -*) echo "models.sh: unknown option $a" >&2; exit 1;; *) [ -z "$ROLEARG" ] && ROLEARG="$a" || { echo "models.sh: only one role at a time" >&2; exit 1; };; esac; shift; done
 [ -n "$ROLEARG" ] || { sed -n 2,2p "$0" >&2; exit 1; }
 kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
 # On exit (also Ctrl+C or TERM) kill every process still running under this script, probes included, then remove the temp dir
@@ -21,7 +22,7 @@ GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR
 CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 [ -f "$CFG" ] || { CFG="$T/config.json"; merged_config . > "$CFG"; }
 
-ROLE="$(jq -r --arg x "$ROLEARG" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$CFG" 2>/dev/null | head -1)"
+ROLE="$(resolve_role "$CFG" "$ROLEARG")"
 [ -n "$ROLE" ] || { echo "Unknown role: $ROLEARG" >&2; exit 1; }
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
@@ -43,7 +44,8 @@ bounded() {
 }
 CANDS="$T/cands"; : > "$CANDS"
 emit() { [ -z "$1" ] || printf '%s\n' "$1" >> "$CANDS"; }
-case "$AGENT" in
+case "$AGENT" in claude|codex|custom) ;; *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;; esac
+[ -n "$ONLY" ] || case "$AGENT" in
   claude)
     emit "$MODEL"; for m in sonnet opus haiku fable; do emit "$m"; done
     [ "$CHECK" = 1 ] || echo "Claude Code cannot list the models of your login; these are its aliases. Use --check to test them." >&2;;
@@ -71,8 +73,8 @@ case "$AGENT" in
         *) echo "models.parse must be lines, json:<jq filter> or regex:<ERE>" >&2;;
       esac
     fi;;
-  *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;;
 esac
+[ -z "$ONLY" ] || printf '%s\n' "$ONLY" > "$CANDS"
 awk '!seen[$0]++' "$CANDS" > "$CANDS.u"; mv "$CANDS.u" "$CANDS"
 [ "$CHECK" = 1 ] || { cat "$CANDS"; exit 0; }
 

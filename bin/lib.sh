@@ -89,6 +89,8 @@ launchable_roles() {
     echo "$id"
   done
 }
+# The role id a name (id or title, any case) refers to in a configuration; nothing if there is none.  resolve_role <config> <name>
+resolve_role() { jq -r --arg x "$2" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$1" 2>/dev/null | head -1; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # The kit's prompts folder for the configuration's mode
@@ -141,6 +143,20 @@ overrides_from_args() {
     fi
   done
   printf '%s\n' "$o"
+}
+# Combines a worktree's saved exceptions with the ones of the current run: the new ones add to the saved ones.  merge_overrides <saved> <new> [<previous effective mode>] → stdout
+# only: the new list if it has any, else the saved one. enable/disable: both lists, a role named in the new one leaves the other saved one.
+# set: the saved entries whose path is not set again, then the new ones. mode: the new one if present, else the saved one.
+# Role selections belong to a mode: if the new mode differs from the previous effective mode (the third argument; without it, the saved mode, none saved = programmer), the saved only/enable/disable are dropped.
+merge_overrides() {
+  jq -c --slurpfile n "$2" --arg p "${3:-}" '$n[0] as $n
+    | (if ($n.mode // null) != null and $n.mode != (if $p != "" then $p else (.mode // "programmer") end) then .only = [] | .enable = [] | .disable = [] else . end)
+    | def uniq: reduce .[] as $x ([]; if index([$x]) then . else . + [$x] end);
+      {only: (if ($n.only // [] | length) > 0 then $n.only else (.only // []) end),
+       enable: ((((.enable // []) - ($n.disable // [])) + ($n.enable // [])) | uniq),
+       disable: ((((.disable // []) - ($n.enable // [])) + ($n.disable // [])) | uniq),
+       set: (((.set // []) | map(select(.path as $p | ($n.set // []) | map(.path) | index([$p]) | not))) + ($n.set // []))}
+      + (if ($n.mode // null) != null then {mode: $n.mode} elif (.mode // null) != null then {mode: .mode} else {} end)' "$1"
 }
 # Checks that the exceptions only name existing roles and do not disable the planner.  check_overrides <config> <overrides>
 check_overrides() {

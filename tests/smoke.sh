@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models relaunch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -846,6 +846,57 @@ check "apply_overrides: --set" "$(jq -r '.roles.dev.model' "$TMP/c.json")" "m2"
 overrides_from_args --disable planner,nobody > "$TMP/ovr.json"
 check "check_overrides: unknown role" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: unknown roles: nobody\. Available: ')" "1"
 check "check_overrides: the planner cannot be disabled" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: the planner cannot be disabled$')" "1"
+
+# the options add to the saved ones (library level)
+S0='{"only":["a"],"enable":["x","y"],"disable":["z","w"],"set":[{"path":["roles","dev","model"],"value":"a"},{"path":["k"],"value":1}],"mode":"programmer"}'
+mo() { printf '%s' "$S0" > "$TMP/mo.saved"; printf '%s' "$1" > "$TMP/mo.new"; merge_overrides "$TMP/mo.saved" "$TMP/mo.new" ${2:+"$2"}; }
+E0='"only":[],"enable":[],"disable":[],"set":[]'
+check "merge_overrides: nothing new keeps the saved ones" "$(mo "{$E0}")" "$S0"
+check "merge_overrides: a new --only replaces the saved one" "$(mo '{"only":["b","c"],"enable":[],"disable":[],"set":[]}' | jq -c .only)" '["b","c"]'
+check "merge_overrides: enable/disable add up, the newest wins per role, no duplicates" "$(mo '{"only":[],"enable":["z","y","v"],"disable":["x","w"],"set":[]}' | jq -c '[.enable,.disable]')" '[["y","z","v"],["w","x"]]'
+check "merge_overrides: the same --set path takes the new value, other saved sets stay" "$(mo '{"only":[],"enable":[],"disable":[],"set":[{"path":["roles","dev","model"],"value":"b"}]}' | jq -c .set)" '[{"path":["k"],"value":1},{"path":["roles","dev","model"],"value":"b"}]'
+check "merge_overrides: the new mode wins, the saved mode stays otherwise" "$(mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}' | jq -r .mode):$(mo "{$E0}" | jq -r .mode)" "pr-reviewer:programmer"
+check "merge_overrides: a different mode drops the saved selections and keeps the sets" "$(mo '{"only":[],"enable":["q"],"disable":[],"set":[],"mode":"pr-reviewer"}')" '{"only":[],"enable":["q"],"disable":[],"set":[{"path":["roles","dev","model"],"value":"a"},{"path":["k"],"value":1}],"mode":"pr-reviewer"}'
+check "merge_overrides: the same mode, or a saved one with none (programmer), keeps them" "$(mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}' | jq -c .enable):$(S0="$(printf '%s' "$S0" | jq -c 'del(.mode)')" mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}' | jq -c .enable)" '["x","y"]:["x","y"]'
+check "merge_overrides: the third argument (previous effective mode) is what the new mode is compared with" "$(mo '{"only":[],"enable":["q"],"disable":[],"set":[],"mode":"programmer"}' pr-reviewer | jq -c .enable):$(mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}' programmer | jq -c .enable)" '["q"]:["x","y"]'
+# launch.sh end to end: own kit with a second mode
+pk_setup
+mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester", "enabled": false },
+             "deployer": { "title": "Deployer" }, "rv": { "title": "Rv", "modes": ["pr-reviewer"] } } }
+J
+OW="$TMP/oproj"; mkdir -p "$OW" "$TMP/obin"; git -C "$OW" init -q; OG="$OW/.git"
+cat > "$TMP/obin/orca" <<'EOS'
+#!/bin/sh
+case "$1 $2" in
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal show") exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/obin/orca"; printf '#!/bin/sh\nexit 0\n' > "$TMP/obin/kickoff"; chmod +x "$TMP/obin/kickoff"
+ol() { rm -f "$OG/orca-roles.env"; (cd "$OW" && HOME="$PH" PATH="$TMP/obin:$PATH" ORCA_ROLES_KICKOFF="$TMP/obin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+osaved() { jq -c "$1" "$OG/orca-roles.overrides.json"; }
+oteam() { cut -d= -f1 "$OG/orca-roles.env" | tr '\n' ' '; }
+try ol --only dev; try ol --set roles.dev.model=a
+check "launch: a saved --only is kept when a later run passes only --set" "$RC:$(oteam):$(osaved '[.only,.set]')" '0:PLANNER DEV :[["dev"],[{"path":["roles","dev","model"],"value":"a"}]]'
+try ol --reset --disable deployer; try ol --enable deployer
+check "launch: --disable x then --enable x leaves x enabled and not disabled" "$RC:$(oteam):$(osaved '[.enable,.disable]')" '0:PLANNER DEV DEPLOYER :[["deployer"],[]]'
+try ol --reset --set settings.jiraHandoff=false --set roles.dev.model=a; try ol --set roles.dev.model=b
+check "launch: the same --set path takes the new value and the other saved sets stay" "$RC:$(osaved '.set')" '0:[{"path":["settings","jiraHandoff"],"value":false},{"path":["roles","dev","model"],"value":"b"}]'
+check "launch: the merged value reaches the effective config" "$(jq -r '.roles.dev.model' "$OG/orca-roles.config.json")" "b"
+try ol --only dev; try ol --only deployer
+check "launch: a new --only replaces the saved one" "$RC:$(oteam):$(osaved .only)" '0:PLANNER DEPLOYER :["deployer"]'
+try ol --reset --set roles.dev.model=c
+check "launch: --reset then options keeps only the new ones" "$RC:$(oteam):$(osaved '[.only,.enable,.disable,.set]')" '0:PLANNER DEV DEPLOYER :[[],[],[],[{"path":["roles","dev","model"],"value":"c"}]]'
+try ol --reset --mode pr-reviewer; try ol --set roles.rv.model=m
+check "launch: the saved mode is kept when later options omit it" "$RC:$(osaved .mode):$(jq -r .settings.mode "$OG/orca-roles.config.json")" "0:\"pr-reviewer\":pr-reviewer"
+try ol --reset --enable dev; B="$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" | cksum)"
+try ol --mode pr-reviewer --enable dev
+check "launch: a result that conflicts with the mode fails and saves nothing" "$RC:$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" | cksum):$(printf '%s' "$OUT" | grep -c 'ERROR: role dev is not part of mode pr-reviewer')" "1:$B:1"
 }
 
 sec_launch() {
@@ -1131,6 +1182,33 @@ rm -f "$MG/orca-roles.env"
 try ml --mode pr-reviewer --set settings.mode=programmer; check "--mode beats --set settings.mode" "$RC:$(mmode)" "0:pr-reviewer"
 rm -f "$MG/orca-roles.env"
 try ml --mode programmer; check "saved mode: another --mode changes it" "$RC:$(mmode)" "0:programmer"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# role selections belong to a mode: a different --mode drops the saved --only/--enable/--disable and keeps the saved --set
+ml --mode pr-reviewer --enable rv --set settings.language=x >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode pr-reviewer --set settings.jiraHandoff=false
+check "saved mode: the same --mode keeps the saved selections" "$RC:$(jq -c .enable "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'Mode changed')" '0:["rv"]:0'
+rm -f "$MG/orca-roles.env"
+try ml --mode programmer
+check "saved mode: another --mode drops the saved selections, keeps the sets and says so" "$RC:$(mmode):$(mh):$(jq -c '[.enable,.set[].path]' "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c "Mode changed to programmer: this worktree's saved role selections (--only/--enable/--disable) were dropped.")" '0:programmer:PLANNER DEV ALLROLE :[[],["settings","language"],["settings","jiraHandoff"]]:1'
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+ml --mode pr-reviewer --set settings.language=x >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode programmer
+check "saved mode: a mode change with no saved selections drops nothing and prints no note" "$RC:$(mmode):$(printf '%s' "$OUT" | grep -c 'Mode changed')" "0:programmer:0"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# the mode that counts is the worktree's effective one, also when it comes from .orca-roles.json with no saved --mode
+echo '{"settings":{"mode":"pr-reviewer"}}' > "$M/.orca-roles.json"
+ml --enable rv >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode programmer
+check "effective mode from .orca-roles.json: --mode programmer succeeds, drops the saved enable and says so" "$RC:$(mmode):$(jq -c .enable "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c "Mode changed to programmer")" "0:programmer:[]:1"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+ml --enable rv >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode pr-reviewer --set settings.language=x
+check "effective mode from .orca-roles.json: the same --mode keeps the saved enable and prints no note" "$RC:$(mmode):$(jq -c .enable "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'Mode changed')" "0:pr-reviewer:[\"rv\"]:0"
+rm -f "$M/.orca-roles.json" "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# a saved role that no longer exists is caught again after the merge, so a new option does not save it
+echo '{"enable":["gone"]}' > "$MG/orca-roles.overrides.json"; BEFORE="$(mstate)"
+try ml --set settings.language=x
+check "stale saved role + a new option: rejected, the saved options and config stay unchanged" "$RC:$(printf '%s' "$OUT" | grep -c '^ERROR: unknown roles: gone\. Available: '):$([ "$(mstate)" = "$BEFORE" ] && echo same):$(jq -c . "$MG/orca-roles.overrides.json")" '1:1:same:{"enable":["gone"]}'
 rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
 # --set settings.mode is the same request as --mode: saved the same way
 rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
@@ -2326,7 +2404,7 @@ for bad in '""' '5'; do
 done
 check "check_config: modelError string accepted" "$(cc '{"roles":{"dev":{"modelError":"x {model}"}}}')" ""
 PL="$ROOT/prompts/programmer/planner.md"
-for frag in 'model unavailable' 'comes from the kit' 'fix it themselves' 'Never dispatch tasks to a role that did not start' 'close-role.sh'; do
+for frag in 'model unavailable' 'comes from the kit' 'fix it themselves' 'Never dispatch tasks to a role that did not start' 'relaunch-role.sh'; do
   grep -F 'model unavailable' "$PL" | grep -qF -- "$frag" || { echo "FAIL planner.md: the model unavailable sentence lost '$frag'"; FAIL=1; }
 done
 grep -qF 'modelError' "$ROOT/README.md" || { echo "FAIL README without modelError"; FAIL=1; }
@@ -2508,6 +2586,12 @@ check "models: exit 0 with non-JSON output is ok with -, and a tab in a reason b
 for m in sonnet opus; do rm -f "$MM/b.$m"; done
 touch "$MM/codex.garbage"; mt cx; check "models: codex debug models exiting 0 with non-JSON -> role's model and a note" "$RC:$(tabs):$(cat "$MM/err" | cut -c1-30)" "0:gpt-b:codex debug models failed: "
 rm -f "$MM/codex.garbage"
+# --model: exactly one candidate, with and without --check
+mt cl --model opus; check "models: --model alone prints just that one" "$RC:$(tabs)" "0:opus"
+mt cl --model sonnet --check; check "models: --model with --check probes only that one (deduplicated)" "$RC:$(tabs)" "0:sonnet|ok|claude-opus-5-5"
+echo 404 > "$MM/b.zzz"; mt cl --check --model zzz; check "models: --model with --check reports unavailable" "$RC:$(tabs)" "0:zzz|unavailable"; rm -f "$MM/b.zzz"
+rm -f "$MM/codex.env"; mt cx --model gpt-c --check; check "models: --model on a codex role skips the listing" "$(tabs):$([ -f "$MM/codex.env" ] && echo listed || echo skipped)" "gpt-c|unavailable:skipped"
+mt cl --model; check "models: --model needs a value" "$RC" "1"
 # nothing written outside the temp dir, which is gone
 check "models: nothing written outside the temp dir" "$(find "$TMP/home" | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed):$(ls -A "$MM/tmp" | wc -l | tr -d ' ')" "same:0"
 # check_config
@@ -2520,8 +2604,70 @@ check "models: check_config rejects defaults models" "$(mcc "$(jq -nc '{defaults
 for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":"lines"}' '{"parse":"regex:(.*)"}' '{"list":"a"}'; do
   check "models: check_config accepts $good" "$(mcc "$(jq -nc --argjson m "$good" '{defaults:{models:$m},roles:{dev:{models:$m}}}')")" ""
 done
-check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <role> --check')" "1"
+check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <id> --check')" "1"
 unset MM
+}
+
+sec_relaunch() {
+# relaunch-role.sh with a fake orca, claude and kickoff, in an own kit (never the clone)
+pk_setup
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" }, "deployer": { "title": "Deployer" } } }
+J
+RW="$TMP/rproj"; mkdir -p "$RW" "$TMP/rbin"; git -C "$RW" init -q; RG="$RW/.git"
+RLOG="$TMP/rorca.log"; RKL="$TMP/rkick.log"; RCL="$TMP/rclaude.log"; : > "$RLOG"; : > "$RKL"; : > "$RCL"
+cat > "$TMP/rbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$RLOG"
+case "\$1 \$2" in
+  "terminal create") [ -f "$TMP/r-failcreate" ] && exit 1
+    while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t-\$(grep -c '^terminal create' "$RLOG")\"}";;
+  "terminal show") [ -f "$TMP/r-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+esac
+exit 0
+EOS
+cat > "$TMP/rbin/claude" <<EOS
+#!/bin/bash
+m=""; pv=""; for x in "\$@"; do [ "\$pv" = --model ] && m="\$x"; pv="\$x"; done
+echo "\$m" >> "$RCL"
+case "\$m" in
+  gone) echo '{"api_error_status":404,"result":"nope"}'; exit 1;;
+  net) echo "boom: no network" >&2; exit 1;;
+  *) echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
+esac
+EOS
+printf '#!/bin/sh\necho "$4" >> "%s"\n' "$RKL" > "$TMP/rbin/kickoff"; chmod +x "$TMP/rbin"/*
+rl() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+rr() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/relaunch-role.sh" "$@" 2>&1); }
+rstate() { cat "$RG/orca-roles.env" "$RG/orca-roles.pty" "$RG/orca-roles.overrides.json" "$RG/orca-roles.config.json" | cksum; }
+rclosed() { grep -c '^terminal close' "$RLOG" || true; }
+rkicks() { sleep 1; tr -d ' ' < "$RKL" | tr '\n' ','; }
+rl --only dev,planner >/dev/null; touch "$TMP/r-alive"
+B="$(rstate)"
+for args in "dev" "dev --model" "nobody --model good" "planner --model good" "Planner --model good" "deployer --model good" "--model good" "dev --bogus x"; do
+  # shellcheck disable=SC2086
+  try rr $args; check "relaunch: '$args' fails and changes nothing" "$RC:$(rclosed):$(rstate)" "1:0:$B"
+done
+try rr planner --model good; case "$OUT" in *"The Planner cannot be relaunched from inside the team."*) echo "ok   relaunch: planner message";; *) echo "FAIL relaunch planner: $OUT"; FAIL=1;; esac
+try rr deployer --model good; case "$OUT" in *"deployer is not open in this worktree; run roles."*) echo "ok   relaunch: not open message";; *) echo "FAIL relaunch not open: $OUT"; FAIL=1;; esac
+try rr dev --model gone; check "relaunch: unavailable model" "$RC:$(rclosed):$(rstate):$OUT" "1:0:$B:Model gone is not available for dev; nothing was changed."
+try rr dev --model net; check "relaunch: unknown model" "$RC:$(rclosed):$(rstate):$OUT" "1:0:$B:Could not check model net (boom: no network); use --no-check to relaunch anyway"
+: > "$RKL"; N0="$(grep -c '^terminal create' "$RLOG")"; OLDH="$(grep '^DEV=' "$RG/orca-roles.env")"
+try rr dev --model good
+check "relaunch: closes the tab and opens one new tab" "$RC:$(rclosed):$(( $(grep -c '^terminal create' "$RLOG") - N0 ))" "0:1:1"
+check "relaunch: the old handle is gone, the printed line is the new one in orca-roles.env" "$([ "$(grep '^DEV=' "$RG/orca-roles.env")" != "$OLDH" ] && echo new):$(printf '%s\n' "$OUT" | tail -2 | head -1)" "new:$(grep '^DEV=' "$RG/orca-roles.env")"
+check "relaunch: the closing message names the old handle" "$(printf '%s' "$OUT" | grep -c "tab closed (${OLDH#DEV=})")" "1"
+case "$OUT" in *"Relaunched Dev on good; this worktree keeps that model (roles --reset forgets it)."*) echo "ok   relaunch: final message";; *) echo "FAIL relaunch final: $OUT"; FAIL=1;; esac
+check "relaunch: the saved --only is kept, the model is saved and effective" "$(jq -c '[.only,.set]' "$RG/orca-roles.overrides.json"):$(jq -r .roles.dev.model "$RG/orca-roles.config.json"):$(cut -d= -f1 "$RG/orca-roles.env" | tr '\n' ' ')" '[["dev","planner"],[{"path":["roles","dev","model"],"value":"good"}]]:good:PLANNER DEV '
+check "relaunch: kickoff for that role only" "$(rkicks)" "dev,"
+: > "$RCL"; try rr Dev --model gone --no-check
+check "relaunch: --no-check skips the probe, matches the title in any case" "$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")" "0:0:gone"
+touch "$TMP/r-failcreate"; try rr dev --model good --no-check
+check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
+rm -f "$TMP/r-failcreate"
+check "relaunch: the planner prompt names the new steps" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'models.sh <id> --check')$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'relaunch-role.sh <id> --model <m>')$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'replaces this worktree')" "110"
 }
 
 sec_cli() {
