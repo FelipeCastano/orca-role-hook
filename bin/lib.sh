@@ -36,6 +36,17 @@ project_config() {
 # A role's value, inheriting from defaults:  rcfg <config> <role> <field>
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
+# The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
+# claude: Claude Code's own texts; codex: the API error naming the model; custom: the role's modelError with {model} as the escaped model id.
+model_error_regex() {
+  local agent esc; [ -n "$3" ] || return 0
+  agent="$(rstr "$1" "$2" agent)"; esc="$(regex_escape "$3")"
+  case "${agent:-claude}" in
+    claude) printf '%s\n' "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]";;
+    codex) printf '%s\n' "(unexpected status|ERROR:)[^E]{0,200}${esc}[^E]{0,200}(does not exist|not supported|model_not_found)";;
+    custom) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
+  esac
+}
 setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
 MODE_IDS="programmer pr-reviewer academic-writer"
@@ -78,6 +89,8 @@ launchable_roles() {
     echo "$id"
   done
 }
+# The role id a name (id or title, any case) refers to in a configuration; nothing if there is none.  resolve_role <config> <name>
+resolve_role() { jq -r --arg x "$2" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$1" 2>/dev/null | head -1; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # The kit's prompts folder for the configuration's mode
@@ -94,10 +107,13 @@ prompt_of() {
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
 LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
+# 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
   jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
-                     | map({key: ., value: $m.roles[.]}) | from_entries)' "$1" "$2"
+                     | map({key: ., value: $m.roles[.]}) | from_entries)
+    | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
+    | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
 #   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}], "mode": "<mode id>"}
@@ -115,17 +131,32 @@ overrides_from_args() {
     k="${opt#--}"
     if [ "$k" = mode ]; then
       o="$(jq -c --arg v "$val" '.mode = $v' <<<"$o")"; explicit=1
-    elif [ "$k" = set ] && [ "${val%%=*}" = settings.mode ]; then
+    elif [ "$k" = set ] && case "$val" in settings.mode=*) true;; *) false;; esac; then
       # --set settings.mode=x is the same request as --mode x (and --mode wins if both are given)
       [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" '.mode = $v' <<<"$o")"
     elif [ "$k" = set ]; then
       case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
+      case "${val%%=*}" in settings|roles) echo "ERROR: --set replaces one value, not a whole object: use --set settings.<key>=value (or roles.<role>.<key>=value)" >&2; return 1;; esac
       o="$(jq -c --arg p "${val%%=*}" --arg v "${val#*=}" --argjson l "$LEGACY_ROLES" '.set += [{path: ($p | split(".") | if .[0] == "roles" and $l[.[1]] then .[1] = $l[.[1]] else . end), value: ($v | try fromjson catch $v)}]' <<<"$o")"
     else
       o="$(jq -c --arg k "$k" --arg v "$val" --argjson l "$LEGACY_ROLES" '.[$k] += ($v | split(",") | map(gsub("^ +| +$"; "")) | map(select(. != "")) | map($l[.] // .))' <<<"$o")"
     fi
   done
   printf '%s\n' "$o"
+}
+# Combines a worktree's saved exceptions with the ones of the current run: the new ones add to the saved ones.  merge_overrides <saved> <new> [<previous effective mode>] → stdout
+# only: the new list if it has any, else the saved one. enable/disable: both lists, a role named in the new one leaves the other saved one.
+# set: the saved entries whose path is not set again, then the new ones. mode: the new one if present, else the saved one.
+# Role selections belong to a mode: if the new mode differs from the previous effective mode (the third argument; without it, the saved mode, none saved = programmer), the saved only/enable/disable are dropped.
+merge_overrides() {
+  jq -c --slurpfile n "$2" --arg p "${3:-}" '$n[0] as $n
+    | (if ($n.mode // null) != null and $n.mode != (if $p != "" then $p else (.mode // "programmer") end) then .only = [] | .enable = [] | .disable = [] else . end)
+    | def uniq: reduce .[] as $x ([]; if index([$x]) then . else . + [$x] end);
+      {only: (if ($n.only // [] | length) > 0 then $n.only else (.only // []) end),
+       enable: ((((.enable // []) - ($n.disable // [])) + ($n.enable // [])) | uniq),
+       disable: ((((.disable // []) - ($n.enable // [])) + ($n.disable // [])) | uniq),
+       set: (((.set // []) | map(select(.path as $p | ($n.set // []) | map(.path) | index([$p]) | not))) + ($n.set // []))}
+      + (if ($n.mode // null) != null then {mode: $n.mode} elif (.mode // null) != null then {mode: .mode} else {} end)' "$1"
 }
 # Checks that the exceptions only name existing roles and do not disable the planner.  check_overrides <config> <overrides>
 check_overrides() {
@@ -152,6 +183,17 @@ check_config() {
           else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
       else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
+    | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: modelError must be a non-empty string"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("models")) | .models
+      | select((type != "object") or ((keys - ["list", "parse", "probe"]) | length > 0)
+        or (has("list") and ((.list | type) != "string" or .list == "")) or (has("probe") and ((.probe | type) != "string" or .probe == ""))
+        or (has("parse") and ((.parse | type) != "string" or (.parse != "lines" and (.parse | test("^(json|regex):.+") | not)))))]
+    | if length > 0 then "ERROR: invalid configuration: models must be {list, parse, probe} (see README)" else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: models must be {list, parse, probe} (see README)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
   out="$(jq -r --slurpfile o "$2" --arg m "$m" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
@@ -170,6 +212,8 @@ apply_overrides() {
     | reduce $o.set[] as $s (.; setpath($s.path; $s.value))
     | if ($o.mode // null) != null then .settings.mode = $o.mode else . end' "$1"
 }
+# The role's environment variables (defaults.env + roles.<role>.env) as KEY=VALUE lines.  role_env <config> <role>
+role_env() { jq -r --arg r "$2" '((.defaults.env // {}) * (.roles[$r].env // {})) | to_entries[] | "\(.key)=\(.value)"' "$1"; }
 # Escapes a text to use it literally inside a regular expression
 regex_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|\\]/\\&/g'; }
 # The worktree's Jira key.  jira_key <branch> <Orca's jiraIdentifier> <ticket url>

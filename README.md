@@ -46,7 +46,7 @@ By default:
 | **Researcher** | Opus 5.5 | context7 | PoCs, metrics, performance, load and capacity. Works in `research/`. |
 | **Dev** | Sonnet 5.5 | context7 | Implements the production code. |
 | **Tester** | Sonnet 5.5 | None | Does not review: implements and runs the tests, covering each criterion as a family of inputs with its boundaries, checks them with a few mutants of its own, within limits on quantity, parallelism and time, and cleans up at the end. |
-| **Auditor** | Opus 5.5 | None | Reviews Dev's code and the Tester's tests with its code review method (including mutation, in place in the worktree with a backup and a verified restore). Only findings from the step's rejection threshold up (default `high`) reject; the rest are notes. |
+| **Auditor** | Opus 5.5 | None | Reviews Dev's code and the Tester's tests with its code review method (including mutation, in place in the worktree with a backup and a verified restore). It audits once per set of steps, not per step. Only findings from the rejection threshold up (default `high`) reject; the rest are notes. Defaults: `maxMutants` 8 (Tester `maxSelfMutants` 3). Existing installs that still had the old defaults (15 and 5) move to the new ones on update; values you set yourself are kept (except exactly 15 and 5 themselves, which every update moves to the new defaults; to keep them, set them in the project's `.orca-roles.json`). |
 | **E2E-Tester** | Opus 5.5 | Playwright | Proposes an E2E test plan for the application (front end or API) and, once you approve it, runs it in a headless browser with your session, with screenshots at the key points. |
 | **Deployer** | Sonnet 5.5 | None | Starts and stops the application locally (API, front end and required services) when asked, and maintains `DEPLOYMENT.md` with the step-by-step guide for dev and prod. Never deploys. |
 
@@ -71,15 +71,19 @@ The Planner is the partial exception: it is not a worker, so its sections are St
 1. **Researcher** investigates if something needs deciding first.
 2. **Dev** implements.
 3. **Tester** implements and runs the tests. If they fail because of the code, Dev fixes it.
-4. **Auditor** reviews code and tests. Its findings go to Dev or the Tester as appropriate, and it repeats until it accepts (after 3 rejected rounds, the Planner checks with you).
+4. The **Auditor** does not take part in each step (see "Set audit" below). If the Tester rejects the step, its findings go to Dev or the Tester as appropriate, and it repeats until it accepts (after 3 rejected rounds, the Planner checks with you).
 5. If an E2E test is needed: **Deployer** starts the application → **E2E-Tester** proposes a plan → you approve it → **E2E-Tester** runs it → **Deployer** stops it.
 6. **Researcher** validates performance or capacity if needed.
 7. **Deployer** updates `DEPLOYMENT.md`.
-8. The **Planner** closes the step only with the Auditor's ACCEPTED, reports it to you (result, changes, news, decisions) and only then opens the next one.
+8. The **Planner** closes the step only with the Tester's ACCEPTED (and the E2E-Tester's and the Researcher's if they took part) and its commit made, reports it to you (result, changes, news, decisions) and only then opens the next one.
 
-Steps are atomic and strictly sequential: one behavior, one commit made at close once Dev, Tester and Auditor are done and you say yes to it (and one PR when the project uses them), one step in flight at a time. Nobody commits before the Auditor's ACCEPTED, and the commit message describes the functionality, not the pipeline. A long ticket becomes a chain of small steps, and the Planner proposes one Jira subtask per step, created once you approve the plan and say yes to creating them. Commits and PRs match the format of the repo's recent history, and Jira texts that of the Jira project's recent ones; the Planner re-reads them every time. The next step does not start until the commit is made. Nothing leaves the worktree without your explicit yes to that action: pushes, pull requests and every Jira write are shown to you first, and the workers never touch Jira or GitHub. Dev gets one precise task per step and never the next one until the current step has gone through Tester and Auditor.
+Steps are atomic and strictly sequential: one behavior, one commit made at close once Dev and the Tester are done and you say yes to it (and one PR when the project uses them), one step in flight at a time. Nobody commits before the Tester's ACCEPTED, and the commit message describes the functionality, not the pipeline. A long ticket becomes a chain of small steps, and the Planner proposes one Jira subtask per step, created once you approve the plan and say yes to creating them. Commits and PRs match the format of the repo's recent history, and Jira texts that of the Jira project's recent ones; the Planner re-reads them every time. The next step does not start until the commit is made. Nothing leaves the worktree without your explicit yes to that action: pushes, pull requests and every Jira write are shown to you first, and the workers never touch Jira or GitHub. Dev gets one precise task per step and never the next one until the current step has gone through Dev and the Tester, with its commit made.
+
+**Set audit.** Each step goes Dev → Tester and is committed. The Auditor audits once per set, when the last step of the commits that will go into one PR is committed and before the push or the PR is proposed, over the whole set (`git diff <base> HEAD`). Findings at or above medium are fixed (Dev for code, the Tester for tests), folded into the step commits they belong to and re-audited with a corrections-only review (just the diff of the corrections and the findings they answer); findings below medium (low and notes) are fixed without a new audit, or left as notes if you agree. Corrections are never stacked as new commits: they are folded into the step commits they belong to (fixup plus autosquash, after your yes), because commits describe functionality, not history. The push or the PR is proposed only after the set audit has no open finding at or above medium.
 
 The Planner does not block while the workers run: it hands out the tasks, tells you what is running and stays free, so you can keep refining the plan with it. Orca notifies it when a worker reports, and you can ask it for the status at any time. Workers send no heartbeats: they only report when they finish, ask when blocked or escalate when something fails, so the Planner is not woken (and you are not interrupted) by "still alive" messages. It detects a stuck worker by the time its terminal last printed anything.
+
+**Briefed rounds.** After every Dev or Tester report the Planner records the tree with `checkpoint.sh <step> <n>` and creates the next worker's task with a brief: the task (goal, criteria, threat model) and the state (files changed, what Dev and the Tester did and found, what earlier rounds already verified, the findings still open). The first brief carries the whole step's diff and later ones only what changed since that role last looked (`git diff <earlier checkpoint> <latest checkpoint>`), so the Tester does not rebuild the step from zero in every round; the brief is information, never instructions on what to test, and they still verify the code themselves. The Planner keeps a ledger per step (`ledger-<step>.md` in its scratch folder) as the source of every brief and clears each step's checkpoints at the step's commit and the set's at the end of the set audit.
 
 If a role is disabled in the configuration, the Planner skips its part of the flow and tells you when a step would have needed it.
 
@@ -130,6 +134,7 @@ It creates an `orca.yaml` with the setup script at the main checkout's root and 
   - **run-both:** `orca.yaml` runs first, then the script in Settings.
   - **shared-only:** only `orca.yaml` runs.
 - `roles-yaml` checks this through the Orca CLI before writing anything. With local-only and no `launch.sh` in the local script it stops without writing and tells you the two fixes: put `$HOME/.orca-roles/bin/launch.sh` as the first line of the local script, or switch the source to "run both". If the local script already runs `launch.sh` it tells you `roles-yaml` is not needed (with "run both" it would run twice). It also warns if the setup policy is not "run by default" (with "ask", `orca worktree create` needs `--setup run`). If Orca cannot be queried (not running, project not registered, no CLI) it says so and writes `orca.yaml` anyway.
+- `roles` repeats this check every time it runs and warns if new worktrees would not start the kit (or would start it twice); `roles-yaml --check` runs only the check.
 - To check it yourself: `orca repo show --repo path:<main checkout root> --json | jq .result.repo.hookSettings` (`commandSourcePolicy`, `setupRunPolicy` and `scripts.setup`).
 - Changes to `orca.yaml` (for example, adding `npm install`) are made in the main checkout's one; each new worktree gets a copy.
 
@@ -205,7 +210,7 @@ The wizard asks everything it needs and updates the configuration:
 
 - **Identity:** id, tab title and a **description** for the Planner (what it does and when to use it). The Planner receives that description at startup and fits the role into the flow.
 - **Modes:** whether the role belongs to all [modes](#modes) or to one (`1` all, `2` one, then the mode). A mode that does not exist yet can be chosen: the wizard notes that the role will launch once that mode exists.
-- **Agent:** `claude`, `codex` or `custom` (with its command), exact model and permission mode.
+- **Agent:** `claude`, `codex` or `custom` (with its command), exact model and permission mode. For a `custom` agent it also asks for its `modelError` pattern and its `models` (`list`, `parse`, `probe`); empty answers leave them out.
 - **MCP and tools** (with `claude`): which servers it loads, with the option to define new servers; allowed tools and extra folders.
 - **Other:** extra arguments, environment variables, role parameters, tab position and whether it is enabled.
 - **Prompt, one per mode** (all three for a role in all modes): generated from a few questions (steps, limits, report contents and whether it issues a verdict), copied from a file of yours, or written in your editor (`$EDITOR`, `nano` by default); from the second mode on you can also copy the prompt of the previous mode. In every case the result follows the [common prompt structure](#prompt-structure); if you copy a file that does not follow it, the wizard warns you.
@@ -221,7 +226,7 @@ Every worker also receives the common rules in `prompts/programmer/common-worker
 
 **Removing a role:** `new-role --remove <id>` removes a role you created (its entry and the prompt it has for every mode, plus the old `roles/<id>.md` of earlier versions; previous configuration in `.bak`). Only those exact kit paths are deleted: a prompt your configuration points to elsewhere is left alone and reported. Overwriting a role (same id) that now has fewer modes deletes the prompts of the modes it lost in your installation; with `--repo` it only lists them with the `git rm` command, since they are versioned files. The ids `planner` and `common-workers` are reserved, and with `--repo` a new role cannot take over an existing `prompts/<mode>/<id>.md`. Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
 
-**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration, plus `after` (position) and `overwrite: true` to replace an existing one. `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
+**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration (including `modelError` and `models`, which are validated: an invalid one stops it with nothing written), plus `after` (position) and `overwrite: true` to replace an existing one. `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
 
 ## The Planner's skill
 
@@ -327,6 +332,8 @@ Each role inherits from `defaults` whatever it does not define.
 | `modes` | `"all"` or a list of the modes the role belongs to (default `["programmer"]`). See [Modes](#modes). |
 | `agent` | Which CLI is launched: `claude`, `codex` or `custom`. |
 | `model` | Exact model passed to the agent. |
+| `modelError` | Only with `agent: "custom"`: an ERE (`grep -E`) the agent prints when its model does not exist; `{model}` stands for the escaped model id. Without it, a missing model is not detected for that role. |
+| `models` | `{ "list", "parse", "probe" }`, for `models.sh` (see [Models of a role](#models-of-a-role)): `list` is a command that prints the models, `parse` how to read it (`lines`, `json:<jq filter>` or `regex:<ERE with one group>`), `probe` a command that exits 0 only if the model works (`{model}` is replaced, quoted). Custom agents only (claude and codex roles have built-in listing and probes); in `defaults` or in a role. Unknown keys are rejected. |
 | `permissionMode` | In `claude`, the `--permission-mode` (`auto`, `acceptEdits`, `manual`...). `default` means not passing the flag. In `codex`, `auto` is `--sandbox workspace-write --ask-for-approval on-request` (what `--full-auto` was); any other value passes nothing. |
 | `mcp` | `"all"` for the agent to use its own MCP configuration (in `claude`, all your connectors), or a list of `mcpServers` names (`[]` = none). Works with any agent: see [MCP in other agents](#mcp-in-other-agents). |
 | `allowedTools` | Tools allowed without asking. `claude` only. |
@@ -342,6 +349,28 @@ Each role inherits from `defaults` whatever it does not define.
 | `clearCommand` | Command that opens a new conversation in the agent, for context cleanup. By default `/clear` in `claude` and `/new` in `codex`; in `custom` it must be defined or the role is not cleaned. |
 
 The order of the tabs is the order of the roles in the JSON.
+
+### Models of a role
+
+`~/.orca-roles/bin/models.sh <role|title> [--check]` lists the models a role can use and, with `--check`, tests them. When a role's model does not exist (see Troubleshooting), the Planner's fix steps can use it to find one that works. `--model <m>` replaces the candidates with exactly `<m>`, with or without `--check`.
+
+**Relaunching a role with another model:** `~/.orca-roles/bin/relaunch-role.sh <role|title> --model <m> [--no-check]`, from the worktree, is what the Planner runs after your yes. It tests the model first (`models.sh <role> --check --model <m>`; it stops without changing anything unless the model is `ok`, or `--no-check`), closes the role's tab and runs `launch.sh --set roles.<id>.model=<m>`. The worktree's other saved exceptions are kept; launch.sh reopens every tab of the team that is missing (normally just this role's), and kicks only the roles it opened. The model is saved for the worktree (`roles --reset` forgets it). The Planner cannot be relaunched.
+
+- Without `--check` it only prints the candidates, one per line, the role's own model first. Nothing is run against a model and nothing is spent.
+  - `claude`: Claude Code cannot list the models of your login, so these are its aliases (`sonnet`, `opus`, `haiku`, `fable`).
+  - `codex`: the models `codex debug models` marks as listed.
+  - `custom`: the output of the role's `models.list` command, read as `models.parse` says.
+- With `--check` it runs one minimal probe per candidate, in parallel (at most 6 probes at a time, each bounded to 90 seconds), and prints `<model>`, `ok` with the resolved id, `unavailable` (the model does not exist or you have no access) or `unknown` with the reason (not logged in, offline, timed out...). Only `ok` and `unavailable` are answers.
+- Cost of `--check`: a Claude probe for a model that does not exist costs nothing; for one that works, at most about 0.012 USD the first time (it answers "ok" with no tools). Codex probes use your Codex login. The probes use the role's `env`, write nothing outside a temporary folder except the agents' own logs (Codex keeps its logs even for ephemeral runs) and never change a setting. The list commands are bounded to 90 seconds as well.
+
+For a `custom` role, describe how to list and test models in `models`:
+
+```json
+"tester": { "agent": "custom", "command": "opencode --model {model}", "model": "m1",
+  "models": { "list": "opencode models", "parse": "lines", "probe": "opencode run --model {model} ok" } }
+```
+
+`parse` is `lines` (default: each non-empty line), `json:<jq filter>` (for example `json:.data[].id`) or `regex:<ERE with one group>` (the group of each matching line). Without `list` the role's `model` is the only candidate; without `probe`, `--check` answers `unknown`.
 
 ### Using other agents
 
@@ -442,13 +471,14 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `--disable a,b` | Disables roles. The `planner` cannot be disabled. |
 | `--set path=value` | Changes any configuration key. The path uses dots and the value is read as JSON if it is JSON (`true`, `10`, `["x"]`) and as text otherwise. |
 | `--mode <mode>` | The team's mode (`programmer`, `pr-reviewer`, `academic-writer`); beats `settings.mode` and `.orca-roles.json`. Rejected if the worktree's team is open in another mode. See [Modes](#modes). |
-| `--reset` | Forgets the worktree's saved exceptions (only with `roles`). |
+| `--reset` | Forgets the worktree's saved exceptions first, so only the options of this run apply (only with `roles`). |
+| `--status` | Shows the team and exits; it changes nothing in the worktree or Orca and opens nothing. First line `Mode: <mode>`, then one tab-separated line per role: `<Title>`, handle, state (`alive`, `no tab`, `agent gone`, `orphaned`), configured model (`-` if none) and model in use from `orca-roles.models` (`FAILED:<model>` as recorded, `-` if not recorded). Without a launched team: `No team launched in this worktree.` |
 
 `--set` examples: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `settings.language=Spanish`, `roles.tester.params.maxNewTests=5`, `roles.dev.mcp='["context7"]'`.
 
 - They can be combined and repeated: `--only dev,tester --set roles.dev.model=claude-opus-5-5`. They are applied in this order: `--only`, `--enable`, `--disable`, `--set` and finally `--mode`.
 - If an option names a role that does not exist, `launch.sh` fails with the list of available roles instead of starting halfway.
-- The exceptions are saved per worktree (`orca-roles.overrides.json` in its git dir). So `roles` without options applies them again when resuming after a restart; with new options, it replaces them; with `--reset`, it goes back to the normal configuration.
+- The exceptions are saved per worktree (`orca-roles.overrides.json` in its git dir). So `roles` without options applies them again when resuming after a restart; new options are added to them (the same option replaces its saved value: `--only`, `--mode`, a `--set` path; a role in `--enable` leaves the saved `--disable` and the other way round); a `--mode` different from the saved one also drops the saved `--only`/`--enable`/`--disable` (role selections belong to a mode; the saved `--set`s are kept); with `--reset`, it forgets them and goes back to the normal configuration, or starts over with the options given with it.
 - They also work with `roles` in a workspace terminal (`roles --enable e2e-tester`). They only decide which tabs open: disabling a role whose tab is already open does not close it.
 
 ### General settings (`settings`)
@@ -475,7 +505,9 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── agent.sh                 # launches a role's agent according to the configuration
 │   ├── kickoff.sh               # sends each agent its role, passes the Jira ticket and closes the extra agent
 │   ├── clean.sh                 # cleans the workers' context and resends their role
+│   ├── checkpoint.sh            # records the tree under refs/orca-roles/checkpoints/ (the Planner's briefs diff rounds against it)
 │   ├── close-role.sh            # closes a role's tab in the current workspace
+│   ├── relaunch-role.sh         # relaunches one role with another model
 │   ├── browser-login.sh         # saves your application session for the E2E-Tester
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
 │   ├── lib.sh                   # shared functions
@@ -498,6 +530,7 @@ To change a role's behavior, edit `prompts/programmer/<role>.md` in the repo and
 Inside each worktree:
 
 - `research/` and `qa-evidence/`: the Researcher's work and the E2E-Tester's screenshots. They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`.
+- `refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>`: the Planner's per-round snapshots of the tree (commits kept out of every branch, made without touching HEAD, the index or the files); `checkpoint.sh --list` shows them and `--clear <step>` deletes a step's after its commit. Files marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree, and `checkpoint.sh` warns about them. Renaming a worktree's folder, or moving the main checkout (its git dir moves with it), changes its id, so checkpoints taken before no longer show in `--list` or `--clear`; remove them with `git update-ref -d <ref>` (`git for-each-ref refs/orca-roles/checkpoints` lists them). Moving a linked worktree to another parent folder with `git worktree move` keeps them.
 - `DEPLOYMENT.md`: the Deployer's guide. It is not committed unless you ask.
 - In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.pty` (each role's terminal identity, to recognize the tabs Orca restores after a restart), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json`, `orca-roles.composer-seen.json` and `orca-roles.setup-context` (tabs seen when the worktree was created, and whether Orca's setup script started the kit, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
 - Outside the worktree: `~/.orca-roles/browser/<project>.json`, the browser session for the E2E-Tester.
@@ -556,6 +589,8 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | "Orca CLI not found" (Windows), or `Command 'orca' not found` | Run the command from an Orca terminal (outside them neither `orca` nor `$ORCA_CLI_COMMAND` exist), opened after installing or after `source ~/.bashrc`, so it has the `orca` alias. Do not install apt's `orca` package (a screen reader) |
 | The agents do not receive their role | The worktree's `orca-roles-kickoff.log` |
 | "Invalid configuration" | Validate your JSON: `jq . ~/.orca-roles/config.json` (and the project's `.orca-roles.json`) |
+| A role never answers its first message | Its `model` may not exist: after the role message the kickoff compares the screen with what it showed before and, if a new model error appeared (Claude Code's "There's an issue with the selected model", Codex's "does not exist" API error, or the custom agent's `modelError`), records `ROLE=FAILED:<model>` in `orca-roles.models` (git dir) and sends the Planner a "model unavailable" escalation; the Planner asks you whether you fix it yourself or want it to. Nothing is switched and `config.json` is never changed: set `roles.<id>.model`, close the tab with `close-role.sh <id>` and run `roles`, or let the Planner run `relaunch-role.sh <id> --model <m>`. In a very small pane the check can miss an error (the kit reads only what the tab shows): the role's first answer tells you. Only roles with a `model` are checked |
+| Which models a role can use | `~/.orca-roles/bin/models.sh <role> --check` ([Models of a role](#models-of-a-role)) |
 | An agent starts with another model or MCP | `orca-roles.config.json` in the worktree's git dir shows the configuration that was used, and `orca-roles-launch.log` the exceptions applied |
 | A role does not appear even though `enabled` is `true` | The worktree's saved exceptions: `orca-roles.overrides.json` in its git dir. Drop them with `roles --reset` |
 | The Planner replies in another language | `settings.language` (or a `--set settings.language=...` in the setup script); with `"auto"` it replies in the language you write in |

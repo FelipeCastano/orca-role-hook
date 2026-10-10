@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat guard cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models relaunch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -138,6 +138,10 @@ done
 grep -rEq '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' "$ROOT/prompts/" && { echo "FAIL prompts contain an email address"; FAIL=1; }
 for p in common-workers planner; do
   at=$(grep -n 'never carry attribution to an AI' "$ROOT/prompts/programmer/$p.md" | head -1 | cut -d: -f1 || true)
+  al=$(grep 'never carry attribution to an AI' "$ROOT/prompts/programmer/$p.md" | head -1 || true)
+  for k in 'git log -1 --format=%B' 'git commit --amend'; do
+    printf '%s' "$al" | grep -qF -- "$k" || { echo "FAIL $p.md: the AI-attribution rule lost: $k"; FAIL=1; }
+  done
   nn=$(grep -n 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" | head -1 | cut -d: -f1 || true)
   [ -n "$at" ] && [ -n "$nn" ] && [ "$nn" -eq $((at + 1)) ] || { echo "FAIL $p.md: the no-names rule must sit right after the AI-attribution rule"; FAIL=1; }
   grep -qF "Merge pull request #N from <handle>/<branch>" "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: the commit rule lost the GitHub merge-subject warning"; FAIL=1; }
@@ -164,6 +168,10 @@ OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$CW")"
 for frag in 'Always write in English' 'Repo artifacts (code, commits, docs) still follow' 'no narration between tool calls' 'no recap' 'keep negations, numbers, units, paths, file:line and ids' 'is not written in telegraphic style' 'self-contained and complete' 'Never write "see the file in scratchDir"' 'full, unambiguous sentences'; do
   printf '%s' "$OUTSEC" | grep -qF "$frag" || { echo "FAIL common-workers.md: Output section lost '$frag'"; FAIL=1; }
 done
+WRAP="$(grep -F 'Never wrap commands in' "$CW" || true)"
+for frag in 'Never wrap commands in `bash -c` or `sh -c`' 'save it as a script in `scratchDir`' 'the shell may be zsh'; do
+  printf '%s' "$WRAP" | grep -qF -- "$frag" || { echo "FAIL common-workers.md: the wrapped-commands rule lost '$frag'"; FAIL=1; }
+done
 grep -qF "3-sentence" "$CW" && grep -qF -- '--report-path' "$CW" || { echo "FAIL common-workers.md: lost the override of the preamble's report instructions"; FAIL=1; }
 PL="$(grep 'Specs are written in English and stay compact' "$ROOT/prompts/programmer/planner.md" || true)"
 for frag in 'Do not repeat rules the worker prompts already carry' 'point to files and lines' 'self-contained about the task' 'threat model and rejection threshold' 'with the user you talk as usual' 'Literal strings stay in their original language'; do
@@ -180,7 +188,7 @@ done
 CMT="$(grep 'One commit per step, made at close' "$PLP" || true)"
 printf '%s' "$CMT" | grep -qF "only on the user's explicit yes to that commit, before the next step opens" || { echo "FAIL planner.md: the one-commit rule lost the explicit yes"; FAIL=1; }
 CMT2="$(grep 'One commit per step, now' "$PLP" || true)"
-for frag in 'show the user the full message and the list of files' 'commit only on a clear yes to that commit' 'Approving the plan, the step or the Auditor' 'is not approving the commit' 'If they ask for changes, show it again' '"ok, continue"' 'ask again' 'decline or defer the commit, ask what to do with the uncommitted changes' 'after the convention check in "Limits"' '`git status`, `git diff --stat`'; do
+for frag in 'show the user the full message and the list of files' 'commit only on a clear yes to that commit' 'Approving the plan, the step or the Tester' 'is not approving the commit' 'If they ask for changes, show it again' '"ok, continue"' 'ask again' 'decline or defer the commit, ask what to do with the uncommitted changes' 'after the convention check in "Limits"' '`git status`, `git diff --stat`'; do
   printf '%s' "$CMT2" | grep -qF "$frag" || { echo "FAIL planner.md: step-close commit rule lost '$frag'"; FAIL=1; }
 done
 for pat in 'A step is \*\*open\*\* from its first task' 'Only one code task is in flight'; do
@@ -191,11 +199,15 @@ printf '%s' "$(grep '\*\*Jira subtasks\.\*\*' "$PLP" || true)" | grep -qF 'after
 [ "$(grep -cF 're-propose its close commit (re-running the convention check in "Limits")' "$PLP")" = 3 ] || { echo "FAIL planner.md: the recovery paths (resumed, back, cleared) must re-propose an uncommitted ACCEPTED step's commit"; FAIL=1; }
 printf '%s' "$(grep '^- \*\*Nothing leaves the worktree' "$PLP" || true)" | grep -qF 'Approving the plan, a step or a commit is not approving a push or a Jira update' || { echo "FAIL planner.md: the nothing-leaves rule lost its approval sentence"; FAIL=1; }
 grep -qF 'Nobody commits while the step is open' "$PLP" && { echo "FAIL planner.md: 'Nobody commits while the step is open' forbids the close commit"; FAIL=1; }
-grep -qF "Nobody commits before the Auditor's ACCEPTED" "$PLP" || { echo "FAIL planner.md: the one-commit bullet lost 'Nobody commits before the Auditor's ACCEPTED'"; FAIL=1; }
+grep -qF "Nobody commits before the Tester's ACCEPTED" "$PLP" || { echo "FAIL planner.md: the one-commit bullet lost 'Nobody commits before the Tester's ACCEPTED'"; FAIL=1; }
+grep -qF "Nobody commits before the Auditor's ACCEPTED" "$PLP" && { echo "FAIL planner.md: still says nobody commits before the Auditor's ACCEPTED"; FAIL=1; }
+printf '%s' "$(grep '^8\. \*\*Close and report' "$PLP" || true)" | grep -qF "closes only with the Tester's ACCEPTED" || { echo "FAIL planner.md: step 8 must close on the Tester's ACCEPTED"; FAIL=1; }
+printf '%s' "$(grep '^- A step only closes with ACCEPTED' "$PLP" || true)" | grep -qF 'ACCEPTED from the Tester (and the E2E-Tester and the Researcher if they took part)' || { echo "FAIL planner.md: Limits step-close rule is not the Tester's (plus E2E-Tester/Researcher)"; FAIL=1; }
+printf '%s' "$(grep '^- A step only closes with ACCEPTED' "$PLP" || true)" | grep -qF 'Auditor' && { echo "FAIL planner.md: Limits step-close rule still names the Auditor"; FAIL=1; }
 for pat in '^8\. \*\*Close and report' '^- A step only closes with ACCEPTED'; do
   printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and its commit made' || { echo "FAIL planner.md: '$pat' lost 'and its commit made'"; FAIL=1; }
 done
-printf '%s' "$(grep '^Steps are atomic' "$ROOT/README.md" || true)" | grep -qF "Nobody commits before the Auditor's ACCEPTED" || { echo "FAIL README: lost the commit-after-ACCEPTED definition"; FAIL=1; }
+printf '%s' "$(grep '^Steps are atomic' "$ROOT/README.md" || true)" | grep -qF "Nobody commits before the Tester's ACCEPTED" || { echo "FAIL README: lost the commit-after-ACCEPTED definition"; FAIL=1; }
 for pat in '^5\. Tell the user, in a few lines: where you were' '^3\. Tell the user, in a few lines: the Run'; do
   printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and wait for the yes' || { echo "FAIL planner.md: recovery summary '$pat' lost 'wait for the yes'"; FAIL=1; }
 done
@@ -759,6 +771,66 @@ check "roles-yaml local-only + kit + our orca.yaml: not needed, no TWICE" "$RC:$
 
 # roles-yaml: the error text does not say that saving a script sets local-only
 yfor local-only "npm i"; check "roles-yaml error text: no claim that saving sets local-only" "$([[ "$OUT" == *"Saving anything"* || "$OUT" == *"sets the source to local-only"* ]] && echo claim || echo none)" "none"
+
+# roles-yaml --check: read-only, silent when Orca cannot be asked, one WARNING line otherwise
+KIT_Y="scripts:"$'\n'"  setup: |"$'\n'"    \$HOME/.orca-roles/bin/launch.sh"$'\n'
+ychk() { yreset; hsjson "$1" "$2" "${3:-}" > "$YP"; [ -z "${4:-}" ] || printf '%s' "$4" > "$Y2/orca.yaml"; [ -z "${5:-}" ] || { printf '%s\n' "$5" > "$Y2/.worktreeinclude"; echo orca.yaml > "$Y2/.git/info/exclude"; }; yrun --check; }
+W_PRE="WARNING: new worktrees of this project will not start the kit: "
+W_LOCAL="${W_PRE}Orca's setup source is local-only and the local setup script does not run launch.sh. Put \$HOME/.orca-roles/bin/launch.sh as the first line of that script (Settings → Repository → ypol → Setup script), or switch the setup source to \"run both\" and run roles-yaml."
+W_SHARED="${W_PRE}Orca's setup source is shared-only and no orca.yaml that reaches new worktrees runs launch.sh. Run roles-yaml, or add \$HOME/.orca-roles/bin/launch.sh to the committed orca.yaml's setup script."
+W_BOTH0="${W_PRE}neither the local setup script nor an orca.yaml that reaches new worktrees runs launch.sh. Run roles-yaml, or put \$HOME/.orca-roles/bin/launch.sh in the local setup script (Settings → Repository → ypol → Setup script)."
+W_TWICE="WARNING: new worktrees of this project start the kit twice: both the local setup script and orca.yaml run launch.sh. Fix it with roles-yaml --remove, or drop launch.sh from the local setup script."
+W_ASK="WARNING: this project's setup policy is 'ask': Orca asks each time, and 'orca worktree create' needs '--setup run'. The kit does not start by itself."
+W_SKIP="WARNING: this project's setup policy is 'skip-by-default': setup does not run automatically, so the kit will not start by itself."
+ychk local-only "$KITL"; check "roles-yaml --check: local-only with the kit is silent" "$RC:$OUT" "0:"
+ychk shared-only "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: shared-only, orca.yaml listed in .worktreeinclude is silent" "$RC:$OUT" "0:"
+ychk run-both "$KITL"; check "roles-yaml --check: run-both with only the local script is silent" "$RC:$OUT" "0:"
+ychk run-both "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: run-both with only orca.yaml is silent" "$RC:$OUT" "0:"
+yreset; try env -u ORCA_CLI_COMMAND PATH=/usr/bin:/bin bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" --check 2>&1' "$Y2" "$ROOT"
+if ! PATH=/usr/bin:/bin command -v orca >/dev/null 2>&1; then check "roles-yaml --check: Orca CLI missing is silent" "$RC:$OUT" "0:"; fi
+yreset; printf '%s' "$NOTRUN" > "$YP"; FAKE_PATH_RC=1 yrun --check; check "roles-yaml --check: Orca not running is silent" "$RC:$OUT" "0:"
+ychk local-only "npm i"; check "roles-yaml --check: local-only without the kit warns" "$RC:$OUT" "0:$W_LOCAL"
+ychk shared-only "npm i"; check "roles-yaml --check: shared-only without orca.yaml warns" "$RC:$OUT" "0:$W_SHARED"
+ychk shared-only "npm i" "" "$KIT_Y"; check "roles-yaml --check: shared-only, orca.yaml neither tracked nor included warns" "$RC:$OUT" "0:$W_SHARED"
+ychk shared-only "npm i" "" "# \$HOME/.orca-roles/bin/launch.sh"$'\n' orca.yaml; check "roles-yaml --check: shared-only, commented launch.sh warns" "$RC:$OUT" "0:$W_SHARED"
+ychk run-both "npm i"; check "roles-yaml --check: run-both with neither warns" "$RC:$OUT" "0:$W_BOTH0"
+ychk run-both "$KITL" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: run-both with both warns about twice" "$RC:$OUT" "0:$W_TWICE"
+ychk local-only "$KITL" ask; check "roles-yaml --check: ask message" "$RC:$OUT" "0:$W_ASK"
+ychk local-only "$KITL" skip-by-default; check "roles-yaml --check: skip-by-default message" "$RC:$OUT" "0:$W_SKIP"
+ychk shared-only "npm i" ask "$KIT_Y" orca.yaml; check "roles-yaml --check: ask with a working orca.yaml" "$RC:$OUT" "0:$W_ASK"
+ychk shared-only "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: listed and ignored orca.yaml is silent" "$RC:$OUT" "0:"
+yreset; hsjson shared-only "npm i" > "$YP"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"; printf 'orca.yaml\n' > "$Y2/.worktreeinclude"; yrun --check
+check "roles-yaml --check: listed but not ignored orca.yaml warns" "$RC:$OUT" "0:$W_SHARED"
+rm -f "$Y2/.worktreeinclude"
+for l in 'setup: npm i # $HOME/.orca-roles/bin/launch.sh' 'setup: |\n    echo run $HOME/.orca-roles/bin/launch.sh later'; do
+  yreset; hsjson shared-only "npm i" > "$YP"; printf 'scripts:\n  %b\n' "$l" > "$Y2/orca.yaml"; git -C "$Y2" add -f orca.yaml; yrun --check
+  check "roles-yaml --check: tracked orca.yaml with launch.sh only in a comment/echo warns ($l)" "$RC:$OUT" "0:$W_SHARED"
+  git -C "$Y2" rm -q -f --cached orca.yaml
+done
+yreset; hsjson shared-only "npm i" > "$YP"; printf 'scripts:\n  setup: npm i && $HOME/.orca-roles/bin/launch.sh\n' > "$Y2/orca.yaml"; git -C "$Y2" add -f orca.yaml; yrun --check
+check "roles-yaml --check: tracked orca.yaml with a chained launch.sh is silent" "$RC:$OUT" "0:"; git -C "$Y2" rm -q -f --cached orca.yaml
+# --check outside a plain checkout (submodule, separate git dir) is silent and exits 0
+SUBS="$TMP/ysubs"; mkdir -p "$SUBS/inner" "$SUBS/super"; git -C "$SUBS/inner" init -q; git -C "$SUBS/inner" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i
+git -C "$SUBS/super" init -q; git -C "$SUBS/super" -c protocol.file.allow=always submodule add -q "$SUBS/inner" s 2>/dev/null
+git init -q --separate-git-dir "$SUBS/sep.git" "$SUBS/sep" 2>/dev/null
+for d in "$SUBS/super/s" "$SUBS/sep"; do
+  try env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" --check 2>&1' "$d" "$ROOT"
+  check "roles-yaml --check: silent and rc 0 in $(basename "$d")" "$RC:$OUT" "0:"
+done
+yreset; hsjson shared-only "x" > "$YP"; printf 'x\n' > "$Y2/.worktreeinclude"; printf 'foo\n' > "$Y2/.git/info/exclude"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"
+S3="$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/orca.yaml" "$Y2/.worktreeinclude" "$Y2/.git/info/exclude")"
+yrun --check; check "roles-yaml --check never writes" "$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/orca.yaml" "$Y2/.worktreeinclude" "$Y2/.git/info/exclude")" "$S3"
+yreset; hsjson local-only "npm i" > "$YP"; yrun --check; check "roles-yaml --check creates nothing" "$(LC_ALL=C ls -A "$Y2" | tr '\n' ' ')" ".git "
+yreset; hsjson shared-only "npm i" > "$YP"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"; git -C "$Y2" add orca.yaml; git -C "$Y2" -c user.name=t -c user.email=t@t commit -q -m yaml
+yrun --check; check "roles-yaml --check: shared-only, tracked orca.yaml with launch.sh is silent" "$RC:$OUT" "0:"
+git -C "$Y2" rm -q -f orca.yaml; git -C "$Y2" -c user.name=t -c user.email=t@t commit -q -m rm-yaml
+ychk MISSING "npm i"; check "roles-yaml --check: no source chosen with a local script is local-only and warns" "$RC:$OUT" "0:$W_LOCAL"
+yreset; printf '{"ok":false,"error":{"code":"not_found"}}' > "$YP"; yrun --check; check "roles-yaml --check: project not registered is silent" "$RC:$OUT" "0:"
+yreset; hsjson local-only "npm i" > "$YP"
+check "roles-yaml --check: the warning goes to stderr, not stdout" "$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" "$ROOT/bin/orca-yaml.sh" --check 2>&1 >/dev/null):$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" "$ROOT/bin/orca-yaml.sh" --check 2>/dev/null | wc -c | tr -d ' ')" "$W_LOCAL:0"
+try yaml "$TMP/ywt" --help; check "roles-yaml --help lists --check" "$RC:$(printf '%s\n' "$OUT" | grep -c -e '--check'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "0:1:6"
+yreset; printf 'garbage' > "$YP"; yrun --check; check "roles-yaml --check: unexpected output is silent" "$RC:$OUT" "0:"
+mkdir -p "$TMP/ynogit"; try env PATH="$FB:/usr/bin:/bin" bash -c 'cd "$0" && GIT_CEILING_DIRECTORIES="$0/.." "$1/bin/orca-yaml.sh" --check 2>&1' "$TMP/ynogit" "$ROOT"; check "roles-yaml --check: outside a git repo is silent" "$RC:$OUT" "0:"
 }
 
 sec_launch_overrides() {
@@ -774,6 +846,57 @@ check "apply_overrides: --set" "$(jq -r '.roles.dev.model' "$TMP/c.json")" "m2"
 overrides_from_args --disable planner,nobody > "$TMP/ovr.json"
 check "check_overrides: unknown role" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: unknown roles: nobody\. Available: ')" "1"
 check "check_overrides: the planner cannot be disabled" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: the planner cannot be disabled$')" "1"
+
+# the options add to the saved ones (library level)
+S0='{"only":["a"],"enable":["x","y"],"disable":["z","w"],"set":[{"path":["roles","dev","model"],"value":"a"},{"path":["k"],"value":1}],"mode":"programmer"}'
+mo() { printf '%s' "$S0" > "$TMP/mo.saved"; printf '%s' "$1" > "$TMP/mo.new"; merge_overrides "$TMP/mo.saved" "$TMP/mo.new" ${2:+"$2"}; }
+E0='"only":[],"enable":[],"disable":[],"set":[]'
+check "merge_overrides: nothing new keeps the saved ones" "$(mo "{$E0}")" "$S0"
+check "merge_overrides: a new --only replaces the saved one" "$(mo '{"only":["b","c"],"enable":[],"disable":[],"set":[]}' | jq -c .only)" '["b","c"]'
+check "merge_overrides: enable/disable add up, the newest wins per role, no duplicates" "$(mo '{"only":[],"enable":["z","y","v"],"disable":["x","w"],"set":[]}' | jq -c '[.enable,.disable]')" '[["y","z","v"],["w","x"]]'
+check "merge_overrides: the same --set path takes the new value, other saved sets stay" "$(mo '{"only":[],"enable":[],"disable":[],"set":[{"path":["roles","dev","model"],"value":"b"}]}' | jq -c .set)" '[{"path":["k"],"value":1},{"path":["roles","dev","model"],"value":"b"}]'
+check "merge_overrides: the new mode wins, the saved mode stays otherwise" "$(mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}' | jq -r .mode):$(mo "{$E0}" | jq -r .mode)" "pr-reviewer:programmer"
+check "merge_overrides: a different mode drops the saved selections and keeps the sets" "$(mo '{"only":[],"enable":["q"],"disable":[],"set":[],"mode":"pr-reviewer"}')" '{"only":[],"enable":["q"],"disable":[],"set":[{"path":["roles","dev","model"],"value":"a"},{"path":["k"],"value":1}],"mode":"pr-reviewer"}'
+check "merge_overrides: the same mode, or a saved one with none (programmer), keeps them" "$(mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}' | jq -c .enable):$(S0="$(printf '%s' "$S0" | jq -c 'del(.mode)')" mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}' | jq -c .enable)" '["x","y"]:["x","y"]'
+check "merge_overrides: the third argument (previous effective mode) is what the new mode is compared with" "$(mo '{"only":[],"enable":["q"],"disable":[],"set":[],"mode":"programmer"}' pr-reviewer | jq -c .enable):$(mo '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}' programmer | jq -c .enable)" '["q"]:["x","y"]'
+# launch.sh end to end: own kit with a second mode
+pk_setup
+mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester", "enabled": false },
+             "deployer": { "title": "Deployer" }, "rv": { "title": "Rv", "modes": ["pr-reviewer"] } } }
+J
+OW="$TMP/oproj"; mkdir -p "$OW" "$TMP/obin"; git -C "$OW" init -q; OG="$OW/.git"
+cat > "$TMP/obin/orca" <<'EOS'
+#!/bin/sh
+case "$1 $2" in
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal show") exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/obin/orca"; printf '#!/bin/sh\nexit 0\n' > "$TMP/obin/kickoff"; chmod +x "$TMP/obin/kickoff"
+ol() { rm -f "$OG/orca-roles.env"; (cd "$OW" && HOME="$PH" PATH="$TMP/obin:$PATH" ORCA_ROLES_KICKOFF="$TMP/obin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+osaved() { jq -c "$1" "$OG/orca-roles.overrides.json"; }
+oteam() { cut -d= -f1 "$OG/orca-roles.env" | tr '\n' ' '; }
+try ol --only dev; try ol --set roles.dev.model=a
+check "launch: a saved --only is kept when a later run passes only --set" "$RC:$(oteam):$(osaved '[.only,.set]')" '0:PLANNER DEV :[["dev"],[{"path":["roles","dev","model"],"value":"a"}]]'
+try ol --reset --disable deployer; try ol --enable deployer
+check "launch: --disable x then --enable x leaves x enabled and not disabled" "$RC:$(oteam):$(osaved '[.enable,.disable]')" '0:PLANNER DEV DEPLOYER :[["deployer"],[]]'
+try ol --reset --set settings.jiraHandoff=false --set roles.dev.model=a; try ol --set roles.dev.model=b
+check "launch: the same --set path takes the new value and the other saved sets stay" "$RC:$(osaved '.set')" '0:[{"path":["settings","jiraHandoff"],"value":false},{"path":["roles","dev","model"],"value":"b"}]'
+check "launch: the merged value reaches the effective config" "$(jq -r '.roles.dev.model' "$OG/orca-roles.config.json")" "b"
+try ol --only dev; try ol --only deployer
+check "launch: a new --only replaces the saved one" "$RC:$(oteam):$(osaved .only)" '0:PLANNER DEPLOYER :["deployer"]'
+try ol --reset --set roles.dev.model=c
+check "launch: --reset then options keeps only the new ones" "$RC:$(oteam):$(osaved '[.only,.enable,.disable,.set]')" '0:PLANNER DEV DEPLOYER :[[],[],[],[{"path":["roles","dev","model"],"value":"c"}]]'
+try ol --reset --mode pr-reviewer; try ol --set roles.rv.model=m
+check "launch: the saved mode is kept when later options omit it" "$RC:$(osaved .mode):$(jq -r .settings.mode "$OG/orca-roles.config.json")" "0:\"pr-reviewer\":pr-reviewer"
+try ol --reset --enable dev; B="$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" | cksum)"
+try ol --mode pr-reviewer --enable dev
+check "launch: a result that conflicts with the mode fails and saves nothing" "$RC:$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" | cksum):$(printf '%s' "$OUT" | grep -c 'ERROR: role dev is not part of mode pr-reviewer')" "1:$B:1"
 }
 
 sec_launch() {
@@ -802,7 +925,104 @@ try launch --only dev; check "launch: --only" "$RC:$(handles)" "0:PLANNER DEV "
 check "launch.sh leaves pre-seeded scratch content intact" "$(for r in planner dev deployer; do d="$(cd "$L" && KIT="$TMP/home/.orca-roles" scratch_dir $r)"; [ -f "$d/f" ] && [ -f "$d/sub/g" ] && [ -f "$d/.hidden" ] && printf y || printf n; done)" "yyy"
 try launch --enable nobody; check "launch: unknown role fails" "$RC" "1"
 check "launch: an error does not overwrite the saved exceptions" "$(jq -c .only "$L/.git/orca-roles.overrides.json")" '["dev"]'
+# launch.sh warns when new worktrees would not start the kit, and a failing check never changes its outcome
+mkdir -p "$TMP/lbin2"; cat > "$TMP/lbin2/orca" <<'EOS'
+#!/bin/sh
+case "$1 $2" in
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal show") [ -n "$FAKE_SHOW" ] && echo "$FAKE_SHOW" && exit 0; exit 1;;
+  "repo show") cat "$FAKE_REPO" 2>/dev/null;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/lbin2/orca"
+launch2() { (cd "$L" && HOME="$TMP/home" PATH="$TMP/lbin2:$PATH" FAKE_REPO="$TMP/l2.json" FAKE_SHOW="${FAKE_SHOW:-}" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$TMP/l2.json"
+try launch2 --reset; check "launch: warns when new worktrees would not start the kit, exits 0, team saved" "$RC:$(printf '%s\n' "$OUT" | grep -c 'WARNING: new worktrees of this project will not start the kit: Orca.s setup source is local-only'):$(handles)" "0:1:PLANNER DEV DEPLOYER "
+printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"$HOME/.orca-roles/bin/launch.sh"}}}}}' > "$TMP/l2.json"
+try launch2 --reset; check "launch: no warning when the kit starts" "$RC:$(printf '%s\n' "$OUT" | grep -c 'WARNING')" "0:0"
+printf 'garbage' > "$TMP/l2.json"
+try launch2 --reset; check "launch: a failing check does not change the outcome" "$RC:$(printf '%s\n' "$OUT" | grep -c 'WARNING'):$(handles)" "0:0:PLANNER DEV DEPLOYER "
+printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$TMP/l2.json"
+try launch2 --reset; check "launch: the warning comes after the team is saved and before it is printed" "$RC:$(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1):$(printf '%s\n' "$OUT" | grep -n '^PLANNER=' | cut -d: -f1 | head -1)" "0:$(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1):$(( $(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1) + 1 ))"
+FAKE_SHOW='{"result":{"terminal":{"agentIdentity":"claude"}}}' try launch2; check "launch: the warning also shows when every role is already open" "$RC:$(printf '%s\n' "$OUT" | grep -c 'All roles are already open'):$(printf '%s\n' "$OUT" | grep -c 'WARNING: new worktrees of this project will not start the kit')" "0:1:1"
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
+}
+
+sec_status() {
+# launch.sh --status: read-only report of the saved team
+write_launch_config
+S="$TMP/sproj"; mkdir -p "$S" "$TMP/sbin"; git -C "$S" init -q; G="$S/.git"
+SLOG="$TMP/sorca.log"; : > "$SLOG"
+cat > "$TMP/sbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$SLOG"
+case "\$1 \$2" in
+  "terminal show") case "\$4" in
+    h-up) echo '{"result":{"terminal":{"agentIdentity":"claude"}}}';;
+    h-gone) echo '{"result":{"terminal":{"title":"x"}}}';;
+    *) exit 1;; esac;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/sbin/orca"
+status() { (cd "$S" && HOME="$TMP/home" PATH="$TMP/sbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+try status --status; check "status: no state" "$RC:$OUT" "0:No team launched in this worktree."
+: > "$G/orca-roles.env"; try status --status; check "status: empty state" "$RC:$OUT" "0:No team launched in this worktree."
+jq '.settings.mode = "programmer"' "$KIT/config.json" > "$G/orca-roles.config.json"
+jq '.roles.dev.model = "m-dev"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+printf 'PLANNER=h-up\nDEV=h-none\nDEPLOYER=h-gone\n' > "$G/orca-roles.env"
+printf 'XDEV=m-x\nPLANNER=m-ok\nDEPLOYER=FAILED:m-bad\n' > "$G/orca-roles.models"
+printf 'PLANNER=pty-1\n' > "$G/orca-roles.pty"; printf '{"only":["dev"],"enable":[],"disable":[],"set":[]}' > "$G/orca-roles.overrides.json"
+ssum() { cat "$G/orca-roles.config.json" "$G/orca-roles.overrides.json" "$G/orca-roles.env" "$G/orca-roles.pty" "$G/orca-roles.models" | cksum; ls "$G" | cksum; }
+S0="$(ssum)"; : > "$SLOG"
+try status --status
+check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Planner|h-up|alive|-|m-ok/Dev|h-none|no tab|m-dev|-/Deployer|h-gone|agent gone|-|FAILED:m-bad"
+check "status: writes nothing" "$([ "$(ssum)" = "$S0" ] && echo unchanged || echo CHANGED):$([ -e "$G/orca-roles-launch.log" ] && echo log)" "unchanged:"
+check "status: only reads terminals" "$(grep -vc '^terminal show ' "$SLOG")" "0"
+try status -h; case "$OUT" in *"--status "*"changes nothing"*) echo "ok   status: -h prints the --status line";; *) echo "FAIL status -h: $OUT"; FAIL=1;; esac
+# orphaned tab, a custom agent (only its tab counts) and a saved state without a saved config (falls back to the merged config)
+cat > "$TMP/sbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$SLOG"
+case "\$1 \$2" in
+  "terminal show") case "\$4" in
+    h-orph) echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}';;
+    h-cust) echo '{"result":{"terminal":{"title":"x"}}}';;
+    *) exit 1;; esac;;
+esac
+exit 0
+EOS
+jq '.roles.dev.agent = "custom" | .roles.dev.command = "c" | .settings.mode = "programmer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+printf 'PLANNER=h-orph\nDEV=h-cust\nGHOST=h-cust\n' > "$G/orca-roles.env"; rm -f "$G/orca-roles.models"; S0="$(ssum 2>/dev/null)"
+try status --status
+check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Planner|h-orph|orphaned|-|-/Dev|h-cust|alive|m-dev|-/ghost|h-cust|agent gone|-|-"
+mv "$G/orca-roles.config.json" "$G/cfg.saved"
+printf '{"roles":{"dev":{"title":"Developer","model":"m-proj"}},"settings":{"mode":"programmer"}}' > "$S/.orca-roles.json"
+printf 'DEV=h-none\n' > "$G/orca-roles.env"
+try status --status
+check "status: without a saved config uses the merged one" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Developer|h-none|no tab|m-proj|-"
+check "status: no saved config is not created" "$([ -e "$G/orca-roles.config.json" ] && echo created || echo absent):$([ -e "$G/orca-roles-launch.log" ] && echo log || echo nolog)" "absent:nolog"
+# no saved config: the project's mode, a saved --mode, no jq error with an answering tab, nothing written, temp file gone
+mkdir -p "$TMP/stmp"; printf 'DEV=h-cust\n' > "$G/orca-roles.env"
+printf '{"settings":{"mode":"pr-reviewer"}}' > "$S/.orca-roles.json"; S0="$(ssum 2>/dev/null)"
+OUT="$(cd "$S" && HOME="$TMP/home" PATH="$TMP/sbin:$PATH" TMPDIR="$TMP/stmp" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" --status 2>"$TMP/status.err")"
+check "status: no saved config, the project's mode" "$(printf '%s' "$OUT" | head -1)" "Mode: pr-reviewer"
+check "status: no saved config, an answering tab prints no jq error" "$(grep -c 'jq: error' "$TMP/status.err")" "0"
+check "status: no saved config writes nothing and removes its temp file" "$([ "$(ssum 2>/dev/null)" = "$S0" ] && echo unchanged || echo CHANGED):$(ls "$TMP/stmp" | wc -l | tr -d ' ')" "unchanged:0"
+rm -f "$S/.orca-roles.json"
+printf '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}' > "$G/orca-roles.overrides.json"
+try status --status; check "status: no saved config, a saved --mode" "$RC:$(printf '%s' "$OUT" | head -1)" "0:Mode: pr-reviewer"
+rm -f "$G/orca-roles.overrides.json"
+rm -f "$S/.orca-roles.json"; mv "$G/cfg.saved" "$G/orca-roles.config.json"
+jq '.settings.mode = "pr-reviewer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+try status --status; check "status: shows the saved mode" "$RC:$(printf '%s' "$OUT" | head -1)" "0:Mode: pr-reviewer"
+# a hyphenated role (E2E_TESTER) and the model inherited from defaults
+jq '.roles["e2e-tester"] = {title: "E2E-Tester"} | .defaults.model = "m-def"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
+printf 'E2E_TESTER=h-up\nPLANNER=h-up\n' > "$G/orca-roles.env"
+printf '#!/bin/sh\necho '"'"'{"result":{"terminal":{"agentIdentity":"claude"}}}'"'"'\n' > "$TMP/sbin/orca"
+try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +2 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-/Planner|h-up|alive|m-def|-"
+try status -h; check "status: -h prints the whole header, ending at the open-team rule" "$(printf '%s\n' "$OUT" | tail -1 | cut -c1-38)" "# The mode of a worktree cannot change"
 }
 
 sec_modes() {
@@ -930,6 +1150,9 @@ try ml --mode=Programmer; check "launch --mode=<x> form is validated too" "$RC:$
 try ml --set settings.mode=Programmer; check "launch --set settings.mode goes through the same validation" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
 try ml --set settings.mode=../x; check "launch --set settings.mode=../x fails" "$RC:$(mstate)" "1:$B"
 try ml --set 'settings.mode=["pr-reviewer"]'; check "launch --set settings.mode with a non-string fails" "$RC:$(mstate)" "1:$B"
+try ml --set settings.mode; check "launch --set settings.mode (no =) is a path=value error, nothing saved" "$RC:$(mstate):$(printf '%s' "$OUT" | grep -c 'ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): settings.mode')" "1:$B:1"
+try ml --set 'settings={"mode":"programmer"}'; check "launch --set settings={...} is refused, nothing saved" "$RC:$(mstate):$(printf '%s' "$OUT" | grep -c 'ERROR: --set replaces one value, not a whole object')" "1:$B:1"
+try ml --set 'roles={}'; check "launch --set roles={} is refused, nothing saved" "$RC:$(mstate):$(printf '%s' "$OUT" | grep -c 'ERROR: --set replaces one value, not a whole object')" "1:$B:1"
 # a role not in the mode
 rm -f "$MG/orca-roles.env"; ml --reset --mode pr-reviewer >/dev/null; rm -f "$MG/orca-roles.env"; B="$(mstate)"
 for o in --enable --disable --only; do
@@ -959,6 +1182,33 @@ rm -f "$MG/orca-roles.env"
 try ml --mode pr-reviewer --set settings.mode=programmer; check "--mode beats --set settings.mode" "$RC:$(mmode)" "0:pr-reviewer"
 rm -f "$MG/orca-roles.env"
 try ml --mode programmer; check "saved mode: another --mode changes it" "$RC:$(mmode)" "0:programmer"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# role selections belong to a mode: a different --mode drops the saved --only/--enable/--disable and keeps the saved --set
+ml --mode pr-reviewer --enable rv --set settings.language=x >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode pr-reviewer --set settings.jiraHandoff=false
+check "saved mode: the same --mode keeps the saved selections" "$RC:$(jq -c .enable "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'Mode changed')" '0:["rv"]:0'
+rm -f "$MG/orca-roles.env"
+try ml --mode programmer
+check "saved mode: another --mode drops the saved selections, keeps the sets and says so" "$RC:$(mmode):$(mh):$(jq -c '[.enable,.set[].path]' "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c "Mode changed to programmer: this worktree's saved role selections (--only/--enable/--disable) were dropped.")" '0:programmer:PLANNER DEV ALLROLE :[[],["settings","language"],["settings","jiraHandoff"]]:1'
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+ml --mode pr-reviewer --set settings.language=x >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode programmer
+check "saved mode: a mode change with no saved selections drops nothing and prints no note" "$RC:$(mmode):$(printf '%s' "$OUT" | grep -c 'Mode changed')" "0:programmer:0"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# the mode that counts is the worktree's effective one, also when it comes from .orca-roles.json with no saved --mode
+echo '{"settings":{"mode":"pr-reviewer"}}' > "$M/.orca-roles.json"
+ml --enable rv >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode programmer
+check "effective mode from .orca-roles.json: --mode programmer succeeds, drops the saved enable and says so" "$RC:$(mmode):$(jq -c .enable "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c "Mode changed to programmer")" "0:programmer:[]:1"
+rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+ml --enable rv >/dev/null; rm -f "$MG/orca-roles.env"
+try ml --mode pr-reviewer --set settings.language=x
+check "effective mode from .orca-roles.json: the same --mode keeps the saved enable and prints no note" "$RC:$(mmode):$(jq -c .enable "$MG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'Mode changed')" "0:pr-reviewer:[\"rv\"]:0"
+rm -f "$M/.orca-roles.json" "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
+# a saved role that no longer exists is caught again after the merge, so a new option does not save it
+echo '{"enable":["gone"]}' > "$MG/orca-roles.overrides.json"; BEFORE="$(mstate)"
+try ml --set settings.language=x
+check "stale saved role + a new option: rejected, the saved options and config stay unchanged" "$RC:$(printf '%s' "$OUT" | grep -c '^ERROR: unknown roles: gone\. Available: '):$([ "$(mstate)" = "$BEFORE" ] && echo same):$(jq -c . "$MG/orca-roles.overrides.json")" '1:1:same:{"enable":["gone"]}'
 rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
 # --set settings.mode is the same request as --mode: saved the same way
 rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
@@ -1175,8 +1425,30 @@ rm -f "$NR/prompts/academic-writer/lone2.md"
 rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
 try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
 check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:8"
+check "modes --repo: --remove --repo leaves the installed legacy file" "$(cat "$PK/roles/rp-all.md" 2>/dev/null)" "inst"
 printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":true,"prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
+# the git hint quotes a clone path with a space
+NS="$TMP/my clone"; mkdir -p "$NS"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NS/"
+git -C "$NS" init -q && git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m init
+printf '%s' '{"id":"rp-sp","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NS"; git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m rp-sp
+printf '%s' '{"id":"rp-sp","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NS"
+HINT="$(printf '%s\n' "$OUT" | grep '^prompts/pr-reviewer/rp-sp.md' | sed 's/.*remove it with: //')"
+case "$HINT" in "git -C "*my*clone*rm*prompts/pr-reviewer/rp-sp.md) (eval "$HINT" >/dev/null 2>&1) || true; check "modes --repo overwrite: the printed git command for a path with a space runs" "$([ -e "$NS/prompts/pr-reviewer/rp-sp.md" ] && echo left)" "";; *) echo "FAIL quoted git hint: $HINT"; FAIL=1;; esac
+# a local role created before the id was reserved can be removed; the kit's prompts and --repo stay protected
+mkdir -p "$PK/roles/programmer" "$PK/prompts/programmer"; echo kit > "$PK/prompts/programmer/common-workers.md"; echo loc > "$PK/roles/programmer/common-workers.md"
+jq '.roles["common-workers"] = {title: "CW"}' "$NRC" > "$TMP/cw.json" && mv "$TMP/cw.json" "$NRC"
+try nrr --remove common-workers --repo "$NR"; check "modes: --remove common-workers --repo is refused" "$RC:$(printf '%s' "$OUT" | grep -c "'common-workers' is a kit file, not a role"):$([ -f "$PK/roles/programmer/common-workers.md" ] && echo kept)" "1:1:kept"
+cp "$NR/config.default.json" "$TMP/nrcd.bak"; jq '.roles["common-workers"] = {title: "CW"}' "$TMP/nrcd.bak" > "$NR/config.default.json"
+try nrr --remove common-workers --repo "$NR"; check "modes: --remove common-workers --repo is refused even when the repo config lists it" "$RC:$(printf '%s' "$OUT" | grep -c "'common-workers' is a kit file, not a role"):$(jq '.roles | has("common-workers")' "$NR/config.default.json")" "1:1:true"
+cp "$TMP/nrcd.bak" "$NR/config.default.json"
+try nrm common-workers; check "modes: --remove common-workers removes a local role of that name" "$RC:$(jq '.roles | has("common-workers")' "$NRC"):$([ -e "$PK/roles/programmer/common-workers.md" ] && echo left):$(cat "$PK/prompts/programmer/common-workers.md")" "0:false::kit"
+try nrm common-workers; check "modes: --remove common-workers without a local role is refused" "$RC:$(printf '%s' "$OUT" | grep -c "'common-workers' is a kit file, not a role")" "1:1"
+# --help prints the header comment only
+HELP="$(cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --help 2>&1)"; HRC=$?
+check "new-role --help: exit 0, first and last header lines, only comment lines" "$HRC:$(printf '%s\n' "$HELP" | head -1 | grep -c '^# Wizard to create a new role'):$(printf '%s\n' "$HELP" | tail -1 | grep -c '^#     Each mode has its own prompt file'):$(printf '%s\n' "$HELP" | grep -vc '^#')" "0:1:1:0"
 rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy is shared with other sections
 }
 
@@ -1207,10 +1479,39 @@ sec_wizard() {
 # The wizard, for a custom agent: clearCommand, addDirFlag and its extra folders (answers in order, one per line)
 printf '# Role: CW\n\n## Report\nx\n' > "$TMP/cw.md"
 # shellcheck disable=SC2088  # "~/a b" is what the user types; the wizard expands it
-printf '%s\n' cu-wiz "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
+printf '%s\n' cu-wiz "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "" "" "" "" n "" "~/a b" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
 try sh -c "cd '$TMP' && HOME='$TMP/home' NEW_ROLE_TTY='$TMP/wiz.in' '$TMP/home/.orca-roles/bin/new-role.sh' < /dev/null"
 check "wizard: custom asks clearCommand, addDirFlag and extra folders" "$RC $(jq -c '.roles["cu-wiz"] | [.command, .clearCommand, .addDirFlag, .extraDirs]' "$KIT/config.json")" '0 ["agy {scratch}","/new","--add-dir",["~/a b"]]'
 jq 'del(.roles["cu-wiz"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-wiz.md"
+# custom agent with model fields: the four answers after --add-dir are modelError, list, parse (only with a list) and probe
+wiz_custom() {  # <id> <answers between --add-dir and the permission mode>
+  local id="$1"; shift
+  printf '%s\n' "$id" "" "custom wizard" "" "" custom "" "agy {scratch}" /new --add-dir "$@" "" n "" "" "" "" "" "" "" 2 "$TMP/cw.md" y > "$TMP/wiz.in"
+  try sh -c "cd '$TMP' && HOME='$TMP/home' NEW_ROLE_TTY='$TMP/wiz.in' '$TMP/home/.orca-roles/bin/new-role.sh' < /dev/null 2>&1"
+}
+wiz_custom cu-m1 "no such model: {model}" "agy models" "json:.[]" "agy -m {model} ok"
+check "wizard: custom with all four model answers" "$RC $(jq -c '.roles["cu-m1"] | [.modelError, .models]' "$KIT/config.json")" '0 ["no such model: {model}",{"list":"agy models","parse":"json:.[]","probe":"agy -m {model} ok"}]'
+wiz_custom cu-m2 "" "" ""
+check "wizard: custom with empty model answers has neither key" "$RC $(jq -c '.roles["cu-m2"] | [has("modelError"), has("models")]' "$KIT/config.json")" '0 [false,false]'
+wiz_custom cu-m3 "" "" "agy -m {model} ok"
+check "wizard: list empty but probe set gives only probe" "$RC $(jq -c '.roles["cu-m3"] | [has("modelError"), .models]' "$KIT/config.json")" '0 [false,{"probe":"agy -m {model} ok"}]'
+jq 'del(.roles["cu-m1"], .roles["cu-m2"], .roles["cu-m3"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer"/cu-m?.md
+# from-json: modelError and models are copied; invalid ones stop with nothing written
+printf '%s' '{"id":"fj-m","description":"x","agent":"custom","command":"c","modelError":"bad {model}","models":{"list":"l","parse":"lines","probe":"p {model}"},"prompt":"# x\n## Report\n"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"
+check "from-json: modelError and models are copied" "$RC $(jq -c '.roles["fj-m"] | [.modelError, .models]' "$KIT/config.json")" '0 ["bad {model}",{"list":"l","parse":"lines","probe":"p {model}"}]'
+jq 'del(.roles["fj-m"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/fj-m.md"
+fj_snap() { { cat "$KIT/config.json"; find "$KIT/roles" -type f 2>/dev/null | sort; } | cksum; }
+FJ0="$(fj_snap)"
+for bad in '"models":{"probes":"x"}' '"modelError":""' '"models":{"list":""}' '"models":"x"'; do
+  printf '%s' '{"id":"fj-bad","description":"x","agent":"custom","command":"c",'"$bad"',"prompt":"# x\n## Report\n"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"
+  check "from-json: $bad rejected, nothing written" "$RC:$([ "$(fj_snap)" = "$FJ0" ] && echo unchanged || echo CHANGED):$(printf '%s' "$OUT" | grep -c '^ERROR')" "1:unchanged:1"
+done
+# wizard: an invalid parse stops before any prompt file is written; an empty parse answer takes the default "lines"
+wiz_custom cu-bad "" "agy models" "bogus" ""
+check "wizard: invalid parse, nothing written" "$RC:$([ "$(fj_snap)" = "$FJ0" ] && echo unchanged || echo CHANGED)" "1:unchanged"
+wiz_custom cu-def "" "agy models" "" ""
+check "wizard: parse defaults to lines" "$RC $(jq -c '.roles["cu-def"].models' "$KIT/config.json")" '0 {"list":"agy models","parse":"lines"}'
+jq 'del(.roles["cu-def"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-def.md"
 printf '%s' '{"id":"Bad Id","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: invalid id" "$RC" "1"
 printf '%s' '{"id":"no-desc","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: without description" "$RC" "1"
 printf '%s' '{"id":"planner","description":"x","prompt":"p"}' > "$TMP/role3.json"; try newrole "$TMP/role3.json"; check "from-json: planner reserved" "$RC" "1"
@@ -1336,7 +1637,7 @@ done
 grep -q 'maxSelfMutants' "$ROOT/prompts/programmer/tester.md" && grep -q 'family of inputs with its boundaries' "$ROOT/prompts/programmer/tester.md" || { echo "FAIL tester.md without self-mutation or families"; FAIL=1; }
 grep -q 'Reject only from the threshold' "$ROOT/prompts/programmer/auditor.md" && grep -q 'rejectSeverity' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md without the threshold"; FAIL=1; }
 grep -q 'family with its boundaries' "$ROOT/prompts/programmer/dev.md" || { echo "FAIL dev.md without boundaries"; FAIL=1; }
-check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[5,"high"]'
+check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,"high"]'
 echo "ok   prompts carry the review's rules"
 }
 
@@ -1785,6 +2086,588 @@ check "guard: unbound variable inside a section -> exit non-zero, no ALL OK" "$(
 check "guard: it died on the probe" "$(printf '%s\n' "$OUT" | grep -c 'SMOKE_UNBOUND_PROBE: unbound variable')" "1"
 try bash "$ROOT/tests/smoke.sh" syntax
 check "guard: the same section unmodified -> exit 0 with ALL OK" "$RC:$(printf '%s\n' "$OUT" | grep -c '^ALL OK')" "0:1"
+}
+
+sec_checkpoint() {
+# checkpoint.sh: records the tree under refs/orca-roles/checkpoints/ without touching HEAD, index, branch or working tree
+CP="$ROOT/bin/checkpoint.sh"; CD="$TMP/cp"; rm -rf "$CD"; mkdir -p "$CD"
+cpg() { git -C "$CD" "$@"; }
+cpg init -q -b main; cpg config user.email t@example.com; cpg config user.name tester
+printf 'ign\n' > "$CD/.gitignore"; printf 'a\n' > "$CD/f"; printf 'b\n' > "$CD/g"; mkdir "$CD/sub"; printf 's\n' > "$CD/sub/h"
+cpg add -A; cpg commit -q -m init
+cpstate() { ( cd "$CD" && echo "head=$(git rev-parse HEAD) branch=$(git symbolic-ref HEAD) idx=$(shasum < "$(git rev-parse --git-path index)" | cut -d' ' -f1)"; git diff --cached | shasum | cut -d' ' -f1; GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 -uall | shasum | cut -d' ' -f1; find . -path ./.git -prune -o -type f -print | sort | xargs shasum | shasum | cut -d' ' -f1 ); }
+cprun() { CPRC=0; CPOUT="$(cd "${CPDIR:-$CD}" && bash "$CP" "$@" 2>"$TMP/cp.err")" || CPRC=$?; CPERR="$(cat "$TMP/cp.err")"; }
+printf 'a2\n' >> "$CD/f"; printf 'staged\n' > "$CD/g"; cpg add g; printf 'n1\n' > "$CD/new1"; printf 'x\n' > "$CD/ignored"; printf 'ignored\n' >> "$CD/.gitignore"
+printf 'junk\n' > "$CD/ign"
+S0="$(cpstate)"
+cprun s1 1; R1="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: exit 0 and prints the ref" "$CPRC:$(printf '%s' "$R1" | grep -c '^refs/orca-roles/checkpoints/.*/s1-c1$')" "0:1"
+check "checkpoint: HEAD, branch, index, staged diff, status and working tree unchanged" "$(cpstate)" "$S0"
+check "checkpoint: prints the whole-step diff command and no tracked-only one" "$(printf '%s\n' "$CPOUT" | grep -cF "git diff HEAD $R1"):$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "1:1"
+check "checkpoint: records modified, staged and untracked files" "$(cpg diff --name-only HEAD "$R1" | tr '\n' ' ')" ".gitignore f g new1 "
+check "checkpoint: excludes ignored files" "$(cpg ls-tree -r --name-only "$R1" | grep -cE '^(ign|ignored)$' || true)" "0"
+check "checkpoint: the commit has HEAD as its parent and the refs live outside the branch" "$(cpg rev-parse "$R1^"):$(cpg for-each-ref --format='%(refname)' refs/heads)" "$(cpg rev-parse HEAD):refs/heads/main"
+printf 'a3\n' >> "$CD/f"; printf 'n2\n' > "$CD/sub/new2"; rm "$CD/sub/h"; S1="$(cpstate)"
+cprun s1 2; R2="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: second call exits 0 and leaves everything unchanged" "$CPRC:$([ "$(cpstate)" = "$S1" ] && echo same)" "0:same"
+check "checkpoint: diff between two checkpoints is exactly the change made between them" "$(cpg diff --name-status "$R1" "$R2" | tr '\t\n' '::' | tr ':' ' ' | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')" "A D M f sub/h sub/new2 "
+check "checkpoint: that diff has no other content" "$(cpg diff "$R1" "$R2" | grep -E '^[+-][^+-]' | LC_ALL=C sort | tr '\n' ' ')" "+a3 +n2 -s "
+check "checkpoint: the previous-checkpoint diff command for n=2 is printed, and nothing else" "$(printf '%s\n' "$CPOUT" | grep -cF "Since the previous checkpoint:"):$(printf '%s\n' "$CPOUT" | grep -cF "git diff $R1 $R2"):$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "1:1:2"
+# refusals write nothing
+REFS0="$(cpg for-each-ref refs/orca-roles | wc -l | tr -d ' ')"; S2="$(cpstate)"
+for bad in '../x 1' 's1 x' 's1 -1' 's1 1.5' 's1 01' 'S1 1' 's/1 1' '-x 1' 's1' '' 's1 1 2' '"" 1'; do
+  eval "cprun $bad"
+  check "checkpoint: rejects [$bad], nothing written" "$([ "$CPRC" != 0 ] && echo fail):$([ -n "$CPERR" ] && echo msg):$(cpg for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "fail:msg:$REFS0"
+done
+cprun s1 1; check "checkpoint: an existing ref is refused without --force" "$CPRC:$(printf '%s' "$CPERR" | grep -c 'already exists'):$(cpg rev-parse "$R1")" "1:1:$(cpg rev-parse "$R1")"
+OLD="$(cpg rev-parse "$R1")"; cprun --force s1 1
+check "checkpoint: --force overwrites it" "$CPRC:$([ "$(cpg rev-parse "$R1")" != "$OLD" ] && echo moved)" "0:moved"
+check "checkpoint: state still unchanged after refusals and --force" "$(cpstate)" "$S2"
+# from a subdirectory
+CPDIR="$CD/sub" cprun s2 1; check "checkpoint: works from a subdirectory and records the whole tree" "$CPRC:$(cpg ls-tree -r --name-only "$(printf '%s\n' "$CPOUT" | head -1)" | grep -c '^new1$')" "0:1"
+# list and clear
+cprun --list; check "checkpoint: --list shows every checkpoint" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '^refs/orca-roles/')" "0:3"
+cprun --list s1; check "checkpoint: --list <step> shows only that step" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '/s1-c')" "0:2"
+cprun --list s; check "checkpoint: --list does not match a step that is only a prefix" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '^refs/')" "0:0"
+cprun --clear ../x; check "checkpoint: --clear rejects an invalid step" "$([ "$CPRC" != 0 ] && echo fail):$(cpg for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "fail:3"
+cprun --clear s1; check "checkpoint: --clear deletes that step's refs only" "$CPRC:$(cpg for-each-ref refs/orca-roles | grep -c '/s1-c'):$(cpg for-each-ref refs/orca-roles | grep -c '/s2-c1')" "0:0:1"
+check "checkpoint: --clear leaves HEAD, index, branch and tree unchanged" "$(cpstate)" "$S2"
+# refs are per worktree: two worktrees of one repo, same step name
+cpg add -A; cpg commit -q -m two; cpg worktree add -q "$TMP/cp-linked" -b other
+printf 'l\n' > "$TMP/cp-linked/only-linked"
+CPDIR="$TMP/cp-linked" cprun s1 1; RL="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: the same step and n in another worktree does not clash" "$CPRC:$([ "$RL" != "$R1" ] && echo different)" "0:different"
+cprun s1 1; check "checkpoint: the main worktree can still record its own s1-c1" "$CPRC" "0"
+check "checkpoint: each worktree records only its own tree" "$(cpg ls-tree -r --name-only "$RL" | grep -c only-linked):$(cpg ls-tree -r --name-only "$R1" | grep -c only-linked || true)" "1:0"
+CPDIR="$TMP/cp-linked" cprun --clear s1; check "checkpoint: --clear in a worktree keeps the other's refs" "$CPRC:$(cpg for-each-ref refs/orca-roles | grep -c '/s1-c1')" "0:1"
+cpg worktree remove --force "$TMP/cp-linked"
+# a repository with no commit yet
+CE="$TMP/cp-empty"; rm -rf "$CE"; mkdir "$CE"; git -C "$CE" init -q; printf 'x\n' > "$CE/x"
+CPDIR="$CE" cprun e 1; check "checkpoint: works before the first commit" "$CPRC:$(git -C "$CE" ls-tree -r --name-only "$(printf '%s\n' "$CPOUT" | head -1)")" "0:x"
+# worktree ids: same folder name under different parents, folder names that are not valid in a ref, steps that contain -c<digits>
+PA="$TMP/cpa/proj"; PB="$TMP/cpb"; rm -rf "$TMP/cpa" "$PB"; mkdir -p "$PA" "$PB"; pa() { git -C "$PA" "$@"; }
+pa init -q -b main; pa config user.email t@example.com; pa config user.name tester; printf 'a\n' > "$PA/f"; pa add -A; pa commit -q -m init
+pa worktree add -q "$PB/proj" -b wt-proj
+CPDIR="$PA" cprun s1 1; RA="$(printf '%s\n' "$CPOUT" | head -1)"; RAC="$CPRC"
+CPDIR="$PB/proj" cprun s1 1; RB="$(printf '%s\n' "$CPOUT" | head -1)"
+check "checkpoint: two worktrees with the same folder name keep separate refs" "$RAC:$CPRC:$([ "$RA" != "$RB" ] && echo different):$(pa for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "0:0:different:2"
+i=0; for nm in 'my repo' 'x.lock' '.hidden' 'a..b' '--' 'proyecto ñ'; do
+  i=$((i + 1)); pa worktree add -q "$PB/$nm" -b "wt-n$i"; CPDIR="$PB/$nm" cprun s 1
+  check "checkpoint: a worktree folder named [$nm] gets a valid id" "$CPRC:$(printf '%s\n' "$CPOUT" | head -1 | grep -cE '^refs/orca-roles/checkpoints/[A-Za-z0-9][A-Za-z0-9-]*-[0-9a-f]{10}/s-c1$')" "0:1"
+done
+CPDIR="$PA" cprun s1-c1 1; CPDIR="$PA" cprun --list s1
+check "checkpoint: --list <step> does not match another step that contains -c<digits>" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c '^refs/'):$(printf '%s\n' "$CPOUT" | grep -c '/s1-c1 ')" "0:1:1"
+CPDIR="$PA" cprun --clear s1; check "checkpoint: --clear <step> keeps the refs of a step named <step>-c<digits>" "$CPRC:$(pa for-each-ref refs/orca-roles | grep -c '/s1-c1-c1$'):$(pa rev-parse -q --verify "$RA" >/dev/null && echo kept || echo gone)" "0:1:gone"
+CPDIR="$PA" cprun gap 5; check "checkpoint: no round-diff command when the previous checkpoint does not exist" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "0:1"
+CPDIR="$PA" cprun gap 0; check "checkpoint: n=0 is accepted and has no round-diff command" "$CPRC:$(printf '%s\n' "$CPOUT" | grep -c 'git diff')" "0:1"
+CPDIR="$PA" cprun gap 999999999; check "checkpoint: the largest n (9 digits) is accepted" "$CPRC" "0"
+R9="$(pa for-each-ref refs/orca-roles | wc -l | tr -d ' ')"; CPDIR="$PA" cprun gap 1000000000
+check "checkpoint: n with 10 digits is refused and nothing is written" "$([ "$CPRC" != 0 ] && echo fail):$(pa for-each-ref refs/orca-roles | wc -l | tr -d ' ')" "fail:$R9"
+for nm in 'my repo' 'x.lock' '.hidden' 'a..b' '--' 'proyecto ñ' proj; do pa worktree remove --force "$PB/$nm"; done
+# a merge in progress (unmerged index entries) and an intent-to-add entry
+CM="$TMP/cp-merge"; rm -rf "$CM"; mkdir "$CM"; cm() { git -C "$CM" "$@"; }
+cm init -q -b main; cm config user.email t@example.com; cm config user.name tester
+printf 'base\n' > "$CM/f"; cm add -A; cm commit -q -m base; cm checkout -q -b side; printf 'side\n' > "$CM/f"; cm commit -qam side
+cm checkout -q main; printf 'main\n' > "$CM/f"; cm commit -qam main; cm merge side >/dev/null 2>&1 || true
+printf 'q\n' > "$CM/q"; cm add -N q
+CD_SAVE="$CD"; CD="$CM"; SM="$(cpstate)"; CD="$CD_SAVE"
+CPDIR="$CM" cprun mg 1
+CD_SAVE="$CD"; CD="$CM"; SM2="$(cpstate)"; CD="$CD_SAVE"
+check "checkpoint: a merge in progress and an intent-to-add entry stay untouched" "$CPRC:$(cm ls-files -u | wc -l | tr -d ' '):$([ "$SM" = "$SM2" ] && echo same)" "0:3:same"
+check "checkpoint: it records the conflicted file as it is in the working tree and the intent-to-add file" "$(cm show "$(printf '%s\n' "$CPOUT" | head -1):f" | grep -c '^<<<<<<<'):$(cm ls-tree -r --name-only "$(printf '%s\n' "$CPOUT" | head -1)" | grep -c '^q$')" "1:1"
+# identity, stale-index warning and --force
+CID="$(cpg log -1 --format='%an <%ae>|%cn <%ce>' "$R1")"
+check "checkpoint: author and committer are orca-roles even with user.name/email configured" "$CID" "orca-roles <orca-roles@localhost>|orca-roles <orca-roles@localhost>"
+cprun s3 1; check "checkpoint: no warning for a normal tree" "$CPRC:$CPERR" "0:"
+cpg update-index --assume-unchanged f; cprun s3 2
+check "checkpoint: warns about an assume-unchanged file, exit 0, ref written" "$CPRC:$(printf '%s' "$CPERR" | grep -c '^Warning: 1 file(s) marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree: f$'):$(cpg rev-parse -q --verify "$(printf '%s\n' "$CPOUT" | head -1)" >/dev/null && echo ref)" "0:1:ref"
+cpg update-index --no-assume-unchanged f; cpg update-index --skip-worktree g; cprun s3 3
+check "checkpoint: warns about a skip-worktree file" "$CPRC:$(printf '%s' "$CPERR" | grep -c '^Warning: 1 file(s).*: g$')" "0:1"
+cpg update-index --no-skip-worktree g; cprun s3 4; check "checkpoint: no warning once the flags are cleared" "$CPRC:$CPERR" "0:"
+cprun s3 4; check "checkpoint: an existing ref is refused without --force (again)" "$CPRC:$(printf '%s' "$CPERR" | grep -c 'already exists')" "1:1"
+# the prompts
+PLP="$ROOT/prompts/programmer/planner.md"; TS="$ROOT/prompts/programmer/tester.md"; AU="$ROOT/prompts/programmer/auditor.md"
+pb() { printf '%s' "$1" | grep -qF -- "$3" || { echo "FAIL $2 lost '$3'"; FAIL=1; }; }
+LED="$(grep '\*\*Ledger\.\*\*' "$PLP" || true)"
+for frag in 'ledger-<step>.md' 'your scratchDir' 'the base commit' 'the checkpoint refs' 'mutants killed or survived, tests added' 'findings open and closed' 'what was not audited' 'Update it after every report' 'source of every brief' 'before proposing the close commit' 'closed or accepted by the user'; do pb "$LED" "planner.md ledger bullet" "$frag"; done
+T3="$(grep '^3\. \*\*Tests\*\*' "$PLP" || true)"; A4="$(grep '^4\. \*\*Audit\*\*' "$PLP" || true)"
+pb "$T3" "planner.md step 3" 'checkpoint.sh <step> <n>'; pb "$T3" "planner.md step 3" 'after every Dev or Tester `worker_done` in the step'; pb "$T3" "planner.md step 3" '(n = 1 for the first report of the step, +1 for each later report)'; pb "$T3" "planner.md step 3" '); after Dev'"'"'s, create the Tester'"'"'s task with a brief'; pb "$T3" "planner.md step 3" 'with a brief (see "Briefed rounds") instead of a chain of dependent tasks'; grep -qF '<step>-c<n-1>' "$PLP" && { echo "FAIL planner.md still has the consecutive-checkpoint wording <step>-c<n-1>"; FAIL=1; }; pb "$T3" "planner.md step 3" 'brief'
+pb "$A4" "planner.md step 4" 'the Auditor does not take part in each step'; pb "$A4" "planner.md step 4" 'Set audit'; pb "$A4" "planner.md step 4" "A step ends with the Tester's"
+[ -z "$(printf '%s' "$A4" | grep -F 'create the Auditor' || true)" ] || { echo "FAIL planner.md step 4 still creates a per-step Auditor task"; FAIL=1; }
+[ -z "$(printf '%s' "$T3$A4" | grep -F -- '--deps' || true)" ] || { echo "FAIL planner.md steps 3 and 4 still chain tasks with --deps"; FAIL=1; }
+NP="$(grep 'Never pre-create Tester or Auditor tasks' "$PLP" || true)"; pb "$NP" "planner.md no-pre-created bullet" '--deps'; pb "$NP" "planner.md no-pre-created bullet" 'generic specs'; pb "$NP" "planner.md no-pre-created bullet" 'after the previous report'
+BR="$(grep '\*\*Briefed rounds\.\*\*' "$PLP" || true)"
+for frag in 'self-contained brief' 'The task' 'acceptance criteria with their pass/fail examples' 'threat model and rejection threshold' 'The state' 'the files changed' 'what Dev did and decided' 'for the Auditor, also what the Tester did and found' 'what earlier rounds already verified' 'the findings still open' '"not audited" items carried forward' 'carries the whole step'"'"'s diff' 'with ref = the latest checkpoint' 'a later brief to a role carries' 'ref of the checkpoint its previous brief pointed to' '<latest ref>' 'since that role last looked' 'test-only rounds included' '`<step>` is lowercase letters, digits and hyphens' 'passes information only' 'never tells the Tester or the Auditor what to test, mutate or look at, or where the risks are'; do pb "$BR" "planner.md briefed-rounds bullet" "$frag"; done
+printf '%s' "$BR" | grep -qiE 'test (the|these|every)|you must mutate|focus on' && { echo "FAIL planner.md briefed-rounds bullet contains a known prescriptive phrase (a denylist of known phrases, not a proof that it never prescribes)"; FAIL=1; }
+FX="$(grep '\*\*Fix rounds carry only what changed' "$PLP" || true)"
+for frag in "never points to a task id" 'the findings assigned to that worker exactly as the reviewer wrote them' '(text, file:line, reproduction)' 'plus any contract change' 'cleaned since its previous task in this step' "also gets the step's task again" 'Tester rounds and Auditor tasks also follow "Briefed rounds"'; do pb "$FX" "planner.md fix-rounds bullet" "$frag"; done
+printf '%s' "$FX" | grep -qF 'references that task' && { echo "FAIL planner.md fix-rounds bullet still points to a task id"; FAIL=1; }
+[ "$(grep -c 'Fix rounds carry only what changed' "$PLP")" = 1 ] || { echo "FAIL planner.md: fix-rounds bullet missing or duplicated"; FAIL=1; }
+pb "$(grep '^   - \*\*After the commit\*\*' "$PLP" || true)" "planner.md close" 'clear the step'"'"'s checkpoints: `~/.orca-roles/bin/checkpoint.sh --clear <step>`.'
+grep -qF "are not cleared after the step's commit" "$PLP" && { echo "FAIL planner.md still keeps step checkpoints after the commit"; FAIL=1; }
+SA="$(grep '\*\*Set audit\.\*\*' "$PLP" || true)"
+[ "$(grep -c '\*\*Set audit\.\*\*' "$PLP")" = 1 ] || { echo "FAIL planner.md: Set audit bullet missing or duplicated"; FAIL=1; }
+for frag in 'audits once per set, not per step' 'before proposing the push or the PR' 'the commit the branch started from' '`git diff <base> HEAD`' 'the ledger state of every step' 'Findings at or above medium' 'reviews only the corrections' 'Findings below medium (low and notes): fixed in a Dev/Tester step without a new audit' 'only after the set audit has no open finding at or above medium' 'Clear the set'"'"'s checkpoints (`~/.orca-roles/bin/checkpoint.sh --clear set`) after the set audit closes.' 'never become new commits on top' '--fixup=' '--autosquash' 'checkpoint.sh set' 'before dispatching any fix task' 'with the tree clean (everything committed), record the audited state with `~/.orca-roles/bin/checkpoint.sh set <n>`' '(n = 1 for the first set audit, +1 for each corrections review)' 'the checkpoint recorded for the audited HEAD' 'the force-push needs its own yes' 'Show the user the resulting commit list and rewrite only on their yes' 'The corrections review diffs the recorded checkpoint against the new HEAD' 'the corrections folded into the step commits' 'GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>' 'commit each correction as `git commit --fixup=<the step commit it belongs to>`' '(no interactive editor)'; do pb "$SA" "planner.md Set audit bullet" "$frag"; done
+printf '%s' "$SA" | grep -qF 'before rewriting, record' && { echo "FAIL planner.md Set audit bullet still records the checkpoint before rewriting"; FAIL=1; }
+pb "$(grep 'Threat model and rejection threshold per step' "$PLP" || true)" "planner.md threat model bullet" "Both go in the Tester's tasks and in the set audit's brief"
+AK="$(grep 'Work out which kind of task it is' "$AU" || true)"
+for frag in '**set audit**' 'the whole diff of a set of steps' 'apply the full method' '**corrections review**' 'only the diff the brief names' 'the findings those corrections answer' 're-run only the mutants that matter for the corrections' 'do not re-review the rest of the set'; do pb "$AK" "auditor.md task kinds" "$frag"; done
+pb "$(grep '^1\. Read the Planner' "$TS" || true)" "tester.md step 1" "The Auditor no longer reviews each step, so your review is the step's only one before its commit; the set audit comes later."
+check "defaults: maxMutants 8 and maxSelfMutants 3 in config, auditor.md and tester.md" "$(jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json"):$(grep -c '^- `maxMutants`: 8$' "$AU"):$(grep -c '^- `maxSelfMutants`: 3$' "$TS")" '[8,3]:1:1'
+mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]'; }
+check "upgrade_config moves the old defaults 15/5 to 8/3" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":15}},"tester":{"params":{"maxSelfMutants":5}}}}')" "[8,3]"
+check "upgrade_config keeps a user's own maxMutants/maxSelfMutants" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":12}},"tester":{"params":{"maxSelfMutants":4}}}}')" "[12,4]"
+check "upgrade_config gives 8/3 to a config without the keys" "$(mm '{"roles":{}}')" "[8,3]"
+RM="$ROOT/README.md"
+pb "$(grep '^4\. ' "$RM" || true)" "README flow step 4" 'does not take part in each step'
+pb "$(grep '^8\. The \*\*Planner\*\*' "$RM" || true)" "README flow step 8" "Tester's ACCEPTED"
+pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'Dev → Tester'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'folded into the step commits they belong to'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'once per set'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'corrections-only review'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'findings below medium (low and notes) are fixed without a new audit'
+pb "$(grep -F '| **Auditor** |' "$RM" || true)" "README Auditor row" '`maxMutants` 8'
+pb "$(grep -F '| **Auditor** |' "$RM" || true)" "README Auditor row" "Existing installs that still had the old defaults (15 and 5) move to the new ones on update; values you set yourself are kept (except exactly 15 and 5 themselves, which every update moves to the new defaults; to keep them, set them in the project's \`.orca-roles.json\`)."
+printf '%s' "$(grep -F 'Reviews the security of Dev' "$ROOT/plugin/skills/team/SKILL.md" || true)" | grep -qF 'after the audit' && { echo "FAIL SKILL example role still says 'after the audit'"; FAIL=1; }
+pb "$(grep -F 'Reviews the security of Dev' "$ROOT/plugin/skills/team/SKILL.md" || true)" "SKILL example role" 'Use it in steps that touch authentication or data.'
+pb "$(grep '^Steps are atomic' "$RM" || true)" "README steps paragraph" 'once Dev and the Tester are done'
+pb "$(grep -F '**Briefed rounds.**' "$RM" || true)" "README briefed rounds" "clears each step's checkpoints at the step's commit and the set's at the end of the set audit"
+printf '%s' "$(grep -F '**Briefed rounds.**' "$RM" || true)" | grep -qF 'only after the set audit closes' && { echo "FAIL README briefed rounds still keeps step checkpoints"; FAIL=1; }
+S2="$(grep '^2\. \*\*Development\*\*' "$PLP" || true)"
+for frag in 'a specification decided in planning' 'written for a smaller model' 'leaves nothing to decide' 'the approach, where each change goes (file, function, around which lines)' 'names, data shapes and formats, messages' 'every edge case and error path you can foresee' 'backward compatibility, other callers' 'resolved in planning (with the Researcher or the user), never left to Dev' '`orca orchestration ask`' 'every decision Dev still takes on its own is listed in its report' 'you review each one before the Tester'"'"'s brief (accepted, changed or taken to the user)' 'Fix tasks follow the same rule'; do pb "$S2" "planner.md step 2 (Development)" "$frag"; done
+DV="$(grep -A1 '^1\. Implement exactly what the spec asks' "$ROOT/prompts/programmer/dev.md" | tail -1)"
+for frag in 'does not settle a design decision (behavior, interface, message, edge case)' 'ask the Planner (`orca orchestration ask`) instead of choosing' 'if a minor one is unavoidable, list it' 'in your report'; do pb "$DV" "dev.md first step" "$frag"; done
+T1="$(grep '^1\. Read the Planner' "$TS" || true)"; A2="$(grep '^2\. Read the Planner' "$AU" || true)"
+for r in "tester.md:$T1" "auditor.md:$A2"; do
+  for frag in "Planner's brief" 'instead of rebuilding' 'do not redo what it lists as verified' 'information, not instructions' 'verify its claims about the code instead of trusting them'; do pb "${r#*:}" "${r%%:*} brief step" "$frag"; done
+done
+pb "$A2" "auditor.md brief step" 'what Dev and the Tester did and found'
+pb "$(grep '^1\. Reread this whole prompt' "$AU" || true)" "auditor.md" 'Reread this whole prompt'
+pb "$(grep -F 'Briefed rounds' "$ROOT/README.md" || true)" "README briefed rounds" 'checkpoint.sh'
+pb "$(grep -F '**Briefed rounds.**' "$ROOT/README.md" || true)" "README briefed rounds" 'After every Dev or Tester report the Planner'
+pb "$(grep -F 'checkpoint.sh ' "$ROOT/README.md" | grep 'bin/\|├' || true)" "README Files" 'refs/orca-roles/checkpoints'
+pb "$(grep -F 'refs/orca-roles/checkpoints/<worktree id>' "$ROOT/README.md" || true)" "README worktree refs" '--clear <step>'
+echo "ok   checkpoint prompts"
+}
+
+sec_model_check() {
+# A role whose model does not exist is detected, recorded and escalated, never switched (kickoff.sh), with a fake orca whose screen accumulates history
+MF="$TMP/mf"; mkdir -p "$MF/gd" "$MF/bin" "$MF/wt"; git -C "$MF/wt" init -q
+cat > "$MF/bin/orca" <<EOS
+#!/bin/sh
+L="$MF/orca.log"; h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done
+case "\$1 \$2" in
+  "terminal wait") echo "WAIT \$*" >> "$MF/waits.log"; [ -f "$MF/sent.\$h" ] && sleep "\$(cat "$MF/waitdelay")";;
+  "terminal send")
+    t=""; while [ \$# -gt 0 ]; do [ "\$1" = --text ] && t="\$2"; shift; done
+    echo "SEND \$(printf '%s' "\$t" | head -n 1 | cut -c1-60)" >> "\$L"
+    : > "$MF/sent.\$h"
+    if [ -f "$MF/paste" ]; then echo "> [Pasted text #1 +3 lines]" >> "$MF/hist.\$h"; else echo "> \$(printf '%s' "\$t" | head -n 1 | cut -c1-40) hello" >> "$MF/hist.\$h"; fi
+    if [ "\$(cat "$MF/mode")" = bad ]; then
+      if [ -f "$MF/wrap" ]; then w="\$(cat "$MF/wrap")"; { printf '  ⎿  '; sed "s/ \$w/\\\\
+     \$w/" "$MF/errtxt"; } >> "$MF/hist.\$h"; else cat "$MF/errtxt" >> "$MF/hist.\$h"; fi
+    else echo ready >> "$MF/hist.\$h"; fi;;
+  "terminal read") v=1000000; [ -f "$MF/view" ] && v="\$(cat "$MF/view")"; jq -nc --arg s "\$(tail -n "\$v" "$MF/hist.\$h" 2>/dev/null)" '{text: \$s}';;
+  "orchestration send")
+    to=""; sub=""; body=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; esac; shift; done
+    echo "ESC \$to|\$sub|\$body" >> "\$L"; [ -f "$MF/failsend" ] && exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$MF/bin/orca"
+CLERR="There's an issue with the selected model (x). It may not exist or you may not have access to it."
+echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
+mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE
+  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/failsend" "$MF/waits.log"
+  printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
+  [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
+  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'PLANNER=hp\nDEV=hd\nTESTER=ht\nAUDITOR=ha\n' > "$MF/gd/orca-roles.env"
+  echo "$2" > "$MF/mode"
+  (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" > "$MF/out.log" 2>&1)
+}
+mfc() { printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner", "model": "claude-opus-5-5" }, "dev": { %s } } }' "$1"; }
+models() { cat "$MF/gd/orca-roles.models" 2>/dev/null | tr '\n' ' '; }
+nomodel() { grep -c '/model' "$MF/orca.log" || true; }
+escs() { grep '^ESC ' "$MF/orca.log" || true; }
+nesc() { escs | wc -l | tr -d ' '; }
+DEVOK='"title": "Dev", "model": "claude-opus-5-5"'
+BODY="ESC hp|Dev model unavailable|Dev did not start: its model claude-opus-5-5 is not available (There's an issue with the selected model). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles (without options, so this worktree's saved options are kept)."
+# model_error_regex
+MR="$MF/mr.json"; echo '{"defaults":{"agent":"claude"},"roles":{"c":{},"x":{"agent":"codex"},"u":{"agent":"custom"},"u2":{"agent":"custom","modelError":"boom {model}!"}}}' > "$MR"
+check "model_error_regex: claude" "$(model_error_regex "$MR" c m)" "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]"
+check "model_error_regex: no model, no detection" "$(model_error_regex "$MR" c "")" ""
+check "model_error_regex: codex escapes the model id" "$(model_error_regex "$MR" x 'gpt-5.5')" '(unexpected status|ERROR:)[^E]{0,200}gpt-5\.5[^E]{0,200}(does not exist|not supported|model_not_found)'
+check "model_error_regex: custom without modelError" "$(model_error_regex "$MR" u m)" ""
+check "model_error_regex: custom with {model} escaped" "$(model_error_regex "$MR" u2 'a.b')" 'boom a\.b!'
+# claude: bad model -> FAILED, exact escalation, nothing is switched
+mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: bad model recorded as FAILED" "$(models)" "DEV=FAILED:claude-opus-5-5 "
+check "model-check: exact escalation" "$(escs)" "$BODY"
+check "model-check: no /model is ever sent" "$(nomodel)" "0"
+check "model-check: role message sent once" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
+mf "$(mfc "$DEVOK")" clean "dev"
+check "model-check: good model recorded, no escalation" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+for how in new remembered; do
+  if [ "$how" = new ]; then STALE=1 mf "$(mfc "$DEVOK")" clean "dev"; else STALE=1 REM=dev mf "$(mfc "$DEVOK")" clean "dev"; fi
+  check "model-check: stale error, good model, $how role" "$(models):$(nesc):$(nomodel)" "DEV=claude-opus-5-5 :0:0"
+done
+STALE=1 mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: a stale error does not hide a new one" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+PASTE=1 mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: collapsed paste still detected" "$(models)" "DEV=FAILED:claude-opus-5-5 "
+ERRTXT="The model us.anthropic.claude-x is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: Bedrock text detected" "$(models):$(escs | grep -c 'The model us.anthropic.claude-x is not available on your)')" "DEV=FAILED:claude-opus-5-5 :1"
+ERRWRAP=model mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: wrapped error detected (indented continuation)" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+BREG="The model us.anthropic.claude-opus-5-5-20260101-v1:0 is not available on your bedrock deployment."
+ERRWRAP="on your" ERRTXT="$BREG" mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: wrapped Bedrock error detected" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+ERRTXT="API Error (us.anthropic.claude-opus-5-5-v9:0): The provided model identifier is invalid.. Run /model to pick a different model." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: Bedrock invalid model id detected" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+ERRTXT="API Error (500): Internal server error" mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: other API errors are not model errors" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+STALETXT="The model us.anthropic.old-1 is not available on your account." STALE=1 ERRTXT="The model us.anthropic.new-2 is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: the escalation quotes the newest error" "$(escs | grep -c 'is not available (The model us.anthropic.new-2 is not available on your)')" "1"
+ERRTXT="Warning: model x isn't described by this version's model catalog" mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: catalog warning is fine" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+VIEW=2 STALE=1 REM=dev mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: known limit: small pane at the first check" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+mf "$(mfc "$DEVOK" | jq -c 'del(.defaults.agent)')" bad "dev"
+check "model-check: a role with no agent is treated as claude" "$(models)" "DEV=FAILED:claude-opus-5-5 "
+# codex
+CXERR='ERROR: unexpected status 404 Not Found: The model `gpt-5.5` does not exist or you do not have access to it.'
+ERRTXT="$CXERR" mf "$(mfc '"title": "Dev", "agent": "codex", "model": "gpt-5.5"')" bad "dev"
+check "model-check: codex bad model -> FAILED" "$(models):$(nesc)" "DEV=FAILED:gpt-5.5 :1"
+ERRTXT="${CXERR//gpt-5.5/gpt-5x5}" mf "$(mfc '"title": "Dev", "agent": "codex", "model": "gpt-5.5"')" bad "dev"
+check "model-check: codex model id is not a regex" "$(models):$(nesc)" "DEV=gpt-5.5 :0"
+ERRTXT="$CXERR" mf "$(mfc '"title": "Dev", "agent": "codex"')" bad "dev"
+check "model-check: codex without model, no detection" "$(models)" ""
+# custom
+mf "$(mfc '"title": "Dev", "agent": "custom", "command": "x", "model": "my-model", "modelError": "boom {model}"')" bad "dev"
+ERRTXT="boom my-model" mf "$(mfc '"title": "Dev", "agent": "custom", "command": "x", "model": "my-model", "modelError": "boom {model}"')" bad "dev"
+check "model-check: custom modelError -> FAILED" "$(models)" "DEV=FAILED:my-model "
+ERRTXT="boom my-model" mf "$(mfc '"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"')" bad "dev"
+check "model-check: custom without modelError, no detection" "$(models)" ""
+# no model, planner, failed send
+mf "$(mfc '"title": "Dev"')" bad "dev"
+check "model-check: no model -> no detection, no line" "$(models)" ""
+mf "$(mfc "$DEVOK")" bad "planner"
+check "model-check: planner FAILED, no escalation" "$(models):$(nesc)" "PLANNER=FAILED:claude-opus-5-5 :0"
+RC=0; FAILSEND=1 mf "$(mfc "$DEVOK")" bad "dev" || RC=$?
+check "model-check: failed escalation send is ignored" "$RC:$(models):$(grep -c 'Could not tell the Planner: Dev model unavailable' "$MF/out.log")" "0:DEV=FAILED:claude-opus-5-5 :1"
+# parallel
+mf "$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')" bad "dev tester"
+check "model-check: two roles, both lines" "$(sort "$MF/gd/orca-roles.models" | tr '\n' ' ')" "DEV=FAILED:claude-opus-5-5 TESTER=FAILED:claude-opus-5-5 "
+check "model-check: two roles, both escalations" "$(escs | cut -d'|' -f2 | sort | tr '\n' ' ')" "Dev model unavailable Tester model unavailable "
+check "model-check: no leftover partial files" "$([ -e "$MF/gd/orca-roles.models.d" ] && echo 1 || echo 0)" "0"
+MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"} | .roles.auditor = {"title": "Auditor", "model": "claude-opus-5-5"}')"
+echo 1 > "$MF/waitdelay"; t0=$SECONDS
+mf "$MF3" bad "dev tester auditor"
+check "model-check: the checks of three roles run in parallel" "$(( SECONDS - t0 < 3 ))" "1"
+echo 2 > "$MF/waitdelay"; t0=$SECONDS
+mf "$MF3" clean "dev tester auditor"
+check "model-check: three roles are checked in parallel" "$(( SECONDS - t0 < 5 ))" "1"
+echo 0 > "$MF/waitdelay"
+# kept lines, config untouched, bounded waits
+PRE=$'AUDITOR=claude-x\nDEV=FAILED:old\n'
+mf "$(mfc "$DEVOK")" clean "dev"; unset PRE
+check "model-check: other roles' lines kept, own replaced" "$(models)" "AUDITOR=claude-x DEV=claude-opus-5-5 "
+check "model-check: config.json is never touched" "$(printf '%s' "$(mfc "$DEVOK")" | cmp -s - "$MF/cfg.json" && echo same || echo changed)" "same"
+mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: every wait is bounded by kickoffTimeoutSeconds" "$(grep -vc -e '--timeout-ms 1000 ' "$MF/waits.log" || true)" "0"
+check "model-check: waits happened" "$(( $(wc -l < "$MF/waits.log") > 1 ))" "1"
+# more edges: remembered bad role, old and new codex error, long text cut, writes confined to the git dir
+REM=dev mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: remembered role with a bad model -> FAILED" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+CXD='"title": "Dev", "agent": "codex", "model": "gpt-5.5"'
+STALE=1 STALETXT="$CXERR" ERRTXT="$CXERR" mf "$(mfc "$CXD")" bad "dev"
+check "model-check: codex stale error does not merge with the new one" "$(models):$(nesc)" "DEV=FAILED:gpt-5.5 :1"
+STALE=1 STALETXT="$CXERR" mf "$(mfc "$CXD")" clean "dev"
+check "model-check: codex stale error, good model" "$(models):$(nesc)" "DEV=gpt-5.5 :0"
+PAD="$(printf 'x%.0s' $(seq 1 150))"
+ERRTXT="ERROR: unexpected status 404 $PAD gpt-5.5 $PAD does not exist" mf "$(mfc "$CXD")" bad "dev"
+check "model-check: matched text in the escalation is cut to 200 characters" "$(escs | sed 's/^[^(]*(//; s/)\. config.json.*$//' | tr -d '\n' | wc -c | tr -d ' ')" "200"
+mkdir -p "$TMP/home"; HB="$(cd "$TMP/home" && find . | sort | shasum)"
+mf "$(mfc "$DEVOK")" bad "dev tester"
+check "model-check: nothing outside the git dir is written" "$(find "$MF/wt" -mindepth 1 -not -path "$MF/wt/.git" -not -path "$MF/wt/.git/*" | wc -l | tr -d ' '):$(ls "$MF/gd" | tr '\n' ' '):$(cd "$TMP/home" && find . | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed)" "0:orca-roles.env orca-roles.models :same"
+# check_config and docs
+cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }
+# defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
+CUD='"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"'
+ERRTXT="dflt my-model" mf "$(mfc "$CUD" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"
+check "model-check: a custom role inherits defaults.modelError" "$(models):$(nesc)" "DEV=FAILED:my-model :1"
+ERRTXT="dflt my-model" mf "$(mfc "$CUD, \"modelError\": \"own {model}\"" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"
+check "model-check: the role's modelError wins over the default" "$(models):$(nesc)" "DEV=my-model :0"
+STALETXT="The model us.anthropic.old-1 is not available on your account." STALE=1 ERRTXT="The model us.anthropic.new-2 is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
+check "model-check: an old and a new Bedrock error are two matches" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+for bad in '""' '5'; do
+  check "check_config: defaults modelError $bad rejected" "$(cc "$(printf '{"defaults":{"modelError":%s},"roles":{}}' "$bad")")" "ERROR: invalid configuration: modelError must be a non-empty string"
+done
+for bad in '""' '5'; do
+  check "check_config: role modelError $bad rejected" "$(cc "$(printf '{"roles":{"dev":{"modelError":%s}}}' "$bad")")" "ERROR: invalid configuration: modelError must be a non-empty string"
+done
+check "check_config: modelError string accepted" "$(cc '{"roles":{"dev":{"modelError":"x {model}"}}}')" ""
+PL="$ROOT/prompts/programmer/planner.md"
+for frag in 'model unavailable' 'comes from the kit' 'fix it themselves' 'Never dispatch tasks to a role that did not start' 'relaunch-role.sh'; do
+  grep -F 'model unavailable' "$PL" | grep -qF -- "$frag" || { echo "FAIL planner.md: the model unavailable sentence lost '$frag'"; FAIL=1; }
+done
+grep -qF 'modelError' "$ROOT/README.md" || { echo "FAIL README without modelError"; FAIL=1; }
+grep -F 'A role never answers its first message' "$ROOT/README.md" | grep -qF 'model unavailable' || { echo "FAIL README troubleshooting row without the new behaviour"; FAIL=1; }
+grep -F 'does not answer its first message' "$ROOT/plugin/skills/team/SKILL.md" | grep -qF 'modelError' || { echo "FAIL SKILL.md row without modelError"; FAIL=1; }
+echo "ok   model-check docs"
+}
+
+sec_models() {
+# models.sh: fake claude, codex and custom commands on PATH (never the real ones), a fake HOME, a private TMPDIR
+MM="$TMP/models"; rm -rf "$MM"; mkdir -p "$MM/bin" "$MM/tmp"
+cat > "$MM/bin/claude" <<'EOS'
+#!/bin/bash
+m=""; pv=""; for x in "$@"; do [ "$pv" = --model ] && m="$x"; pv="$x"; done
+echo "$FOO" >> "$MM/env.$m"; echo "$*" > "$MM/args.$m"
+b="$(cat "$MM/b.$m" 2>/dev/null || echo ok)"
+case "$b" in
+  ok) echo '{"result":"ok","modelUsage":{"claude-opus-5-5":{"costUSD":0}}}';;
+  okplain) echo '{"result":"ok"}';;
+  404) echo '{"api_error_status":404,"result":"nope"}'; exit 1;;
+  prefix) echo '{"result":"There'"'"'s an issue with the selected model (x). It may not exist."}'; exit 1;;
+  prefix2) echo '{"result":"The model x is not available on your account."}'; exit 1;;
+  nologin) echo '{"result":"Not logged in · Please run /login"}'; exit 1;;
+  text) echo "boom: no network" >&2; exit 1;;
+  long) printf 'x%.0s' $(seq 200) >&2; exit 1;;
+  okgarbage) echo 'not json at all'; exit 0;;
+  tabtext) printf 'a\tb\n' >&2; exit 1;;
+  hang) echo $$ > "$MM/hang.pid"; exec sleep 30;;
+  slow) sleep 2; echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
+esac
+EOS
+cat > "$MM/bin/codex" <<'EOS'
+#!/bin/bash
+if [ "$1 $2" = "debug models" ]; then
+  echo "$FOO" > "$MM/codex.env"
+  [ -f "$MM/codex.hangdm" ] && exec sleep 30
+  [ -f "$MM/codex.dmjson1" ] && { echo "dm: boom" >&2; echo '{"models":[{"slug":"zzz","visibility":"list"}]}'; exit 1; }
+  [ -f "$MM/codex.garbage" ] && { echo "not json"; exit 0; }
+  [ -f "$MM/codex.fail" ] && { echo "kaboom: no login" >&2; echo "second" >&2; exit 1; }
+  echo '{"models":[{"slug":"gpt-b","visibility":"list"},{"slug":"hid","visibility":"hide"},{"slug":"gpt-c","visibility":"list"},{"slug":"gpt-d","visibility":"list"}]}'; exit 0
+fi
+echo "$*" >> "$MM/codex.argv"; echo "Reading additional input from stdin..." >&2
+m=""; pv=""; for x in "$@"; do [ "$pv" = -m ] && m="$x"; pv="$x"; done
+TS="2026-10-10T14:12:33.371163Z ERROR codex_api::endpoint::responses_websocket:"
+U="unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"
+[ -f "$MM/codex.401" ] && { echo "$TS failed to connect" >&2; echo "$TS $U" >&2
+  echo '{"type":"thread.started"}'; echo '{"type":"error","message":"'"$U"'"}'; echo '{"type":"turn.failed","error":{"message":"'"$U"', url: https://api.openai.com/v1/responses"}}'; exit 1; }
+[ -f "$MM/codex.401err" ] && { echo "$TS failed to connect" >&2; echo "$TS $U" >&2; exit 1; }
+[ -f "$MM/codex.layA" ] && { echo "$TS $U" >&2; echo '{"type":"error","message":"EV"}'; echo '{"type":"turn.failed","error":{"message":"TF first"}}'; echo '{"type":"turn.failed","error":{"message":"TF last"}}'; exit 1; }
+[ -f "$MM/codex.layB" ] && { echo "$TS $U" >&2; echo 'not json'; echo '{"type":"error","message":"EV first"}'; echo '{"type":"error","message":"EV last"}'; exit 1; }
+case "$m" in
+  gpt-c) echo '{"type":"error","message":"The model `gpt-c` does not exist or you do not have access to it."}'; exit 1;;
+  gpt-d) echo "stream error: connection reset" >&2; exit 1;;
+  *) echo '{"type":"turn.completed"}';;
+esac
+EOS
+cat > "$MM/bin/probe" <<'EOS'
+#!/bin/bash
+printf '%s\n' "$1" >> "$MM/probed"; case "$1" in *bad*) exit 3;; esac
+EOS
+cat > "$MM/bin/cprobe" <<'EOS'
+#!/bin/bash
+f="$MM/conc/$$"; mkdir -p "$MM/conc"; : > "$f"; ls "$MM/conc" | wc -l | tr -d ' ' >> "$MM/conc.log"; sleep 0.6; rm -f "$f"
+EOS
+chmod +x "$MM/bin"/*; export MM
+seq 1 10 | sed 's/^/c/' > "$MM/ten.txt"; seq 1 40 | sed 's/^/q/' > "$MM/forty.txt"
+printf 'alpha\n  beta  \n\nalpha\n' > "$MM/list.txt"
+printf '%s\n' 'id=r1 x' 'junk' 'id=r2' > "$MM/relist.txt"
+echo '{"data":[{"id":"j1"},{"id":"j2"}]}' > "$MM/list.json"
+printf '%s\n' "it's a \"m\"" 'bad one' > "$MM/odd.txt"
+jq -n --arg mm "$MM" '{defaults:{agent:"claude",env:{FOO:"def",MY_KEY:"fromdef"}}, roles:{
+  cl:{title:"Claude",model:"sonnet",env:{FOO:"role"}}, cl2:{title:"Plain"}, cl4:{model:"my-model"},
+  cx:{agent:"codex",model:"gpt-b"}, cx2:{agent:"codex"},
+  lines:{agent:"custom",model:"alpha",models:{list:("cat "+$mm+"/list.txt"),probe:($mm+"/bin/probe {model}")}},
+  js:{agent:"custom",models:{list:("cat "+$mm+"/list.json"),parse:"json:.data[].id",probe:($mm+"/bin/probe {model}")}},
+  re:{agent:"custom",models:{list:("cat "+$mm+"/relist.txt"),parse:"regex:^id=([a-z0-9]+)"}},
+  odd:{agent:"custom",models:{list:("cat "+$mm+"/odd.txt"),probe:($mm+"/bin/probe {model}")}},
+  envl:{agent:"custom",env:{MY_KEY:"fromrole"},models:{list:"echo $MY_KEY"}}, envd:{agent:"custom",models:{list:"echo $MY_KEY"}},
+  conc:{agent:"custom",models:{list:("cat "+$mm+"/ten.txt"),probe:($mm+"/bin/cprobe")}},
+  fast:{agent:"custom",models:{list:("cat "+$mm+"/forty.txt"),probe:"true"}},
+  hl:{agent:"custom",model:"m3",models:{list:"exec sleep 30"}},
+  pw:{agent:"custom",models:{list:"echo p1",probe:("pwd >> "+$mm+"/pwds")}},
+  nolist:{agent:"custom",model:"m1"}, nolist2:{agent:"custom"}, failist:{agent:"custom",model:"m2",models:{list:"echo oops >&2; exit 4"}}}}' > "$MM/cfg.json"
+ms() { (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" "$KIT/bin/models.sh" "$@" 2>"$MM/err"); }
+mt() { try ms "$@"; }
+tabs() { printf '%s' "$OUT" | tr '\t\n' '|;'; }
+HB="$(find "$TMP/home" | sort | shasum)"
+# claude: listing
+mt cl; check "models: claude lists the role's model first, then the aliases, deduplicated" "$RC:$(tabs)" "0:sonnet;opus;haiku;fable"
+check "models: claude's note is on stderr" "$(cat "$MM/err")" "Claude Code cannot list the models of your login; these are its aliases. Use --check to test them."
+mt cl4; check "models: claude with another model first" "$(tabs)" "my-model;sonnet;opus;haiku;fable"
+mt cl2; check "models: claude without model" "$(tabs)" "sonnet;opus;haiku;fable"
+mt Claude; check "models: the role is found by title" "$(tabs)" "sonnet;opus;haiku;fable"
+mt -h; check "models: -h prints the header" "$RC:$(printf '%s\n' "$OUT" | head -1 | cut -c1-20)" "0:# Lists the models a"
+mt; check "models: no role -> exit 1" "$RC" "1"
+mt nosuch; check "models: unknown role -> exit 1 and message" "$RC:$(cat "$MM/err")" "1:Unknown role: nosuch"
+check "models: nothing was probed without --check" "$(ls "$MM"/env.* 2>/dev/null | wc -l | tr -d ' ')" "0"
+# claude: --check
+echo 404 > "$MM/b.opus"; echo prefix > "$MM/b.haiku"; echo prefix2 > "$MM/b.fable"
+mt cl --check; check "models: --check classifies ok, 404, and the two result prefixes" "$RC:$(tabs)" "0:sonnet|ok|claude-opus-5-5;opus|unavailable;haiku|unavailable;fable|unavailable"
+echo okplain > "$MM/b.sonnet"; echo nologin > "$MM/b.opus"; echo text > "$MM/b.haiku"; echo ok > "$MM/b.fable"
+mt cl --check; check "models: ok without modelUsage, not logged in and non-JSON are unknown" "$(tabs)" "sonnet|ok|-;opus|unknown|Not logged in · Please run /login;haiku|unknown|boom: no network;fable|ok|claude-opus-5-5"
+check "models: the role's env reaches the probe (role wins over defaults)" "$(tail -1 "$MM/env.sonnet")" "role"
+mt cl2 --check; check "models: defaults.env reaches the probe of a role without its own" "$(tail -1 "$MM/env.fable")" "def"
+check "models: the probe flags" "$(cat "$MM/args.fable")" '-p --safe-mode --setting-sources local --no-session-persistence --tools  --system-prompt Reply ok. --model fable --output-format json ok'
+# timeout and parallelism
+for m in sonnet opus haiku fable; do rm -f "$MM/b.$m"; done; echo hang > "$MM/b.haiku"
+t0=$SECONDS; ORCA_ROLES_PROBE_TIMEOUT=1 mt cl2 --check
+check "models: a hung probe is killed and reported" "$(tabs)" "sonnet|ok|claude-opus-5-5;opus|ok|claude-opus-5-5;haiku|unknown|timed out;fable|ok|claude-opus-5-5"
+check "models: the hung probe did not hold the others up" "$(( SECONDS - t0 < 5 ))" "1"
+check "models: the hung probe's process is gone after the timeout" "$(kill -0 "$(cat "$MM/hang.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
+rm -f "$MM/hang.pid"; echo hang > "$MM/b.haiku"
+set -m; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" exec "$KIT/bin/models.sh" cl2 --check > /dev/null 2>&1) & MP=$!; set +m
+for _ in $(seq 1 50); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
+HP="$(cat "$MM/hang.pid" 2>/dev/null)"; kill -INT "$MP" 2>/dev/null; wait "$MP" 2>/dev/null || true; sleep 0.3
+check "models: SIGINT while a probe hangs kills the probe and removes the temp dir" "$(kill -0 "${HP:-0}" 2>/dev/null && echo alive || echo gone):$([ -n "$HP" ] && echo started):$(ls -A "$MM/tmp" | wc -l | tr -d ' ')" "gone:started:0"
+rm -f "$MM/hang.pid"
+set -m; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" exec "$KIT/bin/models.sh" cl2 --check > /dev/null 2>&1) & MP=$!; set +m
+for _ in $(seq 1 50); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
+HP="$(cat "$MM/hang.pid" 2>/dev/null)"; kill -TERM "$MP" 2>/dev/null; MRC=0; wait "$MP" 2>/dev/null || MRC=$?; sleep 0.3
+check "models: SIGTERM while a probe hangs kills the probe, removes the temp dir and exits 130" "$(kill -0 "${HP:-0}" 2>/dev/null && echo alive || echo gone):$([ -n "$HP" ] && echo started):$(ls -A "$MM/tmp" | wc -l | tr -d ' '):$MRC" "gone:started:0:130"
+echo slow > "$MM/b.sonnet"; echo slow > "$MM/b.opus"; echo slow > "$MM/b.haiku"
+t0=$SECONDS; mt cl2 --check
+check "models: three probes of 2 s run in parallel" "$(( SECONDS - t0 < 5 ))" "1"
+check "models: the slow probes answered" "$(tabs)" "sonnet|ok|claude-x;opus|ok|claude-x;haiku|ok|claude-x;fable|ok|claude-opus-5-5"
+echo long > "$MM/b.sonnet"; mt cl2 --check; check "models: an unknown reason is cut to 80 characters" "$(tabs | cut -d';' -f1 | awk -F'|' '{print $2 ":" length($3)}')" "unknown:80"
+for m in sonnet opus haiku; do rm -f "$MM/b.$m"; done
+for m in sonnet opus haiku fable; do rm -f "$MM/b.$m"; done
+# codex
+mt cx; check "models: codex lists its model, then the listed ones" "$RC:$(tabs)" "0:gpt-b;gpt-c;gpt-d"
+touch "$MM/codex.fail"; mt cx; check "models: codex debug models failure -> role's model only" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models failed: kaboom: no login"
+mt cx2; check "models: codex failure without a model -> empty" "$RC:$(tabs)" "0:"
+rm -f "$MM/codex.fail"
+mt cx --check; check "models: codex --check: ok, unavailable, unknown" "$(tabs)" "gpt-b|ok|-;gpt-c|unavailable;gpt-d|unknown|stream error: connection reset"
+# custom
+check "models: every codex probe got --ephemeral and --skip-git-repo-check" "$(wc -l < "$MM/codex.argv" | tr -d ' '):$(grep -c -e '--ephemeral' "$MM/codex.argv" | tr -d ' '):$(grep -c -e '--skip-git-repo-check' "$MM/codex.argv" | tr -d ' ')" "3:3:3"
+touch "$MM/codex.401"; mt cx --check; check "models: codex 401 reason is the turn.failed message, not the log line" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | cut -c1-34 | sort -u)" "unexpected status 401 Unauthorized"
+check "models: codex 401 reason is cut to 80 characters" "$(tabs | tr ';' '\n' | head -1 | cut -d'|' -f3 | wc -c | tr -d ' ')" "81"
+rm -f "$MM/codex.401"; touch "$MM/codex.401err"; mt cx --check; check "models: codex 401 with only the timestamped stderr line drops the log prefix" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | cut -c1-17 | sort -u)" "unexpected status"
+rm -f "$MM/codex.401err"; touch "$MM/codex.layA"; mt cx --check; check "models: codex reason prefers the last turn.failed message over an error event and the log line" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | sort -u)" "TF last"
+rm -f "$MM/codex.layA"; touch "$MM/codex.layB"; mt cx --check; check "models: codex reason falls back to the last error event, skipping non-JSON lines, before the log line" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | sort -u)" "EV last"
+rm -f "$MM/codex.layB"; touch "$MM/codex.dmjson1"; mt cx; check "models: codex debug models exiting 1 with valid JSON -> note and the role's model only" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models failed: dm: boom"
+rm -f "$MM/codex.dmjson1"
+rm -f "$MM/codex.401"
+touch "$MM/codex.hangdm"; ORCA_ROLES_PROBE_TIMEOUT=2 mt cx; check "models: a hung codex debug models ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models timed out after 2 s"
+rm -f "$MM/codex.hangdm"
+ORCA_ROLES_PROBE_TIMEOUT=2 mt hl; check "models: a hung models.list ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:m3:models.list timed out after 2 s"
+rm -rf "$MM/conc" "$MM/conc.log"; mt conc --check
+check "models: 10 probes all answered" "$(tabs | tr ';' '\n' | grep -c '|ok|-')" "10"
+check "models: never more than 6 probes run at once, and they did overlap" "$(sort -n "$MM/conc.log" | tail -1):$(wc -l < "$MM/conc.log" | tr -d ' ')" "6:10"
+ORCA_ROLES_PROBE_TIMEOUT=7357 mt fast --check; sleep 0.3
+check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f 'sleep 7357' | wc -l | tr -d ' ')" "40:0"
+mt lines; check "models: custom lines parser trims, skips empty lines and deduplicates" "$(tabs)" "alpha;beta"
+mt js; check "models: custom json parser" "$(tabs)" "j1;j2"
+mt re; check "models: custom regex parser" "$(tabs)" "r1;r2"
+mt envl; check "models: the custom list command sees the role's env" "$(tabs)" "fromrole"
+mt envd; check "models: the custom list command sees defaults.env when the role has none" "$(tabs)" "fromdef"
+mt cx; check "models: codex debug models sees the role's env" "$(cat "$MM/codex.env")" "def"
+mt nolist; check "models: custom without list -> role's model, note, exit 0" "$RC:$(tabs):$(cat "$MM/err")" "0:m1:nolist has no models.list in its configuration"
+mt nolist2; check "models: custom without list or model -> empty" "$RC:$(tabs):$(cat "$MM/err")" "0::nolist2 has no models.list in its configuration"
+mt failist; check "models: a failing list command -> role's model and a note" "$RC:$(tabs):$(cat "$MM/err")" "0:m2:models.list failed: oops"
+rm -f "$MM/probed"; mt lines --check; check "models: custom probe ok" "$(tabs)" "alpha|ok|-;beta|ok|-"
+check "models: probe got each model" "$(sort "$MM/probed" | tr '\n' ' ')" "alpha beta "
+rm -f "$MM/probed"; mt odd --check; check "models: a model with a space and a quote is quoted for the probe" "$(tabs)" "it's a \"m\"|ok|-;bad one|unavailable"
+check "models: the probe received each as one argument" "$(sort "$MM/probed" | tr '\n' '/')" "bad one/it's a \"m\"/"
+mt re --check; check "models: custom without probe -> unknown" "$(tabs)" "r1|unknown|no models.probe;r2|unknown|no models.probe"
+mt PLAIN; check "models: the role is found by title in any letter case" "$RC:$(tabs)" "0:sonnet;opus;haiku;fable"
+mt cLaUdE; check "models: the title match ignores case on the other side too" "$RC:$(tabs)" "0:sonnet;opus;haiku;fable"
+jq -n '{defaults:{agent:"custom",models:{list:"echo dlist",probe:"echo dprobe"}}, roles:{inh:{}, own:{models:{list:"echo rlist"}}, probeonly:{models:{probe:"true"}}}}' > "$MM/cfg2.json"
+ms2() { (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg2.json" TMPDIR="$MM/tmp" "$KIT/bin/models.sh" "$@" 2>"$MM/err"); }
+try ms2 inh; A="$OUT"; try ms2 own; B="$OUT"; try ms2 probeonly; C="$OUT"
+check "models: defaults.models is used by a role without its own, the role's key wins, keys merge" "$A:$B:$C" "dlist:rlist:dlist"
+rm -f "$MM/pwds"; mt pw --check; mt pw --check  # two runs, one probe each
+check "models: probes run in their own folder under the temp dir, not in the caller's" "$(grep -c '/orca-models\.[^/]*/wd\.[0-9]*$' "$MM/pwds"):$(grep -c "^$PROJ\$" "$MM/pwds")" "2:0"
+NRC=0; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" env -u ORCA_ROLES_CONFIG TMPDIR="$MM/tmp" "$KIT/bin/models.sh" dev > "$MM/nocfg.out" 2> "$MM/err") || NRC=$?
+check "models: without ORCA_ROLES_CONFIG or a saved config it resolves the role from the merged config" "$NRC:$(grep -c . "$MM/nocfg.out" | tr -d ' ' | sed 's/^[1-9][0-9]*$/some/')" "0:some"
+echo okgarbage > "$MM/b.sonnet"; echo tabtext > "$MM/b.opus"; mt cl2 --check
+check "models: exit 0 with non-JSON output is ok with -, and a tab in a reason becomes a space" "$(tabs | cut -d';' -f1,2)" "sonnet|ok|-;opus|unknown|a b"
+for m in sonnet opus; do rm -f "$MM/b.$m"; done
+touch "$MM/codex.garbage"; mt cx; check "models: codex debug models exiting 0 with non-JSON -> role's model and a note" "$RC:$(tabs):$(cat "$MM/err" | cut -c1-30)" "0:gpt-b:codex debug models failed: "
+rm -f "$MM/codex.garbage"
+# --model: exactly one candidate, with and without --check
+mt cl --model opus; check "models: --model alone prints just that one" "$RC:$(tabs)" "0:opus"
+mt cl --model sonnet --check; check "models: --model with --check probes only that one (deduplicated)" "$RC:$(tabs)" "0:sonnet|ok|claude-opus-5-5"
+echo 404 > "$MM/b.zzz"; mt cl --check --model zzz; check "models: --model with --check reports unavailable" "$RC:$(tabs)" "0:zzz|unavailable"; rm -f "$MM/b.zzz"
+rm -f "$MM/codex.env"; mt cx --model gpt-c --check; check "models: --model on a codex role skips the listing" "$(tabs):$([ -f "$MM/codex.env" ] && echo listed || echo skipped)" "gpt-c|unavailable:skipped"
+mt cl --model; check "models: --model needs a value" "$RC" "1"
+# nothing written outside the temp dir, which is gone
+check "models: nothing written outside the temp dir" "$(find "$TMP/home" | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed):$(ls -A "$MM/tmp" | wc -l | tr -d ' ')" "same:0"
+# check_config
+mcc() { echo "$1" > "$MM/cc.json"; check_config "$MM/cc.json"; }
+MERR="ERROR: invalid configuration: models must be {list, parse, probe} (see README)"
+for bad in '"x"' '[]' '{"list":false}' '{"probe":5}' '{"probe":false}' '{"probes":"x"}' '{"list":""}' '{"list":5}' '{"probe":""}' '{"probe":[1]}' '{"parse":"xml"}' '{"parse":"json:"}' '{"parse":"regex:"}' '{"parse":""}' '{"parse":5}' 'null'; do
+  check "models: check_config rejects role models $bad" "$(mcc "$(jq -nc --argjson m "$bad" '{roles:{dev:{models:$m}}}')")" "$MERR"
+done
+check "models: check_config rejects defaults models" "$(mcc "$(jq -nc '{defaults:{models:"x"},roles:{}}')")" "$MERR"
+for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":"lines"}' '{"parse":"regex:(.*)"}' '{"list":"a"}'; do
+  check "models: check_config accepts $good" "$(mcc "$(jq -nc --argjson m "$good" '{defaults:{models:$m},roles:{dev:{models:$m}}}')")" ""
+done
+check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <id> --check')" "1"
+unset MM
+}
+
+sec_relaunch() {
+# relaunch-role.sh with a fake orca, claude and kickoff, in an own kit (never the clone)
+pk_setup
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" }, "deployer": { "title": "Deployer" } } }
+J
+RW="$TMP/rproj"; mkdir -p "$RW" "$TMP/rbin"; git -C "$RW" init -q; RG="$RW/.git"
+RLOG="$TMP/rorca.log"; RKL="$TMP/rkick.log"; RCL="$TMP/rclaude.log"; : > "$RLOG"; : > "$RKL"; : > "$RCL"
+cat > "$TMP/rbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$RLOG"
+case "\$1 \$2" in
+  "terminal create") [ -f "$TMP/r-failcreate" ] && exit 1
+    while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t-\$(grep -c '^terminal create' "$RLOG")\"}";;
+  "terminal show") [ -f "$TMP/r-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+esac
+exit 0
+EOS
+cat > "$TMP/rbin/claude" <<EOS
+#!/bin/bash
+m=""; pv=""; for x in "\$@"; do [ "\$pv" = --model ] && m="\$x"; pv="\$x"; done
+echo "\$m" >> "$RCL"
+case "\$m" in
+  gone) echo '{"api_error_status":404,"result":"nope"}'; exit 1;;
+  net) echo "boom: no network" >&2; exit 1;;
+  *) echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
+esac
+EOS
+printf '#!/bin/sh\necho "$4" >> "%s"\n' "$RKL" > "$TMP/rbin/kickoff"; chmod +x "$TMP/rbin"/*
+rl() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+rr() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/relaunch-role.sh" "$@" 2>&1); }
+rstate() { cat "$RG/orca-roles.env" "$RG/orca-roles.pty" "$RG/orca-roles.overrides.json" "$RG/orca-roles.config.json" | cksum; }
+rclosed() { grep -c '^terminal close' "$RLOG" || true; }
+rkicks() { sleep 1; tr -d ' ' < "$RKL" | tr '\n' ','; }
+rl --only dev,planner >/dev/null; touch "$TMP/r-alive"
+B="$(rstate)"
+for args in "dev" "dev --model" "nobody --model good" "planner --model good" "Planner --model good" "deployer --model good" "--model good" "dev --bogus x"; do
+  # shellcheck disable=SC2086
+  try rr $args; check "relaunch: '$args' fails and changes nothing" "$RC:$(rclosed):$(rstate)" "1:0:$B"
+done
+try rr planner --model good; case "$OUT" in *"The Planner cannot be relaunched from inside the team."*) echo "ok   relaunch: planner message";; *) echo "FAIL relaunch planner: $OUT"; FAIL=1;; esac
+try rr deployer --model good; case "$OUT" in *"deployer is not open in this worktree; run roles."*) echo "ok   relaunch: not open message";; *) echo "FAIL relaunch not open: $OUT"; FAIL=1;; esac
+try rr dev --model gone; check "relaunch: unavailable model" "$RC:$(rclosed):$(rstate):$OUT" "1:0:$B:Model gone is not available for dev; nothing was changed."
+try rr dev --model net; check "relaunch: unknown model" "$RC:$(rclosed):$(rstate):$OUT" "1:0:$B:Could not check model net (boom: no network); use --no-check to relaunch anyway"
+: > "$RKL"; N0="$(grep -c '^terminal create' "$RLOG")"; OLDH="$(grep '^DEV=' "$RG/orca-roles.env")"
+try rr dev --model good
+check "relaunch: closes the tab and opens one new tab" "$RC:$(rclosed):$(( $(grep -c '^terminal create' "$RLOG") - N0 ))" "0:1:1"
+check "relaunch: the old handle is gone, the printed line is the new one in orca-roles.env" "$([ "$(grep '^DEV=' "$RG/orca-roles.env")" != "$OLDH" ] && echo new):$(printf '%s\n' "$OUT" | tail -2 | head -1)" "new:$(grep '^DEV=' "$RG/orca-roles.env")"
+check "relaunch: the closing message names the old handle" "$(printf '%s' "$OUT" | grep -c "tab closed (${OLDH#DEV=})")" "1"
+case "$OUT" in *"Relaunched Dev on good; this worktree keeps that model (roles --reset forgets it)."*) echo "ok   relaunch: final message";; *) echo "FAIL relaunch final: $OUT"; FAIL=1;; esac
+check "relaunch: the saved --only is kept, the model is saved and effective" "$(jq -c '[.only,.set]' "$RG/orca-roles.overrides.json"):$(jq -r .roles.dev.model "$RG/orca-roles.config.json"):$(cut -d= -f1 "$RG/orca-roles.env" | tr '\n' ' ')" '[["dev","planner"],[{"path":["roles","dev","model"],"value":"good"}]]:good:PLANNER DEV '
+check "relaunch: kickoff for that role only" "$(rkicks)" "dev,"
+: > "$RCL"; try rr Dev --model gone --no-check
+check "relaunch: --no-check skips the probe, matches the title in any case" "$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")" "0:0:gone"
+touch "$TMP/r-failcreate"; try rr dev --model good --no-check
+check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
+rm -f "$TMP/r-failcreate"
+check "relaunch: the planner prompt names the new steps" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'models.sh <id> --check')$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'relaunch-role.sh <id> --model <m>')$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'replaces this worktree')" "110"
 }
 
 sec_cli() {

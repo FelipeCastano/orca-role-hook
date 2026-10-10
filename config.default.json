@@ -59,7 +59,7 @@
       "env": { "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "NUMEXPR_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2",
                "TOKENIZERS_PARALLELISM": "false", "GOMAXPROCS": "2", "RAYON_NUM_THREADS": "2", "CARGO_BUILD_JOBS": "2", "MAKEFLAGS": "-j2",
                "UV_THREADPOOL_SIZE": "2", "CUDA_VISIBLE_DEVICES": "" },
-      "params": { "maxNewTests": 10, "maxWorkers": 2, "timeoutMinutes": 10, "maxSelfMutants": 5 }
+      "params": { "maxNewTests": 10, "maxWorkers": 2, "timeoutMinutes": 10, "maxSelfMutants": 3 }
     },
     "auditor": {
       "title": "Auditor",
@@ -70,7 +70,7 @@
       "env": { "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "NUMEXPR_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2",
                "TOKENIZERS_PARALLELISM": "false", "GOMAXPROCS": "2", "RAYON_NUM_THREADS": "2", "CARGO_BUILD_JOBS": "2", "MAKEFLAGS": "-j2",
                "UV_THREADPOOL_SIZE": "2", "CUDA_VISIBLE_DEVICES": "" },
-      "params": { "maxMutants": 15, "maxWorkers": 2, "rejectSeverity": "high" }
+      "params": { "maxMutants": 8, "maxWorkers": 2, "rejectSeverity": "high" }
     },
     "e2e-tester": {
       "title": "E2E-Tester",
