@@ -181,6 +181,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | A worker does not receive its role | `orca-roles-kickoff.log` |
 | A role does not appear even though it is `enabled` | `orca-roles.overrides.json` (saved exceptions); `roles --reset` forgets them |
 | A role does not answer its first message | `orca-roles-kickoff.log` and `orca-roles.models` in the git dir: the kickoff detects a model that does not exist (Claude, Codex, or a custom agent with `modelError`), records `ROLE=FAILED:<model>` and escalates; nothing is switched. Ask the user to fix `roles.<id>.model` themselves or to let you do it (see the planner prompt). A very small pane can hide the error: look at the role's first answer |
+| Which models a role can use | `~/.orca-roles/bin/models.sh <role> --check`: lists the role's candidates (Claude's aliases, `codex debug models`, or `models.list`) and tests each one with a minimal probe (`ok`, `unavailable`, `unknown`) |
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
 | "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |

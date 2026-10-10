@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -2199,6 +2199,195 @@ grep -qF 'modelError' "$ROOT/README.md" || { echo "FAIL README without modelErro
 grep -F 'A role never answers its first message' "$ROOT/README.md" | grep -qF 'model unavailable' || { echo "FAIL README troubleshooting row without the new behaviour"; FAIL=1; }
 grep -F 'does not answer its first message' "$ROOT/plugin/skills/team/SKILL.md" | grep -qF 'modelError' || { echo "FAIL SKILL.md row without modelError"; FAIL=1; }
 echo "ok   model-check docs"
+}
+
+sec_models() {
+# models.sh: fake claude, codex and custom commands on PATH (never the real ones), a fake HOME, a private TMPDIR
+MM="$TMP/models"; rm -rf "$MM"; mkdir -p "$MM/bin" "$MM/tmp"
+cat > "$MM/bin/claude" <<'EOS'
+#!/bin/bash
+m=""; pv=""; for x in "$@"; do [ "$pv" = --model ] && m="$x"; pv="$x"; done
+echo "$FOO" >> "$MM/env.$m"; echo "$*" > "$MM/args.$m"
+b="$(cat "$MM/b.$m" 2>/dev/null || echo ok)"
+case "$b" in
+  ok) echo '{"result":"ok","modelUsage":{"claude-opus-5-5":{"costUSD":0}}}';;
+  okplain) echo '{"result":"ok"}';;
+  404) echo '{"api_error_status":404,"result":"nope"}'; exit 1;;
+  prefix) echo '{"result":"There'"'"'s an issue with the selected model (x). It may not exist."}'; exit 1;;
+  prefix2) echo '{"result":"The model x is not available on your account."}'; exit 1;;
+  nologin) echo '{"result":"Not logged in · Please run /login"}'; exit 1;;
+  text) echo "boom: no network" >&2; exit 1;;
+  long) printf 'x%.0s' $(seq 200) >&2; exit 1;;
+  okgarbage) echo 'not json at all'; exit 0;;
+  tabtext) printf 'a\tb\n' >&2; exit 1;;
+  hang) echo $$ > "$MM/hang.pid"; exec sleep 30;;
+  slow) sleep 2; echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
+esac
+EOS
+cat > "$MM/bin/codex" <<'EOS'
+#!/bin/bash
+if [ "$1 $2" = "debug models" ]; then
+  echo "$FOO" > "$MM/codex.env"
+  [ -f "$MM/codex.hangdm" ] && exec sleep 30
+  [ -f "$MM/codex.dmjson1" ] && { echo "dm: boom" >&2; echo '{"models":[{"slug":"zzz","visibility":"list"}]}'; exit 1; }
+  [ -f "$MM/codex.garbage" ] && { echo "not json"; exit 0; }
+  [ -f "$MM/codex.fail" ] && { echo "kaboom: no login" >&2; echo "second" >&2; exit 1; }
+  echo '{"models":[{"slug":"gpt-b","visibility":"list"},{"slug":"hid","visibility":"hide"},{"slug":"gpt-c","visibility":"list"},{"slug":"gpt-d","visibility":"list"}]}'; exit 0
+fi
+echo "$*" >> "$MM/codex.argv"; echo "Reading additional input from stdin..." >&2
+m=""; pv=""; for x in "$@"; do [ "$pv" = -m ] && m="$x"; pv="$x"; done
+TS="2026-10-10T14:12:33.371163Z ERROR codex_api::endpoint::responses_websocket:"
+U="unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"
+[ -f "$MM/codex.401" ] && { echo "$TS failed to connect" >&2; echo "$TS $U" >&2
+  echo '{"type":"thread.started"}'; echo '{"type":"error","message":"'"$U"'"}'; echo '{"type":"turn.failed","error":{"message":"'"$U"', url: https://api.openai.com/v1/responses"}}'; exit 1; }
+[ -f "$MM/codex.401err" ] && { echo "$TS failed to connect" >&2; echo "$TS $U" >&2; exit 1; }
+[ -f "$MM/codex.layA" ] && { echo "$TS $U" >&2; echo '{"type":"error","message":"EV"}'; echo '{"type":"turn.failed","error":{"message":"TF first"}}'; echo '{"type":"turn.failed","error":{"message":"TF last"}}'; exit 1; }
+[ -f "$MM/codex.layB" ] && { echo "$TS $U" >&2; echo 'not json'; echo '{"type":"error","message":"EV first"}'; echo '{"type":"error","message":"EV last"}'; exit 1; }
+case "$m" in
+  gpt-c) echo '{"type":"error","message":"The model `gpt-c` does not exist or you do not have access to it."}'; exit 1;;
+  gpt-d) echo "stream error: connection reset" >&2; exit 1;;
+  *) echo '{"type":"turn.completed"}';;
+esac
+EOS
+cat > "$MM/bin/probe" <<'EOS'
+#!/bin/bash
+printf '%s\n' "$1" >> "$MM/probed"; case "$1" in *bad*) exit 3;; esac
+EOS
+cat > "$MM/bin/cprobe" <<'EOS'
+#!/bin/bash
+f="$MM/conc/$$"; mkdir -p "$MM/conc"; : > "$f"; ls "$MM/conc" | wc -l | tr -d ' ' >> "$MM/conc.log"; sleep 0.6; rm -f "$f"
+EOS
+chmod +x "$MM/bin"/*; export MM
+seq 1 10 | sed 's/^/c/' > "$MM/ten.txt"; seq 1 40 | sed 's/^/q/' > "$MM/forty.txt"
+printf 'alpha\n  beta  \n\nalpha\n' > "$MM/list.txt"
+printf '%s\n' 'id=r1 x' 'junk' 'id=r2' > "$MM/relist.txt"
+echo '{"data":[{"id":"j1"},{"id":"j2"}]}' > "$MM/list.json"
+printf '%s\n' "it's a \"m\"" 'bad one' > "$MM/odd.txt"
+jq -n --arg mm "$MM" '{defaults:{agent:"claude",env:{FOO:"def",MY_KEY:"fromdef"}}, roles:{
+  cl:{title:"Claude",model:"sonnet",env:{FOO:"role"}}, cl2:{title:"Plain"}, cl4:{model:"my-model"},
+  cx:{agent:"codex",model:"gpt-b"}, cx2:{agent:"codex"},
+  lines:{agent:"custom",model:"alpha",models:{list:("cat "+$mm+"/list.txt"),probe:($mm+"/bin/probe {model}")}},
+  js:{agent:"custom",models:{list:("cat "+$mm+"/list.json"),parse:"json:.data[].id",probe:($mm+"/bin/probe {model}")}},
+  re:{agent:"custom",models:{list:("cat "+$mm+"/relist.txt"),parse:"regex:^id=([a-z0-9]+)"}},
+  odd:{agent:"custom",models:{list:("cat "+$mm+"/odd.txt"),probe:($mm+"/bin/probe {model}")}},
+  envl:{agent:"custom",env:{MY_KEY:"fromrole"},models:{list:"echo $MY_KEY"}}, envd:{agent:"custom",models:{list:"echo $MY_KEY"}},
+  conc:{agent:"custom",models:{list:("cat "+$mm+"/ten.txt"),probe:($mm+"/bin/cprobe")}},
+  fast:{agent:"custom",models:{list:("cat "+$mm+"/forty.txt"),probe:"true"}},
+  hl:{agent:"custom",model:"m3",models:{list:"exec sleep 30"}},
+  pw:{agent:"custom",models:{list:"echo p1",probe:("pwd >> "+$mm+"/pwds")}},
+  nolist:{agent:"custom",model:"m1"}, nolist2:{agent:"custom"}, failist:{agent:"custom",model:"m2",models:{list:"echo oops >&2; exit 4"}}}}' > "$MM/cfg.json"
+ms() { (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" "$KIT/bin/models.sh" "$@" 2>"$MM/err"); }
+mt() { try ms "$@"; }
+tabs() { printf '%s' "$OUT" | tr '\t\n' '|;'; }
+HB="$(find "$TMP/home" | sort | shasum)"
+# claude: listing
+mt cl; check "models: claude lists the role's model first, then the aliases, deduplicated" "$RC:$(tabs)" "0:sonnet;opus;haiku;fable"
+check "models: claude's note is on stderr" "$(cat "$MM/err")" "Claude Code cannot list the models of your login; these are its aliases. Use --check to test them."
+mt cl4; check "models: claude with another model first" "$(tabs)" "my-model;sonnet;opus;haiku;fable"
+mt cl2; check "models: claude without model" "$(tabs)" "sonnet;opus;haiku;fable"
+mt Claude; check "models: the role is found by title" "$(tabs)" "sonnet;opus;haiku;fable"
+mt -h; check "models: -h prints the header" "$RC:$(printf '%s\n' "$OUT" | head -1 | cut -c1-20)" "0:# Lists the models a"
+mt; check "models: no role -> exit 1" "$RC" "1"
+mt nosuch; check "models: unknown role -> exit 1 and message" "$RC:$(cat "$MM/err")" "1:Unknown role: nosuch"
+check "models: nothing was probed without --check" "$(ls "$MM"/env.* 2>/dev/null | wc -l | tr -d ' ')" "0"
+# claude: --check
+echo 404 > "$MM/b.opus"; echo prefix > "$MM/b.haiku"; echo prefix2 > "$MM/b.fable"
+mt cl --check; check "models: --check classifies ok, 404, and the two result prefixes" "$RC:$(tabs)" "0:sonnet|ok|claude-opus-5-5;opus|unavailable;haiku|unavailable;fable|unavailable"
+echo okplain > "$MM/b.sonnet"; echo nologin > "$MM/b.opus"; echo text > "$MM/b.haiku"; echo ok > "$MM/b.fable"
+mt cl --check; check "models: ok without modelUsage, not logged in and non-JSON are unknown" "$(tabs)" "sonnet|ok|-;opus|unknown|Not logged in · Please run /login;haiku|unknown|boom: no network;fable|ok|claude-opus-5-5"
+check "models: the role's env reaches the probe (role wins over defaults)" "$(tail -1 "$MM/env.sonnet")" "role"
+mt cl2 --check; check "models: defaults.env reaches the probe of a role without its own" "$(tail -1 "$MM/env.fable")" "def"
+check "models: the probe flags" "$(cat "$MM/args.fable")" '-p --safe-mode --setting-sources local --no-session-persistence --tools  --system-prompt Reply ok. --model fable --output-format json ok'
+# timeout and parallelism
+for m in sonnet opus haiku fable; do rm -f "$MM/b.$m"; done; echo hang > "$MM/b.haiku"
+t0=$SECONDS; ORCA_ROLES_PROBE_TIMEOUT=1 mt cl2 --check
+check "models: a hung probe is killed and reported" "$(tabs)" "sonnet|ok|claude-opus-5-5;opus|ok|claude-opus-5-5;haiku|unknown|timed out;fable|ok|claude-opus-5-5"
+check "models: the hung probe did not hold the others up" "$(( SECONDS - t0 < 5 ))" "1"
+check "models: the hung probe's process is gone after the timeout" "$(kill -0 "$(cat "$MM/hang.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
+rm -f "$MM/hang.pid"; echo hang > "$MM/b.haiku"
+set -m; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" exec "$KIT/bin/models.sh" cl2 --check > /dev/null 2>&1) & MP=$!; set +m
+for _ in $(seq 1 50); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
+HP="$(cat "$MM/hang.pid" 2>/dev/null)"; kill -INT "$MP" 2>/dev/null; wait "$MP" 2>/dev/null || true; sleep 0.3
+check "models: SIGINT while a probe hangs kills the probe and removes the temp dir" "$(kill -0 "${HP:-0}" 2>/dev/null && echo alive || echo gone):$([ -n "$HP" ] && echo started):$(ls -A "$MM/tmp" | wc -l | tr -d ' ')" "gone:started:0"
+rm -f "$MM/hang.pid"
+set -m; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" exec "$KIT/bin/models.sh" cl2 --check > /dev/null 2>&1) & MP=$!; set +m
+for _ in $(seq 1 50); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
+HP="$(cat "$MM/hang.pid" 2>/dev/null)"; kill -TERM "$MP" 2>/dev/null; MRC=0; wait "$MP" 2>/dev/null || MRC=$?; sleep 0.3
+check "models: SIGTERM while a probe hangs kills the probe, removes the temp dir and exits 130" "$(kill -0 "${HP:-0}" 2>/dev/null && echo alive || echo gone):$([ -n "$HP" ] && echo started):$(ls -A "$MM/tmp" | wc -l | tr -d ' '):$MRC" "gone:started:0:130"
+echo slow > "$MM/b.sonnet"; echo slow > "$MM/b.opus"; echo slow > "$MM/b.haiku"
+t0=$SECONDS; mt cl2 --check
+check "models: three probes of 2 s run in parallel" "$(( SECONDS - t0 < 5 ))" "1"
+check "models: the slow probes answered" "$(tabs)" "sonnet|ok|claude-x;opus|ok|claude-x;haiku|ok|claude-x;fable|ok|claude-opus-5-5"
+echo long > "$MM/b.sonnet"; mt cl2 --check; check "models: an unknown reason is cut to 80 characters" "$(tabs | cut -d';' -f1 | awk -F'|' '{print $2 ":" length($3)}')" "unknown:80"
+for m in sonnet opus haiku; do rm -f "$MM/b.$m"; done
+for m in sonnet opus haiku fable; do rm -f "$MM/b.$m"; done
+# codex
+mt cx; check "models: codex lists its model, then the listed ones" "$RC:$(tabs)" "0:gpt-b;gpt-c;gpt-d"
+touch "$MM/codex.fail"; mt cx; check "models: codex debug models failure -> role's model only" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models failed: kaboom: no login"
+mt cx2; check "models: codex failure without a model -> empty" "$RC:$(tabs)" "0:"
+rm -f "$MM/codex.fail"
+mt cx --check; check "models: codex --check: ok, unavailable, unknown" "$(tabs)" "gpt-b|ok|-;gpt-c|unavailable;gpt-d|unknown|stream error: connection reset"
+# custom
+check "models: every codex probe got --ephemeral and --skip-git-repo-check" "$(wc -l < "$MM/codex.argv" | tr -d ' '):$(grep -c -e '--ephemeral' "$MM/codex.argv" | tr -d ' '):$(grep -c -e '--skip-git-repo-check' "$MM/codex.argv" | tr -d ' ')" "3:3:3"
+touch "$MM/codex.401"; mt cx --check; check "models: codex 401 reason is the turn.failed message, not the log line" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | cut -c1-34 | sort -u)" "unexpected status 401 Unauthorized"
+check "models: codex 401 reason is cut to 80 characters" "$(tabs | tr ';' '\n' | head -1 | cut -d'|' -f3 | wc -c | tr -d ' ')" "81"
+rm -f "$MM/codex.401"; touch "$MM/codex.401err"; mt cx --check; check "models: codex 401 with only the timestamped stderr line drops the log prefix" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | cut -c1-17 | sort -u)" "unexpected status"
+rm -f "$MM/codex.401err"; touch "$MM/codex.layA"; mt cx --check; check "models: codex reason prefers the last turn.failed message over an error event and the log line" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | sort -u)" "TF last"
+rm -f "$MM/codex.layA"; touch "$MM/codex.layB"; mt cx --check; check "models: codex reason falls back to the last error event, skipping non-JSON lines, before the log line" "$(tabs | tr ';' '\n' | cut -d'|' -f3 | sort -u)" "EV last"
+rm -f "$MM/codex.layB"; touch "$MM/codex.dmjson1"; mt cx; check "models: codex debug models exiting 1 with valid JSON -> note and the role's model only" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models failed: dm: boom"
+rm -f "$MM/codex.dmjson1"
+rm -f "$MM/codex.401"
+touch "$MM/codex.hangdm"; ORCA_ROLES_PROBE_TIMEOUT=2 mt cx; check "models: a hung codex debug models ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models timed out after 2 s"
+rm -f "$MM/codex.hangdm"
+ORCA_ROLES_PROBE_TIMEOUT=2 mt hl; check "models: a hung models.list ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:m3:models.list timed out after 2 s"
+rm -rf "$MM/conc" "$MM/conc.log"; mt conc --check
+check "models: 10 probes all answered" "$(tabs | tr ';' '\n' | grep -c '|ok|-')" "10"
+check "models: never more than 6 probes run at once, and they did overlap" "$(sort -n "$MM/conc.log" | tail -1):$(wc -l < "$MM/conc.log" | tr -d ' ')" "6:10"
+ORCA_ROLES_PROBE_TIMEOUT=7357 mt fast --check; sleep 0.3
+check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f 'sleep 7357' | wc -l | tr -d ' ')" "40:0"
+mt lines; check "models: custom lines parser trims, skips empty lines and deduplicates" "$(tabs)" "alpha;beta"
+mt js; check "models: custom json parser" "$(tabs)" "j1;j2"
+mt re; check "models: custom regex parser" "$(tabs)" "r1;r2"
+mt envl; check "models: the custom list command sees the role's env" "$(tabs)" "fromrole"
+mt envd; check "models: the custom list command sees defaults.env when the role has none" "$(tabs)" "fromdef"
+mt cx; check "models: codex debug models sees the role's env" "$(cat "$MM/codex.env")" "def"
+mt nolist; check "models: custom without list -> role's model, note, exit 0" "$RC:$(tabs):$(cat "$MM/err")" "0:m1:nolist has no models.list in its configuration"
+mt nolist2; check "models: custom without list or model -> empty" "$RC:$(tabs):$(cat "$MM/err")" "0::nolist2 has no models.list in its configuration"
+mt failist; check "models: a failing list command -> role's model and a note" "$RC:$(tabs):$(cat "$MM/err")" "0:m2:models.list failed: oops"
+rm -f "$MM/probed"; mt lines --check; check "models: custom probe ok" "$(tabs)" "alpha|ok|-;beta|ok|-"
+check "models: probe got each model" "$(sort "$MM/probed" | tr '\n' ' ')" "alpha beta "
+rm -f "$MM/probed"; mt odd --check; check "models: a model with a space and a quote is quoted for the probe" "$(tabs)" "it's a \"m\"|ok|-;bad one|unavailable"
+check "models: the probe received each as one argument" "$(sort "$MM/probed" | tr '\n' '/')" "bad one/it's a \"m\"/"
+mt re --check; check "models: custom without probe -> unknown" "$(tabs)" "r1|unknown|no models.probe;r2|unknown|no models.probe"
+mt PLAIN; check "models: the role is found by title in any letter case" "$RC:$(tabs)" "0:sonnet;opus;haiku;fable"
+mt cLaUdE; check "models: the title match ignores case on the other side too" "$RC:$(tabs)" "0:sonnet;opus;haiku;fable"
+jq -n '{defaults:{agent:"custom",models:{list:"echo dlist",probe:"echo dprobe"}}, roles:{inh:{}, own:{models:{list:"echo rlist"}}, probeonly:{models:{probe:"true"}}}}' > "$MM/cfg2.json"
+ms2() { (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg2.json" TMPDIR="$MM/tmp" "$KIT/bin/models.sh" "$@" 2>"$MM/err"); }
+try ms2 inh; A="$OUT"; try ms2 own; B="$OUT"; try ms2 probeonly; C="$OUT"
+check "models: defaults.models is used by a role without its own, the role's key wins, keys merge" "$A:$B:$C" "dlist:rlist:dlist"
+rm -f "$MM/pwds"; mt pw --check; mt pw --check  # two runs, one probe each
+check "models: probes run in their own folder under the temp dir, not in the caller's" "$(grep -c '/orca-models\.[^/]*/wd\.[0-9]*$' "$MM/pwds"):$(grep -c "^$PROJ\$" "$MM/pwds")" "2:0"
+NRC=0; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" env -u ORCA_ROLES_CONFIG TMPDIR="$MM/tmp" "$KIT/bin/models.sh" dev > "$MM/nocfg.out" 2> "$MM/err") || NRC=$?
+check "models: without ORCA_ROLES_CONFIG or a saved config it resolves the role from the merged config" "$NRC:$(grep -c . "$MM/nocfg.out" | tr -d ' ' | sed 's/^[1-9][0-9]*$/some/')" "0:some"
+echo okgarbage > "$MM/b.sonnet"; echo tabtext > "$MM/b.opus"; mt cl2 --check
+check "models: exit 0 with non-JSON output is ok with -, and a tab in a reason becomes a space" "$(tabs | cut -d';' -f1,2)" "sonnet|ok|-;opus|unknown|a b"
+for m in sonnet opus; do rm -f "$MM/b.$m"; done
+touch "$MM/codex.garbage"; mt cx; check "models: codex debug models exiting 0 with non-JSON -> role's model and a note" "$RC:$(tabs):$(cat "$MM/err" | cut -c1-30)" "0:gpt-b:codex debug models failed: "
+rm -f "$MM/codex.garbage"
+# nothing written outside the temp dir, which is gone
+check "models: nothing written outside the temp dir" "$(find "$TMP/home" | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed):$(ls -A "$MM/tmp" | wc -l | tr -d ' ')" "same:0"
+# check_config
+mcc() { echo "$1" > "$MM/cc.json"; check_config "$MM/cc.json"; }
+MERR="ERROR: invalid configuration: models must be {list, parse, probe} (see README)"
+for bad in '"x"' '[]' '{"list":false}' '{"probe":5}' '{"probe":false}' '{"probes":"x"}' '{"list":""}' '{"list":5}' '{"probe":""}' '{"probe":[1]}' '{"parse":"xml"}' '{"parse":"json:"}' '{"parse":"regex:"}' '{"parse":""}' '{"parse":5}' 'null'; do
+  check "models: check_config rejects role models $bad" "$(mcc "$(jq -nc --argjson m "$bad" '{roles:{dev:{models:$m}}}')")" "$MERR"
+done
+check "models: check_config rejects defaults models" "$(mcc "$(jq -nc '{defaults:{models:"x"},roles:{}}')")" "$MERR"
+for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":"lines"}' '{"parse":"regex:(.*)"}' '{"list":"a"}'; do
+  check "models: check_config accepts $good" "$(mcc "$(jq -nc --argjson m "$good" '{defaults:{models:$m},roles:{dev:{models:$m}}}')")" ""
+done
+check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <role> --check')" "1"
+unset MM
 }
 
 sec_cli() {

@@ -168,6 +168,13 @@ check_config() {
     | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: modelError must be a non-empty string"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("models")) | .models
+      | select((type != "object") or ((keys - ["list", "parse", "probe"]) | length > 0)
+        or (has("list") and ((.list | type) != "string" or .list == "")) or (has("probe") and ((.probe | type) != "string" or .probe == ""))
+        or (has("parse") and ((.parse | type) != "string" or (.parse != "lines" and (.parse | test("^(json|regex):.+") | not)))))]
+    | if length > 0 then "ERROR: invalid configuration: models must be {list, parse, probe} (see README)" else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: models must be {list, parse, probe} (see README)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
   out="$(jq -r --slurpfile o "$2" --arg m "$m" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
@@ -186,6 +193,8 @@ apply_overrides() {
     | reduce $o.set[] as $s (.; setpath($s.path; $s.value))
     | if ($o.mode // null) != null then .settings.mode = $o.mode else . end' "$1"
 }
+# The role's environment variables (defaults.env + roles.<role>.env) as KEY=VALUE lines.  role_env <config> <role>
+role_env() { jq -r --arg r "$2" '((.defaults.env // {}) * (.roles[$r].env // {})) | to_entries[] | "\(.key)=\(.value)"' "$1"; }
 # Escapes a text to use it literally inside a regular expression
 regex_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|\\]/\\&/g'; }
 # The worktree's Jira key.  jira_key <branch> <Orca's jiraIdentifier> <ticket url>
