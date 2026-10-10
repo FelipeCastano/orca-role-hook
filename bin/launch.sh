@@ -194,6 +194,7 @@ done
 
 : > "$STATE"; : > "$PTY"
 for id in $ROLES; do v="$(var_of "$id")"; echo "$v=${!v}" >> "$STATE"; echo "$v=$(pty_of_handle "${!v}")" >> "$PTY"; done
+"$KIT/bin/orca-yaml.sh" --check || true
 cat "$STATE"
 
 if [ -z "$NEW" ]; then echo "All roles are already open."; exit 0; fi

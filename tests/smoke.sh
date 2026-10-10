@@ -763,6 +763,66 @@ check "roles-yaml local-only + kit + our orca.yaml: not needed, no TWICE" "$RC:$
 
 # roles-yaml: the error text does not say that saving a script sets local-only
 yfor local-only "npm i"; check "roles-yaml error text: no claim that saving sets local-only" "$([[ "$OUT" == *"Saving anything"* || "$OUT" == *"sets the source to local-only"* ]] && echo claim || echo none)" "none"
+
+# roles-yaml --check: read-only, silent when Orca cannot be asked, one WARNING line otherwise
+KIT_Y="scripts:"$'\n'"  setup: |"$'\n'"    \$HOME/.orca-roles/bin/launch.sh"$'\n'
+ychk() { yreset; hsjson "$1" "$2" "${3:-}" > "$YP"; [ -z "${4:-}" ] || printf '%s' "$4" > "$Y2/orca.yaml"; [ -z "${5:-}" ] || { printf '%s\n' "$5" > "$Y2/.worktreeinclude"; echo orca.yaml > "$Y2/.git/info/exclude"; }; yrun --check; }
+W_PRE="WARNING: new worktrees of this project will not start the kit: "
+W_LOCAL="${W_PRE}Orca's setup source is local-only and the local setup script does not run launch.sh. Put \$HOME/.orca-roles/bin/launch.sh as the first line of that script (Settings → Repository → ypol → Setup script), or switch the setup source to \"run both\" and run roles-yaml."
+W_SHARED="${W_PRE}Orca's setup source is shared-only and no orca.yaml that reaches new worktrees runs launch.sh. Run roles-yaml, or add \$HOME/.orca-roles/bin/launch.sh to the committed orca.yaml's setup script."
+W_BOTH0="${W_PRE}neither the local setup script nor an orca.yaml that reaches new worktrees runs launch.sh. Run roles-yaml, or put \$HOME/.orca-roles/bin/launch.sh in the local setup script (Settings → Repository → ypol → Setup script)."
+W_TWICE="WARNING: new worktrees of this project start the kit twice: both the local setup script and orca.yaml run launch.sh. Fix it with roles-yaml --remove, or drop launch.sh from the local setup script."
+W_ASK="WARNING: this project's setup policy is 'ask': Orca asks each time, and 'orca worktree create' needs '--setup run'. The kit does not start by itself."
+W_SKIP="WARNING: this project's setup policy is 'skip-by-default': setup does not run automatically, so the kit will not start by itself."
+ychk local-only "$KITL"; check "roles-yaml --check: local-only with the kit is silent" "$RC:$OUT" "0:"
+ychk shared-only "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: shared-only, orca.yaml listed in .worktreeinclude is silent" "$RC:$OUT" "0:"
+ychk run-both "$KITL"; check "roles-yaml --check: run-both with only the local script is silent" "$RC:$OUT" "0:"
+ychk run-both "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: run-both with only orca.yaml is silent" "$RC:$OUT" "0:"
+yreset; try env -u ORCA_CLI_COMMAND PATH=/usr/bin:/bin bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" --check 2>&1' "$Y2" "$ROOT"
+if ! PATH=/usr/bin:/bin command -v orca >/dev/null 2>&1; then check "roles-yaml --check: Orca CLI missing is silent" "$RC:$OUT" "0:"; fi
+yreset; printf '%s' "$NOTRUN" > "$YP"; FAKE_PATH_RC=1 yrun --check; check "roles-yaml --check: Orca not running is silent" "$RC:$OUT" "0:"
+ychk local-only "npm i"; check "roles-yaml --check: local-only without the kit warns" "$RC:$OUT" "0:$W_LOCAL"
+ychk shared-only "npm i"; check "roles-yaml --check: shared-only without orca.yaml warns" "$RC:$OUT" "0:$W_SHARED"
+ychk shared-only "npm i" "" "$KIT_Y"; check "roles-yaml --check: shared-only, orca.yaml neither tracked nor included warns" "$RC:$OUT" "0:$W_SHARED"
+ychk shared-only "npm i" "" "# \$HOME/.orca-roles/bin/launch.sh"$'\n' orca.yaml; check "roles-yaml --check: shared-only, commented launch.sh warns" "$RC:$OUT" "0:$W_SHARED"
+ychk run-both "npm i"; check "roles-yaml --check: run-both with neither warns" "$RC:$OUT" "0:$W_BOTH0"
+ychk run-both "$KITL" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: run-both with both warns about twice" "$RC:$OUT" "0:$W_TWICE"
+ychk local-only "$KITL" ask; check "roles-yaml --check: ask message" "$RC:$OUT" "0:$W_ASK"
+ychk local-only "$KITL" skip-by-default; check "roles-yaml --check: skip-by-default message" "$RC:$OUT" "0:$W_SKIP"
+ychk shared-only "npm i" ask "$KIT_Y" orca.yaml; check "roles-yaml --check: ask with a working orca.yaml" "$RC:$OUT" "0:$W_ASK"
+ychk shared-only "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: listed and ignored orca.yaml is silent" "$RC:$OUT" "0:"
+yreset; hsjson shared-only "npm i" > "$YP"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"; printf 'orca.yaml\n' > "$Y2/.worktreeinclude"; yrun --check
+check "roles-yaml --check: listed but not ignored orca.yaml warns" "$RC:$OUT" "0:$W_SHARED"
+rm -f "$Y2/.worktreeinclude"
+for l in 'setup: npm i # $HOME/.orca-roles/bin/launch.sh' 'setup: |\n    echo run $HOME/.orca-roles/bin/launch.sh later'; do
+  yreset; hsjson shared-only "npm i" > "$YP"; printf 'scripts:\n  %b\n' "$l" > "$Y2/orca.yaml"; git -C "$Y2" add -f orca.yaml; yrun --check
+  check "roles-yaml --check: tracked orca.yaml with launch.sh only in a comment/echo warns ($l)" "$RC:$OUT" "0:$W_SHARED"
+  git -C "$Y2" rm -q -f --cached orca.yaml
+done
+yreset; hsjson shared-only "npm i" > "$YP"; printf 'scripts:\n  setup: npm i && $HOME/.orca-roles/bin/launch.sh\n' > "$Y2/orca.yaml"; git -C "$Y2" add -f orca.yaml; yrun --check
+check "roles-yaml --check: tracked orca.yaml with a chained launch.sh is silent" "$RC:$OUT" "0:"; git -C "$Y2" rm -q -f --cached orca.yaml
+# --check outside a plain checkout (submodule, separate git dir) is silent and exits 0
+SUBS="$TMP/ysubs"; mkdir -p "$SUBS/inner" "$SUBS/super"; git -C "$SUBS/inner" init -q; git -C "$SUBS/inner" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i
+git -C "$SUBS/super" init -q; git -C "$SUBS/super" -c protocol.file.allow=always submodule add -q "$SUBS/inner" s 2>/dev/null
+git init -q --separate-git-dir "$SUBS/sep.git" "$SUBS/sep" 2>/dev/null
+for d in "$SUBS/super/s" "$SUBS/sep"; do
+  try env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" --check 2>&1' "$d" "$ROOT"
+  check "roles-yaml --check: silent and rc 0 in $(basename "$d")" "$RC:$OUT" "0:"
+done
+yreset; hsjson shared-only "x" > "$YP"; printf 'x\n' > "$Y2/.worktreeinclude"; printf 'foo\n' > "$Y2/.git/info/exclude"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"
+S3="$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/orca.yaml" "$Y2/.worktreeinclude" "$Y2/.git/info/exclude")"
+yrun --check; check "roles-yaml --check never writes" "$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/orca.yaml" "$Y2/.worktreeinclude" "$Y2/.git/info/exclude")" "$S3"
+yreset; hsjson local-only "npm i" > "$YP"; yrun --check; check "roles-yaml --check creates nothing" "$(LC_ALL=C ls -A "$Y2" | tr '\n' ' ')" ".git "
+yreset; hsjson shared-only "npm i" > "$YP"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"; git -C "$Y2" add orca.yaml; git -C "$Y2" -c user.name=t -c user.email=t@t commit -q -m yaml
+yrun --check; check "roles-yaml --check: shared-only, tracked orca.yaml with launch.sh is silent" "$RC:$OUT" "0:"
+git -C "$Y2" rm -q -f orca.yaml; git -C "$Y2" -c user.name=t -c user.email=t@t commit -q -m rm-yaml
+ychk MISSING "npm i"; check "roles-yaml --check: no source chosen with a local script is local-only and warns" "$RC:$OUT" "0:$W_LOCAL"
+yreset; printf '{"ok":false,"error":{"code":"not_found"}}' > "$YP"; yrun --check; check "roles-yaml --check: project not registered is silent" "$RC:$OUT" "0:"
+yreset; hsjson local-only "npm i" > "$YP"
+check "roles-yaml --check: the warning goes to stderr, not stdout" "$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" "$ROOT/bin/orca-yaml.sh" --check 2>&1 >/dev/null):$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" "$ROOT/bin/orca-yaml.sh" --check 2>/dev/null | wc -c | tr -d ' ')" "$W_LOCAL:0"
+try yaml "$TMP/ywt" --help; check "roles-yaml --help lists --check" "$RC:$(printf '%s\n' "$OUT" | grep -c -e '--check'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "0:1:6"
+yreset; printf 'garbage' > "$YP"; yrun --check; check "roles-yaml --check: unexpected output is silent" "$RC:$OUT" "0:"
+mkdir -p "$TMP/ynogit"; try env PATH="$FB:/usr/bin:/bin" bash -c 'cd "$0" && GIT_CEILING_DIRECTORIES="$0/.." "$1/bin/orca-yaml.sh" --check 2>&1' "$TMP/ynogit" "$ROOT"; check "roles-yaml --check: outside a git repo is silent" "$RC:$OUT" "0:"
 }
 
 sec_launch_overrides() {
@@ -806,6 +866,27 @@ try launch --only dev; check "launch: --only" "$RC:$(handles)" "0:PLANNER DEV "
 check "launch.sh leaves pre-seeded scratch content intact" "$(for r in planner dev deployer; do d="$(cd "$L" && KIT="$TMP/home/.orca-roles" scratch_dir $r)"; [ -f "$d/f" ] && [ -f "$d/sub/g" ] && [ -f "$d/.hidden" ] && printf y || printf n; done)" "yyy"
 try launch --enable nobody; check "launch: unknown role fails" "$RC" "1"
 check "launch: an error does not overwrite the saved exceptions" "$(jq -c .only "$L/.git/orca-roles.overrides.json")" '["dev"]'
+# launch.sh warns when new worktrees would not start the kit, and a failing check never changes its outcome
+mkdir -p "$TMP/lbin2"; cat > "$TMP/lbin2/orca" <<'EOS'
+#!/bin/sh
+case "$1 $2" in
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal show") [ -n "$FAKE_SHOW" ] && echo "$FAKE_SHOW" && exit 0; exit 1;;
+  "repo show") cat "$FAKE_REPO" 2>/dev/null;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/lbin2/orca"
+launch2() { (cd "$L" && HOME="$TMP/home" PATH="$TMP/lbin2:$PATH" FAKE_REPO="$TMP/l2.json" FAKE_SHOW="${FAKE_SHOW:-}" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$TMP/l2.json"
+try launch2 --reset; check "launch: warns when new worktrees would not start the kit, exits 0, team saved" "$RC:$(printf '%s\n' "$OUT" | grep -c 'WARNING: new worktrees of this project will not start the kit: Orca.s setup source is local-only'):$(handles)" "0:1:PLANNER DEV DEPLOYER "
+printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"$HOME/.orca-roles/bin/launch.sh"}}}}}' > "$TMP/l2.json"
+try launch2 --reset; check "launch: no warning when the kit starts" "$RC:$(printf '%s\n' "$OUT" | grep -c 'WARNING')" "0:0"
+printf 'garbage' > "$TMP/l2.json"
+try launch2 --reset; check "launch: a failing check does not change the outcome" "$RC:$(printf '%s\n' "$OUT" | grep -c 'WARNING'):$(handles)" "0:0:PLANNER DEV DEPLOYER "
+printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$TMP/l2.json"
+try launch2 --reset; check "launch: the warning comes after the team is saved and before it is printed" "$RC:$(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1):$(printf '%s\n' "$OUT" | grep -n '^PLANNER=' | cut -d: -f1 | head -1)" "0:$(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1):$(( $(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1) + 1 ))"
+FAKE_SHOW='{"result":{"terminal":{"agentIdentity":"claude"}}}' try launch2; check "launch: the warning also shows when every role is already open" "$RC:$(printf '%s\n' "$OUT" | grep -c 'All roles are already open'):$(printf '%s\n' "$OUT" | grep -c 'WARNING: new worktrees of this project will not start the kit')" "0:1:1"
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
 }
 

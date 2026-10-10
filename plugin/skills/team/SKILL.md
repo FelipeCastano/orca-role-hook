@@ -177,7 +177,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | Symptom | Where to look |
 |---|---|
 | The tabs do not open | `orca-roles-launch.log` in the worktree's git dir; the project's setup script |
-| `launch.sh` does not run in new worktrees | `orca repo show --repo path:<main checkout root> --json \| jq .result.repo.hookSettings`: `commandSourcePolicy` local-only (or absent with a local script) ignores `orca.yaml`; `setupRunPolicy` other than run-by-default does not run setup. Fix in Settings → Repository → Setup script |
+| `launch.sh` does not run in new worktrees | `orca repo show --repo path:<main checkout root> --json \| jq .result.repo.hookSettings`: `commandSourcePolicy` local-only (or absent with a local script) ignores `orca.yaml`; `setupRunPolicy` other than run-by-default does not run setup. Fix in Settings → Repository → Setup script. `roles` repeats this check and warns when new worktrees would not start the kit; `roles-yaml --check` runs only the check |
 | A worker does not receive its role | `orca-roles-kickoff.log` |
 | A role does not appear even though it is `enabled` | `orca-roles.overrides.json` (saved exceptions); `roles --reset` forgets them |
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
