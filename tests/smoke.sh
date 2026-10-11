@@ -122,6 +122,60 @@ for p in common-workers planner; do grep -q 'No names of people anywhere you wri
 grep -q 'No new code comments unless the repo' "$ROOT/prompts/programmer/common-workers.md" || { echo "FAIL common-workers.md: missing the comments rule"; FAIL=1; }
 grep -q 'Names and stray comments' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md: missing the names/comments finding"; FAIL=1; }
 echo "ok   rules: no names of people, comments only if the repo uses them, auditor finding"
+# pr-reviewer mode prompts: each pin is anchored to its section
+PRD="$ROOT/prompts/pr-reviewer"
+for f in planner common-workers lens-reviewer auditor; do [ -f "$PRD/$f.md" ] || { echo "FAIL prompts/pr-reviewer/$f.md missing"; FAIL=1; }; done
+prsec() { awk -v t="## $2" '$0 == t {f=1; next} /^## /{f=0} f' "$PRD/$1.md"; }   # prsec <file> <section title>
+prpin() { local d="$1" f="$2" sec="$3" pat="$4"; prsec "$f" "$sec" | grep -qE -- "$pat" || { echo "FAIL pr-reviewer $f.md, section '$sec': $d"; FAIL=1; }; }
+for sec in "When you start (before talking to the user)" "Resuming a workspace after a restart" "Coming back with your memory" "After your conversation was cleared" "The review skill" "The team" "Reviewing a PR" "Common mechanics for any task" "Limits" "Cleaning the workers' context"; do
+  [ -n "$(prsec planner "$sec")" ] || { echo "FAIL pr-reviewer planner.md: missing section '$sec'"; FAIL=1; }
+done
+prpin "runs review-skill.sh status at start" planner "The review skill" 'review-skill\.sh status'
+prpin "installs only on the user's yes" planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
+prpin "gets SKILL.md with review-skill.sh path" planner "The review skill" 'review-skill\.sh path'
+prpin "a disabled skill is enabled by the user, not by the Planner" planner "The review skill" 'Do not enable it yourself without their yes'
+prpin "reviewers are dispatched with orca orchestration, never own subagents" planner "The review skill" 'never with your own subagents'
+prpin "lens roles are created with new-role --from-json" planner "The team" 'new-role\.sh --from-json'
+prpin "lens roles have modes pr-reviewer" planner "The team" '"modes": "pr-reviewer"'
+prpin "lens roles get extraDirs from review-skill.sh root" planner "The team" '"extraDirs": \["<output of ~/.orca-roles/bin/review-skill\.sh root>"\]'
+prpin "the lens role prompt carries no absolute path and credits lens-review" planner "The team" 'without copying it; each brief gives you the current paths'
+prpin "stale lens roles are compared with review-skill.sh root" planner "The team" 'compare each one.s `extraDirs` with the output of `review-skill\.sh root`'
+prpin "stale lens roles are re-created with overwrite, on the user's yes" planner "The team" '"overwrite": true., only on their yes'
+prpin "re-creation keeps every other field of the current entry" planner "The team" 'starts from the role.s current entry in the user.s configuration.*read with .jq. from .~/\.orca-roles/config\.json.*changes only .extraDirs.*and the prompt; nothing else the user set is dropped'
+prpin "the credit sentence at the start of each review" planner "Reviewing a PR" 'This review follows lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include it: it is installed from its repository \(with your yes when the kit installs it\) and reads it now'
+prpin "briefs carry the current paths of SKILL.md and the lens files" planner "Reviewing a PR" 'current absolute paths of SKILL\.md from `review-skill\.sh path` and of the role.s lens file'
+prpin "validation follows the skill's tier rules and uncertain verdicts" planner "Reviewing a PR" 'the skill says to validate for the tier.*An uncertain verdict is handled as the skill.s validation prompt says'
+prpin "the report ends with the credit line" planner "Reviewing a PR" 'Review method: lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include or copy it: it installs it from its repository and runs it; the method and its lenses belong to that project'
+prpin "what is posted carries the credit line" planner "Reviewing a PR" 'Whatever you post carries the same "Review method: \.\.\." line'
+prpin "the skill is installed from its repository, not copied" planner "The review skill" 'does not include or copy it, it installs it from its own repository'
+prpin "validation subject has the uncertain verdict" lens-reviewer "Report" 'VALIDATION: confirmed\|refuted\|uncertain'
+prpin "findings follow the skill's own format" lens-reviewer "When you receive a task" "skill's own finding format and rules"
+prpin "the auditor caps workers at maxWorkers" auditor "Limits" 'at `maxWorkers` parallel workers'
+prpin "the auditor reads maxWorkers (default 2)" auditor "Parameters" 'maxWorkers.: 2'
+grep -qF 'The pr-reviewer mode follows lens-review (https://github.com/romerox3/lens-review), a Claude Code plugin skill for multi-agent code review. orca-roles does not include or copy it: on the first start of the mode the Planner installs the plugin from its own repository, with your yes, and reads it at run time to set up the reviewer roles and run each review. The review method and its lenses belong to that project, and every report credits it.' "$ROOT/README.md" || { echo "FAIL README.md: lost the lens-review credit paragraph"; FAIL=1; }
+grep -qF '`review-skill.sh root`' "$ROOT/README.md" && grep -qF 'needs `addDirFlag`' "$ROOT/README.md" || { echo "FAIL README.md: First start lost the root folder or the addDirFlag note"; FAIL=1; }
+grep -qF 'https://github.com/romerox3/lens-review' "$ROOT/plugin/skills/team/SKILL.md" || { echo "FAIL team SKILL.md: pr-reviewer paragraph lost the lens-review credit"; FAIL=1; }
+prpin "lens roles are created on the user's yes" planner "The team" 'On their yes, create each'
+prpin "the lens role prompt points to lens-reviewer.md" planner "The team" 'prompts/pr-reviewer/lens-reviewer\.md'
+prpin "dispatch with orca orchestration task-create / worker-start" planner "Reviewing a PR" 'task-create .*worker-start'
+prpin "validation by a different lens role" planner "Reviewing a PR" 'different lens role than the one that reported it'
+prpin "never approve, request changes or merge" planner "Reviewing a PR" 'Never approve, request changes or merge'
+prpin "posts only with the user's explicit yes to that exact text" planner "Reviewing a PR" 'only with the user.s explicit yes to that exact text'
+prpin "the Auditor only if the user asks" planner "Reviewing a PR" 'Only if the user asks'
+prpin "no commits in this mode" planner "Reviewing a PR" 'No commits, no pushes, no code changes in this mode'
+prpin "no commits in this mode (limits)" planner "Limits" 'No commits, no pushes, no code changes in this mode'
+prpin "nothing leaves the worktree without the user's yes" planner "Limits" 'Nothing leaves the worktree without the user.s explicit yes'
+prpin "the convention check before any PR comment" planner "Limits" 'follows the repository.s own conventions'
+prpin "the worktree is read-only" common-workers "Limits" 'The worktree is read-only'
+prpin "never posts to GitHub or any external system" common-workers "Limits" 'Never post to GitHub'
+prpin "no heartbeats" common-workers "Communication" 'No heartbeats'
+prpin "reads SKILL.md and its lens entirely" lens-reviewer "When you receive a task" 'Read SKILL\.md and your lens file\(s\) entirely'
+prpin "validation: refuted by default" lens-reviewer "When you receive a task" 'verdict is refuted by default'
+prpin "read-only, no running the project's code" lens-reviewer "Limits" 'The worktree is read-only'
+prpin "reproduces in a copy of the worktree" auditor "When you receive a task" 'rsync -a --delete --exclude \.git'
+prpin "never experiments in the worktree" auditor "When you receive a task" 'never experiment in the worktree'
+prpin "no mutation testing in this mode" auditor "Limits" 'No mutation testing in this mode'
+echo "ok   pr-reviewer prompts: pins"
 for p in common-workers planner; do
   r=$(grep 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" || true)
   for k in 'Handles (`@user`) and email addresses count as names' '"the repo owner"' 'not `<name>_test_user`' 'not "as <name> asked"' 'Names of products, libraries, companies and services'; do
@@ -1067,7 +1121,7 @@ for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr
   check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-writer)"
 done
 check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
-check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner") | .value.modes] | unique)]' "$PKC")" '["programmer","all",[["programmer"]]]'
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor") | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
 check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "planner researcher dev tester auditor e2e-tester deployer "
 
 # roles and prompts per mode (library level)
@@ -1280,6 +1334,20 @@ rm -f "$MG/orca-roles.env"; upgrade_config "$PKC" "$TMP/m-legacy.json" > "$MC"
 try ml --reset; check "legacy config after upgrade_config: the same programmer team" "$RC:$(mh):$(mmode)" "0:$SAME:programmer"
 sleep 1
 rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config.json"   # the kit copy is shared with other sections
+
+# pr-reviewer is available in the shipped kit: the default configuration opens the planner and the auditor only
+PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
+ln -sfn "$PRK" "$PRH/.orca-roles"
+jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
+check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
+check "mode_error: academic-writer is still not available" "$(KIT="$PRK" mode_error academic-writer)" "mode 'academic-writer' is not available yet"
+check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor") | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
+PRP="$TMP/prproj"; mkdir -p "$PRP"; git -C "$PRP" init -q; PRG="$PRP/.git"; : > "$MLOG"
+prl() { (cd "$PRP" && HOME="$PRH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PRH/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and AUDITOR only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER AUDITOR "
+check "launch pr-reviewer (default config): the auditor reads the mode's prompts" "$(cd "$PRP" && KIT="$PRK" worker_msg "$PRG/orca-roles.config.json" auditor | grep -o "Read [^ ]*common-workers.md and [^ ]*auditor.md")" "Read $PRK/prompts/pr-reviewer/common-workers.md and $PRK/prompts/pr-reviewer/auditor.md"
+check "launch pr-reviewer (default config): the planner reads the mode's planner.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "planner auditor" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md')" "Read $PRK/prompts/pr-reviewer/planner.md"
+rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
 }
 
 sec_new_role_modes() {
@@ -1399,9 +1467,9 @@ printf '%s' '{"id":"rp-all","description":"d","modes":"programmer","overwrite":t
 try nrr --from-json "$TMP/nj.json" --repo "$NR"
 check "modes --repo overwrite: lost modes are listed, not deleted; the installed legacy file stays" "$RC:$(ls "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-writer/rp-all.md" | wc -l | tr -d ' '):$(cat "$PK/roles/rp-all.md")" "0:2:inst"
 case "$OUT" in *"prompts/pr-reviewer/rp-all.md is no longer used by 'rp-all'; remove it with: git -C $NR rm prompts/pr-reviewer/rp-all.md"*"prompts/academic-writer/rp-all.md is no longer used"*) echo "ok   modes --repo overwrite: tells how to remove them with git";; *) echo "FAIL repo overwrite listing: $OUT"; FAIL=1;; esac
-printf '%s' '{"id":"rp-pr","description":"d","modes":"pr-reviewer","prompt":"# r\n"}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'pr-reviewer' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
-try nrr --remove rp-pr --repo "$NR"
+printf '%s' '{"id":"rp-aw","description":"d","modes":"academic-writer","prompt":"# a\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
+try nrr --remove rp-aw --repo "$NR"
 # D1: kit files cannot be taken over
 echo kit > "$NR/prompts/programmer/common-workers.md"; echo kit > "$NR/prompts/pr-reviewer/common-workers.md"; echo kit > "$NR/prompts/programmer/lone.md"
 R0="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
