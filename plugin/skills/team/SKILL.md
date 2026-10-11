@@ -187,6 +187,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |
 | A worker did the work but never reported | Check its dispatch (`dispatch-show`: `last_heartbeat_at`). Usually a non-Claude agent that ran `orca orchestration send` as a background task; ask the user to look at its tab |
+| The review skill is missing (pr-reviewer mode) | `~/.orca-roles/bin/review-skill.sh status`: `installed`, `disabled`, `missing` or `error <reason>`; after the user's yes, `review-skill.sh install` adds the marketplace and installs the plugin (`settings.prReviewer` names them), and `path` prints the skill file |
 | A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
 | A role lost its role after a manual `/clear` or `/new` | Claude and Codex roles ask for it again on the next message (`clean.sh --msg <role>`, from a line outside the conversation). A `custom` role only if its `command` passes `{anchor}`; otherwise `clean.sh <role>`, or tell it to run `clean.sh --msg <role>` |
 

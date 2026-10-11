@@ -7,7 +7,8 @@
     "composerAgentWindowSeconds": 180,
     "cleanWorkersAfterStep": true,
     "language": "auto",
-    "mode": "programmer"
+    "mode": "programmer",
+    "prReviewer": { "marketplace": "romerox3/lens-review", "plugin": "lens-review@lens-review", "skill": "skills/lens-review/SKILL.md" }
   },
   "defaults": {
     "agent": "claude",

@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models relaunch cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -2606,6 +2606,135 @@ for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":
 done
 check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <id> --check')" "1"
 unset MM
+}
+
+sec_review_skill() {
+# review-skill.sh: a fake claude on PATH (never the real one) that records its argv and serves plugin list / marketplace add / install
+RS="$TMP/rskill"; rm -rf "${RS:?}"; mkdir -p "$RS/bin" "$RS/nobin" "$RS/tmp" "$RS/plug/skills/lens-review"
+echo "skill" > "$RS/plug/skills/lens-review/SKILL.md"
+for t in bash jq git pgrep mktemp sed head tr cat grep sleep rm awk uname dirname env kill; do ln -sf "$(command -v $t)" "$RS/nobin/$t"; done
+cat > "$RS/bin/claude" <<'EOS'
+#!/bin/bash
+echo "$*" >> "$RS/argv.log"
+rd() { cat "$RS/$1" 2>/dev/null || echo ok; }
+case "$1 $2" in
+  "plugin list")
+    case "$(rd list.mode)" in
+      ok) cat "$RS/list.json";;
+      garbage) echo "not json";;
+      fail) echo "list boom" >&2; echo second >&2; exit 5;;
+      hang) echo $$ > "$RS/hang.pid"; exec sleep 30;;
+      tree) sleep 30 & echo $! > "$RS/child.pid"; wait;;
+    esac;;
+  "plugin marketplace")
+    case "$(rd mkt.mode)" in
+      ok) echo "added";;
+      exists) echo "Marketplace 'lens-review' already exists" >&2; exit 1;;
+      upper) cat "$RS/mkt.msg" >&2; exit 1;;
+      fail) echo "mkt boom: no network" >&2; exit 1;;
+      hang) echo $$ > "$RS/hang.pid"; exec sleep 30;;
+    esac;;
+  "plugin install")
+    case "$(rd inst.mode)" in
+      ok) cp "$RS/installed.json" "$RS/list.json"; echo "installed";;
+      fail) echo "install boom" >&2; exit 1;;
+      hang) echo $$ > "$RS/hang.pid"; exec sleep 30;;
+    esac;;
+esac
+EOS
+chmod +x "$RS/bin/claude"
+mkdir -p "$RS/wt"; git -C "$RS/wt" init -q; git -C "$RS/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+jq -n --arg p "$RS/plug" '[{id:"other@x",version:"1",enabled:true,installPath:"/nowhere"},{id:"lens-review@lens-review",version:"1.2.3",scope:"user",enabled:true,installPath:$p}]' > "$RS/installed.json"
+jq '.[1].enabled = false' "$RS/installed.json" > "$RS/disabled.json"
+echo '[{"id":"other@x","version":"1","enabled":true,"installPath":"/nowhere"}]' > "$RS/missing.json"
+RSC="$RS/config.json"; merged_config . > "$RSC"
+rs_state() { cp "$RS/$1.json" "$RS/list.json"; rm -f "${RS:?}"/*.mode "$RS/argv.log" "$RS/hang.pid"; }
+export RS
+rs_run() { (cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="${RSCFG:-$RSC}" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err"); }
+rs_try() { if OUT="$(rs_run "$@")"; then RC=0; else RC=$?; fi; ERR="$(cat "$RS/err")"; }
+rs_calls() { tr '\n' ';' < "$RS/argv.log" 2>/dev/null; }
+check "review-skill: the default configuration names the plugin" "$(jq -r '.settings.prReviewer | [.marketplace, .plugin, .skill] | join(" ")' "$KIT/config.default.json")" "romerox3/lens-review lens-review@lens-review skills/lens-review/SKILL.md"
+check "review-skill: -h prints the header and exits 0" "$("$KIT/bin/review-skill.sh" -h | head -1 | cut -c1-31):$?" "# Finds and installs the review:0"
+try "$KIT/bin/review-skill.sh" bogus 2>/dev/null; check "review-skill: an unknown command exits 1" "$RC" "1"
+try "$KIT/bin/review-skill.sh" 2>/dev/null; check "review-skill: no command exits 1" "$RC" "1"
+rs_state installed; rs_try status
+check "review-skill: status installed" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+rs_state disabled; rs_try status; check "review-skill: status disabled" "$RC:$OUT" "3:disabled 1.2.3 $RS/plug"
+rs_state missing; rs_try status; check "review-skill: status missing" "$RC:$OUT" "2:missing"
+rs_state installed; echo garbage > "$RS/list.mode"; rs_try status; check "review-skill: status with non-JSON output" "$RC:$OUT:$ERR" "1::error claude plugin list did not print a JSON list"
+echo fail > "$RS/list.mode"; rs_try status; check "review-skill: status with a failing claude shows the first stderr line" "$RC:$OUT:$ERR" "1::error list boom"
+echo '{"a":1}' > "$RS/list.json"; rm -f "$RS/list.mode"; rs_try status; check "review-skill: status with JSON that is not a list" "$RC:$ERR" "1:error claude plugin list did not print a JSON list"
+jq '.[1].installPath = ""' "$RS/installed.json" > "$RS/list.json"; rs_try status; check "review-skill: an entry without installPath is not installed" "$RC:$OUT" "2:missing"
+(cd "$RS/wt" && PATH="$RS/nobin" ORCA_ROLES_CONFIG="$RSC" "$KIT/bin/review-skill.sh" status 2>"$RS/err") > "$RS/out" && RC=0 || RC=$?
+check "review-skill: status without claude on PATH" "$RC:$(cat "$RS/out"):$(cat "$RS/err")" "1::error claude not found"
+rs_state installed; rs_try path; check "review-skill: path prints installPath/skill" "$RC:$OUT" "0:$RS/plug/skills/lens-review/SKILL.md"
+rm -f "$RS/plug/skills/lens-review/SKILL.md"; rs_try path; check "review-skill: path with the skill file missing" "$RC:$OUT:$ERR" "4::skill file not found: $RS/plug/skills/lens-review/SKILL.md"
+echo "skill" > "$RS/plug/skills/lens-review/SKILL.md"
+rs_state disabled; rs_try path; check "review-skill: path when disabled" "$RC:$OUT:$ERR" "3::disabled 1.2.3 $RS/plug"
+rs_state missing; rs_try path; check "review-skill: path when missing" "$RC:$OUT:$ERR" "2::missing"
+echo garbage > "$RS/list.mode"; rs_try path; check "review-skill: path when claude fails" "$RC:$OUT" "1:"
+rs_state installed; rs_try root; check "review-skill: root installed prints the parent of installPath" "$RC:$OUT" "0:$RS"
+rs_state missing; rs_try root; check "review-skill: root missing" "$RC:$OUT:$ERR" "2::missing"
+rs_state disabled; rs_try root; check "review-skill: root disabled" "$RC:$OUT:$ERR" "3::disabled 1.2.3 $RS/plug"
+rs_state installed; rs_try install
+check "review-skill: install when already installed does nothing else" "$RC:$(printf '%s' "$OUT" | tr '\n' '|'):$(rs_calls)" "0:already installed|$RS/plug/skills/lens-review/SKILL.md:plugin list --json;"
+rs_state missing; rs_try install
+check "review-skill: install from missing adds the marketplace, installs, then prints the path" "$RC:$OUT:$(rs_calls)" "0:$RS/plug/skills/lens-review/SKILL.md:plugin list --json;plugin marketplace add romerox3/lens-review;plugin install lens-review@lens-review;plugin list --json;"
+rs_state missing; echo exists > "$RS/mkt.mode"; rs_try install
+check "review-skill: a marketplace that already exists is tolerated" "$RC:$OUT:$ERR:$(rs_calls | grep -o 'plugin install')" "0:$RS/plug/skills/lens-review/SKILL.md::plugin install"
+rs_state missing; echo fail > "$RS/mkt.mode"; rs_try install
+check "review-skill: marketplace failure shows its output, exit 1, no install" "$RC:$ERR:$(rs_calls | grep -c 'plugin install')" "1:mkt boom: no network:0"
+rs_state missing; echo fail > "$RS/inst.mode"; rs_try install
+check "review-skill: install failure shows its output, exit 1" "$RC:$ERR" "1:install boom"
+rs_state disabled; rs_try install
+check "review-skill: install on a disabled plugin refuses with exit 3 and calls nothing but plugin list" "$RC:$OUT:$ERR:$(rs_calls)" "3::disabled 1.2.3 $RS/plug
+the plugin is disabled: enable it with claude plugin enable lens-review@lens-review (install would re-enable it):plugin list --json;"
+rs_state missing; cp "$RS/installed.json" "$RS/real.json"; echo '[]' > "$RS/installed.json"; rs_try install
+check "review-skill: install that leaves the plugin absent fails as path does" "$RC:$OUT:$ERR" "2::missing"
+cp "$RS/real.json" "$RS/installed.json"
+rs_state installed; mv "$RS/plug/skills" "$RS/skills.bak"; rs_try install
+check "review-skill: install with the skill file missing exits 4" "$RC:$ERR" "4:skill file not found: $RS/plug/skills/lens-review/SKILL.md"
+mv "$RS/skills.bak" "$RS/plug/skills"
+# a hung claude is killed after the bound, nothing is left running
+for mode in list mkt; do
+  rs_state missing; if [ "$mode" = mkt ]; then echo hang > "$RS/mkt.mode"; else echo hang > "$RS/list.mode"; fi
+  T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+  HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
+  check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 8 ] && echo quick)" "1:error claude timed out:gone:quick"
+done
+rs_state missing; echo hang > "$RS/inst.mode"; rm -f "$RS/hang.pid"
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
+check "review-skill: a hung plugin install is cut after the bound: exit 1, message, process gone" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
+rs_state installed; echo tree > "$RS/list.mode"; rm -f "$RS/child.pid"
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
+CP="$(cat "$RS/child.pid" 2>/dev/null)"; sleep 0.3
+check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
+rs_state missing; echo fail > "$RS/list.mode"; rs_try install
+check "review-skill: install with a failing plugin list runs no marketplace add or install" "$RC:$ERR:$(rs_calls)" "1:error list boom:plugin list --json;"
+rs_state missing; echo ALREADY EXISTS > "$RS/mkt.msg"; echo upper > "$RS/mkt.mode"; rs_try install
+check "review-skill: 'already exists' is matched case-insensitively" "$RC:$(rs_calls | grep -c 'plugin install')" "0:1"
+jq '. + [(.[1] | .enabled = false | .version = "0.0.1" | .installPath = "/old")]' "$RS/installed.json" > "$RS/list.json"; jq 'reverse' "$RS/list.json" > "$RS/list2.json"; cp "$RS/list2.json" "$RS/list.json"; rm -f "$RS/list.mode"; rs_try status
+check "review-skill: with several entries for the id the enabled one wins" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+check "review-skill: no temp folder left behind" "$(ls "$RS/tmp" | wc -l | tr -d ' ')" "0"
+# settings.prReviewer overrides
+jq '.settings.prReviewer = {marketplace: "me/mkt", plugin: "mine@mkt", skill: "a/B.md"}' "$RSC" > "$RS/cfg2.json"; mkdir -p "$RS/plug/a"; echo b > "$RS/plug/a/B.md"
+rs_state installed; jq '.[1].id = "mine@mkt"' "$RS/installed.json" > "$RS/mine.json"; cp "$RS/mine.json" "$RS/list.json"
+RSCFG="$RS/cfg2.json" rs_try path; check "review-skill: another plugin id and skill path are honoured" "$RC:$OUT" "0:$RS/plug/a/B.md"
+RSCFG="$RS/cfg2.json" rs_try status; check "review-skill: status uses the configured plugin" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+rs_state missing; RSCFG="$RS/cfg2.json" rs_try install; check "review-skill: install with another plugin adds its marketplace and installs it" "$RC:$(grep -v 'plugin list' "$RS/argv.log" | tr '\n' ';')" "2:plugin marketplace add me/mkt;plugin install mine@mkt;"
+rs_state installed; RSCFG="$RS/none.json" rs_try status; check "review-skill: without a saved configuration it uses the merged one" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+jq 'del(.settings.prReviewer)' "$RSC" > "$RS/cfg3.json"; RSCFG="$RS/cfg3.json" rs_try status; check "review-skill: a configuration without prReviewer falls back to the default" "$RC" "0"
+# check_config and upgrade_config
+chk() { jq --argjson v "$1" '.settings.prReviewer = $v' "$KIT/config.default.json" > "$RS/chk.json"; check_config "$RS/chk.json"; }
+MSG="ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"
+check "review-skill: check_config accepts the default" "$(check_config "$KIT/config.default.json")" ""
+for bad in '"x"' 'null' '[]' '{}' '{"marketplace":"a","plugin":"b"}' '{"marketplace":"a","plugin":"b","skill":""}' '{"marketplace":1,"plugin":"b","skill":"c"}'; do
+  check "review-skill: check_config rejects $bad" "$(chk "$bad")" "$MSG"
+done
+echo '{"settings":{"language":"es"},"roles":{}}' > "$RS/old.json"
+check "review-skill: upgrade_config adds prReviewer to an old configuration" "$(upgrade_config "$KIT/config.default.json" "$RS/old.json" | jq -r '.settings.prReviewer.plugin + " " + .settings.language')" "lens-review@lens-review es"
+check "review-skill: nothing is written in the worktree" "$(git -C "$RS/wt" status --porcelain | wc -l | tr -d ' ')" "0"
 }
 
 sec_relaunch() {
