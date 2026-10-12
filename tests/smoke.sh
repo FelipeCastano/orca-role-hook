@@ -191,9 +191,13 @@ rule R10 "$PD/planner.md" 'audits once per set, not per step' '\*\*Set audit\.\*
 rule R10 "$PD/planner.md" 'after the previous report' 'Never pre-create Tester or Auditor tasks'
 rule R10 "$PD/planner.md" 'You do not write production code'
 rule R10 "$PD/dev.md" 'You do not write the test suite'
+rule R10 "$PD/tester.md" 'do not write text checks or run text mutants' '^2\. If the change only touches prompt'
+rule R10 "$PD/auditor.md" 'do not run text mutants' '^4\. If the change only touches prompt'
+rule R10 "$PD/tester.md" 'the rest of this list still applies (including cleanup)' '^2\. If the change only touches prompt'
+rule R10 "$PD/auditor.md" 'the rest of the method still applies, including the names-of-people pass' '^4\. If the change only touches prompt'
 rule R10 "$PD/planner.md" 'never tells the Tester or the Auditor what to test, mutate or look at' '\*\*Briefed rounds\.\*\*'
 # R11 where each role works: in place with .orca-bak, one mutant at a time, verified close; experiments in scratchDir; temporaries only there
-t=$(awk '/^5\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
+t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
 a27="$(grep '^2\. \*\*Baseline' "$PD/auditor.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)"
 for k in 'in place in the worktree' 'mv <f>.orca-bak <f>' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'equal the baseline'; do
   printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL rules R11: tester.md mutation step lost '$k'"; FAIL=1; }
