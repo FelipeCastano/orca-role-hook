@@ -1323,16 +1323,56 @@ nrw() {  # nrw <answers file>
 printf '%s\n' wz-one "" "wizard one" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" y > "$TMP/nw1.in"
 try nrw "$TMP/nw1.in"; check "modes wizard: one mode" "$RC:$(jq -c '.roles["wz-one"] | [.modes, .prompt]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-one.md" && echo same)" "0:[[\"pr-reviewer\"],{\"pr-reviewer\":\"$PH/.orca-roles/roles/pr-reviewer/wz-one.md\"}]:same"
 check "modes wizard: launched in its mode" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')" "planner rv rv-list fresh wz-one "
-printf '%s\n' wz-all "" "wizard all" 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 4 4 y > "$TMP/nw2.in"
+printf '%s\n' wz-all "" "wizard all" 1 "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 4 4 y > "$TMP/nw2.in"
 try nrw "$TMP/nw2.in"; check "modes wizard: all, the copy option for the 2nd and 3rd" "$RC:$(jq -c '.roles["wz-all"] | [.modes, (.prompt | keys)]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/programmer/wz-all.md" && cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-all.md" && cmp -s "$SRC" "$PK/roles/academic-writer/wz-all.md" && echo same)" '0:["all",["academic-writer","pr-reviewer","programmer"]]:same'
 case "$OUT" in *"4) Copy the prompt of pr-reviewer"*) echo "ok   modes wizard: offers the copy option";; *) echo "FAIL wizard options: $OUT"; FAIL=1;; esac
 case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes wizard: notes the unavailable mode";; *) echo "FAIL wizard note: $OUT"; FAIL=1;; esac
 case "$OUT" in *"programmer: $PH/.orca-roles/roles/programmer/wz-all.md"*"academic-writer: $PH/.orca-roles/roles/academic-writer/wz-all.md"*) echo "ok   modes wizard: the summary lists each mode's file";; *) echo "FAIL wizard summary: $OUT"; FAIL=1;; esac
 SRC2="$TMP/nw-src2.md"; printf '# Role: W2\n\n## Report\ny\n' > "$SRC2"
-printf '%s\n' wz-chain "" "wizard chain" 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 2 "$SRC2" 4 y > "$TMP/nw4.in"
+printf '%s\n' wz-chain "" "wizard chain" 1 "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 2 "$SRC2" 4 y > "$TMP/nw4.in"
 try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous mode's prompt, not the first" "$RC:$(cmp -s "$SRC" "$PK/roles/programmer/wz-chain.md" && echo p):$(cmp -s "$SRC2" "$PK/roles/pr-reviewer/wz-chain.md" && echo r):$(cmp -s "$SRC2" "$PK/roles/academic-writer/wz-chain.md" && echo a)" "0:p:r:a"
 printf '%s\n' wz-bad "" "x" 2 9 > "$TMP/nw3.in"; S1="$(snap)"
 try nrw "$TMP/nw3.in"; check "modes wizard: an invalid mode is refused, nothing written" "$RC:$([ "$(snap)" = "$S1" ] && echo unchanged)" "1:unchanged"
+
+# phases (academic-writer only): wizard (answers: id, title, description, modes, mode, phase, then the defaults up to the prompt)
+nrw_ph() {  # nrw_ph <id> <modes answer> <mode pick or -> <phase answer or ->
+  local a=("$1" "" "phases $1" "$2"); [ "$3" = - ] || a+=("$3"); [ "$4" = - ] || a+=("$4")
+  local t=(2 "$SRC" y); [ "$2" != 1 ] || t=(2 "$SRC" 4 4 y)
+  printf '%s\n' "${a[@]}" "" "" "" n "" "" "" "" "" "" "" "" "${t[@]}" > "$TMP/nwp.in"; try nrw "$TMP/nwp.in"
+}
+nrw_ph ph-exp 2 3 1; check "phases wizard: academic-writer, 1 = experiment, phases right after modes" "$RC:$(jq -c '.roles["ph-exp"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["ph-exp"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-writer"],["experiment"]]:modes,phases'
+case "$OUT" in *"Phases (academic-writer)"*"1) experiment"*"2) writing"*"3) both"*) echo "ok   phases wizard: the section lists the three options";; *) echo "FAIL phases section: $OUT"; FAIL=1;; esac
+nrw_ph ph-wri 2 3 2; check "phases wizard: 2 = writing" "$RC:$(jq -c '.roles["ph-wri"].phases' "$NRC")" '0:["writing"]'
+nrw_ph ph-both 2 3 3; R3="$RC:$(jq -c '.roles["ph-both"] | has("phases")' "$NRC")"; nrw_ph ph-def 2 3 ""; check "phases wizard: 3 and the default (empty) write no phases field" "$R3:$RC:$(jq -c '.roles["ph-def"] | has("phases")' "$NRC")" "0:false:0:false"
+nrw_ph ph-all 1 - 2; check "phases wizard: modes all asks it too" "$RC:$(jq -c '.roles["ph-all"] | [.modes, .phases]' "$NRC")" '0:["all",["writing"]]'
+nrw_ph ph-prg 2 1 -; check "phases wizard: a programmer role gets no question and no field" "$RC:$(jq -c '.roles["ph-prg"] | has("phases")' "$NRC"):$(printf '%s' "$OUT" | grep -c 'Phases')" "0:false:0"
+S4="$(snap)"; for bad in 4 0 x; do nrw_ph ph-bad 2 3 "$bad"; check "phases wizard: the answer '$bad' is refused, nothing written" "$RC:$([ "$(snap)" = "$S4" ] && echo unchanged)" "1:unchanged"; done
+
+# phases: --from-json
+nr_ph() {  # <id> <modes json fragment> <phases json>
+  printf '%s' '{"id":"'"$1"'","description":"d",'"$2"'"phases":'"$3"',"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"; try nrj "$TMP/nj.json"
+}
+nr_ph pj-aw '"modes":"academic-writer",' '["experiment","writing"]'; check "phases from-json: academic-writer with both phases, right after modes" "$RC:$(jq -c '.roles["pj-aw"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["pj-aw"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-writer"],["experiment","writing"]]:modes,phases'
+nr_ph pj-list '"modes":["academic-writer"],' '["writing"]'; check "phases from-json: a one-element modes list" "$RC:$(jq -c '.roles["pj-list"].phases' "$NRC")" '0:["writing"]'
+printf '%s' '{"id":"pj-all","description":"d","modes":"all","phases":["experiment"],"prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "phases from-json: modes all" "$RC:$(jq -c '.roles["pj-all"].phases' "$NRC")" '0:["experiment"]'
+printf '%s' '{"id":"pj-none","description":"d","modes":"academic-writer","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "phases from-json: no phases, no field" "$RC:$(jq -c '.roles["pj-none"] | has("phases")' "$NRC")" "0:false"
+S5="$(snap)"
+nr_ph_fail() {  # <name> <modes fragment> <phases json>
+  nr_ph pj-bad "$2" "$3"; check "phases from-json rejects $1, nothing written" "$RC:$([ "$(snap)" = "$S5" ] && echo unchanged)" "1:unchanged"
+}
+nr_ph_fail "phases on a programmer role" '"modes":"programmer",' '["experiment"]'
+nr_ph_fail "phases on a role without modes" '' '["writing"]'
+nr_ph_fail "phases on another mode" '"modes":["pr-reviewer"],' '["writing"]'
+nr_ph_fail "phases null on a programmer role" '"modes":"programmer",' 'null'
+nr_ph_fail "an empty list" '"modes":"academic-writer",' '[]'
+nr_ph_fail "a string" '"modes":"academic-writer",' '"experiment"'
+nr_ph_fail "an unknown phase" '"modes":"academic-writer",' '["experiment","review"]'
+nr_ph_fail "a non-string phase" '"modes":"all",' '[1]'
+nr_ph_fail "null on academic-writer" '"modes":"academic-writer",' 'null'
+case "$OUT" in *"Invalid"*|*"phases"*) echo "ok   phases from-json: says why";; *) echo "FAIL phases message: $OUT"; FAIL=1;; esac
+nr_ph pj-bad '"modes":"programmer",' '["writing"]'; case "$OUT" in *"phases is only for mode academic-writer"*) echo "ok   phases from-json: the refusal message";; *) echo "FAIL phases refusal: $OUT"; FAIL=1;; esac
 
 # --repo layout
 NR="$TMP/nrm-repo"; mkdir -p "$NR"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NR/"
