@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models relaunch cli"
+SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -122,6 +122,60 @@ for p in common-workers planner; do grep -q 'No names of people anywhere you wri
 grep -q 'No new code comments unless the repo' "$ROOT/prompts/programmer/common-workers.md" || { echo "FAIL common-workers.md: missing the comments rule"; FAIL=1; }
 grep -q 'Names and stray comments' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md: missing the names/comments finding"; FAIL=1; }
 echo "ok   rules: no names of people, comments only if the repo uses them, auditor finding"
+# pr-reviewer mode prompts: each pin is anchored to its section
+PRD="$ROOT/prompts/pr-reviewer"
+for f in planner common-workers lens-reviewer auditor; do [ -f "$PRD/$f.md" ] || { echo "FAIL prompts/pr-reviewer/$f.md missing"; FAIL=1; }; done
+prsec() { awk -v t="## $2" '$0 == t {f=1; next} /^## /{f=0} f' "$PRD/$1.md"; }   # prsec <file> <section title>
+prpin() { local d="$1" f="$2" sec="$3" pat="$4"; prsec "$f" "$sec" | grep -qE -- "$pat" || { echo "FAIL pr-reviewer $f.md, section '$sec': $d"; FAIL=1; }; }
+for sec in "When you start (before talking to the user)" "Resuming a workspace after a restart" "Coming back with your memory" "After your conversation was cleared" "The review skill" "The team" "Reviewing a PR" "Common mechanics for any task" "Limits" "Cleaning the workers' context"; do
+  [ -n "$(prsec planner "$sec")" ] || { echo "FAIL pr-reviewer planner.md: missing section '$sec'"; FAIL=1; }
+done
+prpin "runs review-skill.sh status at start" planner "The review skill" 'review-skill\.sh status'
+prpin "installs only on the user's yes" planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
+prpin "gets SKILL.md with review-skill.sh path" planner "The review skill" 'review-skill\.sh path'
+prpin "a disabled skill is enabled by the user, not by the Planner" planner "The review skill" 'Do not enable it yourself without their yes'
+prpin "reviewers are dispatched with orca orchestration, never own subagents" planner "The review skill" 'never with your own subagents'
+prpin "lens roles are created with new-role --from-json" planner "The team" 'new-role\.sh --from-json'
+prpin "lens roles have modes pr-reviewer" planner "The team" '"modes": "pr-reviewer"'
+prpin "lens roles get extraDirs from review-skill.sh root" planner "The team" '"extraDirs": \["<output of ~/.orca-roles/bin/review-skill\.sh root>"\]'
+prpin "the lens role prompt carries no absolute path and credits lens-review" planner "The team" 'without copying it; each brief gives you the current paths'
+prpin "stale lens roles are compared with review-skill.sh root" planner "The team" 'compare each one.s `extraDirs` with the output of `review-skill\.sh root`'
+prpin "stale lens roles are re-created with overwrite, on the user's yes" planner "The team" '"overwrite": true., only on their yes'
+prpin "re-creation keeps every other field of the current entry" planner "The team" 'starts from the role.s current entry in the user.s configuration.*read with .jq. from .~/\.orca-roles/config\.json.*changes only .extraDirs.*and the prompt; nothing else the user set is dropped'
+prpin "the credit sentence at the start of each review" planner "Reviewing a PR" 'This review follows lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include it: it is installed from its repository \(with your yes when the kit installs it\) and reads it now'
+prpin "briefs carry the current paths of SKILL.md and the lens files" planner "Reviewing a PR" 'current absolute paths of SKILL\.md from `review-skill\.sh path` and of the role.s lens file'
+prpin "validation follows the skill's tier rules and uncertain verdicts" planner "Reviewing a PR" 'the skill says to validate for the tier.*An uncertain verdict is handled as the skill.s validation prompt says'
+prpin "the report ends with the credit line" planner "Reviewing a PR" 'Review method: lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include or copy it: it installs it from its repository and runs it; the method and its lenses belong to that project'
+prpin "what is posted carries the credit line" planner "Reviewing a PR" 'Whatever you post carries the same "Review method: \.\.\." line'
+prpin "the skill is installed from its repository, not copied" planner "The review skill" 'does not include or copy it, it installs it from its own repository'
+prpin "validation subject has the uncertain verdict" lens-reviewer "Report" 'VALIDATION: confirmed\|refuted\|uncertain'
+prpin "findings follow the skill's own format" lens-reviewer "When you receive a task" "skill's own finding format and rules"
+prpin "the auditor caps workers at maxWorkers" auditor "Limits" 'at `maxWorkers` parallel workers'
+prpin "the auditor reads maxWorkers (default 2)" auditor "Parameters" 'maxWorkers.: 2'
+grep -qF 'The pr-reviewer mode follows lens-review (https://github.com/romerox3/lens-review), a Claude Code plugin skill for multi-agent code review. orca-roles does not include or copy it: on the first start of the mode the Planner installs the plugin from its own repository, with your yes, and reads it at run time to set up the reviewer roles and run each review. The review method and its lenses belong to that project, and every report credits it.' "$ROOT/README.md" || { echo "FAIL README.md: lost the lens-review credit paragraph"; FAIL=1; }
+grep -qF '`review-skill.sh root`' "$ROOT/README.md" && grep -qF 'needs `addDirFlag`' "$ROOT/README.md" || { echo "FAIL README.md: First start lost the root folder or the addDirFlag note"; FAIL=1; }
+grep -qF 'https://github.com/romerox3/lens-review' "$ROOT/plugin/skills/team/SKILL.md" || { echo "FAIL team SKILL.md: pr-reviewer paragraph lost the lens-review credit"; FAIL=1; }
+prpin "lens roles are created on the user's yes" planner "The team" 'On their yes, create each'
+prpin "the lens role prompt points to lens-reviewer.md" planner "The team" 'prompts/pr-reviewer/lens-reviewer\.md'
+prpin "dispatch with orca orchestration task-create / worker-start" planner "Reviewing a PR" 'task-create .*worker-start'
+prpin "validation by a different lens role" planner "Reviewing a PR" 'different lens role than the one that reported it'
+prpin "never approve, request changes or merge" planner "Reviewing a PR" 'Never approve, request changes or merge'
+prpin "posts only with the user's explicit yes to that exact text" planner "Reviewing a PR" 'only with the user.s explicit yes to that exact text'
+prpin "the Auditor only if the user asks" planner "Reviewing a PR" 'Only if the user asks'
+prpin "no commits in this mode" planner "Reviewing a PR" 'No commits, no pushes, no code changes in this mode'
+prpin "no commits in this mode (limits)" planner "Limits" 'No commits, no pushes, no code changes in this mode'
+prpin "nothing leaves the worktree without the user's yes" planner "Limits" 'Nothing leaves the worktree without the user.s explicit yes'
+prpin "the convention check before any PR comment" planner "Limits" 'follows the repository.s own conventions'
+prpin "the worktree is read-only" common-workers "Limits" 'The worktree is read-only'
+prpin "never posts to GitHub or any external system" common-workers "Limits" 'Never post to GitHub'
+prpin "no heartbeats" common-workers "Communication" 'No heartbeats'
+prpin "reads SKILL.md and its lens entirely" lens-reviewer "When you receive a task" 'Read SKILL\.md and your lens file\(s\) entirely'
+prpin "validation: refuted by default" lens-reviewer "When you receive a task" 'verdict is refuted by default'
+prpin "read-only, no running the project's code" lens-reviewer "Limits" 'The worktree is read-only'
+prpin "reproduces in a copy of the worktree" auditor "When you receive a task" 'rsync -a --delete --exclude \.git'
+prpin "never experiments in the worktree" auditor "When you receive a task" 'never experiment in the worktree'
+prpin "no mutation testing in this mode" auditor "Limits" 'No mutation testing in this mode'
+echo "ok   pr-reviewer prompts: pins"
 for p in common-workers planner; do
   r=$(grep 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" || true)
   for k in 'Handles (`@user`) and email addresses count as names' '"the repo owner"' 'not `<name>_test_user`' 'not "as <name> asked"' 'Names of products, libraries, companies and services'; do
@@ -1067,7 +1121,7 @@ for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr
   check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-writer)"
 done
 check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
-check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner") | .value.modes] | unique)]' "$PKC")" '["programmer","all",[["programmer"]]]'
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor") | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
 check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "planner researcher dev tester auditor e2e-tester deployer "
 
 # roles and prompts per mode (library level)
@@ -1280,6 +1334,20 @@ rm -f "$MG/orca-roles.env"; upgrade_config "$PKC" "$TMP/m-legacy.json" > "$MC"
 try ml --reset; check "legacy config after upgrade_config: the same programmer team" "$RC:$(mh):$(mmode)" "0:$SAME:programmer"
 sleep 1
 rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config.json"   # the kit copy is shared with other sections
+
+# pr-reviewer is available in the shipped kit: the default configuration opens the planner and the auditor only
+PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
+ln -sfn "$PRK" "$PRH/.orca-roles"
+jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
+check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
+check "mode_error: academic-writer is still not available" "$(KIT="$PRK" mode_error academic-writer)" "mode 'academic-writer' is not available yet"
+check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor") | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
+PRP="$TMP/prproj"; mkdir -p "$PRP"; git -C "$PRP" init -q; PRG="$PRP/.git"; : > "$MLOG"
+prl() { (cd "$PRP" && HOME="$PRH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PRH/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and AUDITOR only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER AUDITOR "
+check "launch pr-reviewer (default config): the auditor reads the mode's prompts" "$(cd "$PRP" && KIT="$PRK" worker_msg "$PRG/orca-roles.config.json" auditor | grep -o "Read [^ ]*common-workers.md and [^ ]*auditor.md")" "Read $PRK/prompts/pr-reviewer/common-workers.md and $PRK/prompts/pr-reviewer/auditor.md"
+check "launch pr-reviewer (default config): the planner reads the mode's planner.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "planner auditor" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md')" "Read $PRK/prompts/pr-reviewer/planner.md"
+rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
 }
 
 sec_new_role_modes() {
@@ -1399,9 +1467,9 @@ printf '%s' '{"id":"rp-all","description":"d","modes":"programmer","overwrite":t
 try nrr --from-json "$TMP/nj.json" --repo "$NR"
 check "modes --repo overwrite: lost modes are listed, not deleted; the installed legacy file stays" "$RC:$(ls "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-writer/rp-all.md" | wc -l | tr -d ' '):$(cat "$PK/roles/rp-all.md")" "0:2:inst"
 case "$OUT" in *"prompts/pr-reviewer/rp-all.md is no longer used by 'rp-all'; remove it with: git -C $NR rm prompts/pr-reviewer/rp-all.md"*"prompts/academic-writer/rp-all.md is no longer used"*) echo "ok   modes --repo overwrite: tells how to remove them with git";; *) echo "FAIL repo overwrite listing: $OUT"; FAIL=1;; esac
-printf '%s' '{"id":"rp-pr","description":"d","modes":"pr-reviewer","prompt":"# r\n"}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'pr-reviewer' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
-try nrr --remove rp-pr --repo "$NR"
+printf '%s' '{"id":"rp-aw","description":"d","modes":"academic-writer","prompt":"# a\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
+try nrr --remove rp-aw --repo "$NR"
 # D1: kit files cannot be taken over
 echo kit > "$NR/prompts/programmer/common-workers.md"; echo kit > "$NR/prompts/pr-reviewer/common-workers.md"; echo kit > "$NR/prompts/programmer/lone.md"
 R0="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
@@ -2606,6 +2674,135 @@ for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":
 done
 check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <id> --check')" "1"
 unset MM
+}
+
+sec_review_skill() {
+# review-skill.sh: a fake claude on PATH (never the real one) that records its argv and serves plugin list / marketplace add / install
+RS="$TMP/rskill"; rm -rf "${RS:?}"; mkdir -p "$RS/bin" "$RS/nobin" "$RS/tmp" "$RS/plug/skills/lens-review"
+echo "skill" > "$RS/plug/skills/lens-review/SKILL.md"
+for t in bash jq git pgrep mktemp sed head tr cat grep sleep rm awk uname dirname env kill; do ln -sf "$(command -v $t)" "$RS/nobin/$t"; done
+cat > "$RS/bin/claude" <<'EOS'
+#!/bin/bash
+echo "$*" >> "$RS/argv.log"
+rd() { cat "$RS/$1" 2>/dev/null || echo ok; }
+case "$1 $2" in
+  "plugin list")
+    case "$(rd list.mode)" in
+      ok) cat "$RS/list.json";;
+      garbage) echo "not json";;
+      fail) echo "list boom" >&2; echo second >&2; exit 5;;
+      hang) echo $$ > "$RS/hang.pid"; exec sleep 30;;
+      tree) sleep 30 & echo $! > "$RS/child.pid"; wait;;
+    esac;;
+  "plugin marketplace")
+    case "$(rd mkt.mode)" in
+      ok) echo "added";;
+      exists) echo "Marketplace 'lens-review' already exists" >&2; exit 1;;
+      upper) cat "$RS/mkt.msg" >&2; exit 1;;
+      fail) echo "mkt boom: no network" >&2; exit 1;;
+      hang) echo $$ > "$RS/hang.pid"; exec sleep 30;;
+    esac;;
+  "plugin install")
+    case "$(rd inst.mode)" in
+      ok) cp "$RS/installed.json" "$RS/list.json"; echo "installed";;
+      fail) echo "install boom" >&2; exit 1;;
+      hang) echo $$ > "$RS/hang.pid"; exec sleep 30;;
+    esac;;
+esac
+EOS
+chmod +x "$RS/bin/claude"
+mkdir -p "$RS/wt"; git -C "$RS/wt" init -q; git -C "$RS/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+jq -n --arg p "$RS/plug" '[{id:"other@x",version:"1",enabled:true,installPath:"/nowhere"},{id:"lens-review@lens-review",version:"1.2.3",scope:"user",enabled:true,installPath:$p}]' > "$RS/installed.json"
+jq '.[1].enabled = false' "$RS/installed.json" > "$RS/disabled.json"
+echo '[{"id":"other@x","version":"1","enabled":true,"installPath":"/nowhere"}]' > "$RS/missing.json"
+RSC="$RS/config.json"; merged_config . > "$RSC"
+rs_state() { cp "$RS/$1.json" "$RS/list.json"; rm -f "${RS:?}"/*.mode "$RS/argv.log" "$RS/hang.pid"; }
+export RS
+rs_run() { (cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="${RSCFG:-$RSC}" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err"); }
+rs_try() { if OUT="$(rs_run "$@")"; then RC=0; else RC=$?; fi; ERR="$(cat "$RS/err")"; }
+rs_calls() { tr '\n' ';' < "$RS/argv.log" 2>/dev/null; }
+check "review-skill: the default configuration names the plugin" "$(jq -r '.settings.prReviewer | [.marketplace, .plugin, .skill] | join(" ")' "$KIT/config.default.json")" "romerox3/lens-review lens-review@lens-review skills/lens-review/SKILL.md"
+check "review-skill: -h prints the header and exits 0" "$("$KIT/bin/review-skill.sh" -h | head -1 | cut -c1-31):$?" "# Finds and installs the review:0"
+try "$KIT/bin/review-skill.sh" bogus 2>/dev/null; check "review-skill: an unknown command exits 1" "$RC" "1"
+try "$KIT/bin/review-skill.sh" 2>/dev/null; check "review-skill: no command exits 1" "$RC" "1"
+rs_state installed; rs_try status
+check "review-skill: status installed" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+rs_state disabled; rs_try status; check "review-skill: status disabled" "$RC:$OUT" "3:disabled 1.2.3 $RS/plug"
+rs_state missing; rs_try status; check "review-skill: status missing" "$RC:$OUT" "2:missing"
+rs_state installed; echo garbage > "$RS/list.mode"; rs_try status; check "review-skill: status with non-JSON output" "$RC:$OUT:$ERR" "1::error claude plugin list did not print a JSON list"
+echo fail > "$RS/list.mode"; rs_try status; check "review-skill: status with a failing claude shows the first stderr line" "$RC:$OUT:$ERR" "1::error list boom"
+echo '{"a":1}' > "$RS/list.json"; rm -f "$RS/list.mode"; rs_try status; check "review-skill: status with JSON that is not a list" "$RC:$ERR" "1:error claude plugin list did not print a JSON list"
+jq '.[1].installPath = ""' "$RS/installed.json" > "$RS/list.json"; rs_try status; check "review-skill: an entry without installPath is not installed" "$RC:$OUT" "2:missing"
+(cd "$RS/wt" && PATH="$RS/nobin" ORCA_ROLES_CONFIG="$RSC" "$KIT/bin/review-skill.sh" status 2>"$RS/err") > "$RS/out" && RC=0 || RC=$?
+check "review-skill: status without claude on PATH" "$RC:$(cat "$RS/out"):$(cat "$RS/err")" "1::error claude not found"
+rs_state installed; rs_try path; check "review-skill: path prints installPath/skill" "$RC:$OUT" "0:$RS/plug/skills/lens-review/SKILL.md"
+rm -f "$RS/plug/skills/lens-review/SKILL.md"; rs_try path; check "review-skill: path with the skill file missing" "$RC:$OUT:$ERR" "4::skill file not found: $RS/plug/skills/lens-review/SKILL.md"
+echo "skill" > "$RS/plug/skills/lens-review/SKILL.md"
+rs_state disabled; rs_try path; check "review-skill: path when disabled" "$RC:$OUT:$ERR" "3::disabled 1.2.3 $RS/plug"
+rs_state missing; rs_try path; check "review-skill: path when missing" "$RC:$OUT:$ERR" "2::missing"
+echo garbage > "$RS/list.mode"; rs_try path; check "review-skill: path when claude fails" "$RC:$OUT" "1:"
+rs_state installed; rs_try root; check "review-skill: root installed prints the parent of installPath" "$RC:$OUT" "0:$RS"
+rs_state missing; rs_try root; check "review-skill: root missing" "$RC:$OUT:$ERR" "2::missing"
+rs_state disabled; rs_try root; check "review-skill: root disabled" "$RC:$OUT:$ERR" "3::disabled 1.2.3 $RS/plug"
+rs_state installed; rs_try install
+check "review-skill: install when already installed does nothing else" "$RC:$(printf '%s' "$OUT" | tr '\n' '|'):$(rs_calls)" "0:already installed|$RS/plug/skills/lens-review/SKILL.md:plugin list --json;"
+rs_state missing; rs_try install
+check "review-skill: install from missing adds the marketplace, installs, then prints the path" "$RC:$OUT:$(rs_calls)" "0:$RS/plug/skills/lens-review/SKILL.md:plugin list --json;plugin marketplace add romerox3/lens-review;plugin install lens-review@lens-review;plugin list --json;"
+rs_state missing; echo exists > "$RS/mkt.mode"; rs_try install
+check "review-skill: a marketplace that already exists is tolerated" "$RC:$OUT:$ERR:$(rs_calls | grep -o 'plugin install')" "0:$RS/plug/skills/lens-review/SKILL.md::plugin install"
+rs_state missing; echo fail > "$RS/mkt.mode"; rs_try install
+check "review-skill: marketplace failure shows its output, exit 1, no install" "$RC:$ERR:$(rs_calls | grep -c 'plugin install')" "1:mkt boom: no network:0"
+rs_state missing; echo fail > "$RS/inst.mode"; rs_try install
+check "review-skill: install failure shows its output, exit 1" "$RC:$ERR" "1:install boom"
+rs_state disabled; rs_try install
+check "review-skill: install on a disabled plugin refuses with exit 3 and calls nothing but plugin list" "$RC:$OUT:$ERR:$(rs_calls)" "3::disabled 1.2.3 $RS/plug
+the plugin is disabled: enable it with claude plugin enable lens-review@lens-review (install would re-enable it):plugin list --json;"
+rs_state missing; cp "$RS/installed.json" "$RS/real.json"; echo '[]' > "$RS/installed.json"; rs_try install
+check "review-skill: install that leaves the plugin absent fails as path does" "$RC:$OUT:$ERR" "2::missing"
+cp "$RS/real.json" "$RS/installed.json"
+rs_state installed; mv "$RS/plug/skills" "$RS/skills.bak"; rs_try install
+check "review-skill: install with the skill file missing exits 4" "$RC:$ERR" "4:skill file not found: $RS/plug/skills/lens-review/SKILL.md"
+mv "$RS/skills.bak" "$RS/plug/skills"
+# a hung claude is killed after the bound, nothing is left running
+for mode in list mkt; do
+  rs_state missing; if [ "$mode" = mkt ]; then echo hang > "$RS/mkt.mode"; else echo hang > "$RS/list.mode"; fi
+  T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+  HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
+  check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 8 ] && echo quick)" "1:error claude timed out:gone:quick"
+done
+rs_state missing; echo hang > "$RS/inst.mode"; rm -f "$RS/hang.pid"
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
+check "review-skill: a hung plugin install is cut after the bound: exit 1, message, process gone" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
+rs_state installed; echo tree > "$RS/list.mode"; rm -f "$RS/child.pid"
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
+CP="$(cat "$RS/child.pid" 2>/dev/null)"; sleep 0.3
+check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
+rs_state missing; echo fail > "$RS/list.mode"; rs_try install
+check "review-skill: install with a failing plugin list runs no marketplace add or install" "$RC:$ERR:$(rs_calls)" "1:error list boom:plugin list --json;"
+rs_state missing; echo ALREADY EXISTS > "$RS/mkt.msg"; echo upper > "$RS/mkt.mode"; rs_try install
+check "review-skill: 'already exists' is matched case-insensitively" "$RC:$(rs_calls | grep -c 'plugin install')" "0:1"
+jq '. + [(.[1] | .enabled = false | .version = "0.0.1" | .installPath = "/old")]' "$RS/installed.json" > "$RS/list.json"; jq 'reverse' "$RS/list.json" > "$RS/list2.json"; cp "$RS/list2.json" "$RS/list.json"; rm -f "$RS/list.mode"; rs_try status
+check "review-skill: with several entries for the id the enabled one wins" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+check "review-skill: no temp folder left behind" "$(ls "$RS/tmp" | wc -l | tr -d ' ')" "0"
+# settings.prReviewer overrides
+jq '.settings.prReviewer = {marketplace: "me/mkt", plugin: "mine@mkt", skill: "a/B.md"}' "$RSC" > "$RS/cfg2.json"; mkdir -p "$RS/plug/a"; echo b > "$RS/plug/a/B.md"
+rs_state installed; jq '.[1].id = "mine@mkt"' "$RS/installed.json" > "$RS/mine.json"; cp "$RS/mine.json" "$RS/list.json"
+RSCFG="$RS/cfg2.json" rs_try path; check "review-skill: another plugin id and skill path are honoured" "$RC:$OUT" "0:$RS/plug/a/B.md"
+RSCFG="$RS/cfg2.json" rs_try status; check "review-skill: status uses the configured plugin" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+rs_state missing; RSCFG="$RS/cfg2.json" rs_try install; check "review-skill: install with another plugin adds its marketplace and installs it" "$RC:$(grep -v 'plugin list' "$RS/argv.log" | tr '\n' ';')" "2:plugin marketplace add me/mkt;plugin install mine@mkt;"
+rs_state installed; RSCFG="$RS/none.json" rs_try status; check "review-skill: without a saved configuration it uses the merged one" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
+jq 'del(.settings.prReviewer)' "$RSC" > "$RS/cfg3.json"; RSCFG="$RS/cfg3.json" rs_try status; check "review-skill: a configuration without prReviewer falls back to the default" "$RC" "0"
+# check_config and upgrade_config
+chk() { jq --argjson v "$1" '.settings.prReviewer = $v' "$KIT/config.default.json" > "$RS/chk.json"; check_config "$RS/chk.json"; }
+MSG="ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"
+check "review-skill: check_config accepts the default" "$(check_config "$KIT/config.default.json")" ""
+for bad in '"x"' 'null' '[]' '{}' '{"marketplace":"a","plugin":"b"}' '{"marketplace":"a","plugin":"b","skill":""}' '{"marketplace":1,"plugin":"b","skill":"c"}'; do
+  check "review-skill: check_config rejects $bad" "$(chk "$bad")" "$MSG"
+done
+echo '{"settings":{"language":"es"},"roles":{}}' > "$RS/old.json"
+check "review-skill: upgrade_config adds prReviewer to an old configuration" "$(upgrade_config "$KIT/config.default.json" "$RS/old.json" | jq -r '.settings.prReviewer.plugin + " " + .settings.language')" "lens-review@lens-review es"
+check "review-skill: nothing is written in the worktree" "$(git -C "$RS/wt" status --porcelain | wc -l | tr -d ' ')" "0"
 }
 
 sec_relaunch() {

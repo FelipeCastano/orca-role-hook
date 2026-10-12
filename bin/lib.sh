@@ -15,6 +15,9 @@ orca_shim() {
 }
 orca_shim
 
+# Kills a process and all its descendants (children first).  kill_tree <pid>
+kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
+
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
 merged_config() {  # $1 = project/worktree folder
@@ -193,6 +196,10 @@ check_config() {
         or (has("parse") and ((.parse | type) != "string" or (.parse != "lines" and (.parse | test("^(json|regex):.+") | not)))))]
     | if length > 0 then "ERROR: invalid configuration: models must be {list, parse, probe} (see README)" else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: models must be {list, parse, probe} (see README)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("prReviewer") then (.prReviewer | select((type != "object") or ([.marketplace, .plugin, .skill] | map(select(type != "string" or . == "")) | length > 0))
+      | "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}") else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0

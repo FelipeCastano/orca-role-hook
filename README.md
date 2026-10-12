@@ -287,7 +287,7 @@ All the configuration lives in `~/.orca-roles/config.json`. It is read every tim
 
 ### Modes
 
-The kit has three fixed modes (not configurable): `programmer`, `pr-reviewer` and `academic-writer`. The mode decides which team a worktree launches and which prompts it reads (`prompts/<mode>/`). Today only `programmer` exists; a mode is available when `prompts/<mode>/planner.md` exists, and asking for another one fails with `mode '<x>' is not available yet`. Without any setting the mode is `programmer` and everything works as before.
+The kit has three fixed modes (not configurable): `programmer`, `pr-reviewer` and `academic-writer`. The mode decides which team a worktree launches and which prompts it reads (`prompts/<mode>/`). Today `programmer` and `pr-reviewer` exist; a mode is available when `prompts/<mode>/planner.md` exists, and asking for another one (`academic-writer`) fails with `mode '<x>' is not available yet`. Without any setting the mode is `programmer` and everything works as before.
 
 Choose it, from lowest to highest priority:
 
@@ -299,7 +299,7 @@ The id must be exactly one of the three (no uppercase, spaces, slashes or `..`);
 
 **Open team rule:** the mode of a worktree cannot change while its team is open. If the requested mode differs from the one the worktree was launched with and any tab of the saved team still exists (also one Orca restored after a restart with a new handle), `launch.sh` stops with an error and changes nothing. Close the team first (`close-role.sh` on each worker, or close the tabs) and run `roles` again.
 
-Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"` and the six workers are `["programmer"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
+Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]` and the other five workers are `["programmer"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
 
 `prompt` is a path (legacy form, it applies to `programmer` only) or an object per mode:
 
@@ -310,6 +310,22 @@ Each role has `modes`: `"all"` or a list of mode ids; without it the role belong
 A mode without an entry uses `prompts/<mode>/<role>.md`. A role of the mode whose prompt file does not exist is skipped with a warning naming the role, the mode and the expected path (the other roles still launch). The common rules come from the mode's folder (`prompts/<mode>/common-workers.md`).
 
 > Update needed if you set a custom `prompt` pointing to the old flat `~/.orca-roles/prompts/<role>.md`: that file no longer exists, the prompts moved to `prompts/programmer/<role>.md`.
+
+#### pr-reviewer mode
+
+The pr-reviewer mode follows lens-review (https://github.com/romerox3/lens-review), a Claude Code plugin skill for multi-agent code review. orca-roles does not include or copy it: on the first start of the mode the Planner installs the plugin from its own repository, with your yes, and reads it at run time to set up the reviewer roles and run each review. The review method and its lenses belong to that project, and every report credits it.
+
+The mode's Planner reads that skill to review pull requests. `settings.prReviewer` names it: `marketplace` (`romerox3/lens-review`), `plugin` (`lens-review@lens-review`) and `skill` (the skill's path inside the plugin, `skills/lens-review/SKILL.md`). `~/.orca-roles/bin/review-skill.sh status` tells whether it is installed (`installed`, `disabled`, `missing` or `error`), `path` prints the skill file and `install` adds the marketplace and installs the plugin with the `claude` CLI. The mode's Planner asks you before installing it, the first time the mode starts; `roles` never installs it.
+
+**Starting it.** `roles --mode pr-reviewer` in the worktree (the mode is saved, so a plain `roles` keeps it). With the default configuration it opens the PLANNER and the AUDITOR only; the reviewers are created on the first run.
+
+**First start.** The Planner checks the skill with `review-skill.sh status`. If it is missing, it tells you what installing does (adds the marketplace and installs the plugin into your Claude Code, for all your sessions) and runs `review-skill.sh install` only after your yes; if it is disabled, it asks you to enable it (`claude plugin enable <plugin>`). It then reads the skill itself (the skill's text is not copied into the kit) and, from it, proposes one lens role per lens (`lens-correctness`, `lens-security`, `lens-tests`, `lens-architecture`) with the model the skill suggests. On your yes it creates them with `new-role --from-json` (mode `pr-reviewer`, `extraDirs` set to the plugin's version-independent folder, `review-skill.sh root`, so any agent type can read the skill and an update does not break the roles) and opens them. Roles created with an older, versioned path are re-created on your yes. They are ordinary roles in your configuration: change their models or agent whenever you like. `claude` and `codex` work as they are; a `custom` lens role needs `addDirFlag` so it can be given that folder.
+
+**Reviewing a PR.** Give the Planner a PR (number or URL). It reads it with `gh`, checks that the worktree is at the PR's head commit and completes with you what the skill's intake requires (intent, tests run, size, tier). It dispatches one task per lens role of the tier, sends each finding to a different lens role to validate it and synthesizes with the skill's report template. The report is shown to you in the conversation and saved in the Planner's scratch folder.
+
+**Auditor (optional).** If you ask, the Auditor tries to reproduce each confirmed finding in a copy of the worktree and reports reproduced, not reproduced or could not try, with the evidence.
+
+**Read-only team.** Nobody edits the worktree, commits or pushes. The Planner never approves, requests changes or merges, and posts to the PR only after you approve that exact text.
 
 ### Enabling and disabling roles
 

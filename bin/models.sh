@@ -14,7 +14,6 @@ case "${1:-}" in -h|--help) sed -n 2,10p "$0"; exit 0;; esac
 ROLEARG=""; CHECK=0; ONLY=""
 while [ $# -gt 0 ]; do a="$1"; case "$a" in --check) CHECK=1;; --model) [ -n "${2:-}" ] || { echo "models.sh: --model needs a value" >&2; exit 1; }; ONLY="$2"; shift;; -*) echo "models.sh: unknown option $a" >&2; exit 1;; *) [ -z "$ROLEARG" ] && ROLEARG="$a" || { echo "models.sh: only one role at a time" >&2; exit 1; };; esac; shift; done
 [ -n "$ROLEARG" ] || { sed -n 2,2p "$0" >&2; exit 1; }
-kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
 # On exit (also Ctrl+C or TERM) kill every process still running under this script, probes included, then remove the temp dir
 cleanup() { local c; trap '' INT TERM; for c in $(pgrep -P $$ 2>/dev/null); do kill_tree "$c"; done; rm -rf "$T"; }
 T="$(mktemp -d "${TMPDIR:-/tmp}/orca-models.XXXXXX")"; trap cleanup EXIT; trap 'exit 130' INT TERM
