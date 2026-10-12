@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts output-rules config planner-msg clean scratch prompt-rules cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -100,194 +100,140 @@ jq empty "$ROOT/config.default.json"; echo "ok   config.default.json is JSON"
 }
 
 sec_prompts() {
-# Every prompt follows the pattern
-for p in "$ROOT"/prompts/programmer/*.md; do
-  n="$(basename "$p" .md)"; [ "$n" = common-workers ] && continue
-  for sec in '^# Role: ' '^## When you receive a task' '^## Limits' '^## Parameters' '^## Report' '^Now reply only'; do
-    [ "$n" = planner ] && case "$sec" in '^## When you receive a task'|'^## Report'|'^Now reply only') continue;; esac
-    grep -qE "$sec" "$p" || { echo "FAIL prompts/programmer/$n.md: missing section $sec"; FAIL=1; }
-  done
-  [ "$n" = planner ] || awk '/^## Report/{f=1;next} /^## /{f=0} f' "$p" | grep -qF 'following the Output rules' || { echo "FAIL prompts/programmer/$n.md: its Report does not point to the Output rules"; FAIL=1; }
-done
-grep -q '^## Code review method' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md without its method"; FAIL=1; }
-grep -q '^## Plan review method' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md without its method"; FAIL=1; }
-grep -q '^## Resuming a workspace after a restart' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md without the resume section"; FAIL=1; }
-grep -q 'reply to the user in the language they write to you in' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md does not reply in the user's language"; FAIL=1; }
-echo "ok   prompt pattern"
-grep -q 'No heartbeats' "$ROOT/prompts/programmer/common-workers.md" || { echo "FAIL common-workers.md: falta la regla de no enviar heartbeats"; FAIL=1; }
-grep -q 'lastOutputAt' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md: la detección de workers silenciosos debe usar lastOutputAt"; FAIL=1; }
-grep -q 'last_heartbeat_at' "$ROOT/prompts/programmer/planner.md" && { echo "FAIL planner.md: aún depende de last_heartbeat_at"; FAIL=1; }
-echo "ok   heartbeats: workers no laten, planner vigila por lastOutputAt"
-for p in common-workers planner; do grep -q 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: missing the no-names-of-people rule"; FAIL=1; }; done
-grep -q 'No new code comments unless the repo' "$ROOT/prompts/programmer/common-workers.md" || { echo "FAIL common-workers.md: missing the comments rule"; FAIL=1; }
-grep -q 'Names and stray comments' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md: missing the names/comments finding"; FAIL=1; }
-echo "ok   rules: no names of people, comments only if the repo uses them, auditor finding"
-# pr-reviewer mode prompts: each pin is anchored to its section
-PRD="$ROOT/prompts/pr-reviewer"
-for f in planner common-workers lens-reviewer auditor; do [ -f "$PRD/$f.md" ] || { echo "FAIL prompts/pr-reviewer/$f.md missing"; FAIL=1; }; done
-prsec() { awk -v t="## $2" '$0 == t {f=1; next} /^## /{f=0} f' "$PRD/$1.md"; }   # prsec <file> <section title>
-prpin() { local d="$1" f="$2" sec="$3" pat="$4"; prsec "$f" "$sec" | grep -qE -- "$pat" || { echo "FAIL pr-reviewer $f.md, section '$sec': $d"; FAIL=1; }; }
-for sec in "When you start (before talking to the user)" "Resuming a workspace after a restart" "Coming back with your memory" "After your conversation was cleared" "The review skill" "The team" "Reviewing a PR" "Common mechanics for any task" "Limits" "Cleaning the workers' context"; do
-  [ -n "$(prsec planner "$sec")" ] || { echo "FAIL pr-reviewer planner.md: missing section '$sec'"; FAIL=1; }
-done
-prpin "runs review-skill.sh status at start" planner "The review skill" 'review-skill\.sh status'
-prpin "installs only on the user's yes" planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
-prpin "gets SKILL.md with review-skill.sh path" planner "The review skill" 'review-skill\.sh path'
-prpin "a disabled skill is enabled by the user, not by the Planner" planner "The review skill" 'Do not enable it yourself without their yes'
-prpin "reviewers are dispatched with orca orchestration, never own subagents" planner "The review skill" 'never with your own subagents'
-prpin "lens roles are created with new-role --from-json" planner "The team" 'new-role\.sh --from-json'
-prpin "lens roles have modes pr-reviewer" planner "The team" '"modes": "pr-reviewer"'
-prpin "lens roles get extraDirs from review-skill.sh root" planner "The team" '"extraDirs": \["<output of ~/.orca-roles/bin/review-skill\.sh root>"\]'
-prpin "the lens role prompt carries no absolute path and credits lens-review" planner "The team" 'without copying it; each brief gives you the current paths'
-prpin "stale lens roles are compared with review-skill.sh root" planner "The team" 'compare each one.s `extraDirs` with the output of `review-skill\.sh root`'
-prpin "stale lens roles are re-created with overwrite, on the user's yes" planner "The team" '"overwrite": true., only on their yes'
-prpin "re-creation keeps every other field of the current entry" planner "The team" 'starts from the role.s current entry in the user.s configuration.*read with .jq. from .~/\.orca-roles/config\.json.*changes only .extraDirs.*and the prompt; nothing else the user set is dropped'
-prpin "the credit sentence at the start of each review" planner "Reviewing a PR" 'This review follows lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include it: it is installed from its repository \(with your yes when the kit installs it\) and reads it now'
-prpin "briefs carry the current paths of SKILL.md and the lens files" planner "Reviewing a PR" 'current absolute paths of SKILL\.md from `review-skill\.sh path` and of the role.s lens file'
-prpin "validation follows the skill's tier rules and uncertain verdicts" planner "Reviewing a PR" 'the skill says to validate for the tier.*An uncertain verdict is handled as the skill.s validation prompt says'
-prpin "the report ends with the credit line" planner "Reviewing a PR" 'Review method: lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include or copy it: it installs it from its repository and runs it; the method and its lenses belong to that project'
-prpin "what is posted carries the credit line" planner "Reviewing a PR" 'Whatever you post carries the same "Review method: \.\.\." line'
-prpin "the skill is installed from its repository, not copied" planner "The review skill" 'does not include or copy it, it installs it from its own repository'
-prpin "validation subject has the uncertain verdict" lens-reviewer "Report" 'VALIDATION: confirmed\|refuted\|uncertain'
-prpin "findings follow the skill's own format" lens-reviewer "When you receive a task" "skill's own finding format and rules"
-prpin "the auditor caps workers at maxWorkers" auditor "Limits" 'at `maxWorkers` parallel workers'
-prpin "the auditor reads maxWorkers (default 2)" auditor "Parameters" 'maxWorkers.: 2'
-grep -qF 'The pr-reviewer mode follows lens-review (https://github.com/romerox3/lens-review), a Claude Code plugin skill for multi-agent code review. orca-roles does not include or copy it: on the first start of the mode the Planner installs the plugin from its own repository, with your yes, and reads it at run time to set up the reviewer roles and run each review. The review method and its lenses belong to that project, and every report credits it.' "$ROOT/README.md" || { echo "FAIL README.md: lost the lens-review credit paragraph"; FAIL=1; }
-grep -qF '`review-skill.sh root`' "$ROOT/README.md" && grep -qF 'needs `addDirFlag`' "$ROOT/README.md" || { echo "FAIL README.md: First start lost the root folder or the addDirFlag note"; FAIL=1; }
-grep -qF 'https://github.com/romerox3/lens-review' "$ROOT/plugin/skills/team/SKILL.md" || { echo "FAIL team SKILL.md: pr-reviewer paragraph lost the lens-review credit"; FAIL=1; }
-prpin "lens roles are created on the user's yes" planner "The team" 'On their yes, create each'
-prpin "the lens role prompt points to lens-reviewer.md" planner "The team" 'prompts/pr-reviewer/lens-reviewer\.md'
-prpin "dispatch with orca orchestration task-create / worker-start" planner "Reviewing a PR" 'task-create .*worker-start'
-prpin "validation by a different lens role" planner "Reviewing a PR" 'different lens role than the one that reported it'
-prpin "never approve, request changes or merge" planner "Reviewing a PR" 'Never approve, request changes or merge'
-prpin "posts only with the user's explicit yes to that exact text" planner "Reviewing a PR" 'only with the user.s explicit yes to that exact text'
-prpin "the Auditor only if the user asks" planner "Reviewing a PR" 'Only if the user asks'
-prpin "no commits in this mode" planner "Reviewing a PR" 'No commits, no pushes, no code changes in this mode'
-prpin "no commits in this mode (limits)" planner "Limits" 'No commits, no pushes, no code changes in this mode'
-prpin "nothing leaves the worktree without the user's yes" planner "Limits" 'Nothing leaves the worktree without the user.s explicit yes'
-prpin "the convention check before any PR comment" planner "Limits" 'follows the repository.s own conventions'
-prpin "the worktree is read-only" common-workers "Limits" 'The worktree is read-only'
-prpin "never posts to GitHub or any external system" common-workers "Limits" 'Never post to GitHub'
-prpin "no heartbeats" common-workers "Communication" 'No heartbeats'
-prpin "reads SKILL.md and its lens entirely" lens-reviewer "When you receive a task" 'Read SKILL\.md and your lens file\(s\) entirely'
-prpin "validation: refuted by default" lens-reviewer "When you receive a task" 'verdict is refuted by default'
-prpin "read-only, no running the project's code" lens-reviewer "Limits" 'The worktree is read-only'
-prpin "reproduces in a copy of the worktree" auditor "When you receive a task" 'rsync -a --delete --exclude \.git'
-prpin "never experiments in the worktree" auditor "When you receive a task" 'never experiment in the worktree'
-prpin "no mutation testing in this mode" auditor "Limits" 'No mutation testing in this mode'
-echo "ok   pr-reviewer prompts: pins"
-for p in common-workers planner; do
-  r=$(grep 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" || true)
-  for k in 'Handles (`@user`) and email addresses count as names' '"the repo owner"' 'not `<name>_test_user`' 'not "as <name> asked"' 'Names of products, libraries, companies and services'; do
-    printf '%s' "$r" | grep -qF -- "$k" || { echo "FAIL $p.md: the no-names rule lost: $k"; FAIL=1; }
-  done
-done
-grep 'No new code comments unless the repo' "$ROOT/prompts/programmer/common-workers.md" | grep -qF 'Never delete existing comments' || { echo "FAIL common-workers.md: the comments rule lost 'never delete existing comments'"; FAIL=1; }
-grep 'No new code comments unless the repo' "$ROOT/prompts/programmer/common-workers.md" | grep -qF 'narrates the change' || { echo "FAIL common-workers.md: the comments rule lost 'never narrate the change'"; FAIL=1; }
-a=$(grep 'Names and stray comments' "$ROOT/prompts/programmer/auditor.md" || true)
-for k in 'handle or an email address' '**low** severity' 'Owner: **Dev** for code, **Tester** for tests'; do
-  printf '%s' "$a" | grep -qF -- "$k" || { echo "FAIL auditor.md: the names/comments finding lost: $k"; FAIL=1; }
-done
-# the examples use placeholders, not real people
-grep -rEq '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' "$ROOT/prompts/" && { echo "FAIL prompts contain an email address"; FAIL=1; }
-for p in common-workers planner; do
-  at=$(grep -n 'never carry attribution to an AI' "$ROOT/prompts/programmer/$p.md" | head -1 | cut -d: -f1 || true)
-  al=$(grep 'never carry attribution to an AI' "$ROOT/prompts/programmer/$p.md" | head -1 || true)
-  for k in 'git log -1 --format=%B' 'git commit --amend'; do
-    printf '%s' "$al" | grep -qF -- "$k" || { echo "FAIL $p.md: the AI-attribution rule lost: $k"; FAIL=1; }
-  done
-  nn=$(grep -n 'No names of people anywhere you write' "$ROOT/prompts/programmer/$p.md" | head -1 | cut -d: -f1 || true)
-  [ -n "$at" ] && [ -n "$nn" ] && [ "$nn" -eq $((at + 1)) ] || { echo "FAIL $p.md: the no-names rule must sit right after the AI-attribution rule"; FAIL=1; }
-  grep -qF "Merge pull request #N from <handle>/<branch>" "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: the commit rule lost the GitHub merge-subject warning"; FAIL=1; }
-done
-c=$(grep 'No new code comments unless the repo' "$ROOT/prompts/programmer/common-workers.md" || true)
-for k in 'comment density' 'CLAUDE.md' 'CONTRIBUTING' 'linter' 'none at all in a repo whose code carries none'; do
-  printf '%s' "$c" | grep -qF -- "$k" || { echo "FAIL common-workers.md: the comments rule lost: $k"; FAIL=1; }
-done
-pass=$(awk '/^### Passes/{f=1;next} /^### /{f=0} f' "$ROOT/prompts/programmer/auditor.md" | grep 'Names and stray comments' || true)
-printf '%s' "$pass" | grep -qF 'Jira' || { echo "FAIL auditor.md: the names/comments pass must live under '### Passes' and cover Jira"; FAIL=1; }
-echo "ok   rules: key content pinned, examples use placeholders"
-
 # Every role in the config has a prompt
 for r in $(jq -r '.roles | keys_unsorted[]' "$KIT/config.default.json"); do
   [ -f "$(prompt_of "$KIT/config.default.json" "$r")" ] || { echo "FAIL role $r without a prompt"; FAIL=1; }
 done; echo "ok   prompts of the default roles"
 }
 
-# The Output rules: pinned inside the section (not anywhere in the file), by anchor phrases
+sec_rules() {
+# The safety and permission rules the prompts must keep (R<n> = the rule's number). Wording, flow details, formats and README sentences are not pinned.
+blk_start
+PD="$ROOT/prompts/programmer"; PRD="$ROOT/prompts/pr-reviewer"
+# rule <R> <file> <fragment> [<line pattern>]: the file (or, with a pattern, the line it matches) holds the fragment
+rule() { local r="$1" f="$2" frag="$3" lp="${4:-}"; if [ -n "$lp" ]; then grep -E -- "$lp" "$f" | grep -qF -- "$frag"; else grep -qF -- "$frag" "$f"; fi || { echo "FAIL rules $r: ${f#$ROOT/} lost '$frag'"; FAIL=1; }; }
+prsec() { awk -v t="## $2" '$0 == t {f=1; next} /^## /{f=0} f' "$PRD/$1.md"; }   # prsec <file> <section title>
+prrule() { local r="$1" f="$2" sec="$3" pat="$4"; prsec "$f" "$sec" | grep -qE -- "$pat" || { echo "FAIL rules $r: pr-reviewer $f.md, section '$sec', lost '$pat'"; FAIL=1; }; }
+# R1 nothing leaves the worktree without the user's explicit yes
+rule R1 "$PD/planner.md" "Nothing leaves the worktree without the user's explicit yes"
+rule R1 "$PD/planner.md" 'Approving the plan, a step or a commit is not approving a push or a Jira update'
+rule R1 "$PD/planner.md" 'the force-push needs its own yes'
+rule R1 "$PD/planner.md" 'rewrite only on their yes'
+# R2 commit only on the user's explicit yes; audit fixes folded into the step commits
+rule R2 "$PD/planner.md" "only on the user's explicit yes to that commit" 'One commit per step, made at close'
+rule R2 "$PD/planner.md" 'commit only on a clear yes to that commit' 'One commit per step, now'
+rule R2 "$PD/planner.md" 'is not approving the commit' 'One commit per step, now'
+rule R2 "$PD/planner.md" 'never become new commits on top' '\*\*Set audit\.\*\*'
+rule R2 "$PD/planner.md" '--fixup=' '\*\*Set audit\.\*\*'
+rule R2 "$PD/planner.md" '--autosquash' '\*\*Set audit\.\*\*'
+# R3 no AI attribution in commits and PRs, and the check after every commit
+for p in common-workers planner; do
+  rule R3 "$PD/$p.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
+  rule R3 "$PD/$p.md" 'git commit --amend' 'never carry attribution to an AI'
+done
+rule R3 "$PRD/common-workers.md" 'Nothing you write (reports, findings, files) carries attribution to an AI'
+rule R3 "$PRD/common-workers.md" 'no `Co-Authored-By` trailer and no "Generated with' 'carries attribution to an AI'
+# R4 no names of people
+for p in common-workers planner; do
+  rule R4 "$PD/$p.md" 'No names of people anywhere you write'
+  rule R4 "$PD/$p.md" 'Handles (`@user`) and email addresses count as names' 'No names of people anywhere you write'
+done
+rule R4 "$PRD/common-workers.md" 'No names of people anywhere you write'
+rule R4 "$PRD/common-workers.md" 'Handles (`@user`) and email addresses count as names' 'No names of people anywhere you write'
+rule R4 "$PD/auditor.md" 'Names and stray comments'
+grep -rEq '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' "$ROOT/prompts/" && { echo "FAIL rules R4: a prompt contains an email address"; FAIL=1; }
+# R5 worker permissions: no worktrees or terminals, no push, no git state changes, read-only reviewer worktree, no writes to external systems
+rule R5 "$PD/common-workers.md" 'Never create worktrees or terminals'
+rule R5 "$PD/common-workers.md" 'Never `git push`'
+rule R5 "$PD/common-workers.md" 'Never run `git checkout`'
+rule R5 "$PD/planner.md" 'Never create worktrees or terminals'
+rule R5 "$PD/common-workers.md" 'Never write to Jira, GitHub'
+rule R5 "$PD/common-workers.md" 'Do not commit unless the task asks for it'
+rule R5 "$PD/common-workers.md" 'Work only inside your worktree'
+rule R5 "$PD/deployer.md" 'You never deploy to any environment'
+rule R5 "$PD/deployer.md" 'You do not modify production code'
+rule R5 "$PD/e2e-tester.md" 'Do not sign in or enter credentials'
+rule R5 "$PD/e2e-tester.md" 'You do not modify anything in the project'
+rule R5 "$PD/researcher.md" 'Do not modify production code'
+# R6 install and create only with the user's yes; R7 never approve or merge; R8 credit to lens-review, not copied
+# R5 the pr-reviewer worktree is read-only; R11 its Auditor never experiments in the worktree; R14 no heartbeats; R15 convention check
+prrule R6 planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
+prrule R6 planner "The review skill" 'Do not enable it yourself without their yes'
+prrule R6 planner "The team" '"overwrite": true., only on their yes'
+prrule R8 planner "Reviewing a PR" 'This review follows lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include it: it is installed from its repository \(with your yes when the kit installs it\) and reads it now'
+prrule R8 planner "Reviewing a PR" 'Review method: lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include or copy it: it installs it from its repository and runs it; the method and its lenses belong to that project'
+prrule R8 planner "Reviewing a PR" 'Whatever you post carries the same "Review method: \.\.\." line'
+prrule R8 planner "The review skill" 'does not include or copy it, it installs it from its own repository'
+prrule R6 planner "The team" 'On their yes, create each'
+prrule R7 planner "Reviewing a PR" 'Never approve, request changes or merge'
+prrule R1 planner "Reviewing a PR" 'only with the user.s explicit yes to that exact text'
+prrule R5 planner "Limits" 'No commits, no pushes, no code changes in this mode'
+prrule R1 planner "Limits" 'Nothing leaves the worktree without the user.s explicit yes'
+prrule R15 planner "Limits" 'follows the repository.s own conventions'
+prrule R5 common-workers "Limits" 'The worktree is read-only'
+prrule R5 common-workers "Limits" 'Never post to GitHub'
+prrule R14 common-workers "Communication" 'No heartbeats'
+prrule R5 lens-reviewer "Limits" 'The worktree is read-only'
+prrule R11 auditor "When you receive a task" 'rsync -a --delete --exclude \.git'
+prrule R5 auditor "When you receive a task" 'never experiment in the worktree'
+prrule R5 auditor "Limits" 'No mutation testing in this mode'
+rule R8 "$ROOT/README.md" 'does not include or copy it' 'https://github.com/romerox3/lens-review'
+rule R8 "$ROOT/plugin/skills/team/SKILL.md" 'https://github.com/romerox3/lens-review'
+# R9 workers write in English; never wrap commands in bash -c / sh -c
+OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$PD/common-workers.md")"
+printf '%s' "$OUTSEC" | grep -qF 'Always write in English' || { echo "FAIL rules R9: common-workers.md Output section lost 'Always write in English'"; FAIL=1; }
+rule R9 "$PD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`'
+# R10 workflow: one code task in flight, Dev -> Tester per step, audit once per set, commit after the Tester's ACCEPTED, the Planner writes no production code
+rule R10 "$PD/planner.md" 'Only one code task is in flight at any moment' '^- \*\*One step at a time\.\*\*'
+rule R10 "$PD/planner.md" "Nobody commits before the Tester's ACCEPTED"
+rule R10 "$PD/planner.md" "closes only with the Tester's ACCEPTED" '^8\. \*\*Close and report'
+rule R10 "$PD/planner.md" 'audits once per set, not per step' '\*\*Set audit\.\*\*'
+rule R10 "$PD/planner.md" 'after the previous report' 'Never pre-create Tester or Auditor tasks'
+rule R10 "$PD/planner.md" 'You do not write production code'
+rule R10 "$PD/dev.md" 'You do not write the test suite'
+rule R10 "$PD/tester.md" 'do not write text checks or run text mutants' '^2\. If the change only touches prompt'
+rule R10 "$PD/auditor.md" 'do not run text mutants' '^4\. If the change only touches prompt'
+rule R10 "$PD/tester.md" 'the rest of this list still applies (including cleanup)' '^2\. If the change only touches prompt'
+rule R10 "$PD/auditor.md" 'the rest of the method still applies, including the names-of-people pass' '^4\. If the change only touches prompt'
+rule R10 "$PD/planner.md" 'never tells the Tester or the Auditor what to test, mutate or look at' '\*\*Briefed rounds\.\*\*'
+# R11 where each role works: in place with .orca-bak, one mutant at a time, verified close; experiments in scratchDir; temporaries only there
+t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
+a27="$(grep '^2\. \*\*Baseline' "$PD/auditor.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)"
+for k in 'in place in the worktree' 'mv <f>.orca-bak <f>' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'equal the baseline'; do
+  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL rules R11: tester.md mutation step lost '$k'"; FAIL=1; }
+  printf '%s' "$a27" | grep -qF -- "$k" || { echo "FAIL rules R11: auditor.md mutation passes lost '$k'"; FAIL=1; }
+done
+printf '%s' "$t$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)" | grep -qF '&& mv' && { echo "FAIL rules R11: the restore mv is chained with && in the mutation text"; FAIL=1; }
+for p in tester auditor; do
+  grep -F 'git checkout' "$PD/$p.md" | grep -vqE 'Never (use|run) .git checkout.' && { echo "FAIL rules R11: $p.md mentions git checkout without forbidding it"; FAIL=1; }
+done
+rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
+check "rules R11: common-workers.md earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$PD/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$PD/common-workers.md")$(grep -c -- '--short' "$PD/common-workers.md" || true)$(grep -c 'copy-rev/' "$PD/common-workers.md")" "1101"
+check "rules R11: tester.md mutation in place, no copy" "$(grep -c 'in place in the worktree' "$PD/tester.md")$(grep -c 'rsync' "$PD/tester.md")" "10"
+check "rules R11: no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
+# R12 process cleanup
+rule R12 "$PD/common-workers.md" 'stop the processes you started'
+# Tester and Auditor resource caps
+for p in tester auditor; do
+  rule caps "$PD/$p.md" 'No GPU'
+  rule caps "$PD/$p.md" 'capped at `maxWorkers` parallel processes or threads' '^- \*\*Resources\*\*'
+done
+prrule caps auditor "Limits" 'Cap every process you run at .maxWorkers. parallel workers'
+# R14 no heartbeats
+rule R14 "$PD/common-workers.md" 'No heartbeats'
+# R15 the convention check before proposing a commit, PR or Jira text
+rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
+rule R15 "$PD/planner.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'
+blk_end "rules: the safety and permission rules are in the prompts"
+}
+
+# The role anchor
 sec_output_rules() {
-CW="$ROOT/prompts/programmer/common-workers.md"
-OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$CW")"
-[ -n "$OUTSEC" ] || { echo "FAIL common-workers.md: missing the Output section"; FAIL=1; }
-for frag in 'Always write in English' 'Repo artifacts (code, commits, docs) still follow' 'no narration between tool calls' 'no recap' 'keep negations, numbers, units, paths, file:line and ids' 'is not written in telegraphic style' 'self-contained and complete' 'Never write "see the file in scratchDir"' 'full, unambiguous sentences'; do
-  printf '%s' "$OUTSEC" | grep -qF "$frag" || { echo "FAIL common-workers.md: Output section lost '$frag'"; FAIL=1; }
-done
-WRAP="$(grep -F 'Never wrap commands in' "$CW" || true)"
-for frag in 'Never wrap commands in `bash -c` or `sh -c`' 'save it as a script in `scratchDir`' 'the shell may be zsh'; do
-  printf '%s' "$WRAP" | grep -qF -- "$frag" || { echo "FAIL common-workers.md: the wrapped-commands rule lost '$frag'"; FAIL=1; }
-done
-grep -qF "3-sentence" "$CW" && grep -qF -- '--report-path' "$CW" || { echo "FAIL common-workers.md: lost the override of the preamble's report instructions"; FAIL=1; }
-PL="$(grep 'Specs are written in English and stay compact' "$ROOT/prompts/programmer/planner.md" || true)"
-for frag in 'Do not repeat rules the worker prompts already carry' 'point to files and lines' 'self-contained about the task' 'threat model and rejection threshold' 'with the user you talk as usual' 'Literal strings stay in their original language'; do
-  printf '%s' "$PL" | grep -qF "$frag" || { echo "FAIL planner.md: compact-specs bullet lost '$frag'"; FAIL=1; }
-done
-PLP="$ROOT/prompts/programmer/planner.md"
-CONV="$(grep 'follows the repository.s own conventions, checked every time' "$PLP" || true)"
-for frag in 'checked every time' 'git log -15' 'gh pr list --state merged' 'gh pr view' 'pull_request_template.md' 'glab mr list --merged' '.gitlab/merge_request_templates/' 'subTaskIssueTypes()' 'gh pr view <n> --comments' 'pulls/<n>/comments' 'Jira issue or subtask' 'For a Jira comment' 'Never reuse a format remembered' 'without re-reading'; do
-  printf '%s' "$CONV" | grep -qF "$frag" || { echo "FAIL planner.md: convention-check bullet lost '$frag'"; FAIL=1; }
-done
-for frag in 'no history to read' 'the command fails or returns nothing' 'tell the user so and propose a format for them to confirm'; do
-  printf '%s' "$CONV" | grep -qF "$frag" || { echo "FAIL planner.md: convention-check bullet lost the no-history fallback '$frag'"; FAIL=1; }
-done
-CMT="$(grep 'One commit per step, made at close' "$PLP" || true)"
-printf '%s' "$CMT" | grep -qF "only on the user's explicit yes to that commit, before the next step opens" || { echo "FAIL planner.md: the one-commit rule lost the explicit yes"; FAIL=1; }
-CMT2="$(grep 'One commit per step, now' "$PLP" || true)"
-for frag in 'show the user the full message and the list of files' 'commit only on a clear yes to that commit' 'Approving the plan, the step or the Tester' 'is not approving the commit' 'If they ask for changes, show it again' '"ok, continue"' 'ask again' 'decline or defer the commit, ask what to do with the uncommitted changes' 'after the convention check in "Limits"' '`git status`, `git diff --stat`'; do
-  printf '%s' "$CMT2" | grep -qF "$frag" || { echo "FAIL planner.md: step-close commit rule lost '$frag'"; FAIL=1; }
-done
-for pat in 'A step is \*\*open\*\* from its first task' 'Only one code task is in flight'; do
-  printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qE 'commit is made|its commit is not made' || { echo "FAIL planner.md: '$pat' no longer keeps the step open until its commit is made"; FAIL=1; }
-done
-printf '%s' "$(grep 'Report to the user (see' "$PLP" || true)" | grep -qF "with the step's commit made, open the next step" || { echo "FAIL planner.md: the next step opens before the commit"; FAIL=1; }
-printf '%s' "$(grep '\*\*Jira subtasks\.\*\*' "$PLP" || true)" | grep -qF 'after the convention check in "Limits"' || { echo "FAIL planner.md: Jira subtasks do not point to the convention check"; FAIL=1; }
-[ "$(grep -cF 're-propose its close commit (re-running the convention check in "Limits")' "$PLP")" = 3 ] || { echo "FAIL planner.md: the recovery paths (resumed, back, cleared) must re-propose an uncommitted ACCEPTED step's commit"; FAIL=1; }
-printf '%s' "$(grep '^- \*\*Nothing leaves the worktree' "$PLP" || true)" | grep -qF 'Approving the plan, a step or a commit is not approving a push or a Jira update' || { echo "FAIL planner.md: the nothing-leaves rule lost its approval sentence"; FAIL=1; }
-grep -qF 'Nobody commits while the step is open' "$PLP" && { echo "FAIL planner.md: 'Nobody commits while the step is open' forbids the close commit"; FAIL=1; }
-grep -qF "Nobody commits before the Tester's ACCEPTED" "$PLP" || { echo "FAIL planner.md: the one-commit bullet lost 'Nobody commits before the Tester's ACCEPTED'"; FAIL=1; }
-grep -qF "Nobody commits before the Auditor's ACCEPTED" "$PLP" && { echo "FAIL planner.md: still says nobody commits before the Auditor's ACCEPTED"; FAIL=1; }
-printf '%s' "$(grep '^8\. \*\*Close and report' "$PLP" || true)" | grep -qF "closes only with the Tester's ACCEPTED" || { echo "FAIL planner.md: step 8 must close on the Tester's ACCEPTED"; FAIL=1; }
-printf '%s' "$(grep '^- A step only closes with ACCEPTED' "$PLP" || true)" | grep -qF 'ACCEPTED from the Tester (and the E2E-Tester and the Researcher if they took part)' || { echo "FAIL planner.md: Limits step-close rule is not the Tester's (plus E2E-Tester/Researcher)"; FAIL=1; }
-printf '%s' "$(grep '^- A step only closes with ACCEPTED' "$PLP" || true)" | grep -qF 'Auditor' && { echo "FAIL planner.md: Limits step-close rule still names the Auditor"; FAIL=1; }
-for pat in '^8\. \*\*Close and report' '^- A step only closes with ACCEPTED'; do
-  printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and its commit made' || { echo "FAIL planner.md: '$pat' lost 'and its commit made'"; FAIL=1; }
-done
-printf '%s' "$(grep '^Steps are atomic' "$ROOT/README.md" || true)" | grep -qF "Nobody commits before the Tester's ACCEPTED" || { echo "FAIL README: lost the commit-after-ACCEPTED definition"; FAIL=1; }
-for pat in '^5\. Tell the user, in a few lines: where you were' '^3\. Tell the user, in a few lines: the Run'; do
-  printf '%s' "$(grep "$pat" "$PLP" || true)" | grep -qF 'and wait for the yes' || { echo "FAIL planner.md: recovery summary '$pat' lost 'wait for the yes'"; FAIL=1; }
-done
-for frag in 'open the next step only once the tree holds no changes from the previous step' '(commit, stash or branch, discard: the user decides and approves)' 'A step with nothing to commit (research only, no change needed) closes when the user agrees there is nothing to commit'; do
-  printf '%s' "$CMT2" | grep -qF "$frag" || { echo "FAIL planner.md: step-close commit rule lost '$frag'"; FAIL=1; }
-done
-RPT="$(grep -A1 '^## Report to the user' "$PLP" | tail -1)"
-printf '%s' "$RPT" | grep -qF 'the proposed commit, awaiting their yes' || { echo "FAIL planner.md: Report to the user lost the proposed commit awaiting the yes"; FAIL=1; }
-RS="$(grep '^Steps are atomic and strictly sequential' "$ROOT/README.md" || true)"
-for frag in 'and you say yes to it' 'match the format of the repo'"'"'s recent history, and Jira texts that of the Jira project'"'"'s recent ones' 're-reads them every time' 'The next step does not start until the commit is made'; do
-  printf '%s' "$RS" | grep -qF "$frag" || { echo "FAIL README steps paragraph lost '$frag'"; FAIL=1; }
-done
-for p in dev tester auditor researcher e2e-tester deployer; do
-  grep -qF 'following the Output rules' "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: Report lost the pointer to the Output rules"; FAIL=1; }
-done
-grep -qF 'following the Output rules' "$ROOT/bin/new-role.sh" || { echo "FAIL new-role.sh: skeleton Report lacks the Output pointer"; FAIL=1; }
-grep -qF 'following the Output rules' "$ROOT/plugin/skills/team/SKILL.md" || { echo "FAIL team SKILL.md: Report template lacks the Output pointer"; FAIL=1; }
-RD="$(grep '^| `language` |' "$ROOT/README.md" || true)"
-for frag in 'workers always write in English' '"language":"english"' "Claude Code's own \`language\` setting"; do
-  printf '%s' "$RD" | grep -qF "$frag" || { echo "FAIL README language row lost '$frag'"; FAIL=1; }
-done
 # Anchor: workers get the English rule, the Planner does not
 . "$ROOT/bin/lib.sh"
 printf '%s' "$(role_anchor "$KIT/config.default.json" dev)" | grep -qF 'Always write in English' || { echo "FAIL role_anchor: workers lack the English rule"; FAIL=1; }
 printf '%s' "$(role_anchor "$KIT/config.default.json" planner)" | grep -qF 'Always write in English' && { echo "FAIL role_anchor: the Planner got the English rule"; FAIL=1; }
-echo "ok   output rules: pinned in their section, planner bullet, README, report pointers, anchor"
+echo "ok   output rules: role anchor (workers get the English rule, the Planner does not)"
 }
 
 sec_config() {
@@ -362,7 +308,6 @@ case "$M2" in *"Sec"*) echo "FAIL planner_msg includes an inactive role"; FAIL=1
 case "$M2" in *"Always reply to the user in"*) echo "FAIL planner_msg sets a language without settings.language"; FAIL=1;; *) echo "ok   planner_msg: language auto by default";; esac
 M3="$(planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" 3)"
 case "$M3" in (*"Handles: Dev=t2."*"conversation was cleared"*"After your conversation was cleared"*"Start there.") echo "ok   planner_msg: cleared mode";; (*) echo "FAIL planner_msg cleared: $M3"; FAIL=1;; esac
-grep -q '^## After your conversation was cleared' "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md: section for the cleared mode" || { echo "FAIL planner.md without the cleared section"; FAIL=1; }
 jq '.settings.language = "Spanish"' "$KIT/config.json" > "$TMP/lang.json"
 case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in *"Always reply to the user in Spanish, whatever language they write in."*) echo "ok   planner_msg: settings.language";; *) echo "FAIL planner_msg language"; FAIL=1;; esac
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
@@ -420,92 +365,6 @@ check "scratch_dir from a subdirectory equals the root's" "$(cd "$SW/main/a/b" &
 check "scratch_dir from a subdirectory of a linked worktree" "$(mkdir -p "$SW/linked/x" && cd "$SW/linked/x" && scratch_dir tester)" "$S3"
 # no script in bin/ deletes under the scratch root (rm, find -delete or rsync --delete aimed at $KIT/tmp or scratch_dir)
 check "bin/ has no empty_scratch left" "$(grep -c 'empty_scratch' "$ROOT"/bin/*.sh | grep -vc ':0$' || true)" "0"
-# prompts: earlier versions go to rev-<sha> folders, copies of the tree to copy/, and nobody deletes in scratchDir
-check "common-workers.md: earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$ROOT/prompts/programmer/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$ROOT/prompts/programmer/common-workers.md")$(grep -c -- '--short' "$ROOT/prompts/programmer/common-workers.md" || true)$(grep -c 'copy-rev/' "$ROOT/prompts/programmer/common-workers.md")" "1101"
-check "planner.md: earlier versions go to the Researcher's scratchDir rev-<full sha>" "$(grep -c 'scratchDir.*rev-<full sha>.*rev-parse "<commit>^{commit}"' "$ROOT/prompts/programmer/planner.md")" "1"
-check "tester.md: mutation in place, no copy" "$(grep -c 'in place in the worktree' "$ROOT/prompts/programmer/tester.md")$(grep -c 'rsync' "$ROOT/prompts/programmer/tester.md")" "10"
-check "auditor.md: Experiments block uses <scratchDir>/copy/" "$(grep -c '^rsync -a --delete --exclude .git ./ <scratchDir>/copy/' "$ROOT/prompts/programmer/auditor.md")" "1"
-}
-
-sec_prompt_rules() {
-blk_start
-t=$(awk '/^5\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$ROOT/prompts/programmer/tester.md")
-a2=$(grep '^2\. \*\*Baseline' "$ROOT/prompts/programmer/auditor.md" || true)
-a7=$(grep '^7\. \*\*Mutation, in place' "$ROOT/prompts/programmer/auditor.md" || true)
-a27="$a2$a7"
-for k in 'in place in the worktree' 'Recovery first' 'restore any leftover `*.orca-bak`' 'mv <f>.orca-bak <f>' 'cp <f> <f>.orca-bak' 'Baseline.' 'baseline-status.txt' 'baseline.diff' 'do not mutate' 'give no mutation-based verdict' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'never have two mutants applied at once' 'only when a specific test fails because of it' 'Verified close' 'equal the baseline' 'say so at once'; do
-  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: the in-place mutation step lost: $k"; FAIL=1; }
-done
-for k in 'in place in the worktree' 'restore any leftover `*.orca-bak`' 'mv <f>.orca-bak <f>' 'cp <f> <f>.orca-bak' 'Baseline' 'baseline-status.txt' 'baseline.diff' 'baseline-untracked.txt' 'do not mutate' 'give no mutation-based verdict' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'never have two applied at once' 'only when a specific test fails because of it' 'equal the baseline' 'say so at once'; do
-  printf '%s' "$a27" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 7 lost: $k"; FAIL=1; }
-done
-for k in 'baseline-untracked.txt' 'git ls-files -o --exclude-standard' "find . -name '*.orca-bak' -not -path './.git/*'" 'sha1sum' 'do not mutate'; do
-  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: recovery and baseline lost: $k"; FAIL=1; }
-  printf '%s' "$a2" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 2 (recovery and baseline) lost: $k"; FAIL=1; }
-done
-for k in 'never `cp` over it' 'never chained with `&&`' 'whatever the test result was' 'a chained `mv` would be skipped'; do
-  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: the mutant mechanics lost: $k"; FAIL=1; }
-  printf '%s' "$a7" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 7 mechanics lost: $k"; FAIL=1; }
-done
-for k in 'look again for leftovers with the `find`' 'untracked hashes'; do
-  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL tester.md: the verified close lost: $k"; FAIL=1; }
-  printf '%s' "$a7" | grep -qF -- "$k" || { echo "FAIL auditor.md: the close in pass 7 lost: $k"; FAIL=1; }
-done
-printf '%s' "$t" | grep -qF 'the only allowed difference is the tests you deliver' || { echo "FAIL tester.md: the close lost 'the only allowed difference is the tests you deliver'"; FAIL=1; }
-printf '%s' "$t$a7" | grep -qF '&& mv' && { echo "FAIL the restore mv is chained with && in the mutation text"; FAIL=1; }
-printf '%s' "$a7" | grep -qF 'Relies on the recovery and the baseline of pass 2' || { echo "FAIL auditor.md: pass 7 no longer relies on pass 2 for recovery and baseline"; FAIL=1; }
-l2=$(grep -n 'baseline-status.txt' "$ROOT/prompts/programmer/auditor.md" | head -1 | cut -d: -f1 || true)
-l3=$(grep -n '^3\. \*\*Criteria before findings' "$ROOT/prompts/programmer/auditor.md" | cut -d: -f1 || true)
-{ [ -n "$l2" ] && [ -n "$l3" ] && [ "$l2" -lt "$l3" ]; } || { echo "FAIL auditor.md: the recovery and baseline must come before pass 3 (first baseline-status.txt line [$l2], pass 3 line [$l3])"; FAIL=1; }
-printf '%s' "$a2" | grep -qF 'Before any pass that edits files (3 and 7)' || { echo "FAIL auditor.md: pass 2 lost that it precedes every pass that edits files (3 and 7)"; FAIL=1; }
-blk_end "tester.md step 5 and auditor.md passes 2 and 7: in-place mutation mechanics pinned"
-blk_start
-for p in tester auditor; do
-  grep -qF 'check that `git status --porcelain`, `git diff` and the untracked hashes' "$ROOT/prompts/programmer/$p.md" || { echo "FAIL $p.md: the closing step lost the *.orca-bak restore and the git status/diff check"; FAIL=1; }
-  grep -qF 'git checkout' "$ROOT/prompts/programmer/$p.md" && ! grep -F 'git checkout' "$ROOT/prompts/programmer/$p.md" | grep -qF 'Never use' && { echo "FAIL $p.md: mentions git checkout without forbidding it"; FAIL=1; }
-  grep -iE 'mutat[a-z]* .*in (a|your|the) copy|copy .*mutat' "$ROOT/prompts/programmer/$p.md" | grep -v 'in place' && { echo "FAIL $p.md: still tells to mutate in a copy"; FAIL=1; }
-done
-grep -qF 'in your copy' "$ROOT/prompts/programmer/auditor.md" && { echo "FAIL auditor.md: still says 'in your copy' (breaking a criterion is mutation, in place)"; FAIL=1; }
-p3=$(grep '^3\. \*\*Criteria before findings' "$ROOT/prompts/programmer/auditor.md" || true)
-for k in '**breaking it** in place' 'mechanics of pass 7' 'backup with `cp`' 'one change at a time' 'restore with `mv`'; do
-  printf '%s' "$p3" | grep -qF -- "$k" || { echo "FAIL auditor.md: pass 3 lost: $k"; FAIL=1; }
-done
-rr=$(grep -F '| **Auditor** |' "$ROOT/README.md" || true)
-printf '%s' "$rr" | grep -qF 'in place' || { echo "FAIL README.md: the Auditor row does not say mutation is in place"; FAIL=1; }
-printf '%s' "$rr" | grep -qiF 'copy' && { echo "FAIL README.md: the Auditor row still mentions a copy"; FAIL=1; }
-blk_end "tester.md and auditor.md: close step, git checkout forbidden, no mutation in a copy"
-blk_start
-v=$(grep '^- The reviewer verifies, it does not change' "$ROOT/prompts/programmer/auditor.md" || true)
-for k in 'only files of the worktree you may modify are those you mutate, temporarily' 'mechanics of pass 7' 'proving at the end with `git diff`' 'Never edit Dev'"'"'s or the Tester'"'"'s files in any other way' 'goes in your scratch folder'; do
-  printf '%s' "$v" | grep -qF -- "$k" || { echo "FAIL auditor.md: the reviewer-verifies rule lost: $k"; FAIL=1; }
-done
-grep -qF 'Mutation is done in place (pass 7). Every other pass that edits files' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md: Experiments no longer says mutation is in place and the rest goes in a copy"; FAIL=1; }
-blk_end "auditor.md: reviewer modifies only to mutate, Experiments consistent with pass 7"
-blk_start
-o=$(grep '^- \*\*One step at a time\.\*\*' "$ROOT/prompts/programmer/planner.md" || true)
-for k in 'Only one code task is in flight at any moment' 'Dev, Tester or Auditor' 'dispatch no other task to any worker in that worktree' 'mutate the tree in place' 'Never start the next step'"'"'s Dev task while the current step is open'; do
-  printf '%s' "$o" | grep -qF -- "$k" || { echo "FAIL planner.md: One step at a time lost: $k"; FAIL=1; }
-done
-for k in 'the Deployer'"'"'s guide and a Researcher measurement wait until the code task reports' 'The one exception: when the in-flight Tester or Auditor itself asks for services, dispatch the Deployer to start or stop them (it edits no code), as part of that task; nothing else is dispatched until the code task reports.'; do
-  printf '%s' "$o" | grep -qF -- "$k" || { echo "FAIL planner.md: One step at a time lost: $k"; FAIL=1; }
-done
-check "planner.md: One step at a time has exactly one exception" "$(printf '%s' "$o" | grep -o 'exception' | wc -l | tr -d ' ')" "1"
-check "planner.md: One step at a time names the Deployer only for the guide and the exception" "$(printf '%s' "$o" | grep -o 'Deployer' | wc -l | tr -d ' ')" "2"
-check "planner.md: One step at a time names the Researcher only as waiting" "$(printf '%s' "$o" | grep -o 'Researcher' | wc -l | tr -d ' ')" "1"
-grep -qF 'ask the Planner before you start mutating (the Deployer, who edits no code, starts and stops them as part of your task)' "$ROOT/prompts/programmer/tester.md" || { echo "FAIL tester.md: the Services rule lost that the Deployer starts and stops services for the Tester"; FAIL=1; }
-grep -qF 'ask the Planner: the Deployer, who edits no code, starts and stops them as part of your task' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md: the Limits lost that the Deployer starts and stops services for the Auditor"; FAIL=1; }
-blk_end "planner.md: one exception (the Deployer's services for the in-flight Tester or Auditor), guide and Researcher wait"
-blk_start
-for p in common-workers planner; do
-  case $p in planner) pre='^- Everything you draft for outside the worktree';; *) pre='^- Commit messages follow the repository';; esac
-  cr=$(grep "$pre" "$ROOT/prompts/programmer/$p.md" || true)
-  printf '%s' "$cr" | grep -qF ') (' && { echo "FAIL $p.md: the commit rule has a double parenthesis"; FAIL=1; }
-  printf '%s' "$cr" | grep -qF 'ticket key) and the depth of its body' || { echo "FAIL $p.md: the commit rule lost 'ticket key) and the depth of its body'"; FAIL=1; }
-  printf '%s' "$cr" | grep -qF 'what is left out. GitHub'"'"'s own merge subjects (' || { echo "FAIL $p.md: the GitHub merge-subject warning must be its own sentence"; FAIL=1; }
-  printf '%s' "$cr" | grep -qF 'your subjects never carry a handle. A subject-only commit is not acceptable' || { echo "FAIL $p.md: the commit rule lost its closing sentences"; FAIL=1; }
-done
-blk_end "commit rule: no double parenthesis, merge-subject warning in its own sentence"
-check "no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
 }
 
 sec_cleanup_msg() {
@@ -573,10 +432,6 @@ check "agent.sh: MCP file with expanded placeholders" "$(jq -r '.mcpServers.pw.a
 echo '{"cookies":[{"n":1}],"origins":[]}' > "$KIT/browser/proj.json"
 ( role_context "$C" vt "$PROJ"; ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"; check "ensure_browser_state does not overwrite an existing session" "$(jq -c '.cookies | length' "$KIT/browser/proj.json")" "1"; [ "$FAIL" = 0 ] ) || FAIL=1
 grep -q -- '--headless' "$ROOT/config.default.json" && grep -q '{browserState}' "$ROOT/config.default.json" && grep -q '{worktree}/{evidenceDir}' "$ROOT/config.default.json" && echo "ok   config.default: headless playwright with session and evidence" || { echo "FAIL config.default playwright"; FAIL=1; }
-for sec in '^## Your browser' 'browser-login.sh' 'browser_evaluate'; do grep -q "$sec" "$ROOT/prompts/programmer/e2e-tester.md" || { echo "FAIL e2e-tester.md without $sec"; FAIL=1; }; done
-grep -q 'browser-login.sh' "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md without browser-login"; FAIL=1; }
-grep -q 'orca-<service>.pid' "$ROOT/prompts/programmer/deployer.md" || { echo "FAIL deployer.md without services"; FAIL=1; }
-echo "ok   E2E test prompts"
 }
 
 sec_custom_command() {
@@ -1524,7 +1379,6 @@ sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
 check "skill: name in the frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/team/SKILL.md")" "name: team"
-grep -q '^## Managing the kit and the team' "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md links the skill" || { echo "FAIL planner.md without the skill"; FAIL=1; }
 check "default config: the planner's plugin" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin"]'
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester" } } }
@@ -1690,23 +1544,12 @@ rm -f "$TMP/fakebin/orca"
 }
 
 sec_prompts_misc() {
-# The Planner does not block waiting for the workers
-grep -q 'Never block waiting for the workers' "$ROOT/prompts/programmer/planner.md" && ! grep -q 'check --wait --types' "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md: waits without blocking" || { echo "FAIL planner.md still blocks in check --wait"; FAIL=1; }
-
 # The repo is a Claude Code marketplace whose plugin is the kit's own
 check "marketplace: lists the orca-roles plugin from ./plugin" "$(jq -r '.plugins[] | "\(.name) \(.source)"' "$ROOT/.claude-plugin/marketplace.json")" "orca-roles ./plugin"
 check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/.claude-plugin/marketplace.json")" "$(jq -r '.name' "$ROOT/plugin/.claude-plugin/plugin.json")"
-grep -q '^## Start here' "$ROOT/README.md" && [ "$(grep -n '^## ' "$ROOT/README.md" | head -1 | cut -d: -f2-)" = "## Start here: get Claude's help with the setup" ] && echo "ok   README starts with installing the guide" || { echo "FAIL README does not start with the guide"; FAIL=1; }
 
-# Tighter steps: the rules from the review are in the prompts and the defaults
-for pat in 'Scope: only what the user asked' 'Criteria as families with boundaries' 'Threat model and rejection threshold' 'Check the libraries first' 'contract decision' 'Fix rounds carry only what changed' 'do not try Jira'"'"'s REST API'; do
-  grep -q "$pat" "$ROOT/prompts/programmer/planner.md" || { echo "FAIL planner.md without: $pat"; FAIL=1; }
-done
-grep -q 'maxSelfMutants' "$ROOT/prompts/programmer/tester.md" && grep -q 'family of inputs with its boundaries' "$ROOT/prompts/programmer/tester.md" || { echo "FAIL tester.md without self-mutation or families"; FAIL=1; }
-grep -q 'Reject only from the threshold' "$ROOT/prompts/programmer/auditor.md" && grep -q 'rejectSeverity' "$ROOT/prompts/programmer/auditor.md" || { echo "FAIL auditor.md without the threshold"; FAIL=1; }
-grep -q 'family with its boundaries' "$ROOT/prompts/programmer/dev.md" || { echo "FAIL dev.md without boundaries"; FAIL=1; }
 check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,"high"]'
-echo "ok   prompts carry the review's rules"
+echo "ok   marketplace and defaults"
 }
 
 sec_composer_tab() {
@@ -1781,16 +1624,10 @@ case "$OUT" in *"The tab of Tst (t-orp) was closed but Orca kept its session run
 check "orphaned session: ended" "$(grep -c 'terminal close --terminal t-orp' "$DLOG")" "1"
 check "E1: non-Claude workers run Orca's commands in the foreground" "$(worker_msg "$KIT/config.json" cu | grep -c 'in the foreground')" "1"
 check "E1: Claude workers get no extra instruction" "$(worker_msg "$KIT/config.json" dev | grep -c 'in the foreground' || true)" "0"
-grep -q 'Watch for silent workers' "$ROOT/prompts/programmer/planner.md" && echo "ok   G: the Planner watches for silent workers" || { echo "FAIL planner.md without silent workers"; FAIL=1; }
 rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/tst.md"
 }
 
 sec_agent_flags() {
-# Jira/GitHub only with the user's yes; resource caps for the Tester and the Auditor
-grep -q "Nothing leaves the worktree without the user's explicit yes" "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md: Jira/GitHub only with approval" || { echo "FAIL planner.md: approval rule"; FAIL=1; }
-grep -q 'Never write to Jira, GitHub' "$ROOT/prompts/programmer/common-workers.md" && echo "ok   common-workers.md: workers never write to Jira/GitHub" || { echo "FAIL common-workers.md: Jira/GitHub rule"; FAIL=1; }
-grep -q '^## Coming back with your memory' "$ROOT/prompts/programmer/planner.md" && echo "ok   planner.md: coming back with memory" || { echo "FAIL planner.md: memory section"; FAIL=1; }
-for r in tester auditor; do grep -q 'No GPU' "$ROOT/prompts/programmer/$r.md" && grep -q 'maxWorkers' "$ROOT/prompts/programmer/$r.md" || { echo "FAIL $r.md: resource caps"; FAIL=1; }; done; echo "ok   tester/auditor prompts: CPU, threads and GPU caps"
 check "default config: tester and auditor lowered priority" "$(jq -r '[.roles.tester.nice, .roles.auditor.nice] | join(",")' "$ROOT/config.default.json")" "10,10"
 check "default config: thread caps and no GPU" "$(jq -r '.roles.auditor.env | [.OMP_NUM_THREADS, .GOMAXPROCS, .CUDA_VISIBLE_DEVICES] | join("|")' "$ROOT/config.default.json")" "2|2|"
 check "default config: auditor maxWorkers" "$(jq -r '.roles.auditor.params.maxWorkers' "$ROOT/config.default.json")" "2"
@@ -2253,65 +2090,12 @@ cpg update-index --no-assume-unchanged f; cpg update-index --skip-worktree g; cp
 check "checkpoint: warns about a skip-worktree file" "$CPRC:$(printf '%s' "$CPERR" | grep -c '^Warning: 1 file(s).*: g$')" "0:1"
 cpg update-index --no-skip-worktree g; cprun s3 4; check "checkpoint: no warning once the flags are cleared" "$CPRC:$CPERR" "0:"
 cprun s3 4; check "checkpoint: an existing ref is refused without --force (again)" "$CPRC:$(printf '%s' "$CPERR" | grep -c 'already exists')" "1:1"
-# the prompts
-PLP="$ROOT/prompts/programmer/planner.md"; TS="$ROOT/prompts/programmer/tester.md"; AU="$ROOT/prompts/programmer/auditor.md"
-pb() { printf '%s' "$1" | grep -qF -- "$3" || { echo "FAIL $2 lost '$3'"; FAIL=1; }; }
-LED="$(grep '\*\*Ledger\.\*\*' "$PLP" || true)"
-for frag in 'ledger-<step>.md' 'your scratchDir' 'the base commit' 'the checkpoint refs' 'mutants killed or survived, tests added' 'findings open and closed' 'what was not audited' 'Update it after every report' 'source of every brief' 'before proposing the close commit' 'closed or accepted by the user'; do pb "$LED" "planner.md ledger bullet" "$frag"; done
-T3="$(grep '^3\. \*\*Tests\*\*' "$PLP" || true)"; A4="$(grep '^4\. \*\*Audit\*\*' "$PLP" || true)"
-pb "$T3" "planner.md step 3" 'checkpoint.sh <step> <n>'; pb "$T3" "planner.md step 3" 'after every Dev or Tester `worker_done` in the step'; pb "$T3" "planner.md step 3" '(n = 1 for the first report of the step, +1 for each later report)'; pb "$T3" "planner.md step 3" '); after Dev'"'"'s, create the Tester'"'"'s task with a brief'; pb "$T3" "planner.md step 3" 'with a brief (see "Briefed rounds") instead of a chain of dependent tasks'; grep -qF '<step>-c<n-1>' "$PLP" && { echo "FAIL planner.md still has the consecutive-checkpoint wording <step>-c<n-1>"; FAIL=1; }; pb "$T3" "planner.md step 3" 'brief'
-pb "$A4" "planner.md step 4" 'the Auditor does not take part in each step'; pb "$A4" "planner.md step 4" 'Set audit'; pb "$A4" "planner.md step 4" "A step ends with the Tester's"
-[ -z "$(printf '%s' "$A4" | grep -F 'create the Auditor' || true)" ] || { echo "FAIL planner.md step 4 still creates a per-step Auditor task"; FAIL=1; }
-[ -z "$(printf '%s' "$T3$A4" | grep -F -- '--deps' || true)" ] || { echo "FAIL planner.md steps 3 and 4 still chain tasks with --deps"; FAIL=1; }
-NP="$(grep 'Never pre-create Tester or Auditor tasks' "$PLP" || true)"; pb "$NP" "planner.md no-pre-created bullet" '--deps'; pb "$NP" "planner.md no-pre-created bullet" 'generic specs'; pb "$NP" "planner.md no-pre-created bullet" 'after the previous report'
-BR="$(grep '\*\*Briefed rounds\.\*\*' "$PLP" || true)"
-for frag in 'self-contained brief' 'The task' 'acceptance criteria with their pass/fail examples' 'threat model and rejection threshold' 'The state' 'the files changed' 'what Dev did and decided' 'for the Auditor, also what the Tester did and found' 'what earlier rounds already verified' 'the findings still open' '"not audited" items carried forward' 'carries the whole step'"'"'s diff' 'with ref = the latest checkpoint' 'a later brief to a role carries' 'ref of the checkpoint its previous brief pointed to' '<latest ref>' 'since that role last looked' 'test-only rounds included' '`<step>` is lowercase letters, digits and hyphens' 'passes information only' 'never tells the Tester or the Auditor what to test, mutate or look at, or where the risks are'; do pb "$BR" "planner.md briefed-rounds bullet" "$frag"; done
-printf '%s' "$BR" | grep -qiE 'test (the|these|every)|you must mutate|focus on' && { echo "FAIL planner.md briefed-rounds bullet contains a known prescriptive phrase (a denylist of known phrases, not a proof that it never prescribes)"; FAIL=1; }
-FX="$(grep '\*\*Fix rounds carry only what changed' "$PLP" || true)"
-for frag in "never points to a task id" 'the findings assigned to that worker exactly as the reviewer wrote them' '(text, file:line, reproduction)' 'plus any contract change' 'cleaned since its previous task in this step' "also gets the step's task again" 'Tester rounds and Auditor tasks also follow "Briefed rounds"'; do pb "$FX" "planner.md fix-rounds bullet" "$frag"; done
-printf '%s' "$FX" | grep -qF 'references that task' && { echo "FAIL planner.md fix-rounds bullet still points to a task id"; FAIL=1; }
-[ "$(grep -c 'Fix rounds carry only what changed' "$PLP")" = 1 ] || { echo "FAIL planner.md: fix-rounds bullet missing or duplicated"; FAIL=1; }
-pb "$(grep '^   - \*\*After the commit\*\*' "$PLP" || true)" "planner.md close" 'clear the step'"'"'s checkpoints: `~/.orca-roles/bin/checkpoint.sh --clear <step>`.'
-grep -qF "are not cleared after the step's commit" "$PLP" && { echo "FAIL planner.md still keeps step checkpoints after the commit"; FAIL=1; }
-SA="$(grep '\*\*Set audit\.\*\*' "$PLP" || true)"
-[ "$(grep -c '\*\*Set audit\.\*\*' "$PLP")" = 1 ] || { echo "FAIL planner.md: Set audit bullet missing or duplicated"; FAIL=1; }
-for frag in 'audits once per set, not per step' 'before proposing the push or the PR' 'the commit the branch started from' '`git diff <base> HEAD`' 'the ledger state of every step' 'Findings at or above medium' 'reviews only the corrections' 'Findings below medium (low and notes): fixed in a Dev/Tester step without a new audit' 'only after the set audit has no open finding at or above medium' 'Clear the set'"'"'s checkpoints (`~/.orca-roles/bin/checkpoint.sh --clear set`) after the set audit closes.' 'never become new commits on top' '--fixup=' '--autosquash' 'checkpoint.sh set' 'before dispatching any fix task' 'with the tree clean (everything committed), record the audited state with `~/.orca-roles/bin/checkpoint.sh set <n>`' '(n = 1 for the first set audit, +1 for each corrections review)' 'the checkpoint recorded for the audited HEAD' 'the force-push needs its own yes' 'Show the user the resulting commit list and rewrite only on their yes' 'The corrections review diffs the recorded checkpoint against the new HEAD' 'the corrections folded into the step commits' 'GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>' 'commit each correction as `git commit --fixup=<the step commit it belongs to>`' '(no interactive editor)'; do pb "$SA" "planner.md Set audit bullet" "$frag"; done
-printf '%s' "$SA" | grep -qF 'before rewriting, record' && { echo "FAIL planner.md Set audit bullet still records the checkpoint before rewriting"; FAIL=1; }
-pb "$(grep 'Threat model and rejection threshold per step' "$PLP" || true)" "planner.md threat model bullet" "Both go in the Tester's tasks and in the set audit's brief"
-AK="$(grep 'Work out which kind of task it is' "$AU" || true)"
-for frag in '**set audit**' 'the whole diff of a set of steps' 'apply the full method' '**corrections review**' 'only the diff the brief names' 'the findings those corrections answer' 're-run only the mutants that matter for the corrections' 'do not re-review the rest of the set'; do pb "$AK" "auditor.md task kinds" "$frag"; done
-pb "$(grep '^1\. Read the Planner' "$TS" || true)" "tester.md step 1" "The Auditor no longer reviews each step, so your review is the step's only one before its commit; the set audit comes later."
-check "defaults: maxMutants 8 and maxSelfMutants 3 in config, auditor.md and tester.md" "$(jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json"):$(grep -c '^- `maxMutants`: 8$' "$AU"):$(grep -c '^- `maxSelfMutants`: 3$' "$TS")" '[8,3]:1:1'
+check "defaults: maxMutants 8 and maxSelfMutants 3 in config" "$(jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json")" '[8,3]'
 mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]'; }
 check "upgrade_config moves the old defaults 15/5 to 8/3" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":15}},"tester":{"params":{"maxSelfMutants":5}}}}')" "[8,3]"
 check "upgrade_config keeps a user's own maxMutants/maxSelfMutants" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":12}},"tester":{"params":{"maxSelfMutants":4}}}}')" "[12,4]"
 check "upgrade_config gives 8/3 to a config without the keys" "$(mm '{"roles":{}}')" "[8,3]"
-RM="$ROOT/README.md"
-pb "$(grep '^4\. ' "$RM" || true)" "README flow step 4" 'does not take part in each step'
-pb "$(grep '^8\. The \*\*Planner\*\*' "$RM" || true)" "README flow step 8" "Tester's ACCEPTED"
-pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'Dev → Tester'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'folded into the step commits they belong to'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'once per set'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'corrections-only review'; pb "$(grep '^\*\*Set audit\.\*\*' "$RM" || true)" "README Set audit" 'findings below medium (low and notes) are fixed without a new audit'
-pb "$(grep -F '| **Auditor** |' "$RM" || true)" "README Auditor row" '`maxMutants` 8'
-pb "$(grep -F '| **Auditor** |' "$RM" || true)" "README Auditor row" "Existing installs that still had the old defaults (15 and 5) move to the new ones on update; values you set yourself are kept (except exactly 15 and 5 themselves, which every update moves to the new defaults; to keep them, set them in the project's \`.orca-roles.json\`)."
-printf '%s' "$(grep -F 'Reviews the security of Dev' "$ROOT/plugin/skills/team/SKILL.md" || true)" | grep -qF 'after the audit' && { echo "FAIL SKILL example role still says 'after the audit'"; FAIL=1; }
-pb "$(grep -F 'Reviews the security of Dev' "$ROOT/plugin/skills/team/SKILL.md" || true)" "SKILL example role" 'Use it in steps that touch authentication or data.'
-pb "$(grep '^Steps are atomic' "$RM" || true)" "README steps paragraph" 'once Dev and the Tester are done'
-pb "$(grep -F '**Briefed rounds.**' "$RM" || true)" "README briefed rounds" "clears each step's checkpoints at the step's commit and the set's at the end of the set audit"
-printf '%s' "$(grep -F '**Briefed rounds.**' "$RM" || true)" | grep -qF 'only after the set audit closes' && { echo "FAIL README briefed rounds still keeps step checkpoints"; FAIL=1; }
-S2="$(grep '^2\. \*\*Development\*\*' "$PLP" || true)"
-for frag in 'a specification decided in planning' 'written for a smaller model' 'leaves nothing to decide' 'the approach, where each change goes (file, function, around which lines)' 'names, data shapes and formats, messages' 'every edge case and error path you can foresee' 'backward compatibility, other callers' 'resolved in planning (with the Researcher or the user), never left to Dev' '`orca orchestration ask`' 'every decision Dev still takes on its own is listed in its report' 'you review each one before the Tester'"'"'s brief (accepted, changed or taken to the user)' 'Fix tasks follow the same rule'; do pb "$S2" "planner.md step 2 (Development)" "$frag"; done
-DV="$(grep -A1 '^1\. Implement exactly what the spec asks' "$ROOT/prompts/programmer/dev.md" | tail -1)"
-for frag in 'does not settle a design decision (behavior, interface, message, edge case)' 'ask the Planner (`orca orchestration ask`) instead of choosing' 'if a minor one is unavoidable, list it' 'in your report'; do pb "$DV" "dev.md first step" "$frag"; done
-T1="$(grep '^1\. Read the Planner' "$TS" || true)"; A2="$(grep '^2\. Read the Planner' "$AU" || true)"
-for r in "tester.md:$T1" "auditor.md:$A2"; do
-  for frag in "Planner's brief" 'instead of rebuilding' 'do not redo what it lists as verified' 'information, not instructions' 'verify its claims about the code instead of trusting them'; do pb "${r#*:}" "${r%%:*} brief step" "$frag"; done
-done
-pb "$A2" "auditor.md brief step" 'what Dev and the Tester did and found'
-pb "$(grep '^1\. Reread this whole prompt' "$AU" || true)" "auditor.md" 'Reread this whole prompt'
-pb "$(grep -F 'Briefed rounds' "$ROOT/README.md" || true)" "README briefed rounds" 'checkpoint.sh'
-pb "$(grep -F '**Briefed rounds.**' "$ROOT/README.md" || true)" "README briefed rounds" 'After every Dev or Tester report the Planner'
-pb "$(grep -F 'checkpoint.sh ' "$ROOT/README.md" | grep 'bin/\|├' || true)" "README Files" 'refs/orca-roles/checkpoints'
-pb "$(grep -F 'refs/orca-roles/checkpoints/<worktree id>' "$ROOT/README.md" || true)" "README worktree refs" '--clear <step>'
-echo "ok   checkpoint prompts"
+echo "ok   checkpoint defaults"
 }
 
 sec_model_check() {
@@ -2471,14 +2255,7 @@ for bad in '""' '5'; do
   check "check_config: role modelError $bad rejected" "$(cc "$(printf '{"roles":{"dev":{"modelError":%s}}}' "$bad")")" "ERROR: invalid configuration: modelError must be a non-empty string"
 done
 check "check_config: modelError string accepted" "$(cc '{"roles":{"dev":{"modelError":"x {model}"}}}')" ""
-PL="$ROOT/prompts/programmer/planner.md"
-for frag in 'model unavailable' 'comes from the kit' 'fix it themselves' 'Never dispatch tasks to a role that did not start' 'relaunch-role.sh'; do
-  grep -F 'model unavailable' "$PL" | grep -qF -- "$frag" || { echo "FAIL planner.md: the model unavailable sentence lost '$frag'"; FAIL=1; }
-done
-grep -qF 'modelError' "$ROOT/README.md" || { echo "FAIL README without modelError"; FAIL=1; }
-grep -F 'A role never answers its first message' "$ROOT/README.md" | grep -qF 'model unavailable' || { echo "FAIL README troubleshooting row without the new behaviour"; FAIL=1; }
-grep -F 'does not answer its first message' "$ROOT/plugin/skills/team/SKILL.md" | grep -qF 'modelError' || { echo "FAIL SKILL.md row without modelError"; FAIL=1; }
-echo "ok   model-check docs"
+echo "ok   model-check: config"
 }
 
 sec_models() {
@@ -2672,7 +2449,6 @@ check "models: check_config rejects defaults models" "$(mcc "$(jq -nc '{defaults
 for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":"lines"}' '{"parse":"regex:(.*)"}' '{"list":"a"}'; do
   check "models: check_config accepts $good" "$(mcc "$(jq -nc --argjson m "$good" '{defaults:{models:$m},roles:{dev:{models:$m}}}')")" ""
 done
-check "models: planner.md asks for models.sh --check before proposing a model" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF '.orca-roles/bin/models.sh <id> --check')" "1"
 unset MM
 }
 
@@ -2864,7 +2640,6 @@ check "relaunch: --no-check skips the probe, matches the title in any case" "$RC
 touch "$TMP/r-failcreate"; try rr dev --model good --no-check
 check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
 rm -f "$TMP/r-failcreate"
-check "relaunch: the planner prompt names the new steps" "$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'models.sh <id> --check')$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'relaunch-role.sh <id> --model <m>')$(grep -F 'model unavailable' "$ROOT/prompts/programmer/planner.md" | grep -cF 'replaces this worktree')" "110"
 }
 
 sec_cli() {
