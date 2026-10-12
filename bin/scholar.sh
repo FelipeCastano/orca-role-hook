@@ -15,19 +15,32 @@
 #       Checks every entry of the .bib (default <git top-level>/article/refs.bib) against Crossref or arXiv: title, first author, year and
 #       retractions. Prints a header and one TAB-separated line per entry: key status detail.
 #       Status: ok, warn, fail, retracted, notfound (DOI/arXiv id unknown), nodoi (no DOI or arXiv eprint), error (network/API).
+#   scholar.sh pdf <identifier> [--bib <path>]
+#       Gets the PDF of a paper that is in the .bib (default <git top-level>/article/refs.bib) into <git top-level>/article/literature/pdfs/<key>.pdf.
+#       Sources, in order: arXiv (arxiv ids), Unpaywall (DOIs; only with SCHOLAR_EMAIL set), OpenAlex open_access.oa_url (DOIs). A download counts only
+#       if it is a real PDF. Records the paper in article/literature/manifest.tsv (key id title pdf source; pdf is oa, manual or missing) and rewrites
+#       article/literature/missing.md (the PDFs to download by hand). stdout: "downloaded <key> <file>", "present <key> <file>" (a valid PDF was already
+#       there; no network call) or "missing <key> (listed in article/literature/missing.md)". Exit 0 got or present, 2 missing.
+#   scholar.sh pdfs [--bib <path>]
+#       Reconciles the manifest with the PDF folder (no network call): a missing paper whose PDF was dropped in becomes manual; an oa or manual paper whose
+#       file is gone or is not a valid PDF becomes missing. Rewrites manifest.tsv and missing.md. Prints a header and one TAB-separated line per
+#       paper: key pdf note (note: file gone, not a valid PDF, invalid key (a key that cannot be a file name; its row is kept unchanged) or -). Exit 1 when there is no manifest yet.
 #   Identifiers: doi:<doi>, https://doi.org/<doi>, a bare 10.* DOI, arxiv:<id>, https://arxiv.org/abs/<id>, openalex:W<digits>.
 #   Output ids: doi:<doi>, arxiv:<id>, openalex:W<id>, s2:<paperId> (output only).
 # Environment (read only, never printed): OPENALEX_API_KEY and S2_API_KEY (optional, sent as headers), SCHOLAR_EMAIL (optional, goes in
-#   the User-Agent and the Crossref mailto). Test hooks: SCHOLAR_CURL, SCHOLAR_ARXIV_DELAY (default 3), SCHOLAR_RETRY_DELAY (default 3),
+#   the User-Agent (sent as a header read from a file) of the API calls that never follow redirects (OpenAlex, Semantic Scholar, arXiv API,
+#   Crossref, Unpaywall) and in Unpaywall's email parameter; doi.org and PDF downloads follow redirects and always use the plain User-Agent
+#   orca-roles-scholar). Test hooks: SCHOLAR_CURL, SCHOLAR_ARXIV_DELAY (default 3), SCHOLAR_RETRY_DELAY (default 3),
 #   SCHOLAR_CROSSREF_DELAY (seconds between Crossref calls in verify, default 0.2), SCHOLAR_STATE_DIR.
 # Exit codes: 0 ok; 1 usage error or bad option; 2 not found (show, bibtex); 3 network/API error (every requested source failed);
-#   4 verify found problems (a fail, retracted, notfound or nodoi entry).
+#   2 also: pdf found no PDF (the paper is listed in missing.md); 4 verify found problems (a fail, retracted, notfound or nodoi entry).
 set -uo pipefail
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; }
 case "${1:-}" in -h|--help) usage; exit 0;; "") usage >&2; exit 1;; esac
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 AXAWK="$HERE/scholar-arxiv.awk"
+KEY_RE='^[A-Za-z0-9_.:+-]+$'
 UA="orca-roles-scholar"
 [ -n "${SCHOLAR_EMAIL:-}" ] && UA="orca-roles-scholar (mailto:$SCHOLAR_EMAIL)"
 STATE_DIR="${SCHOLAR_STATE_DIR:-${TMPDIR:-/tmp}}"
@@ -40,13 +53,16 @@ trap 'rm -rf "$TMP"' EXIT
 
 die() { echo "scholar.sh: $*" >&2; exit "${CODE:-1}"; }
 
-# http_get <url> <body-file> [extra curl args...]: prints the HTTP status (000 when curl fails)
+# http_get <url> <body-file> [extra curl args...]: prints the HTTP status (000 when curl fails). Redirects are followed only when FOLLOW is set
+# (doi.org and PDF downloads, which also set PLAIN_UA so the email never leaves with them). The User-Agent goes in a header file, never in -A.
 http_get() {
-  local url="$1" out="$2" code; shift 2
+  local url="$1" out="$2" code uaf="$TMP/ua.email" ua="$UA" follow=""; shift 2
   : > "$out"
-  local follow=-L; [ -n "${NOFOLLOW:-}" ] && follow=""
+  [ -z "${FOLLOW:-}" ] || follow=-L
+  if [ -n "${PLAIN_UA:-}" ]; then uaf="$TMP/ua.plain"; ua="orca-roles-scholar"; fi
+  [ -f "$uaf" ] || (umask 077; printf 'User-Agent: %s\n' "$ua" > "$uaf")
   # shellcheck disable=SC2086
-  code="$("${SCHOLAR_CURL:-curl}" -sS $follow --max-time 30 -A "$UA" -o "$out" -w '%{http_code}' "$@" "$url" 2>/dev/null)" || code=000
+  code="$("${SCHOLAR_CURL:-curl}" -sS $follow --max-time 30 -H "@$uaf" -o "$out" -w '%{http_code}' "$@" "$url" 2>/dev/null)" || code=000
   case "$code" in [0-9][0-9][0-9]) ;; *) code=000;; esac
   printf '%s' "$code"
 }
@@ -62,7 +78,7 @@ api_get() {
     fi
   fi
   while :; do
-    if [ -n "$hf" ]; then code="$(NOFOLLOW=1 http_get "$url" "$out" -H "@$hf")"; else code="$(http_get "$url" "$out")"; fi
+    if [ -n "$hf" ]; then code="$(http_get "$url" "$out" -H "@$hf")"; else code="$(http_get "$url" "$out")"; fi
     if [ "$code" = 429 ] && [ "$try" -lt 2 ]; then
       try=$((try + 1)); sleep "$(awk -v d="$d" -v t="$try" 'BEGIN{print d*t}')"
     else
@@ -72,20 +88,42 @@ api_get() {
   printf '%s' "$code"
 }
 
-# arxiv_get <url> <body-file>: paced (one call every SCHOLAR_ARXIV_DELAY seconds across runs), never retried
+# arxiv_get <url> <body-file>: paced (one call every SCHOLAR_ARXIV_DELAY seconds across runs and processes; the whole-second stamp is taken
+# before the call, so it waits d+1 whole seconds after the previous stamp), never retried. If the state dir is not a writable directory, or
+# the lock cannot be taken (a stale one is removed once after 30 s), the call is made unpaced with a note on stderr (once per run).
 arxiv_get() {
-  local url="$1" out="$2" f="$STATE_DIR/orca-roles-scholar-arxiv.last" d="${SCHOLAR_ARXIV_DELAY:-3}" last now code
+  local url="$1" out="$2" f="$STATE_DIR/orca-roles-scholar-arxiv.last" d="${SCHOLAR_ARXIV_DELAY:-3}" why=""; shift 2
   case "$d" in ''|*[!0-9]*) d=3;; esac
-  if [ "$d" -gt 0 ] && [ -f "$f" ]; then
-    last="$(cat "$f" 2>/dev/null)"
-    case "$last" in ''|*[!0-9]*) ;; *)
-      now="$(date +%s)"
-      [ "$now" -ge "$last" ] && [ $((now - last)) -lt "$d" ] && sleep $((d - (now - last)));;
-    esac
+  if [ "$d" -gt 0 ]; then
+    if [ ! -d "$STATE_DIR" ] || [ ! -w "$STATE_DIR" ]; then
+      why="$STATE_DIR is not a writable directory"
+    else
+      (
+        start="$(date +%s)"
+        until mkdir "$f.lock" 2>/dev/null; do
+          if [ $(($(date +%s) - start)) -ge 30 ]; then
+            rmdir "$f.lock" 2>/dev/null
+            mkdir "$f.lock" 2>/dev/null || exit 3
+            break
+          fi
+          sleep 0.2
+        done
+        trap 'rmdir "$f.lock" 2>/dev/null' EXIT
+        last="$(cat "$f" 2>/dev/null)"
+        case "$last" in ''|*[!0-9]*) ;; *)
+          now="$(date +%s)"
+          [ "$now" -ge "$last" ] && [ $((now - last)) -le "$d" ] && sleep $((d + 1 - (now - last)));;
+        esac
+        date +%s > "$f" 2>/dev/null
+        :
+      ) || why="cannot take the lock $f.lock"
+    fi
+    if [ -n "$why" ] && [ ! -e "$TMP/arxiv.unpaced" ]; then
+      : > "$TMP/arxiv.unpaced"
+      echo "scholar.sh: arXiv calls are not paced: $why" >&2
+    fi
   fi
-  code="$(http_get "$url" "$out")"
-  date +%s > "$f" 2>/dev/null
-  printf '%s' "$code"
+  http_get "$url" "$out" "$@"
 }
 
 # parse_id <identifier>: sets ID_KIND (doi|arxiv|openalex) and ID_VAL
@@ -95,11 +133,12 @@ parse_id() {
   ID_KIND=""; ID_VAL=""
   case "$low" in
     doi:*) v="${x#????}"; ID_KIND=doi;;
-    https://doi.org/*) v="${x#https://doi.org/}"; ID_KIND=doi;;
-    http://doi.org/*) v="${x#http://doi.org/}"; ID_KIND=doi;;
+    https://doi.org/*) v="${x:16}"; ID_KIND=doi;;
+    http://doi.org/*) v="${x:15}"; ID_KIND=doi;;
     10.*) v="$x"; ID_KIND=doi;;
     arxiv:*) v="${x#??????}"; ID_KIND=arxiv;;
-    https://arxiv.org/abs/*) v="${x#https://arxiv.org/abs/}"; ID_KIND=arxiv;;
+    https://arxiv.org/abs/*) v="${x:22}"; ID_KIND=arxiv;;
+    http://arxiv.org/abs/*) v="${x:21}"; ID_KIND=arxiv;;
     openalex:w[0-9]*) v="$(printf '%s' "${x#?????????}" | tr 'w' 'W')"; ID_KIND=openalex;;
   esac
   [ -n "$ID_KIND" ] || return 1
@@ -394,9 +433,10 @@ cmd_bibtex() {
     if [ "$have_bib" = 1 ]; then BIB_PATH="$bib"; else default_bib; fi
     [ ! -e "$BIB_PATH" ] || [ -f "$BIB_PATH" ] || die "$BIB_PATH is not a regular file"
   fi
-  code="$(http_get "https://doi.org/$(enc_doi "$doi")" "$body" -H 'Accept: application/x-bibtex')"
+  code="$(FOLLOW=1 PLAIN_UA=1 http_get "https://doi.org/$(enc_doi "$doi")" "$body" -H 'Accept: application/x-bibtex' -D "$TMP/bib.headers")"
   [ "$code" != 404 ] || { CODE=2 die "$ident not found at doi.org"; }
-  if [ "$code" != 200 ] || [ "$(tr -d ' \t\r\n' < "$body" | head -c 1)" != "@" ]; then CODE=3 die "doi.org failed (HTTP $code)"; fi
+  if [ "$code" != 200 ] || [ "$(tr -d ' \t\r\n' < "$body" | head -c 1)" != "@" ] \
+    || ! grep -i '^content-type:' "$TMP/bib.headers" 2>/dev/null | tail -n 1 | grep -qi 'application/x-bibtex'; then CODE=3 die "doi.org failed (HTTP $code)"; fi
   if [ "$(tr -d ' \t\r\n' < "$body" | tail -c 1)" != "}" ] \
     || ! tr -cd '{}' < "$body" | fold -w 1 | awk '$0 == "{" { d++ } $0 == "}" { if (--d < 0) bad = 1 } END { exit (bad || d != 0) }'; then
     CODE=3 die "doi.org returned an incomplete BibTeX entry"
@@ -483,7 +523,7 @@ def rank: {ok: 0, warn: 1, fail: 2, retracted: 3};
 '
 
 cmd_verify() {
-  local bib="" have_bib=0 k d ep ap t au y src aid code line st dt n_bad=0 n_err=0 n_good=0 n_cr=0 cf delay mt ma my cr="$TMP/cr.json" mailto=""
+  local bib="" have_bib=0 k d ep ap t au y src aid code line st dt n_bad=0 n_err=0 n_good=0 n_cr=0 cf delay mt ma my cr="$TMP/cr.json"
   while [ $# -gt 0 ]; do
     case "$1" in
       --bib)
@@ -499,7 +539,6 @@ cmd_verify() {
   [ -f "$BIB_PATH" ] || die "$BIB_PATH not found"
   delay="${SCHOLAR_CROSSREF_DELAY:-0.2}"
   case "$delay" in ''|*[!0-9.]*) delay=0.2;; esac
-  [ -n "${SCHOLAR_EMAIL:-}" ] && mailto="?mailto=$(jq -rn --arg e "$SCHOLAR_EMAIL" '$e | @uri')"
   : > "$TMP/empty"
   bibjq 'entries[] | entry_info
     | [.key, .doi, .eprint, .archiveprefix, .title, .author, .year] | map("x" + ((. // "") | gsub("\\s+"; " "))) | join("\t")' < "$BIB_PATH" > "$TMP/entries.tsv" \
@@ -522,7 +561,7 @@ cmd_verify() {
     elif [ -z "$st" ] && [ "$src" = crossref ]; then
       [ "$n_cr" -eq 0 ] || sleep "$delay"
       n_cr=$((n_cr + 1))
-      code="$(http_get "https://api.crossref.org/works/$(enc_doi "$d")$mailto" "$cr")"
+      code="$(http_get "https://api.crossref.org/works/$(enc_doi "$d")" "$cr")"
       case "$code" in
         200) ;;
         404) st=notfound; dt="not in Crossref";;
@@ -560,11 +599,211 @@ cmd_verify() {
   return 0
 }
 
+# lit_paths [--bib <path>] args: sets TOP, LIT, MANIFEST, BIB_PATH and POS (the positional arguments) for pdf and pdfs
+lit_paths() {
+  local have_bib=0 bib=""
+  POS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --bib)
+        [ "$have_bib" = 0 ] || die "option --bib given twice"
+        [ $# -ge 2 ] && [ -n "$2" ] || die "option --bib needs a value"
+        bib="$2"; have_bib=1; shift 2;;
+      -*) die "unknown option '$1'";;
+      *) POS+=("$1"); shift;;
+    esac
+  done
+  TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
+  [ -n "$TOP" ] || die "not in a git repository"
+  if [ "$have_bib" = 1 ]; then BIB_PATH="$bib"; else BIB_PATH="$TOP/article/refs.bib"; fi
+  [ ! -e "$BIB_PATH" ] || [ -f "$BIB_PATH" ] || die "$BIB_PATH is not a regular file"
+  LIT="$TOP/article/literature"
+  MANIFEST="$LIT/manifest.tsv"
+}
+
+# valid_pdf <file>: more than 1024 bytes and starts with %PDF-
+valid_pdf() {
+  [ -f "$1" ] || return 1
+  [ "$(wc -c < "$1" | tr -d ' ')" -gt 1024 ] && [ "$(head -c 5 "$1")" = "%PDF-" ]
+}
+
+MANIFEST_HEADER=$'key\tid\ttitle\tpdf\tsource'
+
+# manifest_check: dies when an existing manifest does not start with the header
+manifest_check() {
+  [ ! -f "$MANIFEST" ] || [ "$(head -n 1 "$MANIFEST" | tr -d '\r')" = "$MANIFEST_HEADER" ] || die "$MANIFEST does not start with the header (key, id, title, pdf, source)"
+}
+
+# manifest_set <key> <id> <title> <pdf> <source>: appends the row or replaces the row of that key in place (temp file + mv)
+manifest_set() {
+  local new="$TMP/manifest.new" src="$MANIFEST"
+  mkdir -p "$LIT" 2>/dev/null || die "cannot create $LIT"
+  [ -f "$src" ] || src=/dev/null
+  M_KEY="$1" M_ID="$2" M_TITLE="$3" M_PDF="$4" M_SRC="$5" awk -F'\t' -v OFS='\t' '
+    BEGIN { print "key", "id", "title", "pdf", "source"
+            k = ENVIRON["M_KEY"]; row = k OFS ENVIRON["M_ID"] OFS ENVIRON["M_TITLE"] OFS ENVIRON["M_PDF"] OFS ENVIRON["M_SRC"] }
+    NR == 1 || $0 == "" { next }
+    $1 == k { if (!done) { print row; done = 1 }; next }
+    { print }
+    END { if (!done) print row }' "$src" > "$new" && mv "$new" "$MANIFEST" || die "cannot write $MANIFEST"
+}
+
+# write_missing: regenerates missing.md from the manifest
+write_missing() {
+  local new="$TMP/missing.new"
+  awk -F'\t' '
+    NR == 1 || $0 == "" { next }
+    $4 == "missing" {
+      t = $3; gsub(/\|/, "\\|", t)
+      l = $2; if (l ~ /^doi:/) l = "https://doi.org/" substr(l, 5); else if (l ~ /^arxiv:/) l = "https://arxiv.org/abs/" substr(l, 7)
+      rows = rows "| " $1 ".pdf | " t " | " l " |\n"; n++ }
+    END {
+      print "# PDFs to download by hand\n"
+      if (n == 0) { print "None: every paper in the manifest has its PDF."; exit }
+      print "Save each PDF in article/literature/pdfs/ with exactly the file name shown, then run: scholar.sh pdfs\n"
+      print "| File name | Title | Link |\n|---|---|---|"
+      printf "%s", rows }' "$MANIFEST" > "$new" && mv "$new" "$LIT/missing.md" || die "cannot write $LIT/missing.md"
+}
+
+# fetch_pdf <url>: downloads into $TMP/dl.pdf; returns 0 for a valid PDF, else notes the reason on stderr
+fetch_pdf() {
+  local url="$1" code lc
+  lc="$(printf '%s' "$url" | tr 'A-Z' 'a-z')"
+  if [[ "$lc" =~ ^https?://([a-z0-9-]+\.)*arxiv\.org([/:?#]|$) ]]; then
+    code="$(FOLLOW=1 PLAIN_UA=1 arxiv_get "$url" "$TMP/dl.pdf" --max-time 60 --max-redirs 10 --max-filesize 50000000)"
+  else
+    code="$(FOLLOW=1 PLAIN_UA=1 http_get "$url" "$TMP/dl.pdf" --max-time 60 --max-redirs 10 --max-filesize 50000000)"
+  fi
+  if [ "$code" != 200 ]; then echo "tried $url: HTTP $code" >&2; return 1; fi
+  if ! valid_pdf "$TMP/dl.pdf"; then echo "tried $url: not a PDF" >&2; return 1; fi
+}
+
+# try_url <url>: fetch_pdf unless the URL was already tried; sets GOT on success
+try_url() {
+  case "$TRIED" in *$'\n'"$1"$'\n'*) return 1;; esac
+  TRIED="$TRIED$1"$'\n'
+  fetch_pdf "$1" && { GOT="$1"; return 0; }
+  return 1
+}
+
+cmd_pdf() {
+  lit_paths "$@"
+  [ "${#POS[@]}" -eq 1 ] || die "pdf needs exactly one identifier"
+  local ident="${POS[0]}" kind val id key title info code cf cu email row rpdf rsrc rel pdfdir
+  parse_id "$ident" || die "unrecognized identifier '$ident' (use doi:<doi> or arxiv:<id>)"
+  [ "$ID_KIND" != openalex ] || die "pdf needs a DOI or an arXiv id"
+  kind="$ID_KIND"; val="$ID_VAL"; id="$kind:$val"
+  [ -f "$BIB_PATH" ] || die "$BIB_PATH not found"
+  info="$(bibjq 'entries[] | entry_info
+    | select(if $kind == "doi" then .doi == $v
+        else ((.doi // "") | sub("v[0-9]+$"; "")) == ("10.48550/arxiv." + $v)
+          or (((.archiveprefix // "") | ascii_downcase | gsub("\\s+"; "")) == "arxiv"
+              and ((.eprint // "") | gsub("\\s+"; "") | sub("^(?i:arxiv:)"; "") | sub("v[0-9]+$"; "")) == $v) end)
+    | [(.key | gsub("\\s+"; " ")), ((.title // "") | gsub("[{}]"; "") | gsub("\\s+"; " ") | gsub("^ | $"; ""))] | join("\t")' --arg kind "$kind" --arg v "$val" < "$BIB_PATH" | head -n 1)" \
+    || { CODE=3 die "cannot read $BIB_PATH"; }
+  if [ -z "$info" ]; then die "$ident is not in $BIB_PATH; add it first: scholar.sh bibtex $ident --add"; fi
+  key="${info%%$'\t'*}"; title="${info#*$'\t'}"
+  [ -n "$title" ] || title="-"
+  [[ "$key" =~ $KEY_RE ]] || die "the key '$key' cannot be used as a file name"
+  manifest_check
+  pdfdir="$LIT/pdfs"; rel="article/literature/pdfs/$key.pdf"
+  rpdf=""; rsrc="-"
+  if [ -f "$MANIFEST" ]; then
+    row="$(awk -F'\t' -v k="$key" 'NR > 1 && $1 == k { print "x" $4 "\tx" $5; exit }' "$MANIFEST")"
+    if [ -n "$row" ]; then rpdf="${row%%$'\t'*}"; rpdf="${rpdf#x}"; rsrc="${row#*$'\t'}"; rsrc="${rsrc#x}"; fi
+  fi
+  if valid_pdf "$pdfdir/$key.pdf"; then
+    if [ "$rpdf" = oa ]; then manifest_set "$key" "$id" "$title" oa "$rsrc"; else manifest_set "$key" "$id" "$title" manual "-"; fi
+    write_missing
+    echo "present $key $rel"
+    return 0
+  fi
+
+  TRIED=$'\n'; GOT=""
+  if [ "$kind" = arxiv ]; then
+    try_url "https://arxiv.org/pdf/$val" || true
+  else
+    email="${SCHOLAR_EMAIL:-}"
+    if [ -z "$email" ]; then
+      echo "note: Unpaywall skipped: set SCHOLAR_EMAIL to use it" >&2
+    else
+      cu="$TMP/unpaywall.json"
+      code="$(http_get "https://api.unpaywall.org/v2/$(enc_doi "$val")?email=$(jq -rn --arg e "$email" '$e | @uri')" "$cu")"
+      if [ "$code" = 200 ] && jq -r '
+          [(.oa_locations // [])[]? | select((.url_for_pdf | type) == "string" and (.url_for_pdf | test("^https?://")))] as $l
+          | ([$l[] | select(.host_type == "publisher")] + [$l[] | select(.host_type != "publisher")])
+          | reduce .[].url_for_pdf as $u ([]; if index([$u]) then . else . + [$u] end) | .[]' "$cu" > "$TMP/cands" 2>/dev/null; then
+        while IFS= read -r cf; do
+          try_url "$cf" && break
+        done < "$TMP/cands"
+      else
+        [ "$code" = 200 ] && code="unreadable body"
+        echo "note: Unpaywall HTTP $code" >&2
+      fi
+    fi
+    if [ -z "$GOT" ]; then
+      cu="$TMP/openalex.json"
+      code="$(api_get openalex "https://api.openalex.org/works/doi:$(enc_doi "$val")?select=open_access" "$cu")"
+      if [ "$code" = 200 ]; then
+        cf="$(jq -r '.open_access.oa_url | select(type == "string" and test("^https?://"))' "$cu" 2>/dev/null | head -n 1)"
+        [ -z "$cf" ] || try_url "$cf" || true
+      else
+        echo "note: OpenAlex HTTP $code" >&2
+      fi
+    fi
+  fi
+
+  if [ -n "$GOT" ]; then
+    mkdir -p "$pdfdir" 2>/dev/null && mv "$TMP/dl.pdf" "$pdfdir/$key.pdf" || die "cannot write $pdfdir/$key.pdf"
+    manifest_set "$key" "$id" "$title" oa "$GOT"
+    write_missing
+    echo "downloaded $key $rel"
+    return 0
+  fi
+  manifest_set "$key" "$id" "$title" missing "-"
+  write_missing
+  echo "missing $key (listed in article/literature/missing.md)"
+  return 2
+}
+
+cmd_pdfs() {
+  lit_paths "$@"
+  [ "${#POS[@]}" -eq 0 ] || die "pdfs takes no argument (got '${POS[0]}')"
+  [ -f "$MANIFEST" ] || die "no manifest yet (article/literature/manifest.tsv); run scholar.sh pdf <id> first"
+  manifest_check
+  local k i t p s note new="$TMP/manifest.new" out="$TMP/pdfs.out"
+  awk -F'\t' -v OFS='\t' 'NR > 1 && $0 != "" { print "x" $1, "x" $2, "x" $3, "x" $4, "x" $5 }' "$MANIFEST" > "$TMP/rows.tsv"
+  printf '%s\n' "$MANIFEST_HEADER" > "$new"
+  printf 'key\tpdf\tnote\n' > "$out"
+  while IFS=$'\t' read -r k i t p s <&3; do
+    k="${k#x}"; i="${i#x}"; t="${t#x}"; p="${p#x}"; s="${s#x}"; note="-"
+    if ! [[ "$k" =~ $KEY_RE ]]; then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$k" "$i" "$t" "$p" "$s" >> "$new"
+      printf '%s\t%s\t%s\n' "$k" "$p" "invalid key" >> "$out"
+      continue
+    fi
+    if valid_pdf "$LIT/pdfs/$k.pdf"; then
+      if [ "$p" = missing ]; then p=manual; s="-"; fi
+    elif [ -e "$LIT/pdfs/$k.pdf" ]; then
+      p=missing; s="-"; note="not a valid PDF"
+    else
+      p=missing; s="-"; note="file gone"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$k" "$i" "$t" "$p" "$s" >> "$new"
+    printf '%s\t%s\t%s\n' "$k" "$p" "$note" >> "$out"
+  done 3< "$TMP/rows.tsv"
+  mv "$new" "$MANIFEST" || die "cannot write $MANIFEST"
+  write_missing
+  cat "$out"
+}
+
 cmd="$1"; shift
 case "$cmd" in
   search) cmd_search "$@"; exit $?;;
   show) cmd_show "$@"; exit $?;;
   bibtex) cmd_bibtex "$@"; exit $?;;
   verify) cmd_verify "$@"; exit $?;;
-  *) die "unknown command '$cmd' (use search, show, bibtex or verify; -h for help)";;
+  pdf) cmd_pdf "$@"; exit $?;;
+  pdfs) cmd_pdfs "$@"; exit $?;;
+  *) die "unknown command '$cmd' (use search, show, bibtex, verify, pdf or pdfs; -h for help)";;
 esac

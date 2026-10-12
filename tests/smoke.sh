@@ -2829,7 +2829,7 @@ SCH="$TMP/sch"; FX="$SCH/fx"; mkdir -p "$FX" "$SCH/tmp" "$SCH/state" "$SCH/run"
 unset OPENALEX_API_KEY S2_API_KEY SCHOLAR_EMAIL
 cat > "$FX/oa_search.json" <<'J'
 {"results":[
-{"id":"https://openalex.org/W1","doi":"https://doi.org/10.1000/ABC.1","title":"Deep\tLearning\nfor  Tabs","publication_year":2023,"authorships":[{"author":{"display_name":"Ada  Lovelace"}}],"primary_location":{"source":{"display_name":"Nature"}},"cited_by_count":42,"open_access":{"is_oa":true}},
+{"id":"https://openalex.org/W1","doi":"https://doi.org/10.1000/ABC.1","title":"Deep\tLearning\nfor  Tabs","publication_year":2023,"authorships":[{"author":{"display_name":"Alma  Larkin"}}],"primary_location":{"source":{"display_name":"Nature"}},"cited_by_count":42,"open_access":{"is_oa":true}},
 {"id":"https://openalex.org/W2","doi":"https://doi.org/10.48550/arXiv.2401.00001","title":"Arx paper","publication_year":2024,"authorships":[],"primary_location":null,"cited_by_count":0,"open_access":{"is_oa":false}},
 {"id":"https://openalex.org/W3","doi":null,"title":"No doi","publication_year":null,"authorships":[{"author":{"display_name":null}}],"primary_location":{"source":null},"cited_by_count":null,"open_access":{"is_oa":null}},
 {"id":"https://openalex.org/W4","doi":"https://doi.org/10.1000/four","title":"Beyond the limit","publication_year":2020,"authorships":[],"primary_location":null,"cited_by_count":1,"open_access":{"is_oa":false}}]}
@@ -2877,13 +2877,47 @@ sch_feed() { printf '<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http:/
 sch_entry 2401.00001 2 "Shown arXiv" cs.LG "10.1000/Mixed.Case" "First Au" "Second Au" | sch_feed > "$FX/ax_show.xml"
 sch_feed < /dev/null > "$FX/ax_empty.xml"
 printf '<entry>\n <id>http://arxiv.org/api/errors#incorrect_id_format</id>\n <summary>bad id</summary>\n</entry>\n' | sch_feed > "$FX/ax_err.xml"
+cat > "$SCH/stublib.sh" <<'S'
+# stub_args "$@": sets out, df and url; logs the contents and mode of every -H @file (User-Agent files to $SCH_LOG.ua, the others to $SCH_LOG.hdr),
+# and what the pacing stamp and its lock look like at the time of the call (to $SCH_LOG.stamp)
+stub_args() {
+  out=""; df=""; local i=1 a j f lf
+  while [ $i -le $# ]; do
+    a="${!i}"
+    case "$a" in
+      -o) j=$((i+1)); out="${!j}";;
+      -D) j=$((i+1)); df="${!j}";;
+      -H) j=$((i+1)); case "${!j}" in @*) f="${!j#@}"; if head -1 "$f" | grep -q '^User-Agent:'; then lf="$SCH_LOG.ua"; else lf="$SCH_LOG.hdr"; fi
+          { echo "${@: -1}"; cat "$f"; echo "MODE $(ls -l "$f" | cut -c1-10)"; } >> "$lf";; esac;;
+    esac
+    i=$((i+1))
+  done
+  url="${@: -1}"
+  if [ -n "${SCHOLAR_STATE_DIR:-}" ]; then
+    echo "stamp=$(cat "$SCHOLAR_STATE_DIR/orca-roles-scholar-arxiv.last" 2>/dev/null) lock=$([ -d "$SCHOLAR_STATE_DIR/orca-roles-scholar-arxiv.last.lock" ] && echo held || echo free)" >> "$SCH_LOG.stamp"
+  fi
+}
+# stub_dump <status>: writes the -D file, one block per hop from $SCH_FX/ctype (one header line per hop, '-' for none; the last hop is the answer)
+stub_dump() {
+  [ -n "$df" ] || return 0
+  : > "$df"
+  local vals n k=0 v
+  if [ -f "$SCH_FX/ctype" ]; then vals="$(cat "$SCH_FX/ctype")"; else vals="Content-Type: application/x-bibtex"; fi
+  n="$(printf '%s\n' "$vals" | wc -l)"
+  while IFS= read -r v; do
+    k=$((k + 1))
+    if [ "$k" -lt "$n" ]; then printf 'HTTP/1.1 302 Found\r\n' >> "$df"; else printf 'HTTP/2 %s\r\n' "$1" >> "$df"; fi
+    [ "$v" = - ] || printf '%s\r\n' "$v" >> "$df"
+    printf '\r\n' >> "$df"
+  done <<EOT
+$vals
+EOT
+}
+S
 cat > "$SCH/curl" <<'S'
 #!/bin/bash
-out=""; hf=""; i=1
-while [ $i -le $# ]; do a="${!i}"; case "$a" in -o) j=$((i+1)); out="${!j}";; -H) j=$((i+1)); hf="${!j}";; esac; i=$((i+1)); done
-url="${@: -1}"
+. "$SCH_FX/../stublib.sh"; stub_args "$@"
 echo "$*" >> "$SCH_LOG"
-[ -n "$hf" ] && { echo "$url" >> "$SCH_LOG.hdr"; cat "${hf#@}" >> "$SCH_LOG.hdr"; echo "MODE $(ls -l "${hf#@}" | cut -c1-10)" >> "$SCH_LOG.hdr"; }
 case "$url" in
   *api.openalex.org/works/*) kind=oa; case "$url" in *doi:10.404*|*/W999*) body=404;; *doi:10.1000/retracted*|*/W78\?*) body=show2.json;; */W79\?*) body=show3.json;; *) body=show1.json;; esac;;
   *api.openalex.org/works?*) kind=oa; body=oa_search.json;;
@@ -2903,20 +2937,20 @@ printf '%s' "$code"
 S
 chmod +x "$SCH/curl"
 sc() { # runs scholar.sh with the stub; stdout $SCH/out, stderr $SCH/err, rc $SCH/rc, calls $SCH/log
-  : > "$SCH/log"; rm -f "$SCH/log.hdr"
+  : > "$SCH/log"; rm -f "$SCH/log.hdr" "$SCH/log.ua" "$SCH/log.stamp"
   (cd "$SCH/run" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY="${SCHOLAR_ARXIV_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true
 }
 scn() { grep -c . "$SCH/log" || true; }
 scg() { grep -c -- "$1" "$2" || true; }   # lines of a file with the fragment (0 is not a failure)
 scu() { grep -cF -- "$1" "$SCH/log" || true; }   # calls whose line has the fragment
-sch_codes() { rm -f "$FX"/code.*; }
+sch_codes() { rm -f "$FX"/code.* "$FX/ctype"; }
 }
 
 sec_scholar() {
 sch_setup
 # search, all sources without a key: rows, cleaning, ids, limit, cross-source dedupe, one call per source
 sch_codes; sc search "graph neural" --limit 3
-EXP="$(printf 'source\tid\tyear\tfirst_author\tvenue\tcitations\toa\ttitle\nopenalex\tdoi:10.1000/abc.1\t2023\tAda Lovelace\tNature\t42\tyes\tDeep Learning for Tabs\nopenalex\tarxiv:2401.00001\t2024\t-\t-\t0\tno\tArx paper\nopenalex\topenalex:W3\t-\t-\t-\t-\tno\tNo doi\narxiv\tarxiv:2402.00002\t2024\tBob Smith\tarXiv cs.CL\t-\tyes\tTitle & more\narxiv\tarxiv:hep-th/9901001\t2024\tOld Author\tarXiv hep-th\t-\tyes\tOld style')"
+EXP="$(printf 'source\tid\tyear\tfirst_author\tvenue\tcitations\toa\ttitle\nopenalex\tdoi:10.1000/abc.1\t2023\tAlma Larkin\tNature\t42\tyes\tDeep Learning for Tabs\nopenalex\tarxiv:2401.00001\t2024\t-\t-\t0\tno\tArx paper\nopenalex\topenalex:W3\t-\t-\t-\t-\tno\tNo doi\narxiv\tarxiv:2402.00002\t2024\tBob Smith\tarXiv cs.CL\t-\tyes\tTitle & more\narxiv\tarxiv:hep-th/9901001\t2024\tOld Author\tarXiv hep-th\t-\tyes\tOld style')"
 check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:graph+AND+all:neural&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
 # filters per source
 sch_codes
@@ -2982,27 +3016,28 @@ for a in "search q --publisher big --venue zz" "show 10.1000/x.1" "show arxiv:24
     OPENALEX_API_KEY=KEYOA_SECRET S2_API_KEY=KEYS2_SECRET SCHOLAR_EMAIL=me@x.org sc $a
     cat "$SCH/out" "$SCH/err" "$SCH/log" > "$SCH/all"
     grep -q 'KEYOA_SECRET\|KEYS2_SECRET' "$SCH/all" && LEAK=$((LEAK + 1))
+    grep -q 'me@x.org' "$SCH/log" && LEAK=$((LEAK + 1000))
     grep -rq 'KEYOA_SECRET\|KEYS2_SECRET' "$SCH/tmp" "$SCH/state" "$SCH/run" 2>/dev/null && LEAK=$((LEAK + 10))
     [ -z "$(ls -A "$SCH/tmp")" ] || LEAK=$((LEAK + 100))
     [ -f "$SCH/log.hdr" ] && SEEN="$SEEN$(scg 'Authorization: Bearer KEYOA_SECRET' "$SCH/log.hdr")$(scg 'x-api-key: KEYS2_SECRET' "$SCH/log.hdr")."
   done
 done
-sch_codes; sc search q --source openalex; U1="$(scg '-A orca-roles-scholar -o' "$SCH/log"):$([ -f "$SCH/log.hdr" ] && echo hdr || echo nohdr)"
-SCHOLAR_EMAIL=me@x.org sc search q --source openalex; U2="$(scg '-A orca-roles-scholar (mailto:me@x.org) -o' "$SCH/log")"
+sch_codes; sc search q --source openalex; U1="$(scg ' -A ' "$SCH/log")$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$([ -f "$SCH/log.hdr" ] && echo hdr || echo nohdr)"
+SCHOLAR_EMAIL=me@x.org sc search q --source openalex; U2="$(scg ' -A ' "$SCH/log")$(scg 'User-Agent: orca-roles-scholar (mailto:me@x.org)$' "$SCH/log.ua")$(scg 'MODE -rw-------$' "$SCH/log.ua")$(scg 'me@x.org' "$SCH/log")"
 OPENALEX_API_KEY=KEYOA_SECRET sc search q --source openalex; U3="$(scg '-H @' "$SCH/log"):$(scg 'KEYOA' "$SCH/log")"
-check "scholar keys: header file only (-H @file), no key in arguments, output or leftovers; user agent with and without an email" "$LEAK:$SEEN:$U1:$U2:$U3" "0:30.10.10.10.11.13.:1:nohdr:1:1:0"
+check "scholar keys: header file only (-H @file), no key in arguments, output or leftovers; the User-Agent goes in a 0600 header file, never in -A, and the email never reaches a command line of the API calls" "$LEAK:$SEEN:$U1:$U2:$U3" "0:30.10.10.10.11.13.:01:nohdr:0110:1:0"
 # show on OpenAlex: fields in order, cleaning, abstract, not found, API error, and every identifier form reaches the same work
 sch_codes; sc show 10.1000/SHOW.1
 EXPS="$(printf 'id: doi:10.1000/show.1\ntitle: A Shown Paper\nyear: 2022\ndate: 2022-05-06\ntype: article\nauthors: Ann One; Bo Two\nvenue: Journal X\npublisher: Pub Y\ndoi: 10.1000/show.1\narxiv: -\ncitations: 5\noa: yes\noa_url: https://x.org/y.pdf\nretracted: no\nabstract: We study cats study and dogs.')"
 bvu() { grep -o 'https://[^ ]*' "$SCH/log" | sed -e 's#https://api.crossref.org/works/#CR #' -e 's#https://export.arxiv.org/api/query?id_list=#AX #' | tr '\n' ' '; }
 V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPS" ] && echo same || cat "$SCH/out"):$(cat "$SCH/err"):$(scu 'https://api.openalex.org/works/doi:10.1000/show.1?select=id,doi,title,publication_year,publication_date,type,authorships,primary_location,cited_by_count,open_access,is_retracted,abstract_inverted_index')"
 sc show 10.1000/retracted; V2="$(cat "$SCH/rc"):$(sed -n '1p;2p;3p;6p;8p;9p;10p;11p;13p;14p;15p' "$SCH/out" | tr '\n' '|')"
-for id in "doi:10.1000/SHOW.1" "DOI:10.1000/SHOW.1" "https://doi.org/10.1000/SHOW.1" "http://doi.org/10.1000/SHOW.1" "10.1000/SHOW.1" "doi: 10.1000/SHOW.1"; do sc show "$id"; V3="${V3:-}$(cat "$SCH/rc")$(scu 'works/doi:10.1000/show.1?')"; done
+for id in "doi:10.1000/SHOW.1" "DOI:10.1000/SHOW.1" "https://doi.org/10.1000/SHOW.1" "http://doi.org/10.1000/SHOW.1" "10.1000/SHOW.1" "doi: 10.1000/SHOW.1" "HTTPS://DOI.ORG/10.1000/SHOW.1" "HTTP://DOI.ORG/10.1000/SHOW.1" "Https://Doi.Org/10.1000/SHOW.1"; do sc show "$id"; V3="${V3:-}$(cat "$SCH/rc")$(scu 'works/doi:10.1000/show.1?')"; done
 sc show "10.1000/a?b#c%d e"; V4="$(scu 'works/doi:10.1000/a%3Fb%23c%25de?select=')"
 sc show doi:10.404/none; V5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
 echo 500 > "$FX/code.oa"; sc show 10.1000/x; V6="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
 sc show 10.48550/arXiv.2401.00001; V7="$(cat "$SCH/rc"):$(scu api.openalex.org):$(scu 'export.arxiv.org/api/query?id_list=2401.00001')"
-check "scholar show (OpenAlex): fields and cleaning, abstract, retracted, identifier forms, DOI encoding, 404 -> 2, error -> 3, arXiv DOI never asked to OpenAlex" "$V1|$V2|$V3|$V4|$V5|$V6|$V7" "0:same::1|0:id: openalex:W78|title: -|year: -|authors: -|publisher: -|doi: -|arxiv: -|citations: -|oa_url: -|retracted: yes|abstract: -||010101010101|1|2:scholar.sh: doi:10.404/none not found in OpenAlex:0|3:scholar.sh: OpenAlex failed (HTTP 500):1|0:0:1"
+check "scholar show (OpenAlex): fields and cleaning, abstract, retracted, identifier forms, DOI encoding, 404 -> 2, error -> 3, arXiv DOI never asked to OpenAlex" "$V1|$V2|$V3|$V4|$V5|$V6|$V7" "0:same::1|0:id: openalex:W78|title: -|year: -|authors: -|publisher: -|doi: -|arxiv: -|citations: -|oa_url: -|retracted: yes|abstract: -||010101010101010101|1|2:scholar.sh: doi:10.404/none not found in OpenAlex:0|3:scholar.sh: OpenAlex failed (HTTP 500):1|0:0:1"
 sch_codes; sc show openalex:W78; W1="$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W78?select='):$(head -1 "$SCH/out"):$(scg '^arxiv: -$' "$SCH/out")"
 sc show OPENALEX:w78; W1="$W1:$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W78?select='):$(head -1 "$SCH/out")"
 sc show openalex:W77; W2="$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W77?select='):$(head -1 "$SCH/out")"
@@ -3010,19 +3045,19 @@ sc show openalex:W79; W3="$(cat "$SCH/rc"):$(scg '^id: arxiv:2401.00001$' "$SCH/
 sc show OpenAlex:w999; W4="$(cat "$SCH/rc"):$(scu 'works/W999?select='):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
 W5=""; for b in "openalex:" "openalex:W" "openalex:Wx1" "openalex:W1x" "openalex:W1 2x"; do sc show "$b"; W5="$W5$(cat "$SCH/rc")$(scn)"; done
 check "scholar show openalex:W<id>: any case of prefix and W, uppercase W in URL, DOI-less work prints openalex:W, a work with a DOI prints its DOI id, arXiv-DOI work fills 'arxiv:', missing -> 2, malformed -> 1" "$W1|$W2|$W3|$W4|$W5" "0:1:id: openalex:W78:1:0:1:id: openalex:W78|0:1:id: doi:10.1000/show.1|0:1:1:1:0|2:1:scholar.sh: OpenAlex:w999 not found in OpenAlex:0|1010101010"
-# redirects and header file mode: calls with a key header do not follow redirects (-L), keyless ones do; the header file is 0600
+# redirects and header file mode: no API call follows redirects (-L), with or without a key; the key and User-Agent header files are 0600
 sch_codes; OPENALEX_API_KEY=KEYOA_SECRET S2_API_KEY=KEYS2_SECRET sc search q
-R1="$(scn):$(scg ' -L ' "$SCH/log"):$(scu 'export.arxiv.org'):$(scg 'MODE -rw-------$' "$SCH/log.hdr"):$(scg MODE "$SCH/log.hdr")"
+R1="$(scn):$(scg ' -L ' "$SCH/log"):$(scu 'export.arxiv.org'):$(scg 'MODE -rw-------$' "$SCH/log.hdr"):$(scg MODE "$SCH/log.hdr"):$(scg 'MODE -rw-------$' "$SCH/log.ua"):$(scg MODE "$SCH/log.ua"):$(scg '-H @.* -H @' "$SCH/log")"
 OPENALEX_API_KEY=KEYOA_SECRET sc search q --publisher big --venue zz --source openalex; R2="$(scn):$(scg ' -L ' "$SCH/log")"
 sc search q --publisher big --venue zz --source openalex; R3="$(scn):$(scg ' -L ' "$SCH/log")"
 sch_codes; printf '403\n200\n' > "$FX/code.s2"; S2_API_KEY=KEYS2_SECRET sc search q --source s2; R4="$(scn):$(scg ' -L ' "$SCH/log")"
 sch_codes; echo 302 > "$FX/code.oa"; OPENALEX_API_KEY=KEYOA_SECRET sc search q --source openalex; R5="$(cat "$SCH/rc"):$(tr '\n' '|' < "$SCH/err"):$(scn)"
-check "scholar redirects: key calls are made without -L, keyless ones with it, the key header file is 0600, a 3xx on a key call is a failure" "$R1|$R2|$R3|$R4|$R5" "3:1:1:2:2|3:0|3:3|2:1|3:warning: openalex failed (HTTP 302)|scholar.sh: every source failed|:1"
+check "scholar redirects: no API call is made with -L (key or not), the key and User-Agent header files are 0600 and both are passed on a keyed call, a 3xx is a failure" "$R1|$R2|$R3|$R4|$R5" "3:0:1:2:2:3:3:2|3:0|3:0|2:0|3:warning: openalex failed (HTTP 302)|scholar.sh: every source failed|:1"
 # show on arXiv (paced, never OpenAlex), and the pacing across runs
 sch_codes; sc show arxiv:2401.00001v3
 EXPA="$(printf 'id: arxiv:2401.00001\ntitle: Shown arXiv\nyear: 2024\ndate: 2024-02-03\ntype: preprint\nauthors: First Au; Second Au\nvenue: arXiv cs.LG\npublisher: -\ndoi: 10.1000/mixed.case\narxiv: 2401.00001\ncitations: -\noa: yes\noa_url: https://arxiv.org/pdf/2401.00001v2\nretracted: -\nabstract: Sum & text line two.')"
 A1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPA" ] && echo same || cat "$SCH/out"):$(scu 'https://export.arxiv.org/api/query?id_list=2401.00001'):$(scu api.openalex.org)"
-for id in "ARXIV:2401.00001" "https://arxiv.org/abs/2401.00001v2" "arxiv:hep-th/9901001v2" "10.48550/ARXIV.2401.00001"; do sc show "$id"; A2="${A2:-}$(cat "$SCH/rc")$(scu api.openalex.org)$(scu 'id_list=')"; done
+for id in "ARXIV:2401.00001" "https://arxiv.org/abs/2401.00001v2" "arxiv:hep-th/9901001v2" "10.48550/ARXIV.2401.00001" "HTTPS://ARXIV.ORG/ABS/2401.00001v2" "http://arxiv.org/abs/2401.00001" "HTTP://ARXIV.ORG/ABS/hep-th/9901001"; do sc show "$id"; A2="${A2:-}$(cat "$SCH/rc")$(scu api.openalex.org)$(scu 'id_list=')"; done
 sc show arxiv:9999.99999; A3="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
 sc show arxiv:err; A4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
 echo 500 > "$FX/code.ax"; sc show arxiv:2401.00001; A5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
@@ -3033,14 +3068,35 @@ T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P2="$(( $(date
 for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 1 ? 0 : 1 ))$(cat "$SCH/rc")"; done
 P5="$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -le "$(( $(date +%s) + 1 ))" ] && echo rewritten || echo kept)"
 SCHOLAR_ARXIV_DELAY=2 sc search q --source arxiv; P4="$(scu export.arxiv.org)"
-check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
+check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
+# pacing across runs and processes: the stamp is taken before the call and the wait is d+1 whole seconds after it; a lock dir serializes the runs
+LK="$SCH/state/orca-roles-scholar-arxiv.last.lock"; ST="$SCH/state/orca-roles-scholar-arxiv.last"
+rm -rf "$LK"; S0="$(date +%s)"; echo "$S0" > "$ST"
+SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; G1="$(cat "$SCH/rc"):$(( $(date +%s) - S0 >= 3 ? 1 : 0 ))"; G2="$(sed -n 's/^stamp=\([0-9]*\) lock=.*/\1/p' "$SCH/log.stamp")"
+check "scholar arXiv pacing: a stamp in the current second waits d+1 whole seconds, the stamp is already written when the call is made, the lock is free during the call and gone after" "$G1:$(( ${G2:-0} >= S0 + 3 ? 1 : 0 )):$(sed -n 's/.*lock=//p' "$SCH/log.stamp"):$([ -e "$LK" ] && echo left || echo gone):$([ "$(cat "$ST")" = "$G2" ] && echo same || echo moved)" "0:1:1:free:gone:same"
+echo 1000 > "$ST"; mkdir "$LK"; ( sleep 2; rmdir "$LK" ) & T0="$(date +%s)"
+SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; wait; H1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 >= 1 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)"
+mkdir "$LK"; T0="$(date +%s)"; sc show arxiv:2401.00001; H2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 1 ? 1 : 0 )):$([ -d "$LK" ] && echo untouched || echo removed):$(scu export.arxiv.org)"; rmdir "$LK"
+check "scholar arXiv pacing: a run waits while another holds the lock and leaves nothing behind; with the delay 0 there is no lock at all" "$H1:$H2" "0:1:gone:1:0:1:untouched:1"
+mkdir "$LK"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
+check "scholar arXiv pacing: a lock nobody releases is taken over after 30 s (not before, not never) and removed" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)" "0:1:gone:1"
+# no usable state dir or no lock: the call is made unpaced (no lock, no sleep, no stamp), one note on stderr per run, same exit code; never a hang
+SD="$SCH/state"; rm -rf "$SD" "$SCH/nostate"; T0="$(date +%s)"
+SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 2 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$([ -e "$SD" ] && echo created || echo none)"
+printf 'x' > "$SCH/nostate"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=3 sc search q --source arxiv; U2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 2 ? 1 : 0 )):$(grep -c 'not paced' "$SCH/err" || true)"
+SCHOLAR_ARXIV_DELAY=0 sc show arxiv:2401.00001; U3="$(cat "$SCH/rc"):$(wc -c < "$SCH/err" | tr -d ' ')"; mkdir -p "$SD"
+U4=skipped; if [ "$(id -u)" != 0 ]; then chmod 555 "$SD"; SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu export.arxiv.org):$(ls -A "$SD" | wc -l | tr -d ' ')"; chmod 755 "$SD"; fi
+check "scholar arXiv pacing: a missing or read-only state dir (or delay 0) never hangs: the call is made at once without lock, sleep or stamp, with the note 'arXiv calls are not paced: <dir> is not a writable directory'" "$U1|$U2|$U3|$U4" "0:1:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:none|0:1:1|0:0|$([ "$(id -u)" != 0 ] && echo "0:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:0" || echo skipped)"
+mkdir -p "$LK"; : > "$LK/pin"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
+check "scholar arXiv pacing: a lock that cannot be removed ends the wait once after 30 s (no restart), the call is made unpaced with the note 'cannot take the lock', the stamp is not touched" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$(cat "$ST"):$([ -e "$LK/pin" ] && echo kept || echo gone)" "0:1:scholar.sh: arXiv calls are not paced: cannot take the lock $ST.lock:1:1000:kept"
+rm -rf "$LK"
+rm -f "$ST"; mkdir "$ST"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Y="$(cat "$SCH/rc"):$(grep -c 'not paced' "$SCH/err" || true):$(scu export.arxiv.org):$([ -e "$LK" ] && echo left || echo gone)"; rmdir "$ST"
+check "scholar arXiv pacing: a lock taken but a stamp that cannot be written is silent (no 'cannot take the lock' note), the call is made and the lock is released" "$Y" "0:0:1:gone"
 # bibtex and verify: doi.org / Crossref / arXiv stub serving files named after the request; anything else is flagged
 BV="$FX/bv"; rm -rf "$BV"; mkdir -p "$BV" "$SCH/bvg"; git -C "$SCH/bvg" init -q
 cat > "$SCH/curl2" <<'S'
 #!/bin/bash
-out=""; i=1
-while [ $i -le $# ]; do a="${!i}"; case "$a" in -o) j=$((i+1)); out="${!j}";; esac; i=$((i+1)); done
-url="${@: -1}"
+. "$SCH_FX/../stublib.sh"; stub_args "$@"
 echo "$*" >> "$SCH_LOG"
 case "$url" in
   https://doi.org/*) n="doi_$(printf '%s' "${url#https://doi.org/}" | sed 's/[^A-Za-z0-9]/_/g')";;
@@ -3053,37 +3109,49 @@ code=200; [ -f "$SCH_FX/bv/$n.code" ] && code="$(cat "$SCH_FX/bv/$n.code")"
 if [ "$code" = 200 ] && [ -f "$SCH_FX/bv/$n" ]; then cp "$SCH_FX/bv/$n" "$out"
 elif [ "$code" = 200 ]; then echo "<html>404</html>" > "$out"; code=404
 else echo "oops $code" > "$out"; fi
+stub_dump "$code"
 printf '%s' "$code"
 S
 chmod +x "$SCH/curl2"
 bv() { # like sc, for bibtex/verify: cwd $BVDIR (default $SCH/run), stub curl2, no Crossref delay unless set
-  : > "$SCH/log"; rm -f "$SCH/log.bad"
+  : > "$SCH/log"; rm -f "$SCH/log.bad" "$SCH/log.hdr" "$SCH/log.ua" "$SCH/log.stamp"
   (cd "${BVDIR:-$SCH/run}" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl2" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY=0 SCHOLAR_CROSSREF_DELAY="${SCHOLAR_CROSSREF_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true
 }
 bvr() { echo "$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|'):$(scn)"; }   # rc:stdout bytes:stderr:calls
-echo ' @article{Singhal_2023, title={Large language models encode clinical knowledge}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Singhal, Karan and Azizi, Shekoofeh}, year={2023}, month=July, pages={172–180} }' > "$BV/doi_10_1038_s41586_023_06291_2"
-printf '@misc{https://doi.org/10.48550/arxiv.2005.11401,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Lewis, Patrick and Perez, Ethan},\n  title = {Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks},\n  publisher = {arXiv},\n  year = {2020}\n}\n' > "$BV/doi_10_48550_arXiv_2005_11401"
+echo ' @article{Varga_2023, title={Large language models encode clinical knowledge}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Varga, Karl and Lindqvist, Sigrid}, year={2023}, month=July, pages={172–180} }' > "$BV/doi_10_1038_s41586_023_06291_2"
+printf '@misc{https://doi.org/10.48550/arxiv.2005.11401,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Okafor, Paulo and Ibarra, Elena},\n  title = {Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks},\n  publisher = {arXiv},\n  year = {2020}\n}\n' > "$BV/doi_10_48550_arXiv_2005_11401"
 echo '<html>Error</html>' > "$BV/doi_10_1000_html"; echo 500 > "$BV/doi_10_1000_err.code"; echo FAIL > "$BV/doi_10_1000_net.code"
 cr() { local e="${4:-}"; [ -n "$e" ] || e="{}"; jq -nc --arg t "$1" --arg a "$2" --argjson y "$3" --argjson extra "$e" '{status:"ok",message:({title:[$t],author:[{family:$a}],issued:{"date-parts":[[$y]]}} + $extra)}'; }
 BERT="BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
-cr "$BERT" Devlin 2019 > "$BV/cr_10_18653_v1_n19_1423"
-cr "RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" Wakefield 1998 '{"updated-by":[{"DOI":"10.1016/s0140-6736(04)15715-2","type":"correction"},{"DOI":"10.1016/s0140-6736(10)60175-4","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_97_11096_0"
+cr "$BERT" Hartwell 2019 > "$BV/cr_10_18653_v1_n19_1423"
+cr "RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" Castellan 1998 '{"updated-by":[{"DOI":"10.1016/s0140-6736(04)15715-2","type":"correction"},{"DOI":"10.1016/s0140-6736(10)60175-4","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_97_11096_0"
 cr "Retraction—Ileal" "The Editors" 2010 '{"update-to":[{"DOI":"10.1016/s0140-6736(97)11096-0","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_10_60175_4"
 cr "Paper with concern" Ng 2021 '{"updated-by":[{"DOI":"10.1/eoc","type":"expression_of_concern"}]}' > "$BV/cr_10_1_concern"
 cr "Paper withdrawn" Ng 2021 '{"updated-by":[{"DOI":"10.1/wd","type":"withdrawal"}]}' > "$BV/cr_10_1_withdrawn"
 cr "Paper erratum" Ng 2021 '{"updated-by":[{"DOI":"10.1/er","type":"erratum"}]}' > "$BV/cr_10_1_erratum"
 jq -nc '{status:"ok",message:{title:["No author paper"],issued:{"date-parts":[[null]]}}}' > "$BV/cr_10_1_noauthor"
 echo '<html>oops</html>' > "$BV/cr_10_1_html"; echo 500 > "$BV/cr_10_1_err.code"; echo FAIL > "$BV/cr_10_1_net.code"; echo 429 > "$BV/cr_10_1_rate.code"
-sch_entry 2005.11401 1 "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" cs.CL "" "Patrick Lewis" "Ethan Perez" | sch_feed > "$BV/ax_2005_11401"
+sch_entry 2005.11401 1 "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" cs.CL "" "Paulo Okafor" "Elena Ibarra" | sch_feed > "$BV/ax_2005_11401"
 sch_feed < /dev/null > "$BV/ax_9999_99999"
 W="$SCH/bvw"; rm -rf "$W"; mkdir -p "$W"
 bvent() { printf '@article{%s, title={%s}, author={%s}, year={%s}, doi={%s}}\n' "$@"; }
-E1='@article{singhal2023large, title={{Large language models encode clinical knowledge}}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Singhal, Karan and Azizi, Shekoofeh}, year={2023}, month = jul, pages={172--180} }'
-E2="$(printf '@misc{lewis2020retrieval,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Lewis, Patrick and Perez, Ethan},\n  title = {{Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks}},\n  publisher = {arXiv},\n  year = {2020}\n}')"
+E1='@article{varga2023large, title={{Large language models encode clinical knowledge}}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Varga, Karl and Lindqvist, Sigrid}, year={2023}, month = jul, pages={172--180} }'
+E2="$(printf '@misc{okafor2020retrieval,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Okafor, Paulo and Ibarra, Elena},\n  title = {{Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks}},\n  publisher = {arXiv},\n  year = {2020}\n}')"
 # bibtex without --add: fixed entry on stdout (key, braced title, month macro, pages --), Accept header, DOI lowercased, arXiv id -> arXiv DOI, nothing written
 bv bibtex doi:10.1038/S41586-023-06291-2; X1="$(bvr):$([ "$(cat "$SCH/out")" = "$E1" ] && echo same || echo differs):$(scu 'https://doi.org/10.1038/s41586-023-06291-2'):$(scu '-H Accept: application/x-bibtex'):$(scu ' -L ')"
 bv bibtex arxiv:2005.11401v2; X2="$(bvr):$([ "$(cat "$SCH/out")" = "$E2" ] && echo same || echo differs):$(scu 'https://doi.org/10.48550/arXiv.2005.11401')"
 check "scholar bibtex: fixed doi.org entry on stdout (doi and arxiv id), Accept header, follows redirects, empty stderr, nothing written" "$X1|$X2|$(ls "$SCH/run" | wc -l | tr -d ' ')" "0:$(( $(printf '%s' "$E1" | wc -c) + 1 ))::1:same:1:1:1|0:$(printf '%s\n' "$E2" | wc -c | tr -d ' ')::1:same:1|0"
+# bibtex: the LAST Content-Type of the doi.org answer (the -D file holds every hop) must contain application/x-bibtex, in any case; same failure as a body that does not start with '@'
+CT=""
+for c in 'Content-Type: application/x-bibtex' 'content-type: Application/X-BibTeX; charset=utf-8' 'CONTENT-TYPE:application/x-bibtex' 'Content-Type: text/html\nContent-Type: application/x-bibtex' 'Content-Type: application/x-bibtex\nContent-Type: text/html' 'Content-Type: text/html' 'Content-Type: application/json' '-' 'X-Content-Type: application/x-bibtex'; do
+  printf '%b\n' "$c" > "$FX/ctype"; bv bibtex doi:10.1038/S41586-023-06291-2
+  CT="$CT$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$E1" ] && echo same || wc -c < "$SCH/out" | tr -d ' '):$(tr '\n' '|' < "$SCH/err")|"
+done; rm -f "$FX/ctype"; bv bibtex doi:10.1038/S41586-023-06291-2; CT="$CT$(scu ' -D ')"
+check "scholar bibtex content type: accepted when the last hop says application/x-bibtex (case and parameters free); html, json, none, an X- header or an earlier hop only -> exit 3 'doi.org failed (HTTP 200)', empty stdout" "$CT" "0:same:|0:same:|0:same:|0:same:|3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||1"
+# the email never goes to doi.org (which redirects to publishers): plain User-Agent, with -L, no -A, no email anywhere in the call
+SCHOLAR_EMAIL=me@x.org bv bibtex doi:10.1038/S41586-023-06291-2; EM1="$(cat "$SCH/rc"):$(scg ' -L ' "$SCH/log"):$(scg ' -A ' "$SCH/log"):$(scg 'me@x.org' "$SCH/log"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$(scg 'me@x.org' "$SCH/log.ua")"
+SCHOLAR_EMAIL=me@x.org bv bibtex arxiv:2005.11401; EM2="$(cat "$SCH/rc"):$(scg ' -L ' "$SCH/log"):$(scg 'me@x.org' "$SCH/log" "$SCH/log.ua")"
+check "scholar bibtex with SCHOLAR_EMAIL: the doi.org request follows redirects with the plain User-Agent (header file) and the email is nowhere in the call" "$EM1|$EM2" "0:1:0:0:1:0|0:1:0"
 # bibtex failures: usage before any call, 404 -> 2, other status / curl failure / HTML page with 200 -> 3; no file, no stdout
 Y=""; for a in "openalex:W12" "10.9999/none" "10.1000/err" "10.1000/net" "10.1000/html" "nonsense"; do bv bibtex "$a" --add --bib "$W/f.bib"; Y="$Y$(bvr)|"; done
 bv bibtex 10.1/x --bib "$W/f.bib"; Y="$Y$(bvr)|"; bv bibtex 10.1038/s41586-023-06291-2 --add; Y="$Y$(bvr)|"; bv bibtex; Y="$Y$(bvr)|"; bv bibtex 10.1/x --add --add --bib "$W/f.bib"; Y="$Y$(bvr)"
@@ -3094,7 +3162,7 @@ printf '@article{x, title={T}}\ntrailing\n' > "$BV/doi_10_1000_tail"; printf '}\
 Q=""; for a in trunc extra open tail lead; do bv bibtex "10.1000/$a" --add --bib "$W/q.bib"; Q="$Q$(bvr)|"; done; bv bibtex 10.1000/crlf --add --bib "$W/q.bib"; Q="$Q$(bvr):$(cat "$SCH/out"):$(grep -c . "$W/q.bib")"
 check "scholar bibtex: incomplete or unbalanced doi.org body -> exit 3 'incomplete BibTeX entry', empty stdout, nothing written; leading-@ rule first; nested braces and CRLF accepted" "$Q" "3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org failed (HTTP 200)|:1|0:11:note: added 2020nested to $W/q.bib|:1:2020nested:4"
 # --bib on something that exists and is not a regular file: exit 1 before any call, no raw shell error; symlink to a file works, dangling link as before
-mkdir -p "$W/d.bib" "$W/dd"; ln -sfn "$W/dd" "$W/lnk-dir.bib"; ln -sfn "$W/nowhere.bib" "$W/dangling.bib"; printf '@article{k, doi={10.18653/v1/n19-1423}, title={%s}, author={Devlin, J}, year={2019}}\n' "$BERT" > "$W/real.bib"; ln -sfn "$W/real.bib" "$W/lnk-file.bib"
+mkdir -p "$W/d.bib" "$W/dd"; ln -sfn "$W/dd" "$W/lnk-dir.bib"; ln -sfn "$W/nowhere.bib" "$W/dangling.bib"; printf '@article{k, doi={10.18653/v1/n19-1423}, title={%s}, author={Hartwell, J}, year={2019}}\n' "$BERT" > "$W/real.bib"; ln -sfn "$W/real.bib" "$W/lnk-file.bib"
 NR=""; for f in d.bib lnk-dir.bib; do bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/$f"; NR="$NR$(bvr)|"; bv verify --bib "$W/$f"; NR="$NR$(bvr)|"; done
 bv verify --bib "$W/lnk-file.bib"; NR="$NR$(cat "$SCH/rc"):$(tail -n 1 "$SCH/out")|"; bv verify --bib "$W/dangling.bib"; NR="$NR$(bvr)|"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/lnk-file.bib"; NR="$NR$(cat "$SCH/rc"):$(grep -c '^@' "$W/real.bib")"
 check "scholar --bib on a directory (or link to one): bibtex --add and verify exit 1 'is not a regular file' with no call; link to a file works; dangling link keeps the old messages" "$NR" "1:0:scholar.sh: $W/d.bib is not a regular file|:0|1:0:scholar.sh: $W/d.bib is not a regular file|:0|1:0:scholar.sh: $W/lnk-dir.bib is not a regular file|:0|1:0:scholar.sh: $W/lnk-dir.bib is not a regular file|:0|0:k$(printf '\t')ok$(printf '\t')-|1:0:scholar.sh: $W/dangling.bib not found|:0|0:2"
@@ -3106,35 +3174,35 @@ bv bibtex arxiv:2005.11401 --add --bib "$W/nonl.bib"; Z3="$(bvr):$(head -c "$(wc
 printf '@article{old,\n  doi = {10.1/old}\n}\n' > "$W/nl.bib"; cp "$W/nl.bib" "$W/nl0.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/nl.bib"
 Z4="$(cmp -s <(tail -c +"$(( $(wc -c < "$W/nl0.bib") + 1 ))" "$W/nl.bib") <(printf '\n%s\n' "$E1") && echo tail-ok || echo tail-bad)"
 : > "$W/zero.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/zero.bib"; Z5="$(cmp -s "$W/zero.bib" <(printf '%s\n' "$E1") && echo exact || echo differs)"
-check "scholar bibtex --add: creates dirs/file, default path in a git repo, append-only with blank-line separator, no existing byte touched, stdout key, note on stderr" "$Z1|$Z2|$Z3|$Z4|$Z5" "0:17:note: added singhal2023large to $W/n/e/refs.bib|:1:exact:singhal2023large|exact:singhal2023large|0:19:note: added lewis2020retrieval to $W/nonl.bib|:1:kept:tail-ok|tail-ok|exact"
+check "scholar bibtex --add: creates dirs/file, default path in a git repo, append-only with blank-line separator, no existing byte touched, stdout key, note on stderr" "$Z1|$Z2|$Z3|$Z4|$Z5" "0:15:note: added varga2023large to $W/n/e/refs.bib|:1:exact:varga2023large|exact:varga2023large|0:20:note: added okafor2020retrieval to $W/nonl.bib|:1:kept:tail-ok|tail-ok|exact"
 # --add duplicates by DOI (case, https prefix, quoted, other key, arXiv DOI in any case) never write; key collisions
 printf '@article{theirs, doi = "https://doi.org/10.1038/S41586-023-06291-2"}\n@misc{lw, doi={https://doi.org/10.48550/ARXIV.2005.11401}}\n' > "$W/dup.bib"; cp "$W/dup.bib" "$W/dup0.bib"
 bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/dup.bib"; D1="$(bvr):$(cat "$SCH/out")"; bv bibtex arxiv:2005.11401 --add --bib "$W/dup.bib"; D2="$(bvr):$(cat "$SCH/out")"
 check "scholar bibtex --add: a DOI already present (case, prefix, quotes, arXiv DOI) is not added: file untouched, key on stdout, note, exit 0" "$D1|$D2|$(cmp -s "$W/dup.bib" "$W/dup0.bib" && echo same || echo CHANGED)" "0:7:note: already in $W/dup.bib as theirs|:1:theirs|0:3:note: already in $W/dup.bib as lw|:1:lw|same"
-printf '@article{Singhal2023Large,\n doi={10.1/zzz}\n}\n' > "$W/col.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/col.bib"; C1="$(cat "$SCH/out")"
+printf '@article{Varga2023Large,\n doi={10.1/zzz}\n}\n' > "$W/col.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/col.bib"; C1="$(cat "$SCH/out")"
 sed -e 's/10.1038\/s41586-023-06291-2/10.1038\/other/' "$BV/doi_10_1038_s41586_023_06291_2" > "$BV/doi_10_1038_other"; bv bibtex 10.1038/other --add --bib "$W/col.bib"; C2="$(cat "$SCH/out")"
-: > "$W/z.bib"; for l in "" b c d e f g h i j k l m n o p q r s t u v w x y z; do echo "@article{singhal2023large$l, doi={10.1/q$l}}" >> "$W/z.bib"; done; cp "$W/z.bib" "$W/z0.bib"
+: > "$W/z.bib"; for l in "" b c d e f g h i j k l m n o p q r s t u v w x y z; do echo "@article{varga2023large$l, doi={10.1/q$l}}" >> "$W/z.bib"; done; cp "$W/z.bib" "$W/z0.bib"
 bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z.bib"; C3="$(bvr):$(cmp -s "$W/z.bib" "$W/z0.bib" && echo same || echo CHANGED)"
-grep -v 'largez,' "$W/z0.bib" > "$W/z2.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z2.bib"; C4="$(cat "$SCH/out"):$(tail -n 1 "$W/z2.bib" | cut -c1-26)"
-check "scholar bibtex --add: taken key (any case) gets b, c, ...; 26 taken -> exit 3 untouched; z still free" "$C1|$C2|$C3|$C4" "singhal2023largeb|singhal2023largec|3:0:scholar.sh: no free key for singhal2023large in $W/z.bib|:1:same|singhal2023largez:@article{singhal2023largez"
+grep -v 'largez,' "$W/z0.bib" > "$W/z2.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z2.bib"; C4="$(cat "$SCH/out"):$(tail -n 1 "$W/z2.bib" | cut -c1-24)"
+check "scholar bibtex --add: taken key (any case) gets b, c, ...; 26 taken -> exit 3 untouched; z still free" "$C1|$C2|$C3|$C4" "varga2023largeb|varga2023largec|3:0:scholar.sh: no free key for varga2023large in $W/z.bib|:1:same|varga2023largez:@article{varga2023largez"
 # verify: table of statuses over every identity/retraction/mismatch path, exit codes, pacing, request URLs
 BVF() { printf '%s\n' '@comment{ignored @article{fake, doi={10.1/x}} }' '@string{n = "N"}'; }
 { BVF
-bvent ok1 "$BERT" "Devlin, Jacob and Chang, Ming-Wei" 2019 10.18653/V1/N19-1423
-bvent sub "BERT: Pre-training of Deep Bidirectional Transformers" "Jacob Devlin and Chang, Ming-Wei" 2019 https://doi.org/10.18653/v1/n19-1423
+bvent ok1 "$BERT" "Hartwell, Jonas and Ito, Mei" 2019 10.18653/V1/N19-1423
+bvent sub "BERT: Pre-training of Deep Bidirectional Transformers" "Jonas Hartwell and Ito, Mei" 2019 https://doi.org/10.18653/v1/n19-1423
 bvent bad "Totally other" "Smith, J" 2020 10.18653/v1/n19-1423
-bvent wake "Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" "Wakefield, AJ and Murch, SH" 1998 10.1016/S0140-6736\(97\)11096-0
+bvent wake "Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" "Castellan, AJ and Moreau, SH" 1998 10.1016/S0140-6736\(97\)11096-0
 bvent notice Retraction Editors 2010 10.1016/s0140-6736\(10\)60175-4
 bvent missing T "A, B" 2000 10.9999/none
 printf '@article{nodoi, title={T}, author={A, B}, year={2000}}\n'
-printf '@misc{rag, title = "Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks", author = "Lewis, Patrick and Perez, Ethan", year = 2024, eprint = {arXiv:2005.11401v3}, archivePrefix = {arXiv}}\n'
-bvent ragdoi "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" "Lewis, Patrick" 2024 10.48550/arXiv.2005.11401
+printf '@misc{rag, title = "Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks", author = "Okafor, Paulo and Ibarra, Elena", year = 2024, eprint = {arXiv:2005.11401v3}, archivePrefix = {arXiv}}\n'
+bvent ragdoi "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" "Okafor, Paulo" 2024 10.48550/arXiv.2005.11401
 printf '@misc{axmissing, title={T}, author={A}, year={2000}, eprint={9999.99999}, archiveprefix={arXiv}}\n@misc{eprintonly, title={T}, author={A}, year={2000}, eprint={2005.11401}}\n'
 bvent concern "Paper with concern" "Ng, A" 2021 10.1/concern
 bvent wd "Paper withdrawn" "Ng, A" 2021 10.1/withdrawn
 bvent er "Paper erratum" "Ng, A" 2021 10.1/erratum
 bvent noauth "No author paper" "Ng, A" 2021 10.1/noauthor
-printf '@article{notitle, author={Devlin, Jacob}, year={2019}, doi={10.18653/v1/n19-1423}}\n'
+printf '@article{notitle, author={Hartwell, Jonas}, year={2019}, doi={10.18653/v1/n19-1423}}\n'
 bvent html t a 1 10.1/html; bvent err t a 1 10.1/err; bvent net t a 1 10.1/net; bvent rate t a 1 10.1/rate; } > "$W/v.bib"
 sed -i.bak 's/\\(/(/g; s/\\)/)/g' "$W/v.bib"; rm -f "$W/v.bib.bak"; cp "$W/v.bib" "$W/v0.bib"
 bv verify --bib "$W/v.bib"
@@ -3142,7 +3210,7 @@ T="$(printf '\t')"
 EXPV="key${T}status${T}detail
 ok1${T}ok${T}-
 sub${T}warn${T}title differs (subtitle?)
-bad${T}fail${T}title mismatch: \"$BERT\"; first author mismatch: Devlin; year mismatch: 2019
+bad${T}fail${T}title mismatch: \"$BERT\"; first author mismatch: Hartwell; year mismatch: 2019
 wake${T}retracted${T}title mismatch: \"RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children\"; correction (10.1016/s0140-6736(04)15715-2); retracted (10.1016/s0140-6736(10)60175-4); title says RETRACTED
 notice${T}fail${T}title differs (subtitle?); this DOI is a notice, not the paper
 missing${T}notfound${T}not in Crossref
@@ -3163,7 +3231,7 @@ rate${T}error${T}Crossref HTTP 429"
 V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPV" ] && echo table-ok || echo table-differs):$(cat "$SCH/err"):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,):$(cmp -s "$W/v.bib" "$W/v0.bib" && echo same || echo CHANGED):$([ -f "$SCH/log.bad" ] && echo NETWORK || echo contained)"
 check "scholar verify: one TAB line per entry in file order (ok/warn/fail/retracted/notfound/nodoi/error), every identity and retraction path, exit 4, bib untouched; Crossref DOI lowercased, arXiv id without prefix/version, one call per looked-up entry" "$V1:$(bvu)" "4:table-ok::3,:same:contained:CR 10.18653/v1/n19-1423 CR 10.18653/v1/n19-1423 CR 10.18653/v1/n19-1423 CR 10.1016/s0140-6736(97)11096-0 CR 10.1016/s0140-6736(10)60175-4 CR 10.9999/none AX 2005.11401 AX 2005.11401 AX 9999.99999 CR 10.1/concern CR 10.1/withdrawn CR 10.1/erratum CR 10.1/noauthor CR 10.18653/v1/n19-1423 CR 10.1/html CR 10.1/err CR 10.1/net CR 10.1/rate "
 # exit codes
-{ bvent a "$BERT" "Devlin, J" 2019 10.18653/v1/n19-1423; bvent b t a 1 10.1/err; } > "$W/m1.bib"
+{ bvent a "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; bvent b t a 1 10.1/err; } > "$W/m1.bib"
 { bvent b t a 1 10.1/err; bvent c t a 1 10.1/rate; } > "$W/m2.bib"
 { bvent b t a 1 10.1/err; bvent a x "Ng, A" 2019 10.1/concern; } > "$W/m3.bib"
 { bvent b t a 1 10.1/err; printf '@misc{n, title={t}}\n'; } > "$W/m4.bib"
@@ -3174,17 +3242,109 @@ bv verify --bib "$W/nope.bib"; U1="$(bvr)"; bv verify x; U2="$(bvr)"; bv verify 
 mkdir -p "$SCH/bvg/article"; cp "$W/m1.bib" "$SCH/bvg/article/refs.bib"; BVDIR="$SCH/bvg" bv verify; U7="$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ')"
 check "scholar verify usage: missing file / bad args / no git without --bib -> exit 1 with no call; default <git top>/article/refs.bib" "$U1|$U2|$U3|$U4|$U5|$U7" "1:0:scholar.sh: $W/nope.bib not found|:0|1:0:scholar.sh: verify takes no argument (got 'x')|:0|1:0:scholar.sh: unknown option '--x'|:0|1:0:scholar.sh: option --bib needs a value|:0|1:0:scholar.sh: not in a git repository; pass --bib <path>|:0|0:3"
 # odd files: CRLF, mixed-case type/fields, tab and space in keys, bare/quoted values, unreadable file
-printf '@Article{CRLF,\r\n  Title = {%s},\r\n  Author = {Devlin, Jacob},\r\n  Year = {2019},\r\n  DOI = {10.18653/v1/n19-1423}\r\n}\r\n' "$BERT" > "$W/crlf.bib"
-printf '@article{k\tx, title={%s}, author={Devlin, J}, year={2019}, doi="10.18653/v1/n19-1423"}\n@article{sp ace,doi={10.1/err}}\n' "$BERT" > "$W/odd.bib"
+printf '@Article{CRLF,\r\n  Title = {%s},\r\n  Author = {Hartwell, Jonas},\r\n  Year = {2019},\r\n  DOI = {10.18653/v1/n19-1423}\r\n}\r\n' "$BERT" > "$W/crlf.bib"
+printf '@article{k\tx, title={%s}, author={Hartwell, J}, year={2019}, doi="10.18653/v1/n19-1423"}\n@article{sp ace,doi={10.1/err}}\n' "$BERT" > "$W/odd.bib"
 bv verify --bib "$W/crlf.bib"; O1="$(cat "$SCH/out" | tail -n 1)"; bv verify --bib "$W/odd.bib"; O2="$(tail -n +2 "$SCH/out" | tr '\t\n' '~|')"
 O3=skipped; if [ "$(id -u)" != 0 ]; then cp "$W/m1.bib" "$W/ro.bib"; chmod 000 "$W/ro.bib"; bv verify --bib "$W/ro.bib"; O3="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(tail -n 1 "$SCH/err")"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/ro.bib"; O3="$O3:$(cat "$SCH/rc"):$(tail -n 1 "$SCH/err")"; chmod 644 "$W/ro.bib"; fi
 check "scholar verify odd files: CRLF and mixed-case fields, tab in key collapsed, quoted doi; unreadable .bib -> exit 3 for verify and bibtex --add" "$O1|$O2|$O3" "CRLF${T}ok${T}-|k x~ok~-|sp ace~error~Crossref HTTP 500||3:0:scholar.sh: cannot read $W/ro.bib:3:scholar.sh: cannot read $W/ro.bib"
-# Crossref pacing (SCHOLAR_CROSSREF_DELAY between calls, none before the first), mailto from SCHOLAR_EMAIL
-{ bvent a "$BERT" "Devlin, J" 2019 10.18653/v1/n19-1423; bvent b "$BERT" "Devlin, J" 2019 10.18653/v1/n19-1423; } > "$W/p.bib"
+# Crossref pacing (SCHOLAR_CROSSREF_DELAY between calls, none before the first), SCHOLAR_EMAIL in the User-Agent
+{ bvent a "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; bvent b "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; } > "$W/p.bib"
 T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=2 bv verify --bib "$W/p.bib"; PA="$(( $(date +%s) - T0 >= 2 ? 1 : 0 ))"
 head -n 1 "$W/p.bib" > "$W/p1.bib"; T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=5 bv verify --bib "$W/p1.bib"; PB="$(( $(date +%s) - T0 <= 3 ? 1 : 0 ))"
 SCHOLAR_EMAIL='a+b@x.org' bv verify --bib "$W/p.bib"
-check "scholar verify: Crossref delay between calls but not before the first; SCHOLAR_EMAIL goes in the Crossref mailto, URL-encoded" "$PA$PB:$(scu 'works/10.18653/v1/n19-1423?mailto=a%2Bb%40x.org'):$(cat "$SCH/rc")" "11:2:0"
+check "scholar verify: Crossref delay between calls but not before the first; SCHOLAR_EMAIL goes in the User-Agent header file only, no mailto parameter in the URL, no -A, no redirects" "$PA$PB:$(scu 'mailto'):$(scg 'User-Agent: orca-roles-scholar (mailto:a+b@x.org)$' "$SCH/log.ua"):$(scg 'a+b@x.org' "$SCH/log"):$(scg ' -A \| -L ' "$SCH/log"):$(cat "$SCH/rc")" "11:0:2:0:0:0"
+# pdf / pdfs: stub curl3 maps a URL (query stripped, non-alphanumerics -> _) to a fixture in fx/pd; no fixture -> 404, <name>.code overrides the status, FAIL -> curl exit 7
+PD="$FX/pd"; mkdir -p "$PD"
+cat > "$SCH/curl3" <<'S'
+#!/bin/bash
+. "$SCH_FX/../stublib.sh"; stub_args "$@"
+echo "$*" >> "$SCH_LOG"
+n="$(printf '%s' "${url%%\?*}" | sed -e 's#^https\{0,1\}://##' -e 's/[^A-Za-z0-9]/_/g')"
+code=200; [ -f "$SCH_FX/pd/$n.code" ] && code="$(cat "$SCH_FX/pd/$n.code")"
+[ "$code" = FAIL ] && exit 7
+if [ "$code" = 200 ] && [ -f "$SCH_FX/pd/$n" ]; then cp "$SCH_FX/pd/$n" "$out"
+elif [ "$code" = 200 ]; then echo "<html>404</html>" > "$out"; code=404
+else echo "oops $code" > "$out"; fi
+printf '%s' "$code"
+S
+chmod +x "$SCH/curl3"
+pdfbody() { printf '%%PDF-1.4\n'; head -c "$1" /dev/zero | tr '\0' a; }
+pdfbody 3000 > "$PD/arxiv_org_pdf_1706_03762"; pdfbody 3100 > "$PD/pub_example_org_p_pdf"; pdfbody 3200 > "$PD/repo_example_org_h_pdf"; pdfbody 3300 > "$PD/oa_example_org_o_pdf"
+{ printf '<html>'; head -c 3000 /dev/zero | tr '\0' a; } > "$PD/pub_example_org_h_pdf"; cp "$PD/pub_example_org_h_pdf" "$PD/pub_example_org_n_html"
+echo FAIL > "$PD/pub_example_org_f_pdf.code"; echo 500 > "$PD/repo_example_org_f_pdf.code"
+echo '{"oa_locations":[{"host_type":"repository","url_for_pdf":"https://repo.example.org/p.pdf"},{"host_type":"publisher","url_for_pdf":"https://pub.example.org/p.pdf"},{"host_type":"publisher","url_for_pdf":null},{"host_type":"repository","url_for_pdf":"https://pub.example.org/p.pdf"}]}' > "$PD/api_unpaywall_org_v2_10_1_pub"
+echo '{"oa_locations":[{"host_type":"repository","url_for_pdf":"https://repo.example.org/h.pdf"},{"host_type":"publisher","url_for_pdf":"https://pub.example.org/h.pdf"}]}' > "$PD/api_unpaywall_org_v2_10_1_html"
+echo '{"oa_locations":[{"host_type":"publisher","url_for_pdf":"https://pub.example.org/f.pdf"},{"host_type":"repository","url_for_pdf":"https://repo.example.org/f.pdf"}]}' > "$PD/api_unpaywall_org_v2_10_1_fail"
+echo '{"oa_locations":[{"host_type":"repository","url_for_pdf":"https://arxiv.org/pdf/1706.03762"}]}' > "$PD/api_unpaywall_org_v2_10_1_viaarxiv"
+echo '{"open_access":{"oa_url":"https://oa.example.org/o.pdf"}}' > "$PD/api_openalex_org_works_doi_10_1_oaonly"
+echo '{"open_access":{"oa_url":"https://pub.example.org/n.html"}}' > "$PD/api_openalex_org_works_doi_10_1_none"
+echo '{"open_access":{"oa_url":"https://pub.example.org/f.pdf"}}' > "$PD/api_openalex_org_works_doi_10_1_fail"
+W2="$SCH/pw"; rm -rf "$W2"; mkdir -p "$W2/article"; git -C "$W2" init -q; W2R="$(cd "$W2" && pwd -P)"
+cat > "$W2/article/refs.bib" <<'B'
+@article{brandt2017attention, title={{Attention} is all you need}, author={Brandt, A}, year={2017}, eprint={1706.03762v5}, archivePrefix={arXiv}}
+@article{oa2020, doi={10.1/OAonly}, title={}, author={A, B}, year={2020}}
+@article{pub2020, doi={10.1/pub}, title={Pub  paper}, author={A, B}, year={2020}}
+@article{html2020, doi={10.1/html}, title={Html first}, author={A, B}, year={2020}}
+@article{none2020, doi={10.1/none}, title={Nothing | here, {at} all}, author={A, B}, year={2020}}
+@article{fail2020, doi={10.1/fail}, title={Fails}, author={A, B}, year={2020}}
+@misc{okafor2020rag, doi={10.48550/ARXIV.2005.11401}, title={RAG}, author={Okafor, P}, year={2020}}
+@article{via2020, doi={10.1/viaarxiv}, title={Via arxiv host}, author={A, B}, year={2020}}
+@article{a/../b, doi={10.1/evil}, title={Evil}, author={A, B}, year={2020}}
+@article{noid2020, title={No id}, author={A, B}, year={2020}}
+B
+pd() { : > "$SCH/log"; rm -f "$SCH/log.hdr" "$SCH/log.ua" "$SCH/log.stamp"; (cd "${PWD2:-$W2}" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl3" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY="${SCHOLAR_ARXIV_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true; }
+pdr() { echo "$(cat "$SCH/rc"):$(tr '\n' '|' < "$SCH/out"):$(tr '\n' '|' < "$SCH/err"):$(scn)"; }
+LIT2="$W2/article/literature"; TB="$(printf '\t')"
+pd pdf arxiv:1706.03762v5
+check "scholar pdf arXiv id: matched through eprint, one paced arXiv call with size/redirect/time caps, file identical, manifest row, 'None' list" "$(pdr):$(cmp -s "$LIT2/pdfs/brandt2017attention.pdf" "$PD/arxiv_org_pdf_1706_03762" && echo same || echo differs):$(scu 'https://arxiv.org/pdf/1706.03762'):$(scu '--max-time 60 --max-redirs 10 --max-filesize 50000000'):$(cat "$LIT2/manifest.tsv" | tr '\t\n' '~|'):$(tr '\n' '|' < "$LIT2/missing.md")" "0:downloaded brandt2017attention article/literature/pdfs/brandt2017attention.pdf|::1:same:1:1:key~id~title~pdf~source|brandt2017attention~arxiv:1706.03762~Attention is all you need~oa~https://arxiv.org/pdf/1706.03762|:# PDFs to download by hand||None: every paper in the manifest has its PDF.|"
+OPENALEX_API_KEY=sekrit-key pd pdf 10.1/oaonly
+check "scholar pdf DOI without SCHOLAR_EMAIL: Unpaywall skipped with a note and never called, OpenAlex oa_url used, empty title -> '-', key only in the header file" "$(pdr):$(scu unpaywall):$(scu sekrit-key):$(scu 'api.openalex.org/works/doi:10.1/oaonly?select=open_access'):$(grep -c '^oa2020' "$LIT2/manifest.tsv")" "0:downloaded oa2020 article/literature/pdfs/oa2020.pdf|:note: Unpaywall skipped: set SCHOLAR_EMAIL to use it|:2:0:0:1:1"
+SCHOLAR_EMAIL='a+b@x.org' pd pdf doi:10.1/Pub
+P1="$(pdr):$(scu 'https://api.unpaywall.org/v2/10.1/pub?email=a%2Bb%40x.org'):$(scg 'User-Agent: orca-roles-scholar (mailto:a+b@x.org)$' "$SCH/log.ua"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$(scu 'repo.example.org'):$(scu openalex):$(cat "$SCH/out" "$SCH/err" "$LIT2/manifest.tsv" "$LIT2/missing.md" | grep -c 'a+b@x.org' || true):$(scg ' -L ' "$SCH/log")$(scg ' -A ' "$SCH/log")"
+SCHOLAR_EMAIL='a+b@x.org' pd pdf 10.1/html
+check "scholar pdf Unpaywall (email in its User-Agent, downloads plain): publisher URLs first, null and duplicate URLs dropped, stop at the first PDF, email URL-encoded and never in outputs; HTML first then PDF -> 'tried ... not a PDF', source is the PDF URL" "$P1|$(pdr):$(grep "^html2020" "$LIT2/manifest.tsv" | cut -f4,5)" "0:downloaded pub2020 article/literature/pdfs/pub2020.pdf|::2:1:1:1:0:0:0:10|0:downloaded html2020 article/literature/pdfs/html2020.pdf|:tried https://pub.example.org/h.pdf: not a PDF|:3:oa${TB}https://repo.example.org/h.pdf"
+SCHOLAR_EMAIL=me@x.org pd pdf 10.1/none; N1="$(pdr):$(scg 'User-Agent: orca-roles-scholar (mailto:me@x.org)$' "$SCH/log.ua"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua")"
+SCHOLAR_EMAIL=me@x.org pd pdf 10.1/fail; N2="$(pdr):$(scu 'pub.example.org/f.pdf')"
+pd pdf arxiv:2005.11401; N3="$(pdr)"
+check "scholar pdf nothing found: exit 2 'missing', per-candidate reasons (HTTP code, curl failure 000, not a PDF), a URL is never tried twice, no file in the PDF folder" "$N1|$N2|$N3|$(ls "$LIT2/pdfs" | tr '\n' ' ')" "2:missing none2020 (listed in article/literature/missing.md)|:note: Unpaywall HTTP 404|tried https://pub.example.org/n.html: not a PDF|:3:2:1|2:missing fail2020 (listed in article/literature/missing.md)|:tried https://pub.example.org/f.pdf: HTTP 000|tried https://repo.example.org/f.pdf: HTTP 500|:4:1|2:missing okafor2020rag (listed in article/literature/missing.md)|:tried https://arxiv.org/pdf/2005.11401: HTTP 404|:1|brandt2017attention.pdf html2020.pdf oa2020.pdf pub2020.pdf "
+MEXP="$(printf 'key\tid\ttitle\tpdf\tsource\nbrandt2017attention\tarxiv:1706.03762\tAttention is all you need\toa\thttps://arxiv.org/pdf/1706.03762\noa2020\tdoi:10.1/oaonly\t-\toa\thttps://oa.example.org/o.pdf\npub2020\tdoi:10.1/pub\tPub paper\toa\thttps://pub.example.org/p.pdf\nhtml2020\tdoi:10.1/html\tHtml first\toa\thttps://repo.example.org/h.pdf\nnone2020\tdoi:10.1/none\tNothing | here, at all\tmissing\t-\nfail2020\tdoi:10.1/fail\tFails\tmissing\t-\nokafor2020rag\tarxiv:2005.11401\tRAG\tmissing\t-\n')"
+MDEXP="$(printf '# PDFs to download by hand\n\nSave each PDF in article/literature/pdfs/ with exactly the file name shown, then run: scholar.sh pdfs\n\n| File name | Title | Link |\n|---|---|---|\n| none2020.pdf | Nothing \\| here, at all | https://doi.org/10.1/none |\n| fail2020.pdf | Fails | https://doi.org/10.1/fail |\n| okafor2020rag.pdf | RAG | https://arxiv.org/abs/2005.11401 |\n')"
+pd pdf 10.1/none; pd pdf 10.48550/arXiv.2005.11401
+check "scholar manifest/missing.md: header, rows in order, titles cleaned (braces, spaces, tabs), arXiv DOI -> arxiv id, in-place replace on rerun (no duplicate), missing table with escaped '|' and links" "$([ "$(cat "$LIT2/manifest.tsv")" = "$MEXP" ] && echo same || echo differs):$([ "$(cat "$LIT2/missing.md")" = "$MDEXP" ] && echo same || echo differs)" "same:same"
+echo x > "$W2/mark"; find "$W2" -type f -not -path '*/.git/*' | sed "s#$W2/##" | sort | tr '\n' ' ' > "$SCH/tree0"
+for a in 10.9/none openalex:W12 "doi:10.1/evil" noid x; do pd pdf "$a"; PR="${PR:-}$(pdr)|"; done
+pd pdf; PR="$PR$(pdr)|"; pd pdf 10.1/pub --bib "$W2/nofile.bib"; PR="$PR$(pdr)|"; mkdir -p "$W2/dirbib"; pd pdf 10.1/pub --bib "$W2/dirbib"; PR="$PR$(pdr)|"
+PWD2="$TMP" pd pdf 10.1/pub; PR="$PR$(pdr)|"; PWD2="$TMP" pd pdfs; PR="$PR$(pdr)|"; pd pdf 10.1/pub 10.1/html; PR="$PR$(pdr)|"
+find "$W2" -type f -not -path '*/.git/*' | sed "s#$W2/##" | sort | tr '\n' ' ' > "$SCH/tree1"
+check "scholar pdf refusals: not in the .bib, openalex id, key unusable as a file name, no .bib / directory .bib, outside git, bad arguments -> exit 1, no network call, nothing written" "$PR$([ "$(cat "$SCH/tree0")" = "$(cat "$SCH/tree1")" ] && echo untouched || echo CHANGED)" "1::scholar.sh: 10.9/none is not in $W2R/article/refs.bib; add it first: scholar.sh bibtex 10.9/none --add|:0|1::scholar.sh: pdf needs a DOI or an arXiv id|:0|1::scholar.sh: the key 'a/../b' cannot be used as a file name|:0|1::scholar.sh: unrecognized identifier 'noid' (use doi:<doi> or arxiv:<id>)|:0|1::scholar.sh: unrecognized identifier 'x' (use doi:<doi> or arxiv:<id>)|:0|1::scholar.sh: pdf needs exactly one identifier|:0|1::scholar.sh: $W2/nofile.bib not found|:0|1::scholar.sh: $W2/dirbib is not a regular file|:0|1::scholar.sh: not in a git repository|:0|1::scholar.sh: not in a git repository|:0|1::scholar.sh: pdf needs exactly one identifier|:0|untouched"
+mkdir -p "$LIT2/pdfs"; pdfbody 2000 > "$LIT2/pdfs/none2020.pdf"; cp "$LIT2/manifest.tsv" "$SCH/m.before"
+pd pdf 10.1/none; D1="$(pdr):$(grep '^none2020' "$LIT2/manifest.tsv" | cut -f4,5 | tr '\t' '~'):$(grep -c none2020 "$LIT2/missing.md" || true)"
+pd pdf 10.1/oaonly; D2="$(pdr):$(grep '^oa2020' "$LIT2/manifest.tsv" | cut -f4,5 | tr '\t' '~')"
+{ printf '<html>'; head -c 4000 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/fail2020.pdf"; cp "$LIT2/pdfs/fail2020.pdf" "$SCH/fail.keep"
+SCHOLAR_EMAIL=me@x.org pd pdf 10.1/fail; D3="$(pdr):$(cmp -s "$LIT2/pdfs/fail2020.pdf" "$SCH/fail.keep" && echo kept || echo changed)"
+{ printf '%%PDF-'; head -c 1019 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/fail2020.pdf"; SCHOLAR_EMAIL=me@x.org pd pdf 10.1/fail; D4="$(cat "$SCH/rc"):$(wc -c < "$LIT2/pdfs/fail2020.pdf" | tr -d ' ')"
+check "scholar pdf already present: valid dropped file -> 'present', no call, row manual with source '-', off the missing list; oa row keeps its source; invalid (HTML or exactly 1024 bytes) file is not a PDF and is left on failure" "$D1|$D2|$D3|$D4" "0:present none2020 article/literature/pdfs/none2020.pdf|::0:manual~-:0|0:present oa2020 article/literature/pdfs/oa2020.pdf|::0:oa~https://oa.example.org/o.pdf|2:missing fail2020 (listed in article/literature/missing.md)|:tried https://pub.example.org/f.pdf: HTTP 000|tried https://repo.example.org/f.pdf: HTTP 500|:4:kept|2:1024"
+printf '<html>old</html>' > "$LIT2/pdfs/via2020.pdf"; date +%s > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"
+SCHOLAR_ARXIV_DELAY=2 SCHOLAR_EMAIL=me@x.org pd pdf 10.1/viaarxiv; X1="$(pdr):$(scg 'User-Agent: orca-roles-scholar (mailto:me@x.org)$' "$SCH/log.ua"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$(( $(date +%s) - T0 >= 1 ? 1 : 0 )):$(cmp -s "$LIT2/pdfs/via2020.pdf" "$PD/arxiv_org_pdf_1706_03762" && echo replaced || echo kept):$(grep '^via2020' "$LIT2/manifest.tsv" | cut -f4,5 | tr '\t' '~')"
+echo 1000 > "$SCH/state/orca-roles-scholar-arxiv.last"; SCHOLAR_ARXIV_DELAY=2 SCHOLAR_EMAIL=me@x.org pd pdf 10.1/viaarxiv >/dev/null; rm -f "$LIT2/pdfs/via2020.pdf"; SCHOLAR_ARXIV_DELAY=2 SCHOLAR_EMAIL=me@x.org pd pdf 10.1/viaarxiv
+check "scholar pdf: an arXiv download is sent with the plain User-Agent; an invalid file is replaced on success; an arXiv URL from Unpaywall (and the arXiv PDF) is paced like the arXiv API and stamps the pacing file" "$X1:$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -gt 1000 ] && echo stamped || echo nostamp)" "0:downloaded via2020 article/literature/pdfs/via2020.pdf|::2:1:1:1:replaced:oa~https://arxiv.org/pdf/1706.03762:stamped"
+pdfbody 2000 > "$LIT2/pdfs/oa2020.pdf"; rm -f "$LIT2/pdfs/pub2020.pdf"
+{ printf '%%PDF-'; head -c 1019 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/html2020.pdf"; { printf '%%PDF-'; head -c 1020 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/okafor2020rag.pdf"
+cp "$W2/article/refs.bib" "$SCH/refs.keep"; rm -f "$W2/article/refs.bib"
+pd pdfs; Z1="$(pdr)"; cp "$LIT2/manifest.tsv" "$SCH/m.1"; pd pdfs; Z2="$(cmp -s "$LIT2/manifest.tsv" "$SCH/m.1" && echo stable || echo moved)"
+cp "$SCH/refs.keep" "$W2/article/refs.bib"
+check "scholar pdfs: no network call, no .bib needed; per row key/pdf/note in manifest order; missing->manual when a valid file was dropped (1025 bytes), oa/manual->missing 'file gone' / 'not a valid PDF' (1024 bytes, HTML), source reset to '-'; idempotent" "$Z1:$Z2:$(awk -F'\t' '{print $1"~"$4"~"$5}' "$LIT2/manifest.tsv" | tr '\n' ' '):$(grep -c '^| ' "$LIT2/missing.md")" "0:key${TB}pdf${TB}note|brandt2017attention${TB}oa${TB}-|oa2020${TB}oa${TB}-|pub2020${TB}missing${TB}file gone|html2020${TB}missing${TB}not a valid PDF|none2020${TB}manual${TB}-|fail2020${TB}missing${TB}not a valid PDF|okafor2020rag${TB}manual${TB}-|via2020${TB}oa${TB}-|::0:stable:key~pdf~source brandt2017attention~oa~https://arxiv.org/pdf/1706.03762 oa2020~oa~https://oa.example.org/o.pdf pub2020~missing~- html2020~missing~- none2020~manual~- fail2020~missing~- okafor2020rag~manual~- via2020~oa~https://arxiv.org/pdf/1706.03762 :4"
+# pdfs: a manifest key that cannot be a file name (path parts, spaces, empty) is not tested on disk: its row is kept as it is and the note is 'invalid key'
+W4="$SCH/pw4"; rm -rf "$W4"; mkdir -p "$W4/article/literature/pdfs"; git -C "$W4" init -q; LIT4="$W4/article/literature"
+pdfbody 2000 > "$LIT4/out.pdf"; pdfbody 2000 > "$LIT4/pdfs/good.pdf"
+{ printf 'key\tid\ttitle\tpdf\tsource\n'; printf '../out\tdoi:10.1/a\tOut\tmissing\t-\n'; printf 'x/y\tdoi:10.1/b\tSlash\toa\thttps://x.org/y.pdf\n'; printf 'a b\tdoi:10.1/c\tSpace\tmissing\t-\n'; printf 'good\tdoi:10.1/d\tGood\tmissing\t-\n'; printf '\tdoi:10.1/e\tNo key\toa\thttps://x.org/e.pdf\n'; printf 'gone.v-1:2+3\tdoi:10.1/f\tOdd but valid\toa\thttps://x.org/f.pdf\n'; } > "$LIT4/manifest.tsv"
+PWD2="$W4" pd pdfs; IK="$(pdr)"
+check "scholar pdfs: invalid keys keep their row unchanged and say 'invalid key' (never tested outside pdfs/), valid keys are reconciled as before" "$IK:$(cat "$LIT4/manifest.tsv" | tr '\t\n' '~|')" "0:key${TB}pdf${TB}note|../out${TB}missing${TB}invalid key|x/y${TB}oa${TB}invalid key|a b${TB}missing${TB}invalid key|good${TB}manual${TB}-|${TB}oa${TB}invalid key|gone.v-1:2+3${TB}missing${TB}file gone|::0:key~id~title~pdf~source|../out~doi:10.1/a~Out~missing~-|x/y~doi:10.1/b~Slash~oa~https://x.org/y.pdf|a b~doi:10.1/c~Space~missing~-|good~doi:10.1/d~Good~manual~-|~doi:10.1/e~No key~oa~https://x.org/e.pdf|gone.v-1:2+3~doi:10.1/f~Odd but valid~missing~-|"
+W3="$SCH/pw3"; rm -rf "$W3"; mkdir -p "$W3/article/literature"; git -C "$W3" init -q; W3R="$(cd "$W3" && pwd -P)"
+PWD2="$W3" pd pdfs; M1="$(pdr)"; PWD2="$W3" pd pdfs x; M2="$(pdr)"; PWD2="$W3" pd pdfs --bib "$W2/dirbib"; M3="$(pdr)"
+printf 'key\tpdf\n' > "$W3/article/literature/manifest.tsv"; printf 'k\t10\n' >> "$W3/article/literature/manifest.tsv"; cp "$W3/article/literature/manifest.tsv" "$SCH/m.foreign"
+PWD2="$W3" pd pdfs; M4="$(pdr)"; PWD2="$W3" pd pdf 10.1/pub --bib "$W2/article/refs.bib"; M5="$(pdr)"
+check "scholar pdfs errors: no manifest, bad arguments, foreign manifest header (pdfs and pdf refuse it) -> exit 1, no call, manifest untouched, no missing.md" "$M1|$M2|$M3|$M4|$M5|$(cmp -s "$W3/article/literature/manifest.tsv" "$SCH/m.foreign" && echo same || echo CHANGED):$(ls "$W3/article/literature" | tr '\n' ' ')" "1::scholar.sh: no manifest yet (article/literature/manifest.tsv); run scholar.sh pdf <id> first|:0|1::scholar.sh: pdfs takes no argument (got 'x')|:0|1::scholar.sh: $W2/dirbib is not a regular file|:0|1::scholar.sh: $W3R/article/literature/manifest.tsv does not start with the header (key, id, title, pdf, source)|:0|1::scholar.sh: $W3R/article/literature/manifest.tsv does not start with the header (key, id, title, pdf, source)|:0|same:manifest.tsv "
 }
 
 sec_cli() {
