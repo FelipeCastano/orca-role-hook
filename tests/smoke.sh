@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -2640,6 +2640,112 @@ check "relaunch: --no-check skips the probe, matches the title in any case" "$RC
 touch "$TMP/r-failcreate"; try rr dev --model good --no-check
 check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
 rm -f "$TMP/r-failcreate"
+}
+
+sec_academic_writer() {
+# academic-writer: phases (roles per phase, validation, planner message), the document scaffold, launch's git and phase guards, phase.sh
+# Own test kit (never the clone) with a fake academic-writer mode.
+pk_setup
+mkdir -p "$PK/prompts/academic-writer"; for f in planner common-workers exp wr both nop; do echo "# $f" > "$PK/prompts/academic-writer/$f.md"; done
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all", "phases": ["writing"] },
+             "exp": { "title": "Exp", "modes": ["academic-writer"], "phases": ["experiment"] },
+             "wr": { "title": "Wr", "modes": ["academic-writer"], "phases": ["writing"] },
+             "both": { "title": "Both", "modes": ["academic-writer"], "phases": ["experiment", "writing"] },
+             "nop": { "title": "Nop", "modes": ["academic-writer"] },
+             "pe": { "title": "Pe", "modes": ["programmer", "pr-reviewer"], "phases": ["writing"] } } }
+J
+AC="$PK/config.json"
+awe() { jq -c --argjson s "$2" '.settings += $s' "$AC" > "$TMP/aw-c.json"; KIT="$PK" enabled_roles "$TMP/aw-c.json" | tr '\n' ' '; }
+
+# library: the phase filter applies only in academic-writer, the planner stays, a missing phase is experiment
+check "phases: phase_of, and enabled_roles by phase (planner kept despite its phases)" "$(jq -c '.settings.mode="academic-writer"' "$AC" > "$TMP/aw-m.json"; KIT="$PK" phase_of "$TMP/aw-m.json"):$(awe x '{"mode":"academic-writer"}'):$(awe x '{"mode":"academic-writer","phase":"experiment"}'):$(awe x '{"mode":"academic-writer","phase":"writing"}')" "experiment:planner exp both nop :planner exp both nop :planner wr both nop "
+check "phases: ignored in programmer and pr-reviewer, even with settings.phase set" "$(awe x '{"mode":"programmer","phase":"experiment"}'):$(awe x '{"mode":"pr-reviewer","phase":"experiment"}'):$(awe x '{"phase":"writing"}')" "planner pe :planner pe :planner pe "
+B="$(for v in '[]' '"writing"' '["x"]' '[1]' '{}' 'null' '["writing","Experiment"]'; do jq -c --argjson v "$v" '.roles.exp.phases=$v' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: role exp: phases must be a non-empty list of "experiment", "writing"'; done | tr '\n' ' ')"
+S="$(for v in '"Writing"' '1' 'null' '""' '[]' '"experiment "'; do jq -c --argjson v "$v" '.settings.phase=$v | .settings.mode="programmer"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: invalid configuration: settings.phase must be "experiment" or "writing"'; done | tr '\n' ' ')"
+check "phases: check_config rejects bad phases and settings.phase (any mode), accepts good ones" "$B:$S:$(KIT="$PK" check_config "$AC"):$(jq -c '.settings.phase="writing"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json")" "1 1 1 1 1 1 1 :1 1 1 1 1 1 ::"
+jq -c '.settings.mode="academic-writer" | .settings.phase="writing"' "$AC" > "$TMP/aw-m.json"
+printf 'PLANNER=h-P\nWR=h-W\nBOTH=h-B\nNOP=h-N\nPE=h-E\n' > "$TMP/aw-st.env"
+M1="$(KIT="$PK" planner_msg "$TMP/aw-m.json" "planner wr both nop" "$TMP/aw-st.env" "" "" 0)"; M2="$(KIT="$PK" planner_msg "$AC" "planner pe" "$TMP/aw-st.env" "" "" 0)"
+check "planner_msg: Phase only in academic-writer, right after the mode" "$(printf '%s' "$M1" | grep -c 'Mode: academic-writer\. Phase: writing\. Active roles'):$(printf '%s' "$M2" | grep -c 'Phase:')" "1:0"
+
+# scaffold: fresh repo, then idempotent
+SC="$PK/bin/academic-scaffold.sh"; SD="$TMP/aw-sc1"; mkdir -p "$SD"; git -C "$SD" init -q
+DIRS="experimentation/configs experimentation/data experimentation/models experimentation/src experimentation/scripts experimentation/results experimentation/results/raw experimentation/logs article/sections article/literature article/literature/pdfs article/tables article/images article/template"
+try "$SC" "$SD"; O1="$OUT"; R1="$RC"
+GIK="$(cd "$SD" && find . -name .gitkeep | sort | tr '\n' ' ')"; H0="$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)"; I0="$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')"
+try "$SC" "$SD"
+check "scaffold: fresh repo gets every folder, .gitkeep only in tracked ones, the ignore lines; second run prints nothing and changes nothing" "$R1:$(cd "$SD" && for d in $DIRS; do [ -d "$d" ] || echo "$d"; done | wc -l | tr -d ' '):$GIK:$(printf '%s\n' "$O1" | grep -c '^Created '):$(printf '%s\n' "$O1" | tail -1):$(sed -n 1p "$SD/.gitignore"):$(wc -l < "$SD/.gitignore" | tr -d ' '):$RC:[$OUT]:$([ "$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)" = "$H0" ] && echo same):$(ls -A "$SD" | tr '\n' ' ')" "0:0:./article/images/.gitkeep ./article/literature/.gitkeep ./article/sections/.gitkeep ./article/tables/.gitkeep ./article/template/.gitkeep ./experimentation/configs/.gitkeep ./experimentation/results/.gitkeep ./experimentation/scripts/.gitkeep ./experimentation/src/.gitkeep :24:Updated .gitignore:# orca-roles academic-writer:20:0:[]:same:.git .gitignore article experimentation "
+GIL="$(sed -n '2,$p' "$SD/.gitignore" | tr '\n' ' ')"
+check "scaffold: ignore lines are exactly the spec's, in order; git index untouched" "$GIL:$([ "$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')" = "$I0" ] && echo same)" 'experimentation/data/* !experimentation/data/README.md experimentation/models/* !experimentation/models/README.md experimentation/logs/ experimentation/results/raw/ article/literature/pdfs/ article/build/ *.aux *.bbl *.blg *.fdb_latexmk *.fls *.out *.synctex.gz *.toc *.lof *.lot article/**/*.log :same'
+
+# scaffold: an existing project is never overwritten
+SE="$TMP/aw-sc2"; mkdir -p "$SE/experimentation/src" "$SE/article/tables"; printf 'print(1)\n' > "$SE/experimentation/src/mine.py"; printf 'node_modules\n*.aux' > "$SE/.gitignore"
+try "$SC" "$SE"; E1="$OUT"
+EXP="$(printf 'node_modules\n*.aux\n\n# orca-roles academic-writer\n'; sed -n '2,$p' "$SD/.gitignore" | grep -vxF '*.aux')"
+check "scaffold: existing folders keep their content and get no .gitkeep; a .gitignore without final newline keeps its lines, gets header and only the missing lines" "$(ls -A "$SE/experimentation/src"):$(ls -A "$SE/article/tables"):$(cat "$SE/experimentation/src/mine.py"):$([ "$(cat "$SE/.gitignore")" = "$EXP" ] && echo exact):$(printf '%s\n' "$E1" | grep -c 'Created experimentation/src$\|Created article/tables$'):$(printf '%s\n' "$E1" | tail -1)" "mine.py::print(1):exact:0:Updated .gitignore"
+printf 'extra\n' >> "$SE/.gitignore"; try "$SC" "$SE"
+SF="$TMP/aw-sc3"; mkdir -p "$SF"; printf '# orca-roles academic-writer\nmy\n' > "$SF/.gitignore"; try "$SC" "$SF"
+check "scaffold: header not duplicated (existing header, rerun), no-arg and non-directory fail with a message and write nothing" "$RC:$(grep -c '^# orca-roles academic-writer$' "$SE/.gitignore"):$(grep -c '^# orca-roles academic-writer$' "$SF/.gitignore"):$(head -2 "$SF/.gitignore" | tr '\n' ' '):$("$SC" >/dev/null 2>&1; echo $?):$("$SC" "$TMP/aw-nonexistent" >/dev/null 2>&1; echo $?):$([ -e "$TMP/aw-nonexistent" ] && echo created)" "0:1:1:# orca-roles academic-writer my :1:1:"
+
+# launch: git is required, the phase guard, the status line
+AM="$TMP/aw-proj"; mkdir -p "$AM" "$TMP/awbin" "$TMP/awnogit"; git -C "$AM" init -q -b main; AG="$AM/.git"
+ALOG="$TMP/aworca.log"; : > "$ALOG"
+cat > "$TMP/awbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$ALOG"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal list") [ -f "$TMP/aw-listfail" ] && exit 1; exit 0;;
+  "terminal show") [ -f "$TMP/aw-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/awbin/orca"; printf '#!/bin/sh\nexit 0\n' > "$TMP/awbin/kickoff"; chmod +x "$TMP/awbin/kickoff"
+al() { (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+ap() { (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/phase.sh" "$@" 2>&1); }
+ah() { cut -d= -f1 "$AG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
+astate() { echo "$(cat "$AG/orca-roles.config.json" "$AG/orca-roles.env" "$AG/orca-roles.overrides.json" 2>/dev/null | cksum)"; }
+acl() { grep -c '^terminal close' "$ALOG" || true; }
+(cd "$TMP/awnogit" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE GIT_CEILING_DIRECTORIES="$TMP" HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" "$PKL/bin/launch.sh" --mode academic-writer > "$TMP/aw-ng.out" 2>&1) && NGRC=0 || NGRC=$?
+check "launch: academic-writer outside a git repository fails with its message, opens and creates nothing" "$NGRC:$(grep -c 'mode academic-writer needs the project to be a git repository' "$TMP/aw-ng.out"):$(grep -c '^terminal create' "$ALOG"):$(find "$TMP/awnogit" -mindepth 1 ! -name orca-roles-launch.log | wc -l | tr -d ' ')" "1:1:0:0"
+try al --mode academic-writer
+SD1="$(ls -A "$AM" | tr '\n' ' ')"
+check "launch: starts in experiment with the experiment roles only, prints Phase, runs the scaffold; --status shows Phase" "$RC:$(ah):$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$SD1:$(jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"):$(al --status | grep -c '^Phase: experiment$')" "0:PLANNER EXP BOTH NOP :1:.git .gitignore article experimentation :unset:1"
+# phase guard
+touch "$TMP/aw-alive"; B="$(astate)"; N="$(grep -c '^terminal create' "$ALOG" || true)"
+try al --set settings.phase=writing; R_A="$RC:$(printf '%s' "$OUT" | grep -c "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Exp is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed." || true):$(astate):$(grep -c '^terminal create' "$ALOG" || true)"
+touch "$TMP/aw-listfail"; try al --set settings.phase=writing; R_B="$RC:$(printf '%s' "$OUT" | grep -c "phase 'experiment'.*Phase 'writing' was requested; nothing was changed" || true):$(astate)"; rm -f "$TMP/aw-listfail"
+check "launch: phase change under an open team of the old phase is refused (also when Orca cannot be listed), nothing changed" "$R_A:$R_B" "1:1:$B:$N:1:1:$B"
+# phase.sh
+try ap; R1="$RC"; try ap a b; R2="$RC"; try ap Writing; R3="$RC"; try ap ""; R4="$RC"
+B="$(astate)"; try ap experiment; R5="$RC:$OUT"
+(cd "$AM" && git -c user.name=t -c user.email=t@e add -A && git -c user.name=t -c user.email=t@e commit -q -m scaffold); touch "$AM/dirty.txt"
+try ap writing; R6="$RC:$(printf '%s' "$OUT" | grep -c 'the repository has uncommitted changes; commit them first' || true):$(astate):$(acl)"; rm -f "$AM/dirty.txt"
+check "phase.sh: bad arguments exit 1, same phase is a no-op, dirty repo refused with nothing closed or changed" "$R1$R2$R3$R4:$R5:$R6" "1111:0:Already in phase experiment.:1:1:$B:0"
+# phase.sh: experiment -> writing -> experiment
+git -C "$AM" status --porcelain | grep -q . && echo "FAIL academic-writer: repo dirty before the switch"
+N="$(grep -c '^terminal create' "$ALOG" || true)"; C0="$(acl)"
+try ap writing
+check "phase.sh writing: closes only the experiment role, opens the writing one, saves the phase, no 'roles would open it again' hint" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(grep -c 'terminal close --terminal h-Exp ' "$ALOG"):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(jq -c '.set' "$AG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'still enabled in the configuration'):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH NOP PLANNER WR :$((C0 + 1)):1:1:writing:[{\"path\":[\"settings\",\"phase\"],\"value\":\"writing\"}]:0:Phase: writing."
+B="$(astate)"; C1="$(acl)"; try ap experiment; R1="$RC:$(printf '%s' "$OUT" | grep -c 'going back to experiment needs STATE.md committed at the repository root' || true)"
+printf 'state\n' > "$AM/STATE.md"; try ap experiment; R2="$RC:$(printf '%s' "$OUT" | grep -c 'uncommitted changes' || true)"
+check "phase.sh experiment: refused without a committed STATE.md (absent, or untracked), nothing closed or changed" "$R1:$R2:$(astate):$(acl)" "1:1:1:1:$B:$C1"
+(cd "$AM" && git -c user.name=t -c user.email=t@e add STATE.md && git -c user.name=t -c user.email=t@e commit -q -m state)
+N="$(grep -c '^terminal create' "$ALOG" || true)"
+try ap experiment
+check "phase.sh experiment with STATE.md committed: closes the writing role, reopens the experiment one, saves the phase" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH EXP NOP PLANNER :$((C1 + 1)):1:experiment:Phase: experiment."
+# a failing close or launch is reported and does not go on
+AP2="$TMP/aw-prog"; mkdir -p "$AP2"; git -C "$AP2" init -q; (cd "$AP2" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" --mode programmer >/dev/null 2>&1)
+try bash -c 'cd "$0" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$1" PATH="$2" "$1/.orca-roles/bin/phase.sh" writing 2>&1' "$AP2" "$PH" "$TMP/awbin:$PATH"
+PR_RC="$RC:$OUT"
+# close-role hint
+(cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" "$PKL/bin/close-role.sh" nop 2>&1) > "$TMP/aw-h1.out"
+(cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
+check "phase.sh refuses outside academic-writer; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-writer (this worktree: programmer):1:1:0"
+rm -rf "$PK/prompts/academic-writer"   # the other sections reuse this kit and expect the mode unavailable
 }
 
 sec_cli() {

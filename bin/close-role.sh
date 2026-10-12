@@ -36,6 +36,7 @@ for x in "$@"; do
   fi
   TMPS="$(mktemp)"; grep -v "^$v=" "$STATE" > "$TMPS" || true; cat "$TMPS" > "$STATE"; rm -f "$TMPS"
   PTYF="$(dirname "$STATE")/orca-roles.pty"; [ -f "$PTYF" ] && { grep -v "^$v=" "$PTYF" > "$PTYF.tmp" || true; mv "$PTYF.tmp" "$PTYF"; }
+  [ "${ORCA_ROLES_PHASE_SWITCH:-}" = 1 ] && continue   # phase.sh closes roles that the other phase simply does not have: the hint would be wrong
   if merged_config . 2>/dev/null | jq -e --arg r "$id" '.roles[$r] and .roles[$r].enabled != false' >/dev/null 2>&1; then
     echo "$t: still enabled in the configuration, so 'roles' would open it again. Disable it (\"enabled\": false, or --disable $id in the setup script), or remove a role you created with: ~/.orca-roles/bin/new-role.sh --remove $id"
   fi
