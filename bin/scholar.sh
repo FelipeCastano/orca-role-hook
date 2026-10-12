@@ -7,11 +7,21 @@
 #       --limit is per source (1-100, default 10). A source that cannot honour an option is skipped with a note under --source all.
 #   scholar.sh show <identifier>
 #       Prints "key: value" lines: id title year date type authors venue publisher doi arxiv citations oa oa_url retracted abstract.
+#   scholar.sh bibtex <identifier> [--add] [--bib <path>]
+#       Fetches the BibTeX entry of a DOI or arXiv id from doi.org and fixes it (key lastname+year+word, braced title, month macro, pages --).
+#       Prints the entry. With --add it is appended to <path> (default <git top-level>/article/refs.bib, created if missing) and the key is
+#       printed instead; a DOI already in the file is not added twice (its key is printed), a taken key gets b, c, ... appended.
+#   scholar.sh verify [--bib <path>]
+#       Checks every entry of the .bib (default <git top-level>/article/refs.bib) against Crossref or arXiv: title, first author, year and
+#       retractions. Prints a header and one TAB-separated line per entry: key status detail.
+#       Status: ok, warn, fail, retracted, notfound (DOI/arXiv id unknown), nodoi (no DOI or arXiv eprint), error (network/API).
 #   Identifiers: doi:<doi>, https://doi.org/<doi>, a bare 10.* DOI, arxiv:<id>, https://arxiv.org/abs/<id>, openalex:W<digits>.
 #   Output ids: doi:<doi>, arxiv:<id>, openalex:W<id>, s2:<paperId> (output only).
 # Environment (read only, never printed): OPENALEX_API_KEY and S2_API_KEY (optional, sent as headers), SCHOLAR_EMAIL (optional, goes in
-#   the User-Agent). Test hooks: SCHOLAR_CURL, SCHOLAR_ARXIV_DELAY (default 3), SCHOLAR_RETRY_DELAY (default 3), SCHOLAR_STATE_DIR.
-# Exit codes: 0 ok; 1 usage error or bad option; 2 not found (show); 3 network/API error (every requested source failed).
+#   the User-Agent and the Crossref mailto). Test hooks: SCHOLAR_CURL, SCHOLAR_ARXIV_DELAY (default 3), SCHOLAR_RETRY_DELAY (default 3),
+#   SCHOLAR_CROSSREF_DELAY (seconds between Crossref calls in verify, default 0.2), SCHOLAR_STATE_DIR.
+# Exit codes: 0 ok; 1 usage error or bad option; 2 not found (show, bibtex); 3 network/API error (every requested source failed);
+#   4 verify found problems (a fail, retracted, notfound or nodoi entry).
 set -uo pipefail
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; }
 case "${1:-}" in -h|--help) usage; exit 0;; "") usage >&2; exit 1;; esac
@@ -345,9 +355,216 @@ cmd_show() {
       "abstract: " + ($abs | c)' "$body" || { CODE=3 die "OpenAlex returned an unreadable body"; }
 }
 
+# enc_doi <doi>: percent-encodes the characters that would break a URL path
+enc_doi() { printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/?/%3F/g' -e 's/#/%23/g' -e 's/ /%20/g'; }
+
+# default_bib: sets BIB_PATH to <git top-level>/article/refs.bib
+default_bib() {
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  [ -n "$top" ] || die "not in a git repository; pass --bib <path>"
+  BIB_PATH="$top/article/refs.bib"
+}
+
+# bibjq <program> [jq options...]: jq over the text on stdin (-Rs) with the bib helpers loaded
+bibjq() { local prog="$1"; shift; jq -Rrs -L "$HERE" "$@" 'include "scholar-bibfix"; '"$prog"; }
+
+cmd_bibtex() {
+  local ident="" add=0 bib="" have_bib=0 doi code body="$TMP/bibtex.body" entry info base key n kf letter
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --add) [ "$add" = 0 ] || die "option --add given twice"; add=1; shift;;
+      --bib)
+        [ "$have_bib" = 0 ] || die "option --bib given twice"
+        [ $# -ge 2 ] && [ -n "$2" ] || die "option --bib needs a value"
+        bib="$2"; have_bib=1; shift 2;;
+      -*) die "unknown option '$1'";;
+      *) [ -z "$ident" ] || die "bibtex needs exactly one identifier"; ident="$1"; shift;;
+    esac
+  done
+  [ -n "$ident" ] || die "bibtex needs exactly one identifier"
+  [ "$add" = 1 ] || [ "$have_bib" = 0 ] || die "--bib needs --add"
+  parse_id "$ident" || die "unrecognized identifier '$ident' (use doi:<doi> or arxiv:<id>)"
+  case "$ID_KIND" in
+    openalex) die "bibtex needs a DOI or an arXiv id (run: scholar.sh show <id> to see its DOI)";;
+    arxiv) doi="10.48550/arXiv.$ID_VAL";;
+    *) doi="$ID_VAL";;
+  esac
+  if [ "$add" = 1 ]; then
+    if [ "$have_bib" = 1 ]; then BIB_PATH="$bib"; else default_bib; fi
+    [ ! -e "$BIB_PATH" ] || [ -f "$BIB_PATH" ] || die "$BIB_PATH is not a regular file"
+  fi
+  code="$(http_get "https://doi.org/$(enc_doi "$doi")" "$body" -H 'Accept: application/x-bibtex')"
+  [ "$code" != 404 ] || { CODE=2 die "$ident not found at doi.org"; }
+  if [ "$code" != 200 ] || [ "$(tr -d ' \t\r\n' < "$body" | head -c 1)" != "@" ]; then CODE=3 die "doi.org failed (HTTP $code)"; fi
+  if [ "$(tr -d ' \t\r\n' < "$body" | tail -c 1)" != "}" ] \
+    || ! tr -cd '{}' < "$body" | fold -w 1 | awk '$0 == "{" { d++ } $0 == "}" { if (--d < 0) bad = 1 } END { exit (bad || d != 0) }'; then
+    CODE=3 die "doi.org returned an incomplete BibTeX entry"
+  fi
+  entry="$(jq -Rrs -L "$HERE" 'include "scholar-bibfix";
+    sub("^\\s+"; "") | sub("\\s+$"; "") | . as $raw
+    | ($raw | makekey | if . == "" then "ref" + ($raw | field("year") // "" | gsub("[^0-9]"; "")) else . end) as $k
+    | $raw | rekey($k) | protect_title | fix_month | fix_pages' "$body")" || { CODE=3 die "doi.org returned an unreadable body"; }
+  if [ "$add" = 0 ]; then printf '%s\n' "$entry"; return 0; fi
+
+  info="$(printf '%s' "$entry" | bibjq 'entry_info | [(.key | gsub("\\s+"; " ")), (.doi // "")] | join("\t")')" || { CODE=3 die "cannot read the fixed entry"; }
+  base="${info%%$'\t'*}"; doi="${info#*$'\t'}"
+  kf="$TMP/keys.tsv"; : > "$kf"
+  if [ -f "$BIB_PATH" ]; then
+    bibjq 'entries[] | entry_info | [(.key | gsub("\\s+"; " ")), (.doi // "")] | join("\t")' < "$BIB_PATH" > "$kf" || { CODE=3 die "cannot read $BIB_PATH"; }
+    if [ -n "$doi" ]; then
+      key="$(awk -F'\t' -v d="$doi" '$2 == d { print $1; exit }' "$kf")"
+      if [ -n "$key" ]; then echo "note: already in $BIB_PATH as $key" >&2; printf '%s\n' "$key"; return 0; fi
+    fi
+  fi
+  key="$base"; n=0
+  while awk -F'\t' -v k="$key" 'tolower($1) == tolower(k) { f = 1 } END { exit !f }' "$kf"; do
+    n=$((n + 1))
+    [ "$n" -le 25 ] || { CODE=3 die "no free key for $base in $BIB_PATH"; }
+    # shellcheck disable=SC2059
+    letter="$(printf "\\$(printf '%03o' $((97 + n)))")"
+    key="$base$letter"
+  done
+  if [ "$key" != "$base" ]; then
+    entry="$(printf '%s' "$entry" | bibjq 'rekey($k)' --arg k "$key")" || { CODE=3 die "cannot rekey the entry"; }
+  fi
+  mkdir -p "$(dirname "$BIB_PATH")" 2>/dev/null || { CODE=3 die "cannot create the directory of $BIB_PATH"; }
+  {
+    if [ -s "$BIB_PATH" ]; then
+      [ -z "$(tail -c 1 "$BIB_PATH")" ] || printf '\n'
+      printf '\n'
+    fi
+    printf '%s\n' "$entry"
+  } >> "$BIB_PATH" || { CODE=3 die "cannot write $BIB_PATH"; }
+  echo "note: added $key to $BIB_PATH" >&2
+  printf '%s\n' "$key"
+}
+
+# verify filter: input none; --slurpfile cr (Crossref body or nothing), --arg src crossref|arxiv, bt/ba/by (bib), mt/ma/my (arXiv meta).
+# Prints "status<TAB>detail".
+VERIFY_JQ='
+include "scholar-norm";
+def clean: gsub("<[^>]+>"; " ") | gsub("[{}]"; "") | gsub("\\s+"; " ") | gsub("^ | $"; "");
+def rank: {ok: 0, warn: 1, fail: 2, retracted: 3};
+($cr[0].message // null) as $m
+| (if $src == "crossref"
+   then {t: ($m.title[0] // ""), a: ($m.author[0].family // $m.author[0].name // ""), y: ($m.issued["date-parts"][0][0] // "" | tostring)}
+   else {t: $mt, a: $ma, y: $my} end) as $meta
+| ($meta.t | clean) as $mtc
+| ($bt | norm) as $nb | ($meta.t | norm) as $nm
+| ($ba | [splits("\\s+and\\s+"; "i")][0] // "") as $ba1
+| ($meta.a | clean) as $mac
+| ($by | gsub("[^0-9]"; "")) as $by1 | ($meta.y | gsub("[^0-9]"; "")) as $my1
+| [
+    (if $nb == "" or $nm == "" then (if ($bt | clean) == $mtc then empty else {s: "fail", m: "title mismatch: \"\($mtc)\""} end)
+     elif $nb == $nm then empty
+     elif ($nb | startswith($nm)) or ($nm | startswith($nb)) then {s: "warn", m: "title differs (subtitle?)"}
+     else {s: "fail", m: "title mismatch: \"\($mtc)\""} end),
+    (if ($ba1 | clean) == "" or $mac == "" then {s: "warn", m: "first author unknown"}
+     elif ($ba1 | lastname) == "" or ($meta.a | lastname) == "" then (if ($ba1 | clean) == $mac then empty else {s: "fail", m: "first author mismatch: \($mac)"} end)
+     elif ($ba1 | lastname) == ($meta.a | lastname) then empty
+     else {s: "fail", m: "first author mismatch: \($mac)"} end),
+    (if $by1 == "" or $my1 == "" then {s: "warn", m: "year unknown"}
+     elif $by1 == $my1 then empty
+     else {s: "fail", m: "year mismatch: \($my1)"} end),
+    (if $src == "crossref" then
+       (($m["updated-by"] // [])[]? | select(type == "object")
+        | if .type == "retraction" or .type == "withdrawal" then {s: "retracted", m: "retracted (\(.DOI))"}
+          elif .type == "expression_of_concern" then {s: "warn", m: "expression of concern (\(.DOI))"}
+          elif .type == "correction" or .type == "erratum" then {s: "ok", m: "correction (\(.DOI))"}
+          else empty end),
+       (if (($m["update-to"] // []) | length) > 0 then {s: "fail", m: "this DOI is a notice, not the paper"} else empty end),
+       (if (($m.title[0] // "") | norm | startswith("retracted ")) then {s: "retracted", m: "title says RETRACTED"} else empty end)
+     else empty end)
+  ] as $r
+| ($r | reduce .[] as $x ([]; if any(.[]; .m == $x.m) then . else . + [$x] end)) as $u
+| (($u | map(rank[.s]) | max) // 0) as $w
+| (["ok", "warn", "fail", "retracted"][$w]) + "\t" + (if ($u | length) == 0 then "-" else ($u | map(.m) | join("; ")) end)
+'
+
+cmd_verify() {
+  local bib="" have_bib=0 k d ep ap t au y src aid code line st dt n_bad=0 n_err=0 n_good=0 n_cr=0 cf delay mt ma my cr="$TMP/cr.json" mailto=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --bib)
+        [ "$have_bib" = 0 ] || die "option --bib given twice"
+        [ $# -ge 2 ] && [ -n "$2" ] || die "option --bib needs a value"
+        bib="$2"; have_bib=1; shift 2;;
+      -*) die "unknown option '$1'";;
+      *) die "verify takes no argument (got '$1')";;
+    esac
+  done
+  if [ "$have_bib" = 1 ]; then BIB_PATH="$bib"; else default_bib; fi
+  [ ! -e "$BIB_PATH" ] || [ -f "$BIB_PATH" ] || die "$BIB_PATH is not a regular file"
+  [ -f "$BIB_PATH" ] || die "$BIB_PATH not found"
+  delay="${SCHOLAR_CROSSREF_DELAY:-0.2}"
+  case "$delay" in ''|*[!0-9.]*) delay=0.2;; esac
+  [ -n "${SCHOLAR_EMAIL:-}" ] && mailto="?mailto=$(jq -rn --arg e "$SCHOLAR_EMAIL" '$e | @uri')"
+  : > "$TMP/empty"
+  bibjq 'entries[] | entry_info
+    | [.key, .doi, .eprint, .archiveprefix, .title, .author, .year] | map("x" + ((. // "") | gsub("\\s+"; " "))) | join("\t")' < "$BIB_PATH" > "$TMP/entries.tsv" \
+    || { CODE=3 die "cannot read $BIB_PATH"; }
+  printf 'key\tstatus\tdetail\n'
+  while IFS=$'\t' read -r k d ep ap t au y <&3; do
+    k="${k#x}"; d="${d#x}"; ep="${ep#x}"; ap="${ap#x}"; t="${t#x}"; au="${au#x}"; y="${y#x}"
+    src=""; aid=""; st=""; dt="-"
+    if [ -n "$d" ]; then
+      if [[ "$d" =~ ^10\.48550/arxiv\.(.+)$ ]]; then src=arxiv; aid="${BASH_REMATCH[1]}"; else src=crossref; fi
+    elif [ -n "$ep" ] && [ "$(printf '%s' "$ap" | tr 'A-Z' 'a-z')" = arxiv ]; then
+      src=arxiv; aid="$ep"
+    fi
+    if [ "$src" = arxiv ]; then
+      aid="$(printf '%s' "$aid" | tr -d ' ' | sed -e 's/^[Aa][Rr][Xx][Ii][Vv]://' -e 's/v[0-9][0-9]*$//')"
+      [[ "$aid" =~ ^[A-Za-z0-9./-]+$ ]] || { st=error; dt="unusable arXiv id"; }
+    fi
+    if [ -z "$src" ]; then
+      st=nodoi; dt="no doi or arXiv eprint"
+    elif [ -z "$st" ] && [ "$src" = crossref ]; then
+      [ "$n_cr" -eq 0 ] || sleep "$delay"
+      n_cr=$((n_cr + 1))
+      code="$(http_get "https://api.crossref.org/works/$(enc_doi "$d")$mailto" "$cr")"
+      case "$code" in
+        200) ;;
+        404) st=notfound; dt="not in Crossref";;
+        *) st=error; dt="Crossref HTTP $code";;
+      esac
+    elif [ -z "$st" ]; then
+      code="$(arxiv_get "https://export.arxiv.org/api/query?id_list=$aid" "$TMP/ax.xml")"
+      if [ "$code" != 200 ]; then st=error; dt="arXiv HTTP $code"
+      else
+        awk -f "$AXAWK" "$TMP/ax.xml" > "$TMP/ax.tsv" 2> "$TMP/ax.err"
+        if [ -s "$TMP/ax.err" ]; then st=error; dt="arXiv returned an error: $(ax_error)"
+        elif [ ! -s "$TMP/ax.tsv" ]; then st=notfound; dt="not in arXiv"
+        else
+          mt="$(awk -F'\t' 'NR == 1 { print $3 }' "$TMP/ax.tsv")"
+          ma="$(awk -F'\t' 'NR == 1 { p = index($10, "; "); print (p > 0 ? substr($10, 1, p - 1) : $10) }' "$TMP/ax.tsv")"
+          my="$(awk -F'\t' 'NR == 1 { print substr($4, 1, 4) }' "$TMP/ax.tsv")"
+        fi
+      fi
+    fi
+    if [ -z "$st" ]; then
+      if [ "$src" = crossref ]; then cf="$cr"; else cf="$TMP/empty"; fi
+      if line="$(jq -nr -L "$HERE" --slurpfile cr "$cf" --arg src "$src" --arg bt "$t" --arg ba "$au" --arg by "$y" \
+          --arg mt "${mt:-}" --arg ma "${ma:-}" --arg my "${my:-}" "$VERIFY_JQ" 2>/dev/null)"; then
+        st="${line%%$'\t'*}"; dt="${line#*$'\t'}"
+      else
+        st=error; dt="unreadable $([ "$src" = crossref ] && echo Crossref || echo arXiv) response"
+      fi
+    fi
+    case "$st" in ok|warn) n_good=$((n_good + 1));; error) n_err=$((n_err + 1));; *) n_bad=$((n_bad + 1));; esac
+    printf '%s\t%s\t%s\n' "$(printf '%s' "$k" | tr '\t' ' ')" "$st" "$dt"
+    mt=""; ma=""; my=""
+  done 3< "$TMP/entries.tsv"
+  if [ "$n_bad" -gt 0 ]; then return 4; fi
+  if [ "$n_err" -gt 0 ] && [ "$n_good" -eq 0 ]; then return 3; fi
+  return 0
+}
+
 cmd="$1"; shift
 case "$cmd" in
   search) cmd_search "$@"; exit $?;;
   show) cmd_show "$@"; exit $?;;
-  *) die "unknown command '$cmd' (use search or show; -h for help)";;
+  bibtex) cmd_bibtex "$@"; exit $?;;
+  verify) cmd_verify "$@"; exit $?;;
+  *) die "unknown command '$cmd' (use search, show, bibtex or verify; -h for help)";;
 esac

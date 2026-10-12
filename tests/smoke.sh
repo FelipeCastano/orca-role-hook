@@ -2994,6 +2994,7 @@ check "scholar keys: header file only (-H @file), no key in arguments, output or
 # show on OpenAlex: fields in order, cleaning, abstract, not found, API error, and every identifier form reaches the same work
 sch_codes; sc show 10.1000/SHOW.1
 EXPS="$(printf 'id: doi:10.1000/show.1\ntitle: A Shown Paper\nyear: 2022\ndate: 2022-05-06\ntype: article\nauthors: Ann One; Bo Two\nvenue: Journal X\npublisher: Pub Y\ndoi: 10.1000/show.1\narxiv: -\ncitations: 5\noa: yes\noa_url: https://x.org/y.pdf\nretracted: no\nabstract: We study cats study and dogs.')"
+bvu() { grep -o 'https://[^ ]*' "$SCH/log" | sed -e 's#https://api.crossref.org/works/#CR #' -e 's#https://export.arxiv.org/api/query?id_list=#AX #' | tr '\n' ' '; }
 V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPS" ] && echo same || cat "$SCH/out"):$(cat "$SCH/err"):$(scu 'https://api.openalex.org/works/doi:10.1000/show.1?select=id,doi,title,publication_year,publication_date,type,authorships,primary_location,cited_by_count,open_access,is_retracted,abstract_inverted_index')"
 sc show 10.1000/retracted; V2="$(cat "$SCH/rc"):$(sed -n '1p;2p;3p;6p;8p;9p;10p;11p;13p;14p;15p' "$SCH/out" | tr '\n' '|')"
 for id in "doi:10.1000/SHOW.1" "DOI:10.1000/SHOW.1" "https://doi.org/10.1000/SHOW.1" "http://doi.org/10.1000/SHOW.1" "10.1000/SHOW.1" "doi: 10.1000/SHOW.1"; do sc show "$id"; V3="${V3:-}$(cat "$SCH/rc")$(scu 'works/doi:10.1000/show.1?')"; done
@@ -3033,6 +3034,157 @@ for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$S
 P5="$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -le "$(( $(date +%s) + 1 ))" ] && echo rewritten || echo kept)"
 SCHOLAR_ARXIV_DELAY=2 sc search q --source arxiv; P4="$(scu export.arxiv.org)"
 check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
+# bibtex and verify: doi.org / Crossref / arXiv stub serving files named after the request; anything else is flagged
+BV="$FX/bv"; rm -rf "$BV"; mkdir -p "$BV" "$SCH/bvg"; git -C "$SCH/bvg" init -q
+cat > "$SCH/curl2" <<'S'
+#!/bin/bash
+out=""; i=1
+while [ $i -le $# ]; do a="${!i}"; case "$a" in -o) j=$((i+1)); out="${!j}";; esac; i=$((i+1)); done
+url="${@: -1}"
+echo "$*" >> "$SCH_LOG"
+case "$url" in
+  https://doi.org/*) n="doi_$(printf '%s' "${url#https://doi.org/}" | sed 's/[^A-Za-z0-9]/_/g')";;
+  https://api.crossref.org/works/*) u="${url#https://api.crossref.org/works/}"; n="cr_$(printf '%s' "${u%%\?*}" | sed 's/[^A-Za-z0-9]/_/g')";;
+  https://export.arxiv.org/api/query?id_list=*) n="ax_$(printf '%s' "${url##*id_list=}" | sed 's/[^A-Za-z0-9]/_/g')";;
+  *) echo "$url" >> "$SCH_LOG.bad"; exit 7;;
+esac
+code=200; [ -f "$SCH_FX/bv/$n.code" ] && code="$(cat "$SCH_FX/bv/$n.code")"
+[ "$code" = FAIL ] && exit 7
+if [ "$code" = 200 ] && [ -f "$SCH_FX/bv/$n" ]; then cp "$SCH_FX/bv/$n" "$out"
+elif [ "$code" = 200 ]; then echo "<html>404</html>" > "$out"; code=404
+else echo "oops $code" > "$out"; fi
+printf '%s' "$code"
+S
+chmod +x "$SCH/curl2"
+bv() { # like sc, for bibtex/verify: cwd $BVDIR (default $SCH/run), stub curl2, no Crossref delay unless set
+  : > "$SCH/log"; rm -f "$SCH/log.bad"
+  (cd "${BVDIR:-$SCH/run}" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl2" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY=0 SCHOLAR_CROSSREF_DELAY="${SCHOLAR_CROSSREF_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true
+}
+bvr() { echo "$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|'):$(scn)"; }   # rc:stdout bytes:stderr:calls
+echo ' @article{Singhal_2023, title={Large language models encode clinical knowledge}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Singhal, Karan and Azizi, Shekoofeh}, year={2023}, month=July, pages={172–180} }' > "$BV/doi_10_1038_s41586_023_06291_2"
+printf '@misc{https://doi.org/10.48550/arxiv.2005.11401,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Lewis, Patrick and Perez, Ethan},\n  title = {Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks},\n  publisher = {arXiv},\n  year = {2020}\n}\n' > "$BV/doi_10_48550_arXiv_2005_11401"
+echo '<html>Error</html>' > "$BV/doi_10_1000_html"; echo 500 > "$BV/doi_10_1000_err.code"; echo FAIL > "$BV/doi_10_1000_net.code"
+cr() { local e="${4:-}"; [ -n "$e" ] || e="{}"; jq -nc --arg t "$1" --arg a "$2" --argjson y "$3" --argjson extra "$e" '{status:"ok",message:({title:[$t],author:[{family:$a}],issued:{"date-parts":[[$y]]}} + $extra)}'; }
+BERT="BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+cr "$BERT" Devlin 2019 > "$BV/cr_10_18653_v1_n19_1423"
+cr "RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" Wakefield 1998 '{"updated-by":[{"DOI":"10.1016/s0140-6736(04)15715-2","type":"correction"},{"DOI":"10.1016/s0140-6736(10)60175-4","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_97_11096_0"
+cr "Retraction—Ileal" "The Editors" 2010 '{"update-to":[{"DOI":"10.1016/s0140-6736(97)11096-0","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_10_60175_4"
+cr "Paper with concern" Ng 2021 '{"updated-by":[{"DOI":"10.1/eoc","type":"expression_of_concern"}]}' > "$BV/cr_10_1_concern"
+cr "Paper withdrawn" Ng 2021 '{"updated-by":[{"DOI":"10.1/wd","type":"withdrawal"}]}' > "$BV/cr_10_1_withdrawn"
+cr "Paper erratum" Ng 2021 '{"updated-by":[{"DOI":"10.1/er","type":"erratum"}]}' > "$BV/cr_10_1_erratum"
+jq -nc '{status:"ok",message:{title:["No author paper"],issued:{"date-parts":[[null]]}}}' > "$BV/cr_10_1_noauthor"
+echo '<html>oops</html>' > "$BV/cr_10_1_html"; echo 500 > "$BV/cr_10_1_err.code"; echo FAIL > "$BV/cr_10_1_net.code"; echo 429 > "$BV/cr_10_1_rate.code"
+sch_entry 2005.11401 1 "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" cs.CL "" "Patrick Lewis" "Ethan Perez" | sch_feed > "$BV/ax_2005_11401"
+sch_feed < /dev/null > "$BV/ax_9999_99999"
+W="$SCH/bvw"; rm -rf "$W"; mkdir -p "$W"
+bvent() { printf '@article{%s, title={%s}, author={%s}, year={%s}, doi={%s}}\n' "$@"; }
+E1='@article{singhal2023large, title={{Large language models encode clinical knowledge}}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Singhal, Karan and Azizi, Shekoofeh}, year={2023}, month = jul, pages={172--180} }'
+E2="$(printf '@misc{lewis2020retrieval,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Lewis, Patrick and Perez, Ethan},\n  title = {{Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks}},\n  publisher = {arXiv},\n  year = {2020}\n}')"
+# bibtex without --add: fixed entry on stdout (key, braced title, month macro, pages --), Accept header, DOI lowercased, arXiv id -> arXiv DOI, nothing written
+bv bibtex doi:10.1038/S41586-023-06291-2; X1="$(bvr):$([ "$(cat "$SCH/out")" = "$E1" ] && echo same || echo differs):$(scu 'https://doi.org/10.1038/s41586-023-06291-2'):$(scu '-H Accept: application/x-bibtex'):$(scu ' -L ')"
+bv bibtex arxiv:2005.11401v2; X2="$(bvr):$([ "$(cat "$SCH/out")" = "$E2" ] && echo same || echo differs):$(scu 'https://doi.org/10.48550/arXiv.2005.11401')"
+check "scholar bibtex: fixed doi.org entry on stdout (doi and arxiv id), Accept header, follows redirects, empty stderr, nothing written" "$X1|$X2|$(ls "$SCH/run" | wc -l | tr -d ' ')" "0:$(( $(printf '%s' "$E1" | wc -c) + 1 ))::1:same:1:1:1|0:$(printf '%s\n' "$E2" | wc -c | tr -d ' ')::1:same:1|0"
+# bibtex failures: usage before any call, 404 -> 2, other status / curl failure / HTML page with 200 -> 3; no file, no stdout
+Y=""; for a in "openalex:W12" "10.9999/none" "10.1000/err" "10.1000/net" "10.1000/html" "nonsense"; do bv bibtex "$a" --add --bib "$W/f.bib"; Y="$Y$(bvr)|"; done
+bv bibtex 10.1/x --bib "$W/f.bib"; Y="$Y$(bvr)|"; bv bibtex 10.1038/s41586-023-06291-2 --add; Y="$Y$(bvr)|"; bv bibtex; Y="$Y$(bvr)|"; bv bibtex 10.1/x --add --add --bib "$W/f.bib"; Y="$Y$(bvr)"
+check "scholar bibtex failures: usage errors make no call, 404 -> 2, 5xx/curl/HTML-200 -> 3, empty stdout, nothing written" "$Y:$([ -e "$W/f.bib" ] && echo written || echo none)" "1:0:scholar.sh: bibtex needs a DOI or an arXiv id (run: scholar.sh show <id> to see its DOI)|:0|2:0:scholar.sh: 10.9999/none not found at doi.org|:1|3:0:scholar.sh: doi.org failed (HTTP 500)|:1|3:0:scholar.sh: doi.org failed (HTTP 000)|:1|3:0:scholar.sh: doi.org failed (HTTP 200)|:1|1:0:scholar.sh: unrecognized identifier 'nonsense' (use doi:<doi> or arxiv:<id>)|:0|1:0:scholar.sh: --bib needs --add|:0|1:0:scholar.sh: not in a git repository; pass --bib <path>|:0|1:0:scholar.sh: bibtex needs exactly one identifier|:0|1:0:scholar.sh: option --add given twice|:0:none"
+# bibtex: a 200 body that is not one complete entry (truncated, unbalanced, text after the closing brace, '}' before the '@') is refused untouched
+printf '@article{x, title={T}' > "$BV/doi_10_1000_trunc"; printf '@article{x, title={T}}}\n' > "$BV/doi_10_1000_extra"; printf '@article{x, title={{T}}\n' > "$BV/doi_10_1000_open"
+printf '@article{x, title={T}}\ntrailing\n' > "$BV/doi_10_1000_tail"; printf '}\n@article{x, title={T}}\n' > "$BV/doi_10_1000_lead"; printf '@article{x,\r\n title={A {nested} {T}},\r\n year={2020}\r\n}\r\n\r\n' > "$BV/doi_10_1000_crlf"
+Q=""; for a in trunc extra open tail lead; do bv bibtex "10.1000/$a" --add --bib "$W/q.bib"; Q="$Q$(bvr)|"; done; bv bibtex 10.1000/crlf --add --bib "$W/q.bib"; Q="$Q$(bvr):$(cat "$SCH/out"):$(grep -c . "$W/q.bib")"
+check "scholar bibtex: incomplete or unbalanced doi.org body -> exit 3 'incomplete BibTeX entry', empty stdout, nothing written; leading-@ rule first; nested braces and CRLF accepted" "$Q" "3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org failed (HTTP 200)|:1|0:11:note: added 2020nested to $W/q.bib|:1:2020nested:4"
+# --bib on something that exists and is not a regular file: exit 1 before any call, no raw shell error; symlink to a file works, dangling link as before
+mkdir -p "$W/d.bib" "$W/dd"; ln -sfn "$W/dd" "$W/lnk-dir.bib"; ln -sfn "$W/nowhere.bib" "$W/dangling.bib"; printf '@article{k, doi={10.18653/v1/n19-1423}, title={%s}, author={Devlin, J}, year={2019}}\n' "$BERT" > "$W/real.bib"; ln -sfn "$W/real.bib" "$W/lnk-file.bib"
+NR=""; for f in d.bib lnk-dir.bib; do bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/$f"; NR="$NR$(bvr)|"; bv verify --bib "$W/$f"; NR="$NR$(bvr)|"; done
+bv verify --bib "$W/lnk-file.bib"; NR="$NR$(cat "$SCH/rc"):$(tail -n 1 "$SCH/out")|"; bv verify --bib "$W/dangling.bib"; NR="$NR$(bvr)|"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/lnk-file.bib"; NR="$NR$(cat "$SCH/rc"):$(grep -c '^@' "$W/real.bib")"
+check "scholar --bib on a directory (or link to one): bibtex --add and verify exit 1 'is not a regular file' with no call; link to a file works; dangling link keeps the old messages" "$NR" "1:0:scholar.sh: $W/d.bib is not a regular file|:0|1:0:scholar.sh: $W/d.bib is not a regular file|:0|1:0:scholar.sh: $W/lnk-dir.bib is not a regular file|:0|1:0:scholar.sh: $W/lnk-dir.bib is not a regular file|:0|0:k$(printf '\t')ok$(printf '\t')-|1:0:scholar.sh: $W/dangling.bib not found|:0|0:2"
+# --add: new nested file, default <git top>/article/refs.bib, append-only with the right separators, empty file
+bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/n/e/refs.bib"; Z1="$(bvr):$(cat "$W/n/e/refs.bib" | cmp -s - <(printf '%s\n' "$E1") && echo exact || echo differs):$(cat "$SCH/out")"
+BVDIR="$SCH/bvg" bv bibtex 10.1038/s41586-023-06291-2 --add; Z2="$(cmp -s "$SCH/bvg/article/refs.bib" <(printf '%s\n' "$E1") && echo exact || echo differs):$(cat "$SCH/out")"
+printf '%% my comment\n@string{nat = "Nature"}\r\n\n@article{old,\n  title = {Old}, author = "Zed, A", doi = "10.1/OLD",\n  year = 1999\n}' > "$W/nonl.bib"; cp "$W/nonl.bib" "$W/nonl0.bib"
+bv bibtex arxiv:2005.11401 --add --bib "$W/nonl.bib"; Z3="$(bvr):$(head -c "$(wc -c < "$W/nonl0.bib")" "$W/nonl.bib" | cmp -s - "$W/nonl0.bib" && echo kept || echo CHANGED):$(cmp -s <(tail -c +"$(( $(wc -c < "$W/nonl0.bib") + 1 ))" "$W/nonl.bib") <(printf '\n\n%s\n' "$E2") && echo tail-ok || echo tail-bad)"
+printf '@article{old,\n  doi = {10.1/old}\n}\n' > "$W/nl.bib"; cp "$W/nl.bib" "$W/nl0.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/nl.bib"
+Z4="$(cmp -s <(tail -c +"$(( $(wc -c < "$W/nl0.bib") + 1 ))" "$W/nl.bib") <(printf '\n%s\n' "$E1") && echo tail-ok || echo tail-bad)"
+: > "$W/zero.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/zero.bib"; Z5="$(cmp -s "$W/zero.bib" <(printf '%s\n' "$E1") && echo exact || echo differs)"
+check "scholar bibtex --add: creates dirs/file, default path in a git repo, append-only with blank-line separator, no existing byte touched, stdout key, note on stderr" "$Z1|$Z2|$Z3|$Z4|$Z5" "0:17:note: added singhal2023large to $W/n/e/refs.bib|:1:exact:singhal2023large|exact:singhal2023large|0:19:note: added lewis2020retrieval to $W/nonl.bib|:1:kept:tail-ok|tail-ok|exact"
+# --add duplicates by DOI (case, https prefix, quoted, other key, arXiv DOI in any case) never write; key collisions
+printf '@article{theirs, doi = "https://doi.org/10.1038/S41586-023-06291-2"}\n@misc{lw, doi={https://doi.org/10.48550/ARXIV.2005.11401}}\n' > "$W/dup.bib"; cp "$W/dup.bib" "$W/dup0.bib"
+bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/dup.bib"; D1="$(bvr):$(cat "$SCH/out")"; bv bibtex arxiv:2005.11401 --add --bib "$W/dup.bib"; D2="$(bvr):$(cat "$SCH/out")"
+check "scholar bibtex --add: a DOI already present (case, prefix, quotes, arXiv DOI) is not added: file untouched, key on stdout, note, exit 0" "$D1|$D2|$(cmp -s "$W/dup.bib" "$W/dup0.bib" && echo same || echo CHANGED)" "0:7:note: already in $W/dup.bib as theirs|:1:theirs|0:3:note: already in $W/dup.bib as lw|:1:lw|same"
+printf '@article{Singhal2023Large,\n doi={10.1/zzz}\n}\n' > "$W/col.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/col.bib"; C1="$(cat "$SCH/out")"
+sed -e 's/10.1038\/s41586-023-06291-2/10.1038\/other/' "$BV/doi_10_1038_s41586_023_06291_2" > "$BV/doi_10_1038_other"; bv bibtex 10.1038/other --add --bib "$W/col.bib"; C2="$(cat "$SCH/out")"
+: > "$W/z.bib"; for l in "" b c d e f g h i j k l m n o p q r s t u v w x y z; do echo "@article{singhal2023large$l, doi={10.1/q$l}}" >> "$W/z.bib"; done; cp "$W/z.bib" "$W/z0.bib"
+bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z.bib"; C3="$(bvr):$(cmp -s "$W/z.bib" "$W/z0.bib" && echo same || echo CHANGED)"
+grep -v 'largez,' "$W/z0.bib" > "$W/z2.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z2.bib"; C4="$(cat "$SCH/out"):$(tail -n 1 "$W/z2.bib" | cut -c1-26)"
+check "scholar bibtex --add: taken key (any case) gets b, c, ...; 26 taken -> exit 3 untouched; z still free" "$C1|$C2|$C3|$C4" "singhal2023largeb|singhal2023largec|3:0:scholar.sh: no free key for singhal2023large in $W/z.bib|:1:same|singhal2023largez:@article{singhal2023largez"
+# verify: table of statuses over every identity/retraction/mismatch path, exit codes, pacing, request URLs
+BVF() { printf '%s\n' '@comment{ignored @article{fake, doi={10.1/x}} }' '@string{n = "N"}'; }
+{ BVF
+bvent ok1 "$BERT" "Devlin, Jacob and Chang, Ming-Wei" 2019 10.18653/V1/N19-1423
+bvent sub "BERT: Pre-training of Deep Bidirectional Transformers" "Jacob Devlin and Chang, Ming-Wei" 2019 https://doi.org/10.18653/v1/n19-1423
+bvent bad "Totally other" "Smith, J" 2020 10.18653/v1/n19-1423
+bvent wake "Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" "Wakefield, AJ and Murch, SH" 1998 10.1016/S0140-6736\(97\)11096-0
+bvent notice Retraction Editors 2010 10.1016/s0140-6736\(10\)60175-4
+bvent missing T "A, B" 2000 10.9999/none
+printf '@article{nodoi, title={T}, author={A, B}, year={2000}}\n'
+printf '@misc{rag, title = "Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks", author = "Lewis, Patrick and Perez, Ethan", year = 2024, eprint = {arXiv:2005.11401v3}, archivePrefix = {arXiv}}\n'
+bvent ragdoi "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" "Lewis, Patrick" 2024 10.48550/arXiv.2005.11401
+printf '@misc{axmissing, title={T}, author={A}, year={2000}, eprint={9999.99999}, archiveprefix={arXiv}}\n@misc{eprintonly, title={T}, author={A}, year={2000}, eprint={2005.11401}}\n'
+bvent concern "Paper with concern" "Ng, A" 2021 10.1/concern
+bvent wd "Paper withdrawn" "Ng, A" 2021 10.1/withdrawn
+bvent er "Paper erratum" "Ng, A" 2021 10.1/erratum
+bvent noauth "No author paper" "Ng, A" 2021 10.1/noauthor
+printf '@article{notitle, author={Devlin, Jacob}, year={2019}, doi={10.18653/v1/n19-1423}}\n'
+bvent html t a 1 10.1/html; bvent err t a 1 10.1/err; bvent net t a 1 10.1/net; bvent rate t a 1 10.1/rate; } > "$W/v.bib"
+sed -i.bak 's/\\(/(/g; s/\\)/)/g' "$W/v.bib"; rm -f "$W/v.bib.bak"; cp "$W/v.bib" "$W/v0.bib"
+bv verify --bib "$W/v.bib"
+T="$(printf '\t')"
+EXPV="key${T}status${T}detail
+ok1${T}ok${T}-
+sub${T}warn${T}title differs (subtitle?)
+bad${T}fail${T}title mismatch: \"$BERT\"; first author mismatch: Devlin; year mismatch: 2019
+wake${T}retracted${T}title mismatch: \"RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children\"; correction (10.1016/s0140-6736(04)15715-2); retracted (10.1016/s0140-6736(10)60175-4); title says RETRACTED
+notice${T}fail${T}title differs (subtitle?); this DOI is a notice, not the paper
+missing${T}notfound${T}not in Crossref
+nodoi${T}nodoi${T}no doi or arXiv eprint
+rag${T}ok${T}-
+ragdoi${T}ok${T}-
+axmissing${T}notfound${T}not in arXiv
+eprintonly${T}nodoi${T}no doi or arXiv eprint
+concern${T}warn${T}expression of concern (10.1/eoc)
+wd${T}retracted${T}retracted (10.1/wd)
+er${T}ok${T}correction (10.1/er)
+noauth${T}warn${T}first author unknown; year unknown
+notitle${T}fail${T}title mismatch: \"$BERT\"
+html${T}error${T}unreadable Crossref response
+err${T}error${T}Crossref HTTP 500
+net${T}error${T}Crossref HTTP 000
+rate${T}error${T}Crossref HTTP 429"
+V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPV" ] && echo table-ok || echo table-differs):$(cat "$SCH/err"):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,):$(cmp -s "$W/v.bib" "$W/v0.bib" && echo same || echo CHANGED):$([ -f "$SCH/log.bad" ] && echo NETWORK || echo contained)"
+check "scholar verify: one TAB line per entry in file order (ok/warn/fail/retracted/notfound/nodoi/error), every identity and retraction path, exit 4, bib untouched; Crossref DOI lowercased, arXiv id without prefix/version, one call per looked-up entry" "$V1:$(bvu)" "4:table-ok::3,:same:contained:CR 10.18653/v1/n19-1423 CR 10.18653/v1/n19-1423 CR 10.18653/v1/n19-1423 CR 10.1016/s0140-6736(97)11096-0 CR 10.1016/s0140-6736(10)60175-4 CR 10.9999/none AX 2005.11401 AX 2005.11401 AX 9999.99999 CR 10.1/concern CR 10.1/withdrawn CR 10.1/erratum CR 10.1/noauthor CR 10.18653/v1/n19-1423 CR 10.1/html CR 10.1/err CR 10.1/net CR 10.1/rate "
+# exit codes
+{ bvent a "$BERT" "Devlin, J" 2019 10.18653/v1/n19-1423; bvent b t a 1 10.1/err; } > "$W/m1.bib"
+{ bvent b t a 1 10.1/err; bvent c t a 1 10.1/rate; } > "$W/m2.bib"
+{ bvent b t a 1 10.1/err; bvent a x "Ng, A" 2019 10.1/concern; } > "$W/m3.bib"
+{ bvent b t a 1 10.1/err; printf '@misc{n, title={t}}\n'; } > "$W/m4.bib"
+: > "$W/empty.bib"; printf '%% c\n@comment{x}\n@string{a="b"}\n' > "$W/cm.bib"
+X=""; for f in m1 m2 m3 m4 empty cm; do bv verify --bib "$W/$f.bib"; X="$X$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ') "; done
+check "scholar verify exit codes: ok+error 0, only errors 3, error+fail 4, error+nodoi 4, no entries 0 with header only" "$X" "0:3 3:3 4:3 4:3 0:1 0:1 "
+bv verify --bib "$W/nope.bib"; U1="$(bvr)"; bv verify x; U2="$(bvr)"; bv verify --x; U3="$(bvr)"; bv verify --bib; U4="$(bvr)"; bv verify; U5="$(bvr)"
+mkdir -p "$SCH/bvg/article"; cp "$W/m1.bib" "$SCH/bvg/article/refs.bib"; BVDIR="$SCH/bvg" bv verify; U7="$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ')"
+check "scholar verify usage: missing file / bad args / no git without --bib -> exit 1 with no call; default <git top>/article/refs.bib" "$U1|$U2|$U3|$U4|$U5|$U7" "1:0:scholar.sh: $W/nope.bib not found|:0|1:0:scholar.sh: verify takes no argument (got 'x')|:0|1:0:scholar.sh: unknown option '--x'|:0|1:0:scholar.sh: option --bib needs a value|:0|1:0:scholar.sh: not in a git repository; pass --bib <path>|:0|0:3"
+# odd files: CRLF, mixed-case type/fields, tab and space in keys, bare/quoted values, unreadable file
+printf '@Article{CRLF,\r\n  Title = {%s},\r\n  Author = {Devlin, Jacob},\r\n  Year = {2019},\r\n  DOI = {10.18653/v1/n19-1423}\r\n}\r\n' "$BERT" > "$W/crlf.bib"
+printf '@article{k\tx, title={%s}, author={Devlin, J}, year={2019}, doi="10.18653/v1/n19-1423"}\n@article{sp ace,doi={10.1/err}}\n' "$BERT" > "$W/odd.bib"
+bv verify --bib "$W/crlf.bib"; O1="$(cat "$SCH/out" | tail -n 1)"; bv verify --bib "$W/odd.bib"; O2="$(tail -n +2 "$SCH/out" | tr '\t\n' '~|')"
+O3=skipped; if [ "$(id -u)" != 0 ]; then cp "$W/m1.bib" "$W/ro.bib"; chmod 000 "$W/ro.bib"; bv verify --bib "$W/ro.bib"; O3="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(tail -n 1 "$SCH/err")"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/ro.bib"; O3="$O3:$(cat "$SCH/rc"):$(tail -n 1 "$SCH/err")"; chmod 644 "$W/ro.bib"; fi
+check "scholar verify odd files: CRLF and mixed-case fields, tab in key collapsed, quoted doi; unreadable .bib -> exit 3 for verify and bibtex --add" "$O1|$O2|$O3" "CRLF${T}ok${T}-|k x~ok~-|sp ace~error~Crossref HTTP 500||3:0:scholar.sh: cannot read $W/ro.bib:3:scholar.sh: cannot read $W/ro.bib"
+# Crossref pacing (SCHOLAR_CROSSREF_DELAY between calls, none before the first), mailto from SCHOLAR_EMAIL
+{ bvent a "$BERT" "Devlin, J" 2019 10.18653/v1/n19-1423; bvent b "$BERT" "Devlin, J" 2019 10.18653/v1/n19-1423; } > "$W/p.bib"
+T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=2 bv verify --bib "$W/p.bib"; PA="$(( $(date +%s) - T0 >= 2 ? 1 : 0 ))"
+head -n 1 "$W/p.bib" > "$W/p1.bib"; T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=5 bv verify --bib "$W/p1.bib"; PB="$(( $(date +%s) - T0 <= 3 ? 1 : 0 ))"
+SCHOLAR_EMAIL='a+b@x.org' bv verify --bib "$W/p.bib"
+check "scholar verify: Crossref delay between calls but not before the first; SCHOLAR_EMAIL goes in the Crossref mailto, URL-encoded" "$PA$PB:$(scu 'works/10.18653/v1/n19-1423?mailto=a%2Bb%40x.org'):$(cat "$SCH/rc")" "11:2:0"
 }
 
 sec_cli() {
