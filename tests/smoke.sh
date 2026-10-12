@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer aw-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer aw-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -2822,6 +2822,217 @@ PR_RC="$RC:$OUT"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
 check "phase.sh refuses outside academic-writer; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-writer (this worktree: programmer):1:1:0"
 rm -rf "$PK/prompts/academic-writer"   # the other sections reuse this kit and expect the mode unavailable
+}
+
+sch_setup() {
+SCH="$TMP/sch"; FX="$SCH/fx"; mkdir -p "$FX" "$SCH/tmp" "$SCH/state" "$SCH/run"
+unset OPENALEX_API_KEY S2_API_KEY SCHOLAR_EMAIL
+cat > "$FX/oa_search.json" <<'J'
+{"results":[
+{"id":"https://openalex.org/W1","doi":"https://doi.org/10.1000/ABC.1","title":"Deep\tLearning\nfor  Tabs","publication_year":2023,"authorships":[{"author":{"display_name":"Ada  Lovelace"}}],"primary_location":{"source":{"display_name":"Nature"}},"cited_by_count":42,"open_access":{"is_oa":true}},
+{"id":"https://openalex.org/W2","doi":"https://doi.org/10.48550/arXiv.2401.00001","title":"Arx paper","publication_year":2024,"authorships":[],"primary_location":null,"cited_by_count":0,"open_access":{"is_oa":false}},
+{"id":"https://openalex.org/W3","doi":null,"title":"No doi","publication_year":null,"authorships":[{"author":{"display_name":null}}],"primary_location":{"source":null},"cited_by_count":null,"open_access":{"is_oa":null}},
+{"id":"https://openalex.org/W4","doi":"https://doi.org/10.1000/four","title":"Beyond the limit","publication_year":2020,"authorships":[],"primary_location":null,"cited_by_count":1,"open_access":{"is_oa":false}}]}
+J
+cat > "$FX/pub.json" <<'J'
+{"results":[{"id":"https://openalex.org/P1","display_name":"Small Pub","lineage":["https://openalex.org/P1"],"works_count":5},
+{"id":"https://openalex.org/P2","display_name":"Big Child","lineage":["https://openalex.org/P9","https://openalex.org/P2"],"works_count":100},
+{"id":"https://openalex.org/P3","display_name":"Mid","lineage":["https://openalex.org/P3"],"works_count":50}]}
+J
+cat > "$FX/src.json" <<'J'
+{"results":[{"id":"https://openalex.org/S1","display_name":"Other Conf","works_count":900},
+{"id":"https://openalex.org/S2","display_name":"neural information processing systems","works_count":10},
+{"id":"https://openalex.org/S3","display_name":"NIPS Workshop","works_count":5}]}
+J
+echo '{"results":[]}' > "$FX/empty.json"
+cat > "$FX/s2.json" <<'J'
+{"data":[
+{"paperId":"p1","externalIds":{"DOI":"10.1000/ABC.1"},"title":"Dup of OpenAlex","year":2023,"authors":[{"name":"X"}],"venue":"V","citationCount":1,"isOpenAccess":true},
+{"paperId":"p2","externalIds":{"ArXiv":"2405.00005v2"},"title":"S2 arx","year":2024,"authors":[{"name":"Dan"}],"venue":"","citationCount":7,"isOpenAccess":true},
+{"paperId":"p3","externalIds":{},"title":"Only\ts2","year":2020,"authors":[],"venue":"ICML","citationCount":0,"isOpenAccess":false},
+{"paperId":"p4","externalIds":{"DOI":"10.48550/arXiv.2406.00006"},"title":"Cut by limit","year":2024,"authors":[],"venue":null,"citationCount":0,"isOpenAccess":true}]}
+J
+cat > "$FX/show1.json" <<'J'
+{"id":"https://openalex.org/W77","doi":"https://doi.org/10.1000/SHOW.1","title":"A  Shown\nPaper","publication_year":2022,"publication_date":"2022-05-06","type":"article",
+"authorships":[{"author":{"display_name":"Ann One"}},{"author":{"display_name":"Bo Two"}}],"primary_location":{"source":{"display_name":"Journal X","host_organization_name":"Pub Y"}},
+"cited_by_count":5,"open_access":{"is_oa":true,"oa_url":"https://x.org/y.pdf"},"is_retracted":false,
+"abstract_inverted_index":{"Abstract":[0],"We":[1],"study":[2,4],"cats":[3],"and":[5],"dogs.":[6]}}
+J
+cat > "$FX/show3.json" <<'J'
+{"id":"https://openalex.org/W79","doi":"https://doi.org/10.48550/arXiv.2401.00001","title":"Arx via OpenAlex","publication_year":2024,"publication_date":"2024-01-02","type":"preprint","authorships":[],"primary_location":null,"cited_by_count":2,"open_access":{"is_oa":true,"oa_url":null},"is_retracted":false,"abstract_inverted_index":null}
+J
+cat > "$FX/show2.json" <<'J'
+{"id":"https://openalex.org/W78","doi":null,"title":null,"publication_year":null,"publication_date":null,"type":null,"authorships":[],"primary_location":null,"cited_by_count":null,"open_access":{"is_oa":false,"oa_url":null},"is_retracted":true,"abstract_inverted_index":null}
+J
+sch_entry() { # id version title cat doi authors...
+  local id="$1" v="$2" t="$3" cat="$4" doi="$5"; shift 5
+  printf '<entry>\n <id>http://arxiv.org/abs/%sv%s</id>\n <updated>2024-02-04T10:00:00Z</updated>\n <published>2024-02-03T10:00:00Z</published>\n <title>%s</title>\n <summary>  Sum &amp; text\n line two. </summary>\n' "$id" "$v" "$t"
+  for a in "$@"; do printf ' <author>\n  <name>%s</name>\n </author>\n' "$a"; done
+  [ -n "$doi" ] && printf ' <arxiv:doi xmlns:arxiv="http://arxiv.org/schemas/atom">%s</arxiv:doi>\n' "$doi"
+  printf ' <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="%s" scheme="http://arxiv.org/schemas/atom"/>\n</entry>\n' "$cat"
+}
+sch_feed() { printf '<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">\n <id>x</id>\n'; cat; printf '</feed>\n'; }
+{ sch_entry 2401.00001 2 "Arx paper" cs.LG "" "Zed"; sch_entry 2402.00002 1 "Title &amp;
+   more" cs.CL "" "Bob Smith" "Carol"; sch_entry hep-th/9901001 1 "Old style" hep-th "" "Old Author"; sch_entry 2403.00003 1 "Cut by limit" cs.AI "" "Q"; } | sch_feed > "$FX/ax_search.xml"
+sch_entry 2401.00001 2 "Shown arXiv" cs.LG "10.1000/Mixed.Case" "First Au" "Second Au" | sch_feed > "$FX/ax_show.xml"
+sch_feed < /dev/null > "$FX/ax_empty.xml"
+printf '<entry>\n <id>http://arxiv.org/api/errors#incorrect_id_format</id>\n <summary>bad id</summary>\n</entry>\n' | sch_feed > "$FX/ax_err.xml"
+cat > "$SCH/curl" <<'S'
+#!/bin/bash
+out=""; hf=""; i=1
+while [ $i -le $# ]; do a="${!i}"; case "$a" in -o) j=$((i+1)); out="${!j}";; -H) j=$((i+1)); hf="${!j}";; esac; i=$((i+1)); done
+url="${@: -1}"
+echo "$*" >> "$SCH_LOG"
+[ -n "$hf" ] && { echo "$url" >> "$SCH_LOG.hdr"; cat "${hf#@}" >> "$SCH_LOG.hdr"; echo "MODE $(ls -l "${hf#@}" | cut -c1-10)" >> "$SCH_LOG.hdr"; }
+case "$url" in
+  *api.openalex.org/works/*) kind=oa; case "$url" in *doi:10.404*|*/W999*) body=404;; *doi:10.1000/retracted*|*/W78\?*) body=show2.json;; */W79\?*) body=show3.json;; *) body=show1.json;; esac;;
+  *api.openalex.org/works?*) kind=oa; body=oa_search.json;;
+  *api.openalex.org/publishers?*) kind=oa; case "$url" in *search=nomatch*) body=empty.json;; *) body=pub.json;; esac;;
+  *api.openalex.org/sources?*) kind=oa; case "$url" in *search=zzz*) body=empty.json;; *) body=src.json;; esac;;
+  *export.arxiv.org*) kind=ax; case "$url" in *id_list=9999*) body=ax_empty.xml;; *id_list=err*) body=ax_err.xml;; *id_list=*) body=ax_show.xml;; *) body=ax_search.xml;; esac;;
+  *api.semanticscholar.org*) kind=s2; body=s2.json;;
+  *) kind=x; body=empty.json;;
+esac
+cf="$SCH_FX/code.$kind"; code=200
+if [ -f "$cf" ]; then code="$(head -1 "$cf")"; [ "$(wc -l < "$cf")" -gt 1 ] && tail -n +2 "$cf" > "$cf.n" && mv "$cf.n" "$cf"; fi
+[ "$code" = FAIL ] && exit 7
+if [ "$code" != 200 ]; then echo "oops $code" > "$out"
+elif [ "$body" = 404 ]; then echo "<html>404</html>" > "$out"; code=404
+else cp "$SCH_FX/$body" "$out"; fi
+printf '%s' "$code"
+S
+chmod +x "$SCH/curl"
+sc() { # runs scholar.sh with the stub; stdout $SCH/out, stderr $SCH/err, rc $SCH/rc, calls $SCH/log
+  : > "$SCH/log"; rm -f "$SCH/log.hdr"
+  (cd "$SCH/run" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY="${SCHOLAR_ARXIV_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true
+}
+scn() { grep -c . "$SCH/log" || true; }
+scg() { grep -c -- "$1" "$2" || true; }   # lines of a file with the fragment (0 is not a failure)
+scu() { grep -cF -- "$1" "$SCH/log" || true; }   # calls whose line has the fragment
+sch_codes() { rm -f "$FX"/code.*; }
+}
+
+sec_scholar() {
+sch_setup
+# search, all sources without a key: rows, cleaning, ids, limit, cross-source dedupe, one call per source
+sch_codes; sc search "graph neural" --limit 3
+EXP="$(printf 'source\tid\tyear\tfirst_author\tvenue\tcitations\toa\ttitle\nopenalex\tdoi:10.1000/abc.1\t2023\tAda Lovelace\tNature\t42\tyes\tDeep Learning for Tabs\nopenalex\tarxiv:2401.00001\t2024\t-\t-\t0\tno\tArx paper\nopenalex\topenalex:W3\t-\t-\t-\t-\tno\tNo doi\narxiv\tarxiv:2402.00002\t2024\tBob Smith\tarXiv cs.CL\t-\tyes\tTitle & more\narxiv\tarxiv:hep-th/9901001\t2024\tOld Author\tarXiv hep-th\t-\tyes\tOld style')"
+check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:graph+AND+all:neural&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
+# filters per source
+sch_codes
+sc search "rag models" --from 2023-01-01 --to 2024-12-31 --type proceedings --oa --sort citations --limit 05 --source openalex
+R1="$(cat "$SCH/rc"):$(scu 'filter=from_publication_date:2023-01-01,to_publication_date:2024-12-31,type:conference-paper,is_oa:true&sort=cited_by_count:desc&per_page=5&select='):$(scn)"
+sc search "x y" --type article --source openalex; R2="$(scu 'filter=type:article&sort='):$(scu 'filter=type:preprint')"
+sc search "x" --type preprint --source openalex; R2="$R2:$(scu 'filter=type:preprint&sort=')"
+sc search "graph neural" --from 2023-01-01 --source arxiv --sort date --limit 4; R3="$(scu 'search_query=all:graph+AND+all:neural+AND+submittedDate:%5B202301010000+TO+209912312359%5D&start=0&max_results=4&sortBy=submittedDate&sortOrder=descending')"
+sc search "graph" --to 2024-12-31 --source arxiv --sort citations; R3="$R3:$(scu 'submittedDate:%5B199101010000+TO+202412312359%5D&start=0&max_results=10&sortBy=relevance&'):$(cat "$SCH/err")"
+sc search "big" --publisher big --venue NeurIPS --source openalex
+R4="$(cat "$SCH/rc"):$(scu 'publishers?search=big&per_page=25&select=id,display_name,lineage,works_count'):$(scu 'sources?search=Neural%20Information%20Processing%20Systems&per_page=10&select=id,display_name,works_count'):$(scu 'filter=primary_location.source.publisher_lineage:P2,primary_location.source.id:S2&sort='):$(cat "$SCH/err" | tr '\n' '|')"
+sc search "q" --publisher nomatch --source openalex; R5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu 'api.openalex.org/works?')"
+sc search "q" --venue "zzz" --source openalex; R5="$R5:$(cat "$SCH/rc"):$(cat "$SCH/err")"
+check "scholar search filters: OpenAlex filters/sort/per_page, arXiv dates and sort, notes" "$R1:$R2:$R3:$R4:$R5" "0:1:1:1:0:1:1:1:note: arxiv has no citation counts; sorted by relevance:0:1:1:1:note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|note: venue 'NeurIPS' -> neural information processing systems (S2)|note: other candidates: Other Conf (S1), NIPS Workshop (S3)|:1:scholar.sh: no OpenAlex publisher matches 'nomatch':0:1:scholar.sh: no OpenAlex venue matches 'zzz'"
+
+# option validation: every bad call is a usage error (exit 1) and never reaches the network
+sch_codes; BAD=""
+for a in "search" "search   " "search q --from 2024-1-1" "search q --to 24-01-01" "search q --type book" "search q --sort best" "search q --source crossref" "search q --limit 0" "search q --limit 101" "search q --limit abc" "search q --limit -1" "search q --limit 1.5" "search q --limit" "search q --limit ''" "search q --oa --oa" "search q --limit 2 --limit 3" "search q --bogus" "search q q2" "search q --" "search q --venue" "show" "show a b" "show foo" "show arxiv:" "show doi:10.1" "show 10.1000/" "show openalex:Wabc" "show https://example.org/10.1000/x" "frobnicate"; do
+  eval "sc $a"; [ "$(cat "$SCH/rc")" = 1 ] && [ "$(scn)" = 0 ] && [ ! -s "$SCH/out" ] || BAD="$BAD [$a rc=$(cat "$SCH/rc") calls=$(scn)]"
+done
+sc search q --limit 007; L1="$(cat "$SCH/rc"):$(scu 'per_page=7&')"
+sc -h; H1="$(cat "$SCH/rc"):$(grep -c 'scholar.sh search' "$SCH/out")"; sc; H2="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' ')"
+check "scholar usage errors: exit 1, no call, empty stdout; --limit 007 ok; -h exit 0; no arguments exit 1" "$BAD:$L1:$H1:$H2" ":0:1:0:1:1:0"
+# skipped and refused sources
+sch_codes
+sc search q --type article; N1="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu export.arxiv.org)"
+sc search q --publisher big; N2="$(cat "$SCH/rc"):$(cat "$SCH/err" | tr '\n' '|'):$(scu export.arxiv.org)"
+sc search q --source arxiv --venue V; N3="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"
+sc search q --source arxiv --type proceedings; N3="$N3:$(cat "$SCH/rc"):$(cat "$SCH/err")"
+S2_API_KEY=k sc search q --type preprint; N4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu semanticscholar)"
+S2_API_KEY=k sc search q --publisher big; N5="$(cat "$SCH/rc"):$(scu semanticscholar):$(scu export.arxiv.org)"
+sc search q --source s2 --type preprint; N6="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"
+S2_API_KEY=k sc search q; N7="$(scu semanticscholar):$(scu export.arxiv.org):$(scu 'api.openalex.org/works?')"
+check "scholar search: unsupported options skip a source under all, refuse it when explicit; s2 only with a key" "$N1|$N2|$N3|$N4|$N5|$N6|$N7" "0:note: arxiv skipped: arXiv only has preprints:0|0:note: arxiv skipped: arXiv has no publisher/venue filter|note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|:0|1:scholar.sh: --source arxiv: arXiv has no publisher/venue filter:0:1:scholar.sh: --source arxiv: arXiv only has preprints|0:note: s2 skipped: Semantic Scholar has no preprint type:0|0:0:0|1:scholar.sh: --source s2: Semantic Scholar has no preprint type:0|1:1:1"
+# Semantic Scholar: rows (id routing, limit, dedupe against OpenAlex), keyed relevance vs keyless bulk URLs
+sch_codes
+sc search "a-b c" --source s2 --limit 3
+K1="$(cat "$SCH/rc"):$(cat "$SCH/out" | tr '\t' '~' | tr '\n' '|'):$(cat "$SCH/err"):$(scu 'search/bulk?query=a-b%20c&fields=title,year,externalIds,authors,venue,citationCount,isOpenAccess&sort=citationCount:desc')"
+S2_API_KEY=k sc search "a-b c" --source s2 --from 2020-01-01 --type article --oa --venue "Nat Lang"
+K2="$(scu 'paper/search?query=a%20b%20c&limit=10&fields=title,year,externalIds,authors,venue,citationCount,isOpenAccess'):$(scu 'publicationDateOrYear=2020-01-01:'):$(scu 'publicationTypes=JournalArticle'):$(scu '&openAccessPdf'):$(scu '&venue=Nat%20Lang'):$(scu search/bulk)"
+sc search "q" --source s2 --sort date --to 2021-05-05 --type proceedings; K3="$(scu 'search/bulk?query=q&'):$(scu 'sort=publicationDate:desc'):$(scu 'publicationDateOrYear=:2021-05-05'):$(scu 'publicationTypes=Conference'):$(cat "$SCH/err")"
+S2_API_KEY=k sc search "q" --source s2 --sort citations; K4="$(scu 'search/bulk'):$(scu 'sort=citationCount:desc'):$(scu 'paper/search?')"
+S2_API_KEY=k sc search "graph neural" --limit 3; K5="$(cut -f1,2 "$SCH/out" | tr '\t' '~' | tr '\n' '|')"
+check "scholar s2: id routing, limit, dedupe, keyless bulk note, filters, keyed relevance endpoint, order openalex/arxiv/s2" "$K1|$K2|$K3|$K4|$K5" "0:source~id~year~first_author~venue~citations~oa~title|s2~doi:10.1000/abc.1~2023~X~V~1~yes~Dup of OpenAlex|s2~arxiv:2405.00005~2024~Dan~-~7~yes~S2 arx|s2~s2:p3~2020~-~ICML~0~no~Only s2|:note: Semantic Scholar without S2_API_KEY has no relevance ranking; sorted by citations:1|1:1:1:1:1:0|1:1:1:1:|1:1:0|source~id|openalex~doi:10.1000/abc.1|openalex~arxiv:2401.00001|openalex~openalex:W3|arxiv~arxiv:2402.00002|arxiv~arxiv:hep-th/9901001|s2~arxiv:2405.00005|s2~s2:p3|"
+# failing sources: partial success keeps the rest, total failure exits 3 and prints nothing, 429 retried for OpenAlex/S2 only
+sch_codes
+echo 500 > "$FX/code.oa"; sc search q --limit 2; F1="$(cat "$SCH/rc"):$(cut -f1 "$SCH/out" | sort -u | tr '\n' ,):$(cat "$SCH/err")"
+echo 500 > "$FX/code.oa"; echo 503 > "$FX/code.ax"; sc search q; F2="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo FAIL > "$FX/code.oa"; sc search q --source openalex; F3="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo 200 > "$FX/code.oa"; echo 200 > "$FX/code.ax"; printf 'x\n' > /dev/null
+cp "$FX/ax_err.xml" "$FX/ax_search.keep"; cp "$FX/ax_search.xml" "$FX/ax_search.good"; cp "$FX/ax_err.xml" "$FX/ax_search.xml"; sc search q --source arxiv; F4="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|')"; cp "$FX/ax_search.good" "$FX/ax_search.xml"
+sch_codes; printf '429\n429\n200\n' > "$FX/code.oa"; sc search q --source openalex --limit 1; F5="$(cat "$SCH/rc"):$(scn):$(grep -c '^openalex' "$SCH/out")"
+sch_codes; printf '429\n429\n429\n200\n' > "$FX/code.oa"; sc search q --source openalex; F6="$(cat "$SCH/rc"):$(scn):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo 429 > "$FX/code.ax"; sc search q --source arxiv; F7="$(cat "$SCH/rc"):$(scn):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo 429 > "$FX/code.s2"; sc search q --source s2; F8="$(cat "$SCH/rc"):$(scn):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; printf '403\n200\n' > "$FX/code.s2"; S2_API_KEY=k sc search q --source s2 --limit 2; F9="$(cat "$SCH/rc"):$(scn):$(grep -c '^s2' "$SCH/out"):$(grep -c 'x-api-key' "$SCH/log.hdr"):$(cat "$SCH/err" | tr '\n' '|')"
+check "scholar failures: partial success keeps the rest, total failure exits 3 with empty stdout, retries only for OpenAlex/S2" "$F1|$F2|$F3|$F4|$F5|$F6|$F7|$F8|$F9" "0:arxiv,source,:warning: openalex failed (HTTP 500)|3:0:warning: openalex failed (HTTP 500)|warning: arxiv failed (HTTP 503)|scholar.sh: every source failed||3:0:warning: openalex failed (HTTP 000)|scholar.sh: every source failed||3:0:warning: arxiv returned an error: bad id|scholar.sh: every source failed||0:3:1|3:3:warning: openalex failed (HTTP 429)|scholar.sh: every source failed||3:1:warning: arxiv failed (HTTP 429)|scholar.sh: every source failed||3:3:note: Semantic Scholar without S2_API_KEY has no relevance ranking; sorted by citations|warning: s2 failed (HTTP 429)|scholar.sh: every source failed||0:2:2:1:warning: S2_API_KEY was rejected; retried without it|"
+# keys: only in a header file read by curl (-H @file), never in an argument, a URL, stdout, stderr or a file left behind; the temp dir is removed
+sch_codes; LEAK=0; SEEN=""
+for a in "search q --publisher big --venue zz" "show 10.1000/x.1" "show arxiv:2401.00001" "search q --sort date"; do
+  for fail in 0 1; do
+    sch_codes; [ "$fail" = 1 ] && { echo 500 > "$FX/code.oa"; echo 429 > "$FX/code.s2"; }
+    OPENALEX_API_KEY=KEYOA_SECRET S2_API_KEY=KEYS2_SECRET SCHOLAR_EMAIL=me@x.org sc $a
+    cat "$SCH/out" "$SCH/err" "$SCH/log" > "$SCH/all"
+    grep -q 'KEYOA_SECRET\|KEYS2_SECRET' "$SCH/all" && LEAK=$((LEAK + 1))
+    grep -rq 'KEYOA_SECRET\|KEYS2_SECRET' "$SCH/tmp" "$SCH/state" "$SCH/run" 2>/dev/null && LEAK=$((LEAK + 10))
+    [ -z "$(ls -A "$SCH/tmp")" ] || LEAK=$((LEAK + 100))
+    [ -f "$SCH/log.hdr" ] && SEEN="$SEEN$(scg 'Authorization: Bearer KEYOA_SECRET' "$SCH/log.hdr")$(scg 'x-api-key: KEYS2_SECRET' "$SCH/log.hdr")."
+  done
+done
+sch_codes; sc search q --source openalex; U1="$(scg '-A orca-roles-scholar -o' "$SCH/log"):$([ -f "$SCH/log.hdr" ] && echo hdr || echo nohdr)"
+SCHOLAR_EMAIL=me@x.org sc search q --source openalex; U2="$(scg '-A orca-roles-scholar (mailto:me@x.org) -o' "$SCH/log")"
+OPENALEX_API_KEY=KEYOA_SECRET sc search q --source openalex; U3="$(scg '-H @' "$SCH/log"):$(scg 'KEYOA' "$SCH/log")"
+check "scholar keys: header file only (-H @file), no key in arguments, output or leftovers; user agent with and without an email" "$LEAK:$SEEN:$U1:$U2:$U3" "0:30.10.10.10.11.13.:1:nohdr:1:1:0"
+# show on OpenAlex: fields in order, cleaning, abstract, not found, API error, and every identifier form reaches the same work
+sch_codes; sc show 10.1000/SHOW.1
+EXPS="$(printf 'id: doi:10.1000/show.1\ntitle: A Shown Paper\nyear: 2022\ndate: 2022-05-06\ntype: article\nauthors: Ann One; Bo Two\nvenue: Journal X\npublisher: Pub Y\ndoi: 10.1000/show.1\narxiv: -\ncitations: 5\noa: yes\noa_url: https://x.org/y.pdf\nretracted: no\nabstract: We study cats study and dogs.')"
+V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPS" ] && echo same || cat "$SCH/out"):$(cat "$SCH/err"):$(scu 'https://api.openalex.org/works/doi:10.1000/show.1?select=id,doi,title,publication_year,publication_date,type,authorships,primary_location,cited_by_count,open_access,is_retracted,abstract_inverted_index')"
+sc show 10.1000/retracted; V2="$(cat "$SCH/rc"):$(sed -n '1p;2p;3p;6p;8p;9p;10p;11p;13p;14p;15p' "$SCH/out" | tr '\n' '|')"
+for id in "doi:10.1000/SHOW.1" "DOI:10.1000/SHOW.1" "https://doi.org/10.1000/SHOW.1" "http://doi.org/10.1000/SHOW.1" "10.1000/SHOW.1" "doi: 10.1000/SHOW.1"; do sc show "$id"; V3="${V3:-}$(cat "$SCH/rc")$(scu 'works/doi:10.1000/show.1?')"; done
+sc show "10.1000/a?b#c%d e"; V4="$(scu 'works/doi:10.1000/a%3Fb%23c%25de?select=')"
+sc show doi:10.404/none; V5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+echo 500 > "$FX/code.oa"; sc show 10.1000/x; V6="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
+sc show 10.48550/arXiv.2401.00001; V7="$(cat "$SCH/rc"):$(scu api.openalex.org):$(scu 'export.arxiv.org/api/query?id_list=2401.00001')"
+check "scholar show (OpenAlex): fields and cleaning, abstract, retracted, identifier forms, DOI encoding, 404 -> 2, error -> 3, arXiv DOI never asked to OpenAlex" "$V1|$V2|$V3|$V4|$V5|$V6|$V7" "0:same::1|0:id: openalex:W78|title: -|year: -|authors: -|publisher: -|doi: -|arxiv: -|citations: -|oa_url: -|retracted: yes|abstract: -||010101010101|1|2:scholar.sh: doi:10.404/none not found in OpenAlex:0|3:scholar.sh: OpenAlex failed (HTTP 500):1|0:0:1"
+sch_codes; sc show openalex:W78; W1="$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W78?select='):$(head -1 "$SCH/out"):$(scg '^arxiv: -$' "$SCH/out")"
+sc show OPENALEX:w78; W1="$W1:$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W78?select='):$(head -1 "$SCH/out")"
+sc show openalex:W77; W2="$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W77?select='):$(head -1 "$SCH/out")"
+sc show openalex:W79; W3="$(cat "$SCH/rc"):$(scg '^id: arxiv:2401.00001$' "$SCH/out"):$(scg '^arxiv: 2401.00001$' "$SCH/out"):$(scg '^doi: 10.48550/arxiv.2401.00001$' "$SCH/out"):$(scu export.arxiv.org)"
+sc show OpenAlex:w999; W4="$(cat "$SCH/rc"):$(scu 'works/W999?select='):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+W5=""; for b in "openalex:" "openalex:W" "openalex:Wx1" "openalex:W1x" "openalex:W1 2x"; do sc show "$b"; W5="$W5$(cat "$SCH/rc")$(scn)"; done
+check "scholar show openalex:W<id>: any case of prefix and W, uppercase W in URL, DOI-less work prints openalex:W, a work with a DOI prints its DOI id, arXiv-DOI work fills 'arxiv:', missing -> 2, malformed -> 1" "$W1|$W2|$W3|$W4|$W5" "0:1:id: openalex:W78:1:0:1:id: openalex:W78|0:1:id: doi:10.1000/show.1|0:1:1:1:0|2:1:scholar.sh: OpenAlex:w999 not found in OpenAlex:0|1010101010"
+# redirects and header file mode: calls with a key header do not follow redirects (-L), keyless ones do; the header file is 0600
+sch_codes; OPENALEX_API_KEY=KEYOA_SECRET S2_API_KEY=KEYS2_SECRET sc search q
+R1="$(scn):$(scg ' -L ' "$SCH/log"):$(scu 'export.arxiv.org'):$(scg 'MODE -rw-------$' "$SCH/log.hdr"):$(scg MODE "$SCH/log.hdr")"
+OPENALEX_API_KEY=KEYOA_SECRET sc search q --publisher big --venue zz --source openalex; R2="$(scn):$(scg ' -L ' "$SCH/log")"
+sc search q --publisher big --venue zz --source openalex; R3="$(scn):$(scg ' -L ' "$SCH/log")"
+sch_codes; printf '403\n200\n' > "$FX/code.s2"; S2_API_KEY=KEYS2_SECRET sc search q --source s2; R4="$(scn):$(scg ' -L ' "$SCH/log")"
+sch_codes; echo 302 > "$FX/code.oa"; OPENALEX_API_KEY=KEYOA_SECRET sc search q --source openalex; R5="$(cat "$SCH/rc"):$(tr '\n' '|' < "$SCH/err"):$(scn)"
+check "scholar redirects: key calls are made without -L, keyless ones with it, the key header file is 0600, a 3xx on a key call is a failure" "$R1|$R2|$R3|$R4|$R5" "3:1:1:2:2|3:0|3:3|2:1|3:warning: openalex failed (HTTP 302)|scholar.sh: every source failed|:1"
+# show on arXiv (paced, never OpenAlex), and the pacing across runs
+sch_codes; sc show arxiv:2401.00001v3
+EXPA="$(printf 'id: arxiv:2401.00001\ntitle: Shown arXiv\nyear: 2024\ndate: 2024-02-03\ntype: preprint\nauthors: First Au; Second Au\nvenue: arXiv cs.LG\npublisher: -\ndoi: 10.1000/mixed.case\narxiv: 2401.00001\ncitations: -\noa: yes\noa_url: https://arxiv.org/pdf/2401.00001v2\nretracted: -\nabstract: Sum & text line two.')"
+A1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPA" ] && echo same || cat "$SCH/out"):$(scu 'https://export.arxiv.org/api/query?id_list=2401.00001'):$(scu api.openalex.org)"
+for id in "ARXIV:2401.00001" "https://arxiv.org/abs/2401.00001v2" "arxiv:hep-th/9901001v2" "10.48550/ARXIV.2401.00001"; do sc show "$id"; A2="${A2:-}$(cat "$SCH/rc")$(scu api.openalex.org)$(scu 'id_list=')"; done
+sc show arxiv:9999.99999; A3="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+sc show arxiv:err; A4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+echo 500 > "$FX/code.ax"; sc show arxiv:2401.00001; A5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
+# pacing: the stamp is written after an arXiv call; a run within the delay waits for the rest of it; an old, empty or garbled stamp does not
+rm -f "$SCH/state/orca-roles-scholar-arxiv.last"
+SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P1="$([ -f "$SCH/state/orca-roles-scholar-arxiv.last" ] && echo stamp || echo nostamp)"
+T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P2="$(( $(date +%s) - T0 >= 1 ? 1 : 0 ))"
+for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 1 ? 0 : 1 ))$(cat "$SCH/rc")"; done
+P5="$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -le "$(( $(date +%s) + 1 ))" ] && echo rewritten || echo kept)"
+SCHOLAR_ARXIV_DELAY=2 sc search q --source arxiv; P4="$(scu export.arxiv.org)"
+check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
 }
 
 sec_cli() {
