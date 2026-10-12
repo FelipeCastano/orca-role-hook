@@ -1334,6 +1334,15 @@ try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous 
 printf '%s\n' wz-bad "" "x" 2 9 > "$TMP/nw3.in"; S1="$(snap)"
 try nrw "$TMP/nw3.in"; check "modes wizard: an invalid mode is refused, nothing written" "$RC:$([ "$(snap)" = "$S1" ] && echo unchanged)" "1:unchanged"
 
+# wizard, prompt option 1 (generate): the editor question answered n or y must not stop the wizard
+printf '%s\n' '#!/bin/sh' 'echo opened > "$0.mark"' > "$TMP/fake-editor.sh"; chmod +x "$TMP/fake-editor.sh"; rm -f "$TMP/fake-editor.sh.mark"
+printf '%s\n' wz-gen-n "" "gen n" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission n" "step" "" "lim" "" "rep" "" n n y > "$TMP/nwg.in"
+EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering n to the editor question saves the role, the editor stays closed" "$RC:$(jq -r '.roles["wz-gen-n"] | has("prompt")' "$NRC"):$(grep -c 'mission n' "$PK/roles/pr-reviewer/wz-gen-n.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:true:1:"
+printf '%s\n' wz-gen-d "" "gen d" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission d" "step" "" "lim" "" "rep" "" n "" y > "$TMP/nwg.in"
+EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: the default answer to the editor question saves the role" "$RC:$(grep -c 'mission d' "$PK/roles/pr-reviewer/wz-gen-d.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:"
+printf '%s\n' wz-gen-y "" "gen y" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission y" "step" "" "lim" "" "rep" "" n y y > "$TMP/nwg.in"
+EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering y opens the editor and the wizard still saves the role" "$RC:$(grep -c 'mission y' "$PK/roles/pr-reviewer/wz-gen-y.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:opened"
+
 # phases (academic-writer only): wizard (answers: id, title, description, modes, mode, phase, then the defaults up to the prompt)
 nrw_ph() {  # nrw_ph <id> <modes answer> <mode pick or -> <phase answer or ->
   local a=("$1" "" "phases $1" "$2"); [ "$3" = - ] || a+=("$3"); [ "$4" = - ] || a+=("$4")

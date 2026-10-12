@@ -440,7 +440,7 @@ ask_prompt() {  # ask_prompt <mode> <previous mode, if any>: writes $PROMPT_FILE
       ask_lines REPORT "What its report must include"
       ask_yn "Does it issue an ACCEPTED/REJECTED verdict?" n && VERDICT=1 || VERDICT=0
       write_skeleton "$MISSION" "$RESP" "$LIMITS" "$REPORT" "$VERDICT"
-      ask_yn "Open it in the editor to review it?" n && "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"
+      if ask_yn "Open it in the editor to review it?" n; then "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"; fi
       ;;
     2)
       ask SRCF "File path"; SRCF="${SRCF/#\~/$HOME}"
