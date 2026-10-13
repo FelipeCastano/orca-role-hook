@@ -52,6 +52,8 @@ By default:
 
 They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/programmer/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
 
+This is the programmer team; see [pr-reviewer mode](#pr-reviewer-mode) and [academic-writer mode](#academic-writer-mode) for the other teams.
+
 ### Prompt structure
 
 Every role prompt follows the same pattern, in this order:
@@ -209,7 +211,7 @@ new-role --repo ~/path/orca-role-hook  # saves it in your clone of the repo, to 
 The wizard asks everything it needs and updates the configuration:
 
 - **Identity:** id, tab title and a **description** for the Planner (what it does and when to use it). The Planner receives that description at startup and fits the role into the flow.
-- **Modes:** whether the role belongs to all [modes](#modes) or to one (`1` all, `2` one, then the mode). A mode that does not exist yet can be chosen: the wizard notes that the role will launch once that mode exists.
+- **Modes:** whether the role belongs to all [modes](#modes) or to one (`1` all, `2` one, then the mode). For a role in academic-writer (alone or in all modes) it also asks its phase: experiment, writing or both (the default); the other modes have no phases.
 - **Agent:** `claude`, `codex` or `custom` (with its command), exact model and permission mode. For a `custom` agent it also asks for its `modelError` pattern and its `models` (`list`, `parse`, `probe`); empty answers leave them out.
 - **MCP and tools** (with `claude`): which servers it loads, with the option to define new servers; allowed tools and extra folders.
 - **Other:** extra arguments, environment variables, role parameters, tab position and whether it is enabled.
@@ -222,11 +224,11 @@ Before saving it shows you a summary. It keeps a copy of the previous configurat
 | Local | `~/.orca-roles/roles/<mode>/<id>.md`, one per mode (not deleted when the kit is updated); the `prompt` field maps each mode to its file | `~/.orca-roles/config.json` |
 | `--repo` | `prompts/<mode>/<id>.md` in the clone (the folder is created if missing); no `prompt` field, the default path works | `config.default.json` in the clone; offers to reinstall and reminds you to commit |
 
-Every worker also receives the common rules in `prompts/programmer/common-workers.md`. To edit a role later, change its entry in the configuration and its prompt file, or run `new-role` again with the same id to overwrite it.
+Every worker also receives its mode's common rules (`prompts/<mode>/common-workers.md`). To edit a role later, change its entry in the configuration and its prompt file, or run `new-role` again with the same id to overwrite it.
 
 **Removing a role:** `new-role --remove <id>` removes a role you created (its entry and the prompt it has for every mode, plus the old `roles/<id>.md` of earlier versions; previous configuration in `.bak`). Only those exact kit paths are deleted: a prompt your configuration points to elsewhere is left alone and reported. Overwriting a role (same id) that now has fewer modes deletes the prompts of the modes it lost in your installation; with `--repo` it only lists them with the `git rm` command, since they are versioned files. The ids `planner` and `common-workers` are reserved, and with `--repo` a new role cannot take over an existing `prompts/<mode>/<id>.md`. Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
 
-**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration (including `modelError` and `models`, which are validated: an invalid one stops it with nothing written), plus `after` (position) and `overwrite: true` to replace an existing one. `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
+**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration (including `modelError` and `models`, which are validated: an invalid one stops it with nothing written), plus `after` (position) and `overwrite: true` to replace an existing one, and `phases` (academic-writer only, a non-empty list of `experiment`/`writing`; refused for a role of another mode). `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
 
 ## The Planner's skill
 
@@ -287,7 +289,7 @@ All the configuration lives in `~/.orca-roles/config.json`. It is read every tim
 
 ### Modes
 
-The kit has three fixed modes (not configurable): `programmer`, `pr-reviewer` and `academic-writer`. The mode decides which team a worktree launches and which prompts it reads (`prompts/<mode>/`). Today `programmer` and `pr-reviewer` exist; a mode is available when `prompts/<mode>/planner.md` exists, and asking for another one (`academic-writer`) fails with `mode '<x>' is not available yet`. Without any setting the mode is `programmer` and everything works as before.
+The kit has three fixed modes (not configurable): `programmer`, `pr-reviewer` and `academic-writer`. The mode decides which team a worktree launches and which prompts it reads (`prompts/<mode>/`). All three exist; a mode is available when `prompts/<mode>/planner.md` exists (a mode whose folder lacks it fails with `mode '<x>' is not available yet`). Without any setting the mode is `programmer` and everything works as before.
 
 Choose it, from lowest to highest priority:
 
@@ -299,7 +301,7 @@ The id must be exactly one of the three (no uppercase, spaces, slashes or `..`);
 
 **Open team rule:** the mode of a worktree cannot change while its team is open. If the requested mode differs from the one the worktree was launched with and any tab of the saved team still exists (also one Orca restored after a restart with a new handle), `launch.sh` stops with an error and changes nothing. Close the team first (`close-role.sh` on each worker, or close the tabs) and run `roles` again.
 
-Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]` and the other five workers are `["programmer"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
+Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]`, the `researcher` is `["programmer", "academic-writer"]`, the other four programmer workers are `["programmer"]` and the seven academic-writer roles are `["academic-writer"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
 
 `prompt` is a path (legacy form, it applies to `programmer` only) or an object per mode:
 
@@ -327,6 +329,77 @@ The mode's Planner reads that skill to review pull requests. `settings.prReviewe
 
 **Read-only team.** Nobody edits the worktree, commits or pushes. The Planner never approves, requests changes or merges, and posts to the PR only after you approve that exact text.
 
+#### academic-writer mode
+
+A team that takes a scientific paper from the state of the art to the final text, in your git repository. The paper is always in English, LaTeX and BibTeX.
+
+**Phases.** Two phases, `experiment` (always first) and `writing`; only the roles of the current phase open (the Researcher is open in both, but in writing it only fixes tables and figures). The Planner switches with `~/.orca-roles/bin/phase.sh <experiment|writing>` after your yes: it refuses with uncommitted changes, closes the roles the new phase does not have and opens its own; going back to experiment needs `STATE.md` committed at the repository root (the writing state to resume from). The phase is saved like the worktree's other exceptions (`roles --reset` forgets it and the team starts again in experiment). A role's `phases` (`["experiment"]`, `["writing"]` or both; missing = both) only matters in this mode.
+
+| Tab | Phase | Model | Role |
+|---|---|---|---|
+| **State-of-the-Art** | experiment | Haiku 5.5 | Literature search with `scholar.sh`, one card per paper, references and PDFs. |
+| **Researcher** | experiment, writing (tables and figures only) | Opus 5.5 | `PLAN.md`, reproducible experiments, tables and figures by script; HPC jobs only with your approval of each. In writing it only fixes tables and figures: it changes their scripts and regenerates them from the existing results. |
+| **Methodology** | experiment | Opus 5.5 | Design and statistics review, read-only. |
+| **Tech-Verifier** | experiment | Opus 5.5 | Math and reproducibility review, read-only. |
+| **Writer** | writing | Opus 5.5 | The LaTeX paper, compiled after every change. |
+| **Evidence** | writing | Sonnet 5.5 | Claims, citations and numbers against their sources, read-only. |
+| **Rigor** | writing | Opus 5.5 | Conclusions, notation, figures and tables, read-only. |
+| **Style** | writing | Sonnet 5.5 | Structure and language, read-only. |
+
+Plus the Planner (both phases). There is no Auditor in this mode.
+
+**Starting it.** `roles --mode academic-writer` in a worktree of the paper's repository (git is required: the launch stops otherwise). Each launch creates the folders below where missing and adds the lines that keep large or copyrighted files out of git to `.gitignore`; it never overwrites anything.
+
+**Repository layout.**
+
+```
+STATE.md                         # the writing state to resume from (written when going back to experiment)
+experimentation/
+├── PLAN.md
+├── environment.yml              # or requirements.txt
+├── configs/
+├── data/                        # out of git, README.md tracked
+├── models/                      # out of git, README.md tracked
+├── src/
+├── scripts/                     # run scripts and Slurm jobs
+├── results/                     # results/raw/ out of git
+└── logs/                        # out of git
+article/
+├── main.tex
+├── sections/
+├── refs.bib
+├── Makefile
+├── literature/                  # review.md, manifest.tsv, missing.md, pdfs/ (out of git)
+├── tables/
+├── images/
+├── template/                    # put the venue's .cls/.bst here
+├── build/                       # out of git
+├── supplementary.tex
+├── cover_letter.tex
+└── revision/                    # reviews.md, main_correction.tex, rebuttal_letter.tex
+```
+
+Tables and figures are generated by scripts from `results/`, never by hand.
+
+**Flow.** Experiment: intake → state of the art (the PDFs that are not open access are listed in `article/literature/missing.md` with the exact file name; download them yourself into `article/literature/pdfs/` and the role picks them up with `scholar.sh pdfs`) → plan agreed with you and reviewed by Methodology before anything runs → experiments → review by Methodology and Tech-Verifier. Writing: skeleton on the venue's template → each section drafted by the Writer, reviewed by Evidence and Rigor, then Style (findings on tables and figures go to the Researcher, scripts and regeneration only; one that needs a new or repeated run means going back to experiment, with your yes) → final pass (including `scholar.sh verify`) → response to reviewers (changes marked in blue by hand in `main_correction.tex`, `rebuttal_letter.tex` answering every numbered comment). The Planner makes every commit, each one on your yes; workers never commit. HPC jobs are prepared by the Researcher and submitted only after your yes to that job (by the Researcher or by you, you decide each time). Nothing leaves the repository (push, submission, upload, email) without your yes. Names of people may appear in the paper itself (its text, author list, `refs.bib`, the literature cards), never in commit messages, PRs or Jira.
+
+**scholar.sh.** `~/.orca-roles/bin/scholar.sh` is the team's only way to get references and PDFs (curl, jq and awk; no install).
+
+| Command | What it does |
+|---|---|
+| `search "<query>" [--from] [--to] [--type article\|proceedings\|preprint] [--publisher] [--venue] [--oa] [--sort relevance\|date\|citations] [--limit N] [--source openalex\|arxiv\|s2\|all]` | OpenAlex and arXiv (Semantic Scholar too when `S2_API_KEY` is set), one TAB-separated line per paper; `--publisher` (IEEE, Elsevier, Springer, ACM…) and `--venue` (with aliases such as NeurIPS, ICML, ICLR) are resolved to OpenAlex ids and the choice is printed. |
+| `show <id>` | Metadata, all authors and the abstract. |
+| `bibtex <id> [--add] [--bib <path>]` | The entry only from doi.org (arXiv through its DataCite DOI, which keeps the original year), re-keyed as surname+year+word, title in braces; `--add` appends it to `article/refs.bib` without duplicating a DOI and never touches the existing entries. |
+| `verify [--bib <path>]` | Re-checks each entry's title, first author and year against Crossref or arXiv and flags retractions; one line per entry, exit 4 when any entry has a problem. |
+| `pdf <id>` | The paper must already be in refs.bib (`bibtex <id> --add`); the PDF takes its key. A legal open-access copy (arXiv, Unpaywall, OpenAlex) into `article/literature/pdfs/<key>.pdf`, accepted only if it is a real PDF; otherwise listed in `missing.md`. |
+| `pdfs` | Picks up the PDFs you dropped by hand and updates the manifest. |
+
+Ids: `doi:<doi>` (or a bare DOI / doi.org URL), `arxiv:<id>` (or an arxiv.org/abs URL), `openalex:W<id>`.
+
+**Keys and contact** (environment variables, read only, never written anywhere): `OPENALEX_API_KEY` (free; without it OpenAlex allows only a small number of searches a day), `S2_API_KEY` (optional, Semantic Scholar; without it its relevance search is not usable), `SCHOLAR_EMAIL` (your email: required for Unpaywall, also sent to the APIs in the User-Agent; never sent to the sites PDFs are downloaded from). Keys travel in request headers read from a file, never in URLs or the process list. IEEE and Elsevier papers are found through OpenAlex and Crossref; their full text is not open, so they end up in `missing.md` unless an open copy exists.
+
+**Optional MCP.** For computer-science venues, [mcp-dblp](https://github.com/szeider/mcp-dblp) (MIT) gives DBLP search and DBLP's own BibTeX from a local index (about 1.3 GB on first start, according to its README); the kit does not install it: `claude mcp add mcp-dblp -- uvx mcp-dblp`, then add it to the State-of-the-Art role's `mcp` list if you want that role to use it.
+
 ### Enabling and disabling roles
 
 Change `enabled` in the role. The `planner` is always enabled even if you set `false`. For a single project, use the [per-project configuration](#per-project-configuration).
@@ -346,6 +419,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `description` | What the role does and when to use it. The Planner receives it at startup; essential in roles you create. |
 | `prompt` | The role's instructions file (by default `prompts/<mode>/<role>.md`). A path (programmer only) or `{ "<mode>": "<path>" }`. Accepts `~`. See [Modes](#modes). |
 | `modes` | `"all"` or a list of the modes the role belongs to (default `["programmer"]`). See [Modes](#modes). |
+| `phases` | academic-writer only: the phases the role opens in, `["experiment"]`, `["writing"]` or both (missing = both). The other modes have no phases. See [academic-writer mode](#academic-writer-mode). |
 | `agent` | Which CLI is launched: `claude`, `codex` or `custom`. |
 | `model` | Exact model passed to the agent. |
 | `modelError` | Only with `agent: "custom"`: an ERE (`grep -E`) the agent prints when its model does not exist; `{model}` stands for the escaped model id. Without it, a missing model is not detected for that role. |
@@ -508,6 +582,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `composerAgentWindowSeconds` | How long that extra session is watched for after the worktree is created. |
 | `cleanWorkersAfterStep` | Whether the Planner proposes cleaning the workers' context when closing each step. With `false` it only does it when you ask. |
 | `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-writer`. See [Modes](#modes). |
+| `phase` | academic-writer only: the phase (`experiment` by default or `writing`). Changed by the Planner with `phase.sh`, not by hand. |
 | `language` | The language the Planner replies to you in. `"auto"` (default): the language you write in. Any other value (`"Spanish"`, `"English"`...): always that one. The prompts are in English either way. The workers always write in English (their repo artifacts follow the repo's language): for Claude workers the kit passes `--settings '{"language":"english"}'`, overriding Claude Code's own `language` setting, and every worker also gets the rule in its role anchor (the only channel for Codex and custom agents, whose own language settings are not overridden). A `--settings` in a role's `extraArgs` replaces the kit's one (claude does not merge them), so include `"language":"english"` in it. |
 
 ## Files
@@ -524,6 +599,14 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── checkpoint.sh            # records the tree under refs/orca-roles/checkpoints/ (the Planner's briefs diff rounds against it)
 │   ├── close-role.sh            # closes a role's tab in the current workspace
 │   ├── relaunch-role.sh         # relaunches one role with another model
+│   ├── models.sh                # lists a role's candidate models and tests them
+│   ├── review-skill.sh          # installs and locates the pr-reviewer mode's review skill
+│   ├── phase.sh                 # switches an academic-writer team's phase
+│   ├── academic-scaffold.sh     # creates the paper repository's folders and .gitignore lines
+│   ├── scholar.sh               # scholarly search, BibTeX, verification and open-access PDFs
+│   ├── scholar-arxiv.awk        # scholar.sh parser (arXiv)
+│   ├── scholar-norm.jq          # scholar.sh parser (result normalization)
+│   ├── scholar-bibfix.jq        # scholar.sh parser (BibTeX fixes)
 │   ├── browser-login.sh         # saves your application session for the E2E-Tester
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
 │   ├── lib.sh                   # shared functions
@@ -533,15 +616,17 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 ├── plugin/                      # Claude Code plugin the Planner loads
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
 ├── prompts/
-│   └── programmer/
-│       ├── common-workers.md    # rules common to all workers
+│   ├── programmer/
+│   ├── pr-reviewer/
+│   └── academic-writer/         # each mode's folder holds:
+│       ├── common-workers.md    # rules common to the mode's workers
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── tests/
 │   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
 └── .github/workflows/ci.yml     # shellcheck + smoke on every push to main and every PR
 ```
 
-To change a role's behavior, edit `prompts/programmer/<role>.md` in the repo and run the installer again. Whatever you edit directly in `~/.orca-roles/prompts/` is overwritten on update; your `config.json` and your roles in `~/.orca-roles/roles/` are not.
+To change a role's behavior, edit `prompts/<mode>/<role>.md` in the repo and run the installer again. Whatever you edit directly in `~/.orca-roles/prompts/` is overwritten on update; your `config.json` and your roles in `~/.orca-roles/roles/` are not.
 
 Inside each worktree:
 

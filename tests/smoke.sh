@@ -101,9 +101,17 @@ jq empty "$ROOT/config.default.json"; echo "ok   config.default.json is JSON"
 }
 
 sec_prompts() {
-# Every role in the config has a prompt
-for r in $(jq -r '.roles | to_entries[] | select((.value.modes // ["programmer"]) | . == "all" or index("programmer")) | .key' "$KIT/config.default.json"); do
-  [ -f "$(prompt_of "$KIT/config.default.json" "$r")" ] || { echo "FAIL role $r without a prompt"; FAIL=1; }
+# Every role of the config has a prompt for each of its modes ("all" = every mode named in the config), and each mode has the Planner's and the workers' common prompt
+MODES="$(jq -r '[.roles[].modes | select(type == "array") | .[]] | unique | .[]' "$KIT/config.default.json")"
+for m in $MODES; do
+  for f in planner common-workers; do
+    [ -f "$KIT/prompts/$m/$f.md" ] || { echo "FAIL mode $m without prompts/$m/$f.md"; FAIL=1; }
+  done
+done
+for r in $(jq -r '.roles | keys[]' "$KIT/config.default.json"); do
+  for m in $(jq -r --arg r "$r" --arg all "$MODES" '.roles[$r].modes // ["programmer"] | if . == "all" then ($all | split("\n") | .[]) else .[] end' "$KIT/config.default.json"); do
+    [ -f "$KIT/prompts/$m/$r.md" ] || { echo "FAIL role $r without a prompt for mode $m"; FAIL=1; }
+  done
 done; echo "ok   prompts of the default roles"
 }
 
@@ -225,6 +233,94 @@ rule R14 "$PD/common-workers.md" 'No heartbeats'
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
 rule R15 "$PD/planner.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'
+# academic-writer (A<n> = the rule's number)
+AD="$ROOT/prompts/academic-writer"
+# A1 nothing leaves the repository without the user's yes
+rule A1 "$AD/planner.md" 'Nothing leaves the repository without the user'"'"'s explicit yes'
+rule A1 "$AD/planner.md" 'no HPC job submission' 'Nothing leaves the repository'
+rule A1 "$AD/planner.md" 'Never push or touch a remote without the user'"'"'s yes'
+rule A1 "$AD/common-workers.md" 'Never post or send anything outside the repository'
+rule A1 "$AD/common-workers.md" 'no email' 'Never post or send anything outside the repository'
+# A2 the Planner commits, only on the user's yes to that commit; workers never commit
+rule A2 "$AD/planner.md" 'workers never commit' 'You make every commit'
+rule A2 "$AD/planner.md" 'commit only on a clear yes to that commit' 'You make every commit'
+rule A2 "$AD/planner.md" 'approving a stage is not approving the commit' 'You make every commit'
+rule A2 "$AD/common-workers.md" 'Nobody commits'
+rule A2 "$AD/common-workers.md" 'the Planner commits'
+# A3 no fabrication
+rule A3 "$AD/planner.md" '**No fabrication.**'
+rule A3 "$AD/planner.md" 'No invented data, results, citations, quotes or references' 'No fabrication'
+rule A3 "$AD/common-workers.md" '**No fabrication**'
+rule A3 "$AD/common-workers.md" 'never invent data, results, citations, quotes or references' 'No fabrication'
+# A4 no AI attribution, and the check after every commit
+rule A4 "$AD/planner.md" 'never carry attribution to an AI' 'Commit messages, pull requests and Jira'
+rule A4 "$AD/planner.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
+rule A4 "$AD/planner.md" 'git commit --amend' 'never carry attribution to an AI'
+rule A4 "$AD/common-workers.md" 'carries attribution to an AI'
+rule A4 "$AD/common-workers.md" 'no `Co-Authored-By` trailer' 'carries attribution to an AI'
+# A5 no names of people outside the paper
+rule A5 "$AD/planner.md" 'Names of people:' 'never in commit messages, pull requests, Jira'
+rule A5 "$AD/planner.md" 'never in commit messages, pull requests, Jira' 'Names of people:'
+rule A5 "$AD/planner.md" 'The paper itself is different' 'Names of people:'
+rule A5 "$AD/common-workers.md" 'No names of people in your reports'
+rule A5 "$AD/common-workers.md" 'may name people' 'No names of people in your reports'
+# A6 refs.bib only through scholar.sh bibtex --add (the Writer also needs the user's approval in the task)
+rule A6 "$AD/sota.md" 'article/refs.bib changes only through `scholar.sh bibtex --add`'
+rule A6 "$AD/sota.md" 'never edit article/refs.bib by hand'
+rule A6 "$AD/writer.md" 'article/refs.bib changes only through `scholar.sh bibtex --add`, with the user'"'"'s approval stated in the task'
+rule A6 "$AD/writer.md" 'Never edit article/refs.bib by hand'
+# A7 PDFs only through scholar.sh pdf; no scraping, no getting past logins or bot challenges
+rule A7 "$AD/sota.md" 'never try to get past a login or a bot challenge' 'Never browse or scrape'
+rule A7 "$AD/sota.md" 'never download a PDF in any way other than `scholar.sh pdf`' 'Never browse or scrape'
+rule A7 "$AD/planner.md" 'never scrape publisher sites or try to get past logins or bot challenges'
+# A8 HPC job submission only with the user's approval of that job stated in the task
+rule A8 "$AD/planner.md" 'Never submit without that yes' '^4\. \*\*Experiments'
+rule A8 "$AD/planner.md" 'states that the user approved that specific submission' '^4\. \*\*Experiments'
+rule A8 "$AD/researcher.md" 'only when the task states that the user approved that specific submission'
+rule A8 "$AD/researcher.md" 'do not connect to the cluster' 'HPC: prepare the job'
+rule A8 "$AD/common-workers.md" 'HPC job submission only when the task states that the user approved that specific submission' '^- HPC job submission'
+rule A8 "$AD/common-workers.md" 'only the Researcher submits' '^- HPC job submission'
+rule A8 "$AD/common-workers.md" '(no push, no submission, no upload, no email)' '^- Never post or send'
+rule A8 "$AD/common-workers.md" 'report it in your `worker_done` and let the Planner ask' '^- Never post or send'
+# A9 the five review roles are read-only
+rule A9 "$AD/common-workers.md" 'the review roles (Methodology, Tech-Verifier, Evidence, Rigor, Style) write nothing in the repository'
+for p in methodology tech-verifier evidence rigor style; do
+  rule A9 "$AD/$p.md" 'You write nothing in the repository' '^You '
+  rule A9 "$AD/$p.md" 'Read-only (see the common rules)' '^- Read-only'
+done
+# A10 each worker writes only in its folders
+rule A10 "$AD/common-workers.md" '**Write only where your role says.**'
+rule A10 "$AD/sota.md" 'Write only in article/literature/ and article/refs.bib'
+rule A10 "$AD/researcher.md" 'Write only in experimentation/ and in the generated article/tables/ and article/images/'
+rule A10 "$AD/researcher.md" 'Never write the paper'"'"'s text' '^- Write only in experimentation/'
+rule A10 "$AD/writer.md" 'You write only in article/' '^- You write only'
+rule A10 "$AD/writer.md" 'Never write in article/literature/ (except as the Add a citation task says), article/tables/, article/images/' '^- Never write in'
+rule A10 "$AD/common-workers.md" 'otherwise changes the git state (no `git add`, `restore` or `clean` either)' '^- \*\*Write only'
+rule A10 "$AD/common-workers.md" 'handles (`@user`) and email addresses count as names' '^- No names'
+rule A10 "$AD/researcher.md" 'you change only experimentation/scripts/ and regenerate article/tables/ and article/images/' '^- In the writing phase'
+rule A10 "$AD/researcher.md" 'Never change experimentation/results/, the configs or the code in experimentation/src/' '^Resolve the findings'
+rule A10 "$AD/researcher.md" 'never run experiments in the writing phase' '^Resolve the findings'
+rule A10 "$AD/writer.md" 'Then run `scholar.sh pdf <id>`' 'Only when the task states that the user approved it'
+rule A7 "$AD/common-workers.md" 'Never browse or scrape publisher sites and never try to get past a login or a bot challenge' '^- Never browse'
+rule A7 "$AD/common-workers.md" 'papers are read only through `scholar.sh`' '^- Never browse'
+rule A7 "$AD/common-workers.md" 'Technical documentation (libraries, tools, datasets'"'"' own pages and docs) may be read' '^- Never browse'
+rule A7 "$AD/writer.md" 'Exit 2 means no open-access PDF was found' 'Only when the task states that the user approved it'
+rule A7 "$AD/evidence.md" '`scholar.sh` is `~/.orca-roles/bin/scholar.sh`'
+rule A10 "$AD/planner.md" 'those on tables or figures (Evidence'"'"'s and Rigor'"'"'s) go to a Researcher fix task (scripts and regeneration only), the rest to the Writer' '^2\. \*\*Each section'
+rule A10 "$AD/planner.md" 'a finding that needs a new or repeated run means going back to experiment' '^2\. \*\*Each section'
+rule A11 "$AD/planner.md" 'a table or figure finding that needs a new or repeated run' '^- Going back from writing'
+rule A10 "$AD/sota.md" '`--from` and `--to` take YYYY-MM-DD' '^1\. For each query'
+rule A10 "$AD/planner.md" 'years go in the brief as `--from <year>-01-01 --to <year>-12-31`' '^2\. \*\*State of the art'
+rule A10 "$AD/writer.md" 'article/literature/manifest.tsv (which papers have a PDF)' '^1\. Read experimentation/PLAN.md'
+# A11 phase switch only with the user's yes; back to experiment needs STATE.md committed
+rule A11 "$AD/planner.md" "Only with the user's yes." '^- Only with'
+rule A11 "$AD/planner.md" 'only with the user'"'"'s yes' '^- Going back from writing'
+rule A11 "$AD/planner.md" 'STATE.md at the repository root' '^- Going back from writing'
+rule A11 "$AD/planner.md" 'you commit it with the user'"'"'s yes; then `phase.sh experiment`' '^- Going back from writing'
+# A12 the Writer cites only existing keys and never invents one
+rule A12 "$AD/writer.md" 'only keys that exist in article/refs.bib' '^2\. Cite only'
+rule A12 "$AD/writer.md" '[CITATION NEEDED:' '^5\. Where a claim needs'
+rule A12 "$AD/writer.md" 'never invent a key' '^5\. Where a claim needs'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
