@@ -14,6 +14,7 @@ ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 SETTLE="${ORCA_ROLES_KICK_SETTLE:-2}"
 CHECK_PIDS=""
+trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
 press_enter() { orca terminal send --terminal "$1" --enter --json >/dev/null 2>&1 || orca terminal send --terminal "$1" --text "" --enter --json >/dev/null 2>&1; }
@@ -57,7 +58,7 @@ kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds
 kick() {  # $1 handle, $2 role, $3 message
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-    if screen_of "$1" | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
+    if { screen_of "$1" || true; } | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
       press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
     else break; fi
   done

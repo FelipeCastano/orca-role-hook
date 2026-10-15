@@ -76,7 +76,12 @@ echo
 echo "Installed in $KIT"
 echo "Configuration: $CONF"
 echo "Available: $(jq -r '.roles | keys_unsorted | join(" ")' "$CONF")"
-echo "Enabled:   $(enabled_roles "$CONF" | tr '\n' ' ')"
+if m="$(mode_of "$CONF")"; then
+  label="$m"; [ "$m" != academic-writer ] || label="$m, phase $(phase_of "$CONF")"
+  echo "Enabled ($label): $(enabled_roles "$CONF" | tr '\n' ' ')"
+else
+  echo "Enabled: unknown (invalid settings.mode)"
+fi
 echo "To enable or disable roles, edit \"enabled\" in $CONF."
 "$KIT/bin/apply-hooks.sh"
 echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role' and 'roles-yaml' commands."

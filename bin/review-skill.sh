@@ -86,7 +86,7 @@ case "$CMD" in
     if [ "$ST" = disabled ]; then echo "$STLINE" >&2; echo "the plugin is disabled: enable it with claude plugin enable $PLUGIN (install would re-enable it)" >&2; exit 3; fi
     bounded market claude plugin marketplace add "$MARKET"
     if [ "$TIMED" = 1 ]; then echo "error claude timed out" >&2; exit 1; fi
-    if [ "$RC" != 0 ] && ! cat "$T/market.out" "$T/market.err" | grep -qi 'already exists'; then
+    if [ "$RC" != 0 ] && ! grep -qi 'already exists' "$T/market.out" "$T/market.err"; then
       cat "$T/market.out" "$T/market.err" >&2; [ -s "$T/market.out" ] || [ -s "$T/market.err" ] || echo "claude plugin marketplace add exited $RC" >&2
       exit 1
     fi

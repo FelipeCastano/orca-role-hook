@@ -27,11 +27,12 @@ orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Re
 |---|---|
 | `~/.orca-roles/config.json` | The user's configuration: the everyday one. The kit reads it for every new worktree. |
 | `~/.orca-roles/config.default.json` | The kit's default configuration (do not edit: it is rewritten on update). |
-| `~/.orca-roles/prompts/programmer/<role>.md` | Default prompts (rewritten on update). |
+| `~/.orca-roles/prompts/<mode>/<role>.md` | Default prompts, one folder per mode (`programmer`, `pr-reviewer`, `academic-writer`), with each mode's `common-workers.md` (rewritten on update). |
 | `~/.orca-roles/roles/<mode>/<role>.md` | Prompts of the roles the user created, one per mode (kept on update). |
 | `<repo root>/.orca-roles.json` | Configuration for that project only, merged on top of the global one. |
 | The project's setup script | The `launch.sh` line with its options: the project's exceptions. |
-| The worktree's git dir (`git rev-parse --git-dir`) | `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (saved exceptions), `orca-roles.env` (handles), `orca-roles.notes/<role>.md` (instructions for this worktree), logs `orca-roles-launch.log` and `orca-roles-kickoff.log`. |
+| The worktree's git dir (`git rev-parse --git-dir`) | `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (saved exceptions), `orca-roles.env` (handles), `orca-roles.notes/<role>.md` (instructions for this worktree), `orca-roles.lock` (a directory, present while a launch runs, with the holder's pid in `pid`), `orca-roles.kicked` (the handle each role had when it got its role message), `orca-roles.kickoff.d/` (one file per running kickoff, named by its pid, with the roles it will kick; removed when it ends), `orca-roles.wtid` (the worktree id of the last launch), logs `orca-roles-launch.log` and `orca-roles-kickoff.log`. |
+| `refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>` | The Planner's snapshots of the tree, kept out of every branch. Managed with `~/.orca-roles/bin/checkpoint.sh` (`<step> <n>`, `--list [<step>]`, `--clear <step>`, `--clear-all`). |
 
 ## 1. Installing and updating
 
@@ -64,7 +65,7 @@ Where the hook does not fire (main checkout, existing worktrees, after a restart
 
 ## 3. Everyday configuration (`config.json`)
 
-- `settings`: general behavior (`launchWaitSeconds`, `kickoffTimeoutSeconds`, `jiraHandoff`, `closeComposerAgent`, `cleanWorkersAfterStep`, `mode`, `phase` (academic-writer only, changed with `phase.sh`), `language`: the language you reply to the user in, `"auto"` to use theirs...).
+- `settings`: general behavior (`launchWaitSeconds`, `kickoffTimeoutSeconds`, `jiraHandoff`, `closeComposerAgent`, `composerAgentWindowSeconds`, `cleanWorkersAfterStep`, `mode`, `prReviewer` (pr-reviewer only), `phase` (academic-writer only, changed with `phase.sh`), `language`: the language you reply to the user in, `"auto"` to use theirs...).
 - `defaults`: what each role inherits if it does not define it.
 - `mcpServers`: MCP servers defined once; each role picks which ones with `mcp` (`"all"` = the agent's own).
 - `roles.<id>`: `enabled`, `title`, `description`, `prompt`, `agent` (`claude`, `codex`, `custom`), `model`, `permissionMode`, `mcp`, `allowedTools`, `extraDirs`, `extraArgs`, `env`, `params`, `nice`, `pluginDirs`, `command`, `addDirFlag`, `trust`, `clearCommand`, `modes`, `phases` (academic-writer only). With `custom`, `addDirFlag` (e.g. `"--add-dir"`) passes it the scratch folder and `extraDirs`, and `trust` (`{"file": ..., "jq": ...}`) marks the worktree as trusted in a JSON settings file; the README has the details. The order of the tabs is the order of the roles.
@@ -85,7 +86,8 @@ Options on the `launch.sh` line of the project's setup script (or with `roles` i
 | `--enable a,b` / `--disable a,b` | Enable or disable roles. The planner cannot be disabled. |
 | `--set path=value` | Any key; the value is read as JSON if it is JSON. E.g.: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `roles.tester.params.maxNewTests=5`. |
 | `--mode <mode>` | The team's mode (see Modes below). |
-| `--reset` | Forgets the worktree's saved exceptions. |
+| `--reset` | Forgets the worktree's saved exceptions (only with `roles`). |
+| `--status` | Read-only: shows the mode and, per role, its tab state and model (same as `roles --status`); changes and opens nothing. |
 
 They are saved per worktree and `roles` without options reapplies them; new options are added to the saved ones (the same option replaces its saved value) and `--reset` forgets them first. An unknown role makes the startup fail with the list of valid roles. They only decide which tabs open: disabling an open role does not close its tab.
 
@@ -174,7 +176,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 1. **This workspace**: close its tab as above (`close-role.sh`).
 2. **For good**:
    - A role the user created: `~/.orca-roles/bin/new-role.sh --remove <id>` (removes its entry and its prompt of every mode, leaves `config.json.bak`).
-   - A default role (planner, researcher, dev, tester, auditor, e2e-tester, deployer): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
+   - A default role (planner, researcher, dev, tester, auditor, e2e-tester, deployer, and the academic-writer ones: sota, methodology, tech-verifier, writer, evidence, rigor, style): it cannot be removed, because the next update would bring it back. Set `"enabled": false` in `config.json`, or `--disable <id>` in the project's setup script for one project only. The planner can never be disabled.
 
 ## 8. Diagnosis
 
@@ -190,7 +192,13 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
 | "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |
 | Invalid configuration | `jq . ~/.orca-roles/config.json` and the project's `.orca-roles.json` |
-| A worker did the work but never reported | Check its dispatch (`dispatch-show`: `last_heartbeat_at`). Usually a non-Claude agent that ran `orca orchestration send` as a background task; ask the user to look at its tab |
+| The Planner is not notified when workers finish | An unacknowledged message batch: Orca types no notice while one is open. From the Planner's tab `orca orchestration check --peek --json` shows the unread messages; the Planner reads and acknowledges with `orca orchestration check --ack <delivery_id> --json` until `count` is 0 |
+| A worker did the work but never reported | First look for an unacknowledged batch in the Planner (row above), then at the worker's tab: it may be waiting for input or stuck on a command. Also usually a non-Claude agent that ran `orca orchestration send` as a background task; ask the user to look at its tab |
+| `worker-start` fails with `terminal_handle_stale` | The role's tab changed (Orca restarted or lost the window): run `roles` in a terminal of the worktree; the Planner gets a "Role handles changed" message with the new handles |
+| `roles` says "Orca is not ready (<code>)" | It could not tell whether the saved tabs are open; nothing was closed or opened. Run it again once Orca is ready |
+| `roles` says another roles is still running in this worktree | Another launch holds the lock (it waits up to 60 seconds first): wait, or look at the pid in `orca-roles.lock/pid` in the git dir (a lock whose pid is gone is taken over automatically) |
+| `roles` warns that the folder was launched before under another worktree id | Orca lists the same folder under two worktree ids (`orca-roles.wtid` holds the last), so its tabs may be duplicated; close the extra tabs and launch from one id. The warning does not stop the launch |
+| `roles` says a tab "never got its role message" | Expected after an interrupted launch: that tab gets its role now and is not reopened |
 | A role of the other phase is missing (academic-writer) | Expected: only the current phase's roles open; `roles --status` shows the phase; switch with `~/.orca-roles/bin/phase.sh <phase>` |
 | The review skill is missing (pr-reviewer mode) | `~/.orca-roles/bin/review-skill.sh status`: `installed`, `disabled`, `missing` or `error <reason>`; after the user's yes, `review-skill.sh install` adds the marketplace and installs the plugin (`settings.prReviewer` names them), and `path` prints the skill file |
 | A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
