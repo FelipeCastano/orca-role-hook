@@ -35,6 +35,6 @@ if [ -n "$CLOSE" ]; then
   # shellcheck disable=SC2086
   ORCA_ROLES_PHASE_SWITCH=1 "$KIT/bin/close-role.sh" $CLOSE || { echo "phase.sh: could not close every role of phase $CURRENT; run it again." >&2; exit 1; }
 fi
-"$KIT/bin/launch.sh" --set "settings.phase=$TARGET" || { echo "phase.sh: the roles of phase $CURRENT were closed but opening phase $TARGET failed; run it again." >&2; exit 1; }
+"$KIT/bin/launch.sh" --set "settings.phase=$TARGET" || { echo "phase.sh: the roles of phase $CURRENT were closed but opening phase $TARGET failed (see above); run roles to open them. If roles --status still shows phase $CURRENT, run phase.sh $TARGET again." >&2; exit 1; }
 cat "$STATE"
 echo "Phase: $TARGET."
