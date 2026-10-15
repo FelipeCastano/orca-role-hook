@@ -7,6 +7,7 @@
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
 #   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-writer); beats .orca-roles.json and settings.mode;
 #                    saved, and kept when later options omit it
+#   (academic-writer: the phase, settings.phase, is changed with phase.sh, not by hand)
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
@@ -15,7 +16,7 @@
 # --reset forgets the saved ones first. A different --mode also drops the saved --only/--enable/--disable (role selections belong to a mode).
 # The mode of a worktree cannot change while its team is open: close the team first (close-role.sh, or its tabs).
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,16p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,17p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
@@ -63,7 +64,9 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
     if [ -f "$OVR" ] && apply_overrides "$SCFG" "$OVR" > "$SCFG.x" 2>/dev/null; then mv "$SCFG.x" "$SCFG"; fi
   fi
   CFG="$SCFG"
-  echo "Mode: $(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"
+  SMODE="$(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"
+  echo "Mode: $SMODE"
+  [ "$SMODE" = academic-writer ] && echo "Phase: $(phase_of "$SCFG")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     var="${line%%=*}"; handle="${line#*=}"; role="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
@@ -110,6 +113,9 @@ fi
 ERR="$(check_config "$NEWCFG" "$OVRSRC")"
 [ -z "$ERR" ] || fail "$ERR"
 NEWMODE="$(mode_of "$NEWCFG")"
+if [ "$NEWMODE" = academic-writer ] && ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  fail "ERROR: mode academic-writer needs the project to be a git repository (git init, then run roles again). Nothing was changed."
+fi
 
 FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
@@ -150,6 +156,23 @@ if [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ] && [ -s "$STATE" ]; the
     fail "ERROR: this worktree's team is open in mode '$PREV_MODE' and mode '$NEWMODE' was requested. Close the team first (close-role.sh on each worker, or close its tabs), then run roles again. Nothing was changed."
   done
 fi
+# The phase cannot change under an open team either: a role of the old phase that the new one does not have must be closed first (phase.sh does it).
+if [ "$PREV_MODE" = academic-writer ] && [ "$NEWMODE" = academic-writer ] && [ -s "$STATE" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
+  OLDPHASE="$(phase_of "$CFG")"; NEWPHASE="$(phase_of "$NEWCFG")"
+  [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether this worktree's team (phase '$OLDPHASE') is still open: 'orca terminal list' failed. Phase '$NEWPHASE' was requested; nothing was changed. Try again once Orca is ready."
+  NEWENABLED="$(enabled_roles "$NEWCFG")"
+  for line in $(cat "$STATE"); do
+    OPEN=0
+    [ -n "${line#*=}" ] || continue
+    prole="$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')"
+    [ "$prole" != planner ] || continue
+    printf '%s\n' "$NEWENABLED" | grep -qxF "$prole" && continue
+    role_alive "$prole" "${line#*=}"; [ $? -eq 1 ] || OPEN=1
+    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p")" ] && OPEN=1
+    [ "$OPEN" = 1 ] || continue
+    fail "ERROR: this worktree's team is in phase '$OLDPHASE' and phase '$NEWPHASE' was requested while $(title_of "$CFG" "$prole") is still open. Change the phase with ~/.orca-roles/bin/phase.sh $NEWPHASE. Nothing was changed."
+  done
+fi
 # Everything checked: the new configuration and exceptions become the saved ones
 jq --arg m "$NEWMODE" '.settings.mode = $m' "$NEWCFG" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG"   # the effective mode, explicit for the other scripts
 mv "$NEWCFG" "$CFG"
@@ -159,6 +182,10 @@ if [ -f "$OVR" ]; then
   echo "Exceptions: $(jq -c '{only, enable, disable, mode, set: [.set[] | "\(.path | join(".")): \(.value | tojson)"]} | with_entries(select(.value | length > 0))' "$OVR")"
 fi
 echo "Mode: $NEWMODE"
+if [ "$NEWMODE" = academic-writer ]; then
+  echo "Phase: $(phase_of "$CFG")"
+  "$KIT/bin/academic-scaffold.sh" "$(git rev-parse --show-toplevel)" || echo "Warning: could not create the academic-writer folders."
+fi
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
 # title (Claude Code renames it soon after). kickoff.sh uses this snapshot to recognize and close it.

@@ -76,11 +76,16 @@ mode_of() {
   [ -z "$e" ] || { echo "$e" >&2; return 1; }
   printf '%s\n' "$m"
 }
+# The phase of a configuration (settings.phase, "experiment" if unset): academic-writer only.  phase_of <config>
+phase_of() { jq -r '(.settings // {}) | .phase // "experiment" | tostring' "$1" 2>/dev/null || echo experiment; }
 # Enabled roles of the configuration's mode, in order; the planner always runs. A role without "modes" belongs to programmer only.
+# In academic-writer a role with "phases" also needs the current phase in it; in the other modes "phases" is ignored.
 enabled_roles() {
-  local m; m="$(mode_of "$1")" || return 1
-  jq -r --arg m "$m" '.roles | to_entries[]
-    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then index($m) != null else false end)))
+  local m p; m="$(mode_of "$1")" || return 1
+  p="$(phase_of "$1")"
+  jq -r --arg m "$m" --arg p "$p" '.roles | to_entries[]
+    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then index($m) != null else false end)
+        and ($m != "academic-writer" or (.value | has("phases") | not) or (.value.phases | type == "array" and index($p) != null))))
     | .key' "$1"
 }
 # The enabled roles that can start: a worker whose prompt file for the mode is missing is skipped with a warning.  launchable_roles <config>
@@ -111,12 +116,14 @@ prompt_of() {
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
 LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
+# ["programmer"] was the default of researcher's modes before academic-writer joined it: a user still on it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
   jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
-    | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)' "$1" "$2"
+    | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
+    | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
 #   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}], "mode": "<mode id>"}
@@ -179,6 +186,10 @@ check_config() {
             (map(select(type != "string" or (. as $x | $ms | index($x) | not))) | if length > 0 then "ERROR: role \($r): modes has unknown mode ids (\(map(tostring) | join(", "))); modes: \($ml)" else empty end)
           else "ERROR: role \($r): modes must be \"all\" or a non-empty list of mode ids (modes: \($ml))" end)
       else empty end),
+      (if ($v | has("phases")) then
+        ($v.phases | if type == "array" and length > 0 and all(.[]; . == "experiment" or . == "writing") then empty
+          else "ERROR: role \($r): phases must be a non-empty list of \"experiment\", \"writing\"" end)
+      else empty end),
       (if ($v | has("prompt")) then
         ($v.prompt | if . == null or type == "string" then empty
           elif type == "object" then
@@ -200,6 +211,9 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("prReviewer") then (.prReviewer | select((type != "object") or ([.marketplace, .plugin, .skill] | map(select(type != "string" or . == "")) | length > 0))
       | "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
@@ -295,7 +309,9 @@ planner_msg() {
   extra="$(jq -r --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
     '[.roles | to_entries[] | select(.key != "planner" and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
-  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of "$cfg"). Active roles in this workspace:${active:- none}. Handles:${handles%,}."
+  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of "$cfg")."
+  [ "$(mode_of "$cfg")" = academic-writer ] && msg="$msg Phase: $(phase_of "$cfg")."
+  msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
   [ -n "$params" ] && msg="$msg Configuration parameters: $params."

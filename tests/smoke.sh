@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer aw-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -61,6 +61,7 @@ printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; exit 0; }\nexec /bin/bash "$@"
 pk_setup() {
 PK="$TMP/pk"; PH="$TMP/pkhome"; mkdir -p "$PK" "$PH" "$TMP/pkbin"
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PK/"; chmod +x "$PK"/bin/*.sh
+rm -rf "$PK/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
 ln -sfn "$PK" "$PH/.orca-roles"; PKL="$PH/.orca-roles"
 PKC="$PK/config.default.json"
 }
@@ -100,9 +101,17 @@ jq empty "$ROOT/config.default.json"; echo "ok   config.default.json is JSON"
 }
 
 sec_prompts() {
-# Every role in the config has a prompt
-for r in $(jq -r '.roles | keys_unsorted[]' "$KIT/config.default.json"); do
-  [ -f "$(prompt_of "$KIT/config.default.json" "$r")" ] || { echo "FAIL role $r without a prompt"; FAIL=1; }
+# Every role of the config has a prompt for each of its modes ("all" = every mode named in the config), and each mode has the Planner's and the workers' common prompt
+MODES="$(jq -r '[.roles[].modes | select(type == "array") | .[]] | unique | .[]' "$KIT/config.default.json")"
+for m in $MODES; do
+  for f in planner common-workers; do
+    [ -f "$KIT/prompts/$m/$f.md" ] || { echo "FAIL mode $m without prompts/$m/$f.md"; FAIL=1; }
+  done
+done
+for r in $(jq -r '.roles | keys[]' "$KIT/config.default.json"); do
+  for m in $(jq -r --arg r "$r" --arg all "$MODES" '.roles[$r].modes // ["programmer"] | if . == "all" then ($all | split("\n") | .[]) else .[] end' "$KIT/config.default.json"); do
+    [ -f "$KIT/prompts/$m/$r.md" ] || { echo "FAIL role $r without a prompt for mode $m"; FAIL=1; }
+  done
 done; echo "ok   prompts of the default roles"
 }
 
@@ -224,6 +233,94 @@ rule R14 "$PD/common-workers.md" 'No heartbeats'
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
 rule R15 "$PD/planner.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'
+# academic-writer (A<n> = the rule's number)
+AD="$ROOT/prompts/academic-writer"
+# A1 nothing leaves the repository without the user's yes
+rule A1 "$AD/planner.md" 'Nothing leaves the repository without the user'"'"'s explicit yes'
+rule A1 "$AD/planner.md" 'no HPC job submission' 'Nothing leaves the repository'
+rule A1 "$AD/planner.md" 'Never push or touch a remote without the user'"'"'s yes'
+rule A1 "$AD/common-workers.md" 'Never post or send anything outside the repository'
+rule A1 "$AD/common-workers.md" 'no email' 'Never post or send anything outside the repository'
+# A2 the Planner commits, only on the user's yes to that commit; workers never commit
+rule A2 "$AD/planner.md" 'workers never commit' 'You make every commit'
+rule A2 "$AD/planner.md" 'commit only on a clear yes to that commit' 'You make every commit'
+rule A2 "$AD/planner.md" 'approving a stage is not approving the commit' 'You make every commit'
+rule A2 "$AD/common-workers.md" 'Nobody commits'
+rule A2 "$AD/common-workers.md" 'the Planner commits'
+# A3 no fabrication
+rule A3 "$AD/planner.md" '**No fabrication.**'
+rule A3 "$AD/planner.md" 'No invented data, results, citations, quotes or references' 'No fabrication'
+rule A3 "$AD/common-workers.md" '**No fabrication**'
+rule A3 "$AD/common-workers.md" 'never invent data, results, citations, quotes or references' 'No fabrication'
+# A4 no AI attribution, and the check after every commit
+rule A4 "$AD/planner.md" 'never carry attribution to an AI' 'Commit messages, pull requests and Jira'
+rule A4 "$AD/planner.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
+rule A4 "$AD/planner.md" 'git commit --amend' 'never carry attribution to an AI'
+rule A4 "$AD/common-workers.md" 'carries attribution to an AI'
+rule A4 "$AD/common-workers.md" 'no `Co-Authored-By` trailer' 'carries attribution to an AI'
+# A5 no names of people outside the paper
+rule A5 "$AD/planner.md" 'Names of people:' 'never in commit messages, pull requests, Jira'
+rule A5 "$AD/planner.md" 'never in commit messages, pull requests, Jira' 'Names of people:'
+rule A5 "$AD/planner.md" 'The paper itself is different' 'Names of people:'
+rule A5 "$AD/common-workers.md" 'No names of people in your reports'
+rule A5 "$AD/common-workers.md" 'may name people' 'No names of people in your reports'
+# A6 refs.bib only through scholar.sh bibtex --add (the Writer also needs the user's approval in the task)
+rule A6 "$AD/sota.md" 'article/refs.bib changes only through `scholar.sh bibtex --add`'
+rule A6 "$AD/sota.md" 'never edit article/refs.bib by hand'
+rule A6 "$AD/writer.md" 'article/refs.bib changes only through `scholar.sh bibtex --add`, with the user'"'"'s approval stated in the task'
+rule A6 "$AD/writer.md" 'Never edit article/refs.bib by hand'
+# A7 PDFs only through scholar.sh pdf; no scraping, no getting past logins or bot challenges
+rule A7 "$AD/sota.md" 'never try to get past a login or a bot challenge' 'Never browse or scrape'
+rule A7 "$AD/sota.md" 'never download a PDF in any way other than `scholar.sh pdf`' 'Never browse or scrape'
+rule A7 "$AD/planner.md" 'never scrape publisher sites or try to get past logins or bot challenges'
+# A8 HPC job submission only with the user's approval of that job stated in the task
+rule A8 "$AD/planner.md" 'Never submit without that yes' '^4\. \*\*Experiments'
+rule A8 "$AD/planner.md" 'states that the user approved that specific submission' '^4\. \*\*Experiments'
+rule A8 "$AD/researcher.md" 'only when the task states that the user approved that specific submission'
+rule A8 "$AD/researcher.md" 'do not connect to the cluster' 'HPC: prepare the job'
+rule A8 "$AD/common-workers.md" 'HPC job submission only when the task states that the user approved that specific submission' '^- HPC job submission'
+rule A8 "$AD/common-workers.md" 'only the Researcher submits' '^- HPC job submission'
+rule A8 "$AD/common-workers.md" '(no push, no submission, no upload, no email)' '^- Never post or send'
+rule A8 "$AD/common-workers.md" 'report it in your `worker_done` and let the Planner ask' '^- Never post or send'
+# A9 the five review roles are read-only
+rule A9 "$AD/common-workers.md" 'the review roles (Methodology, Tech-Verifier, Evidence, Rigor, Style) write nothing in the repository'
+for p in methodology tech-verifier evidence rigor style; do
+  rule A9 "$AD/$p.md" 'You write nothing in the repository' '^You '
+  rule A9 "$AD/$p.md" 'Read-only (see the common rules)' '^- Read-only'
+done
+# A10 each worker writes only in its folders
+rule A10 "$AD/common-workers.md" '**Write only where your role says.**'
+rule A10 "$AD/sota.md" 'Write only in article/literature/ and article/refs.bib'
+rule A10 "$AD/researcher.md" 'Write only in experimentation/ and in the generated article/tables/ and article/images/'
+rule A10 "$AD/researcher.md" 'Never write the paper'"'"'s text' '^- Write only in experimentation/'
+rule A10 "$AD/writer.md" 'You write only in article/' '^- You write only'
+rule A10 "$AD/writer.md" 'Never write in article/literature/ (except as the Add a citation task says), article/tables/, article/images/' '^- Never write in'
+rule A10 "$AD/common-workers.md" 'otherwise changes the git state (no `git add`, `restore` or `clean` either)' '^- \*\*Write only'
+rule A10 "$AD/common-workers.md" 'handles (`@user`) and email addresses count as names' '^- No names'
+rule A10 "$AD/researcher.md" 'you change only experimentation/scripts/ and regenerate article/tables/ and article/images/' '^- In the writing phase'
+rule A10 "$AD/researcher.md" 'Never change experimentation/results/, the configs or the code in experimentation/src/' '^Resolve the findings'
+rule A10 "$AD/researcher.md" 'never run experiments in the writing phase' '^Resolve the findings'
+rule A10 "$AD/writer.md" 'Then run `scholar.sh pdf <id>`' 'Only when the task states that the user approved it'
+rule A7 "$AD/common-workers.md" 'Never browse or scrape publisher sites and never try to get past a login or a bot challenge' '^- Never browse'
+rule A7 "$AD/common-workers.md" 'papers are read only through `scholar.sh`' '^- Never browse'
+rule A7 "$AD/common-workers.md" 'Technical documentation (libraries, tools, datasets'"'"' own pages and docs) may be read' '^- Never browse'
+rule A7 "$AD/writer.md" 'Exit 2 means no open-access PDF was found' 'Only when the task states that the user approved it'
+rule A7 "$AD/evidence.md" '`scholar.sh` is `~/.orca-roles/bin/scholar.sh`'
+rule A10 "$AD/planner.md" 'those on tables or figures (Evidence'"'"'s and Rigor'"'"'s) go to a Researcher fix task (scripts and regeneration only), the rest to the Writer' '^2\. \*\*Each section'
+rule A10 "$AD/planner.md" 'a finding that needs a new or repeated run means going back to experiment' '^2\. \*\*Each section'
+rule A11 "$AD/planner.md" 'a table or figure finding that needs a new or repeated run' '^- Going back from writing'
+rule A10 "$AD/sota.md" '`--from` and `--to` take YYYY-MM-DD' '^1\. For each query'
+rule A10 "$AD/planner.md" 'years go in the brief as `--from <year>-01-01 --to <year>-12-31`' '^2\. \*\*State of the art'
+rule A10 "$AD/writer.md" 'article/literature/manifest.tsv (which papers have a PDF)' '^1\. Read experimentation/PLAN.md'
+# A11 phase switch only with the user's yes; back to experiment needs STATE.md committed
+rule A11 "$AD/planner.md" "Only with the user's yes." '^- Only with'
+rule A11 "$AD/planner.md" 'only with the user'"'"'s yes' '^- Going back from writing'
+rule A11 "$AD/planner.md" 'STATE.md at the repository root' '^- Going back from writing'
+rule A11 "$AD/planner.md" 'you commit it with the user'"'"'s yes; then `phase.sh experiment`' '^- Going back from writing'
+# A12 the Writer cites only existing keys and never invents one
+rule A12 "$AD/writer.md" 'only keys that exist in article/refs.bib' '^2\. Cite only'
+rule A12 "$AD/writer.md" '[CITATION NEEDED:' '^5\. Where a claim needs'
+rule A12 "$AD/writer.md" 'never invent a key' '^5\. Where a claim needs'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
@@ -281,7 +378,7 @@ check "without .orca-roles.json returns the global one" "$(merged_config "$TMP" 
 # Update: new keys come in, the user's values and order are kept
 U="$(upgrade_config "$KIT/config.default.json" "$C")"
 check "upgrade: user's order first" "$(echo "$U" | jq -r '.roles | keys_unsorted | .[0:4] | join(" ")')" "planner dev tester extra"
-check "upgrade: new roles at the end" "$(echo "$U" | jq -r '.roles | keys_unsorted | last')" "deployer"
+check "upgrade: new roles at the end" "$(echo "$U" | jq -r '.roles | keys_unsorted | last')" "$(jq -r '.roles | keys_unsorted | last' "$KIT/config.default.json")"
 check "upgrade: user's value kept" "$(echo "$U" | jq -r '.roles.dev.model')" "m-dev"
 check "upgrade: user's enabled kept" "$(echo "$U" | jq -r '.roles.tester.enabled')" "false"
 check "upgrade: new setting added" "$(echo "$U" | jq -r '.settings.kickoffTimeoutSeconds')" "180"
@@ -976,7 +1073,7 @@ for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr
   check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-writer)"
 done
 check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
-check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor") | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-writer") | not)) | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
 check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "planner researcher dev tester auditor e2e-tester deployer "
 
 # roles and prompts per mode (library level)
@@ -1192,17 +1289,45 @@ rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config
 
 # pr-reviewer is available in the shipped kit: the default configuration opens the planner and the auditor only
 PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
+rm -rf "$PRK/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
 ln -sfn "$PRK" "$PRH/.orca-roles"
 jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
 check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
 check "mode_error: academic-writer is still not available" "$(KIT="$PRK" mode_error academic-writer)" "mode 'academic-writer' is not available yet"
-check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor") | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
+check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-writer") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
 PRP="$TMP/prproj"; mkdir -p "$PRP"; git -C "$PRP" init -q; PRG="$PRP/.git"; : > "$MLOG"
 prl() { (cd "$PRP" && HOME="$PRH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PRH/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and AUDITOR only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER AUDITOR "
 check "launch pr-reviewer (default config): the auditor reads the mode's prompts" "$(cd "$PRP" && KIT="$PRK" worker_msg "$PRG/orca-roles.config.json" auditor | grep -o "Read [^ ]*common-workers.md and [^ ]*auditor.md")" "Read $PRK/prompts/pr-reviewer/common-workers.md and $PRK/prompts/pr-reviewer/auditor.md"
 check "launch pr-reviewer (default config): the planner reads the mode's planner.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "planner auditor" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md')" "Read $PRK/prompts/pr-reviewer/planner.md"
 rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
+}
+
+sec_aw_defaults() {
+# academic-writer in the default configuration: roles per phase and model, the programmer and pr-reviewer teams untouched, the researcher migration on upgrade
+D="$ROOT/config.default.json"
+check "aw-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
+check "aw-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style"
+check "aw-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-writer|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-writer|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-writer|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-writer|writing|claude-opus-5-5|true evidence=title,enabled,modes,phases,model|academic-writer|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-writer|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-writer|writing|claude-sonnet-5-5|true "
+check "aw-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-writer"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
+git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
+awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '.roles[$r].model // "-"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
+check "aw-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's" "$(awt "$D")" "$(awt "$TMP/awd-old.json")"
+check "aw-defaults: the programmer team is the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "7:programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
+pk_setup
+mkdir -p "$PK/prompts/academic-writer"; echo "# planner" > "$PK/prompts/academic-writer/planner.md"; echo "# cw" > "$PK/prompts/academic-writer/common-workers.md"
+check "aw-defaults: academic-writer team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-writer" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher sota methodology tech-verifier |planner researcher writer evidence rigor style |"
+rm -rf "$PK/prompts/academic-writer"
+awu() { echo "$1" > "$TMP/awd-user.json"; upgrade_config "$D" "$TMP/awd-user.json"; }
+RM() { jq -c '[.roles.researcher.modes, .roles.researcher.phases]'; }
+check "upgrade_config: researcher modes [programmer] move to the new default, phases added (experiment and writing)" "$(awu '{"roles":{"researcher":{"modes":["programmer"]}}}' | RM)" '[["programmer","academic-writer"],["experiment","writing"]]'
+check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-writer","programmer"]' '"all"' '[]' '["programmer","academic-writer"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-writer","programmer"] "all" [] ["programmer","academic-writer"] '
+check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-writer"],false]:[["programmer","academic-writer"],["experiment","writing"]]'
+check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-writer"],["writing"]]'
+check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style","mine",false,"C"]'
+check "upgrade_config: a user's own values on a new role stay" "$(awu '{"roles":{"writer":{"model":"mine","enabled":false}}}' | jq -c '.roles.writer | [.model, .enabled, .phases, .modes]')" '["mine",false,["writing"],["academic-writer"]]'
+awu '{"roles":{"researcher":{"modes":["programmer"]}}}' > "$TMP/awd-up.json"
+check "upgrade_config: the migrated configuration passes check_config, and its programmer team is the old one" "$(check_config "$TMP/awd-up.json"):$(enabled_roles "$TMP/awd-up.json" | tr '\n' ' ')" ":researcher planner dev tester auditor e2e-tester deployer "
 }
 
 sec_new_role_modes() {
@@ -1296,19 +1421,69 @@ nrw() {  # nrw <answers file>
 printf '%s\n' wz-one "" "wizard one" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" y > "$TMP/nw1.in"
 try nrw "$TMP/nw1.in"; check "modes wizard: one mode" "$RC:$(jq -c '.roles["wz-one"] | [.modes, .prompt]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-one.md" && echo same)" "0:[[\"pr-reviewer\"],{\"pr-reviewer\":\"$PH/.orca-roles/roles/pr-reviewer/wz-one.md\"}]:same"
 check "modes wizard: launched in its mode" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')" "planner rv rv-list fresh wz-one "
-printf '%s\n' wz-all "" "wizard all" 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 4 4 y > "$TMP/nw2.in"
+printf '%s\n' wz-all "" "wizard all" 1 "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 4 4 y > "$TMP/nw2.in"
 try nrw "$TMP/nw2.in"; check "modes wizard: all, the copy option for the 2nd and 3rd" "$RC:$(jq -c '.roles["wz-all"] | [.modes, (.prompt | keys)]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/programmer/wz-all.md" && cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-all.md" && cmp -s "$SRC" "$PK/roles/academic-writer/wz-all.md" && echo same)" '0:["all",["academic-writer","pr-reviewer","programmer"]]:same'
 case "$OUT" in *"4) Copy the prompt of pr-reviewer"*) echo "ok   modes wizard: offers the copy option";; *) echo "FAIL wizard options: $OUT"; FAIL=1;; esac
 case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes wizard: notes the unavailable mode";; *) echo "FAIL wizard note: $OUT"; FAIL=1;; esac
 case "$OUT" in *"programmer: $PH/.orca-roles/roles/programmer/wz-all.md"*"academic-writer: $PH/.orca-roles/roles/academic-writer/wz-all.md"*) echo "ok   modes wizard: the summary lists each mode's file";; *) echo "FAIL wizard summary: $OUT"; FAIL=1;; esac
 SRC2="$TMP/nw-src2.md"; printf '# Role: W2\n\n## Report\ny\n' > "$SRC2"
-printf '%s\n' wz-chain "" "wizard chain" 1 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 2 "$SRC2" 4 y > "$TMP/nw4.in"
+printf '%s\n' wz-chain "" "wizard chain" 1 "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 2 "$SRC2" 4 y > "$TMP/nw4.in"
 try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous mode's prompt, not the first" "$RC:$(cmp -s "$SRC" "$PK/roles/programmer/wz-chain.md" && echo p):$(cmp -s "$SRC2" "$PK/roles/pr-reviewer/wz-chain.md" && echo r):$(cmp -s "$SRC2" "$PK/roles/academic-writer/wz-chain.md" && echo a)" "0:p:r:a"
 printf '%s\n' wz-bad "" "x" 2 9 > "$TMP/nw3.in"; S1="$(snap)"
 try nrw "$TMP/nw3.in"; check "modes wizard: an invalid mode is refused, nothing written" "$RC:$([ "$(snap)" = "$S1" ] && echo unchanged)" "1:unchanged"
 
+# wizard, prompt option 1 (generate): the editor question answered n or y must not stop the wizard
+printf '%s\n' '#!/bin/sh' 'echo opened > "$0.mark"' > "$TMP/fake-editor.sh"; chmod +x "$TMP/fake-editor.sh"; rm -f "$TMP/fake-editor.sh.mark"
+printf '%s\n' wz-gen-n "" "gen n" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission n" "step" "" "lim" "" "rep" "" n n y > "$TMP/nwg.in"
+EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering n to the editor question saves the role, the editor stays closed" "$RC:$(jq -r '.roles["wz-gen-n"] | has("prompt")' "$NRC"):$(grep -c 'mission n' "$PK/roles/pr-reviewer/wz-gen-n.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:true:1:"
+printf '%s\n' wz-gen-d "" "gen d" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission d" "step" "" "lim" "" "rep" "" n "" y > "$TMP/nwg.in"
+EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: the default answer to the editor question saves the role" "$RC:$(grep -c 'mission d' "$PK/roles/pr-reviewer/wz-gen-d.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:"
+printf '%s\n' wz-gen-y "" "gen y" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission y" "step" "" "lim" "" "rep" "" n y y > "$TMP/nwg.in"
+EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering y opens the editor and the wizard still saves the role" "$RC:$(grep -c 'mission y' "$PK/roles/pr-reviewer/wz-gen-y.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:opened"
+
+# phases (academic-writer only): wizard (answers: id, title, description, modes, mode, phase, then the defaults up to the prompt)
+nrw_ph() {  # nrw_ph <id> <modes answer> <mode pick or -> <phase answer or ->
+  local a=("$1" "" "phases $1" "$2"); [ "$3" = - ] || a+=("$3"); [ "$4" = - ] || a+=("$4")
+  local t=(2 "$SRC" y); [ "$2" != 1 ] || t=(2 "$SRC" 4 4 y)
+  printf '%s\n' "${a[@]}" "" "" "" n "" "" "" "" "" "" "" "" "${t[@]}" > "$TMP/nwp.in"; try nrw "$TMP/nwp.in"
+}
+nrw_ph ph-exp 2 3 1; check "phases wizard: academic-writer, 1 = experiment, phases right after modes" "$RC:$(jq -c '.roles["ph-exp"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["ph-exp"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-writer"],["experiment"]]:modes,phases'
+case "$OUT" in *"Phases (academic-writer)"*"1) experiment"*"2) writing"*"3) both"*) echo "ok   phases wizard: the section lists the three options";; *) echo "FAIL phases section: $OUT"; FAIL=1;; esac
+nrw_ph ph-wri 2 3 2; check "phases wizard: 2 = writing" "$RC:$(jq -c '.roles["ph-wri"].phases' "$NRC")" '0:["writing"]'
+nrw_ph ph-both 2 3 3; R3="$RC:$(jq -c '.roles["ph-both"] | has("phases")' "$NRC")"; nrw_ph ph-def 2 3 ""; check "phases wizard: 3 and the default (empty) write no phases field" "$R3:$RC:$(jq -c '.roles["ph-def"] | has("phases")' "$NRC")" "0:false:0:false"
+nrw_ph ph-all 1 - 2; check "phases wizard: modes all asks it too" "$RC:$(jq -c '.roles["ph-all"] | [.modes, .phases]' "$NRC")" '0:["all",["writing"]]'
+nrw_ph ph-prg 2 1 -; check "phases wizard: a programmer role gets no question and no field" "$RC:$(jq -c '.roles["ph-prg"] | has("phases")' "$NRC"):$(printf '%s' "$OUT" | grep -c 'Phases')" "0:false:0"
+S4="$(snap)"; for bad in 4 0 x; do nrw_ph ph-bad 2 3 "$bad"; check "phases wizard: the answer '$bad' is refused, nothing written" "$RC:$([ "$(snap)" = "$S4" ] && echo unchanged)" "1:unchanged"; done
+
+# phases: --from-json
+nr_ph() {  # <id> <modes json fragment> <phases json>
+  printf '%s' '{"id":"'"$1"'","description":"d",'"$2"'"phases":'"$3"',"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"; try nrj "$TMP/nj.json"
+}
+nr_ph pj-aw '"modes":"academic-writer",' '["experiment","writing"]'; check "phases from-json: academic-writer with both phases, right after modes" "$RC:$(jq -c '.roles["pj-aw"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["pj-aw"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-writer"],["experiment","writing"]]:modes,phases'
+nr_ph pj-list '"modes":["academic-writer"],' '["writing"]'; check "phases from-json: a one-element modes list" "$RC:$(jq -c '.roles["pj-list"].phases' "$NRC")" '0:["writing"]'
+printf '%s' '{"id":"pj-all","description":"d","modes":"all","phases":["experiment"],"prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "phases from-json: modes all" "$RC:$(jq -c '.roles["pj-all"].phases' "$NRC")" '0:["experiment"]'
+printf '%s' '{"id":"pj-none","description":"d","modes":"academic-writer","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "phases from-json: no phases, no field" "$RC:$(jq -c '.roles["pj-none"] | has("phases")' "$NRC")" "0:false"
+S5="$(snap)"
+nr_ph_fail() {  # <name> <modes fragment> <phases json>
+  nr_ph pj-bad "$2" "$3"; check "phases from-json rejects $1, nothing written" "$RC:$([ "$(snap)" = "$S5" ] && echo unchanged)" "1:unchanged"
+}
+nr_ph_fail "phases on a programmer role" '"modes":"programmer",' '["experiment"]'
+nr_ph_fail "phases on a role without modes" '' '["writing"]'
+nr_ph_fail "phases on another mode" '"modes":["pr-reviewer"],' '["writing"]'
+nr_ph_fail "phases null on a programmer role" '"modes":"programmer",' 'null'
+nr_ph_fail "an empty list" '"modes":"academic-writer",' '[]'
+nr_ph_fail "a string" '"modes":"academic-writer",' '"experiment"'
+nr_ph_fail "an unknown phase" '"modes":"academic-writer",' '["experiment","review"]'
+nr_ph_fail "a non-string phase" '"modes":"all",' '[1]'
+nr_ph_fail "null on academic-writer" '"modes":"academic-writer",' 'null'
+case "$OUT" in *"Invalid"*|*"phases"*) echo "ok   phases from-json: says why";; *) echo "FAIL phases message: $OUT"; FAIL=1;; esac
+nr_ph pj-bad '"modes":"programmer",' '["writing"]'; case "$OUT" in *"phases is only for mode academic-writer"*) echo "ok   phases from-json: the refusal message";; *) echo "FAIL phases refusal: $OUT"; FAIL=1;; esac
+
 # --repo layout
 NR="$TMP/nrm-repo"; mkdir -p "$NR"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NR/"
+rm -rf "$NR/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
 nrr() { (cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" "$@" 2>&1); }
 nrr_w() { (cd "$TMP" && HOME="$PH" NEW_ROLE_TTY="$1" "$PKL/bin/new-role.sh" --repo "$NR" < /dev/null 2>&1); }
 printf '%s' '{"id":"rp","description":"d","modes":"pr-reviewer","prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
@@ -1353,6 +1528,7 @@ printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":tru
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
 # the git hint quotes a clone path with a space
 NS="$TMP/my clone"; mkdir -p "$NS"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NS/"
+rm -rf "$NS/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
 git -C "$NS" init -q && git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m init
 printf '%s' '{"id":"rp-sp","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NS"; git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m rp-sp
@@ -1926,7 +2102,7 @@ msg_paths() {
   echo "$n:$miss:$flat"
 }
 printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/pkstate.env"
-for r in $(jq -r '.roles | keys_unsorted[]' "$PKC"); do
+for r in $(jq -r '.roles | to_entries[] | select((.value.modes // ["programmer"]) | . == "all" or index("programmer")) | .key' "$PKC"); do
   [ "$r" = planner ] && continue
   M="$(cd "$TMP" && KIT="$PK" worker_msg "$PKC" "$r")"
   check "worker_msg $r: 2 prompt paths, all exist, all in programmer/" "$(msg_paths "$M")" "2:0:0"
@@ -2640,6 +2816,635 @@ check "relaunch: --no-check skips the probe, matches the title in any case" "$RC
 touch "$TMP/r-failcreate"; try rr dev --model good --no-check
 check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
 rm -f "$TMP/r-failcreate"
+}
+
+sec_academic_writer() {
+# academic-writer: phases (roles per phase, validation, planner message), the document scaffold, launch's git and phase guards, phase.sh
+# Own test kit (never the clone) with a fake academic-writer mode.
+pk_setup
+mkdir -p "$PK/prompts/academic-writer"; for f in planner common-workers exp wr both nop; do echo "# $f" > "$PK/prompts/academic-writer/$f.md"; done
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all", "phases": ["writing"] },
+             "exp": { "title": "Exp", "modes": ["academic-writer"], "phases": ["experiment"] },
+             "wr": { "title": "Wr", "modes": ["academic-writer"], "phases": ["writing"] },
+             "both": { "title": "Both", "modes": ["academic-writer"], "phases": ["experiment", "writing"] },
+             "nop": { "title": "Nop", "modes": ["academic-writer"] },
+             "pe": { "title": "Pe", "modes": ["programmer", "pr-reviewer"], "phases": ["writing"] } } }
+J
+AC="$PK/config.json"
+awe() { jq -c --argjson s "$2" '.settings += $s' "$AC" > "$TMP/aw-c.json"; KIT="$PK" enabled_roles "$TMP/aw-c.json" | tr '\n' ' '; }
+
+# library: the phase filter applies only in academic-writer, the planner stays, a missing phase is experiment
+check "phases: phase_of, and enabled_roles by phase (planner kept despite its phases)" "$(jq -c '.settings.mode="academic-writer"' "$AC" > "$TMP/aw-m.json"; KIT="$PK" phase_of "$TMP/aw-m.json"):$(awe x '{"mode":"academic-writer"}'):$(awe x '{"mode":"academic-writer","phase":"experiment"}'):$(awe x '{"mode":"academic-writer","phase":"writing"}')" "experiment:planner exp both nop :planner exp both nop :planner wr both nop "
+check "phases: ignored in programmer and pr-reviewer, even with settings.phase set" "$(awe x '{"mode":"programmer","phase":"experiment"}'):$(awe x '{"mode":"pr-reviewer","phase":"experiment"}'):$(awe x '{"phase":"writing"}')" "planner pe :planner pe :planner pe "
+B="$(for v in '[]' '"writing"' '["x"]' '[1]' '{}' 'null' '["writing","Experiment"]'; do jq -c --argjson v "$v" '.roles.exp.phases=$v' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: role exp: phases must be a non-empty list of "experiment", "writing"'; done | tr '\n' ' ')"
+S="$(for v in '"Writing"' '1' 'null' '""' '[]' '"experiment "'; do jq -c --argjson v "$v" '.settings.phase=$v | .settings.mode="programmer"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: invalid configuration: settings.phase must be "experiment" or "writing"'; done | tr '\n' ' ')"
+check "phases: check_config rejects bad phases and settings.phase (any mode), accepts good ones" "$B:$S:$(KIT="$PK" check_config "$AC"):$(jq -c '.settings.phase="writing"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json")" "1 1 1 1 1 1 1 :1 1 1 1 1 1 ::"
+jq -c '.settings.mode="academic-writer" | .settings.phase="writing"' "$AC" > "$TMP/aw-m.json"
+printf 'PLANNER=h-P\nWR=h-W\nBOTH=h-B\nNOP=h-N\nPE=h-E\n' > "$TMP/aw-st.env"
+M1="$(KIT="$PK" planner_msg "$TMP/aw-m.json" "planner wr both nop" "$TMP/aw-st.env" "" "" 0)"; M2="$(KIT="$PK" planner_msg "$AC" "planner pe" "$TMP/aw-st.env" "" "" 0)"
+check "planner_msg: Phase only in academic-writer, right after the mode" "$(printf '%s' "$M1" | grep -c 'Mode: academic-writer\. Phase: writing\. Active roles'):$(printf '%s' "$M2" | grep -c 'Phase:')" "1:0"
+
+# scaffold: fresh repo, then idempotent
+SC="$PK/bin/academic-scaffold.sh"; SD="$TMP/aw-sc1"; mkdir -p "$SD"; git -C "$SD" init -q
+DIRS="experimentation/configs experimentation/data experimentation/models experimentation/src experimentation/scripts experimentation/results experimentation/results/raw experimentation/logs article/sections article/literature article/literature/pdfs article/tables article/images article/template"
+try "$SC" "$SD"; O1="$OUT"; R1="$RC"
+GIK="$(cd "$SD" && find . -name .gitkeep | sort | tr '\n' ' ')"; H0="$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)"; I0="$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')"
+try "$SC" "$SD"
+check "scaffold: fresh repo gets every folder, .gitkeep only in tracked ones, the ignore lines; second run prints nothing and changes nothing" "$R1:$(cd "$SD" && for d in $DIRS; do [ -d "$d" ] || echo "$d"; done | wc -l | tr -d ' '):$GIK:$(printf '%s\n' "$O1" | grep -c '^Created '):$(printf '%s\n' "$O1" | tail -1):$(sed -n 1p "$SD/.gitignore"):$(wc -l < "$SD/.gitignore" | tr -d ' '):$RC:[$OUT]:$([ "$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)" = "$H0" ] && echo same):$(ls -A "$SD" | tr '\n' ' ')" "0:0:./article/images/.gitkeep ./article/literature/.gitkeep ./article/sections/.gitkeep ./article/tables/.gitkeep ./article/template/.gitkeep ./experimentation/configs/.gitkeep ./experimentation/results/.gitkeep ./experimentation/scripts/.gitkeep ./experimentation/src/.gitkeep :24:Updated .gitignore:# orca-roles academic-writer:20:0:[]:same:.git .gitignore article experimentation "
+GIL="$(sed -n '2,$p' "$SD/.gitignore" | tr '\n' ' ')"
+check "scaffold: ignore lines are exactly the spec's, in order; git index untouched" "$GIL:$([ "$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')" = "$I0" ] && echo same)" 'experimentation/data/* !experimentation/data/README.md experimentation/models/* !experimentation/models/README.md experimentation/logs/ experimentation/results/raw/ article/literature/pdfs/ article/build/ *.aux *.bbl *.blg *.fdb_latexmk *.fls *.out *.synctex.gz *.toc *.lof *.lot article/**/*.log :same'
+
+# scaffold: an existing project is never overwritten
+SE="$TMP/aw-sc2"; mkdir -p "$SE/experimentation/src" "$SE/article/tables"; printf 'print(1)\n' > "$SE/experimentation/src/mine.py"; printf 'node_modules\n*.aux' > "$SE/.gitignore"
+try "$SC" "$SE"; E1="$OUT"
+EXP="$(printf 'node_modules\n*.aux\n\n# orca-roles academic-writer\n'; sed -n '2,$p' "$SD/.gitignore" | grep -vxF '*.aux')"
+check "scaffold: existing folders keep their content and get no .gitkeep; a .gitignore without final newline keeps its lines, gets header and only the missing lines" "$(ls -A "$SE/experimentation/src"):$(ls -A "$SE/article/tables"):$(cat "$SE/experimentation/src/mine.py"):$([ "$(cat "$SE/.gitignore")" = "$EXP" ] && echo exact):$(printf '%s\n' "$E1" | grep -c 'Created experimentation/src$\|Created article/tables$'):$(printf '%s\n' "$E1" | tail -1)" "mine.py::print(1):exact:0:Updated .gitignore"
+printf 'extra\n' >> "$SE/.gitignore"; try "$SC" "$SE"
+SF="$TMP/aw-sc3"; mkdir -p "$SF"; printf '# orca-roles academic-writer\nmy\n' > "$SF/.gitignore"; try "$SC" "$SF"
+check "scaffold: header not duplicated (existing header, rerun), no-arg and non-directory fail with a message and write nothing" "$RC:$(grep -c '^# orca-roles academic-writer$' "$SE/.gitignore"):$(grep -c '^# orca-roles academic-writer$' "$SF/.gitignore"):$(head -2 "$SF/.gitignore" | tr '\n' ' '):$("$SC" >/dev/null 2>&1; echo $?):$("$SC" "$TMP/aw-nonexistent" >/dev/null 2>&1; echo $?):$([ -e "$TMP/aw-nonexistent" ] && echo created)" "0:1:1:# orca-roles academic-writer my :1:1:"
+
+# launch: git is required, the phase guard, the status line
+AM="$TMP/aw-proj"; mkdir -p "$AM" "$TMP/awbin" "$TMP/awnogit"; git -C "$AM" init -q -b main; AG="$AM/.git"
+ALOG="$TMP/aworca.log"; : > "$ALOG"
+cat > "$TMP/awbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$ALOG"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal list") [ -f "$TMP/aw-listfail" ] && exit 1; exit 0;;
+  "terminal show") [ -f "$TMP/aw-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/awbin/orca"; printf '#!/bin/sh\nexit 0\n' > "$TMP/awbin/kickoff"; chmod +x "$TMP/awbin/kickoff"
+al() { (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+ap() { (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/phase.sh" "$@" 2>&1); }
+ah() { cut -d= -f1 "$AG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
+astate() { echo "$(cat "$AG/orca-roles.config.json" "$AG/orca-roles.env" "$AG/orca-roles.overrides.json" 2>/dev/null | cksum)"; }
+acl() { grep -c '^terminal close' "$ALOG" || true; }
+(cd "$TMP/awnogit" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE GIT_CEILING_DIRECTORIES="$TMP" HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" "$PKL/bin/launch.sh" --mode academic-writer > "$TMP/aw-ng.out" 2>&1) && NGRC=0 || NGRC=$?
+check "launch: academic-writer outside a git repository fails with its message, opens and creates nothing" "$NGRC:$(grep -c 'mode academic-writer needs the project to be a git repository' "$TMP/aw-ng.out"):$(grep -c '^terminal create' "$ALOG"):$(find "$TMP/awnogit" -mindepth 1 ! -name orca-roles-launch.log | wc -l | tr -d ' ')" "1:1:0:0"
+try al --mode academic-writer
+SD1="$(ls -A "$AM" | tr '\n' ' ')"
+check "launch: starts in experiment with the experiment roles only, prints Phase, runs the scaffold; --status shows Phase" "$RC:$(ah):$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$SD1:$(jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"):$(al --status | grep -c '^Phase: experiment$')" "0:PLANNER EXP BOTH NOP :1:.git .gitignore article experimentation :unset:1"
+# phase guard
+touch "$TMP/aw-alive"; B="$(astate)"; N="$(grep -c '^terminal create' "$ALOG" || true)"
+try al --set settings.phase=writing; R_A="$RC:$(printf '%s' "$OUT" | grep -c "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Exp is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed." || true):$(astate):$(grep -c '^terminal create' "$ALOG" || true)"
+touch "$TMP/aw-listfail"; try al --set settings.phase=writing; R_B="$RC:$(printf '%s' "$OUT" | grep -c "phase 'experiment'.*Phase 'writing' was requested; nothing was changed" || true):$(astate)"; rm -f "$TMP/aw-listfail"
+check "launch: phase change under an open team of the old phase is refused (also when Orca cannot be listed), nothing changed" "$R_A:$R_B" "1:1:$B:$N:1:1:$B"
+# phase.sh
+try ap; R1="$RC"; try ap a b; R2="$RC"; try ap Writing; R3="$RC"; try ap ""; R4="$RC"
+B="$(astate)"; try ap experiment; R5="$RC:$OUT"
+(cd "$AM" && git -c user.name=t -c user.email=t@e add -A && git -c user.name=t -c user.email=t@e commit -q -m scaffold); touch "$AM/dirty.txt"
+try ap writing; R6="$RC:$(printf '%s' "$OUT" | grep -c 'the repository has uncommitted changes; commit them first' || true):$(astate):$(acl)"; rm -f "$AM/dirty.txt"
+check "phase.sh: bad arguments exit 1, same phase is a no-op, dirty repo refused with nothing closed or changed" "$R1$R2$R3$R4:$R5:$R6" "1111:0:Already in phase experiment.:1:1:$B:0"
+# phase.sh: experiment -> writing -> experiment
+git -C "$AM" status --porcelain | grep -q . && echo "FAIL academic-writer: repo dirty before the switch"
+N="$(grep -c '^terminal create' "$ALOG" || true)"; C0="$(acl)"
+try ap writing
+check "phase.sh writing: closes only the experiment role, opens the writing one, saves the phase, no 'roles would open it again' hint" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(grep -c 'terminal close --terminal h-Exp ' "$ALOG"):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(jq -c '.set' "$AG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'still enabled in the configuration'):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH NOP PLANNER WR :$((C0 + 1)):1:1:writing:[{\"path\":[\"settings\",\"phase\"],\"value\":\"writing\"}]:0:Phase: writing."
+B="$(astate)"; C1="$(acl)"; try ap experiment; R1="$RC:$(printf '%s' "$OUT" | grep -c 'going back to experiment needs STATE.md committed at the repository root' || true)"
+printf 'state\n' > "$AM/STATE.md"; try ap experiment; R2="$RC:$(printf '%s' "$OUT" | grep -c 'uncommitted changes' || true)"
+check "phase.sh experiment: refused without a committed STATE.md (absent, or untracked), nothing closed or changed" "$R1:$R2:$(astate):$(acl)" "1:1:1:1:$B:$C1"
+(cd "$AM" && git -c user.name=t -c user.email=t@e add STATE.md && git -c user.name=t -c user.email=t@e commit -q -m state)
+N="$(grep -c '^terminal create' "$ALOG" || true)"
+try ap experiment
+check "phase.sh experiment with STATE.md committed: closes the writing role, reopens the experiment one, saves the phase" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH EXP NOP PLANNER :$((C1 + 1)):1:experiment:Phase: experiment."
+# a failing close or launch is reported and does not go on
+AP2="$TMP/aw-prog"; mkdir -p "$AP2"; git -C "$AP2" init -q; (cd "$AP2" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" --mode programmer >/dev/null 2>&1)
+try bash -c 'cd "$0" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$1" PATH="$2" "$1/.orca-roles/bin/phase.sh" writing 2>&1' "$AP2" "$PH" "$TMP/awbin:$PATH"
+PR_RC="$RC:$OUT"
+# close-role hint
+(cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" "$PKL/bin/close-role.sh" nop 2>&1) > "$TMP/aw-h1.out"
+(cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
+check "phase.sh refuses outside academic-writer; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-writer (this worktree: programmer):1:1:0"
+rm -rf "$PK/prompts/academic-writer"   # the other sections reuse this kit and expect the mode unavailable
+}
+
+sch_setup() {
+SCH="$TMP/sch"; FX="$SCH/fx"; mkdir -p "$FX" "$SCH/tmp" "$SCH/state" "$SCH/run"
+unset OPENALEX_API_KEY S2_API_KEY SCHOLAR_EMAIL
+cat > "$FX/oa_search.json" <<'J'
+{"results":[
+{"id":"https://openalex.org/W1","doi":"https://doi.org/10.1000/ABC.1","title":"Deep\tLearning\nfor  Tabs","publication_year":2023,"authorships":[{"author":{"display_name":"Alma  Larkin"}}],"primary_location":{"source":{"display_name":"Nature"}},"cited_by_count":42,"open_access":{"is_oa":true}},
+{"id":"https://openalex.org/W2","doi":"https://doi.org/10.48550/arXiv.2401.00001","title":"Arx paper","publication_year":2024,"authorships":[],"primary_location":null,"cited_by_count":0,"open_access":{"is_oa":false}},
+{"id":"https://openalex.org/W3","doi":null,"title":"No doi","publication_year":null,"authorships":[{"author":{"display_name":null}}],"primary_location":{"source":null},"cited_by_count":null,"open_access":{"is_oa":null}},
+{"id":"https://openalex.org/W4","doi":"https://doi.org/10.1000/four","title":"Beyond the limit","publication_year":2020,"authorships":[],"primary_location":null,"cited_by_count":1,"open_access":{"is_oa":false}}]}
+J
+cat > "$FX/pub.json" <<'J'
+{"results":[{"id":"https://openalex.org/P1","display_name":"Small Pub","lineage":["https://openalex.org/P1"],"works_count":5},
+{"id":"https://openalex.org/P2","display_name":"Big Child","lineage":["https://openalex.org/P9","https://openalex.org/P2"],"works_count":100},
+{"id":"https://openalex.org/P3","display_name":"Mid","lineage":["https://openalex.org/P3"],"works_count":50}]}
+J
+cat > "$FX/src.json" <<'J'
+{"results":[{"id":"https://openalex.org/S1","display_name":"Other Conf","works_count":900},
+{"id":"https://openalex.org/S2","display_name":"neural information processing systems","works_count":10},
+{"id":"https://openalex.org/S3","display_name":"NIPS Workshop","works_count":5}]}
+J
+echo '{"results":[]}' > "$FX/empty.json"
+cat > "$FX/s2.json" <<'J'
+{"data":[
+{"paperId":"p1","externalIds":{"DOI":"10.1000/ABC.1"},"title":"Dup of OpenAlex","year":2023,"authors":[{"name":"X"}],"venue":"V","citationCount":1,"isOpenAccess":true},
+{"paperId":"p2","externalIds":{"ArXiv":"2405.00005v2"},"title":"S2 arx","year":2024,"authors":[{"name":"Dan"}],"venue":"","citationCount":7,"isOpenAccess":true},
+{"paperId":"p3","externalIds":{},"title":"Only\ts2","year":2020,"authors":[],"venue":"ICML","citationCount":0,"isOpenAccess":false},
+{"paperId":"p4","externalIds":{"DOI":"10.48550/arXiv.2406.00006"},"title":"Cut by limit","year":2024,"authors":[],"venue":null,"citationCount":0,"isOpenAccess":true}]}
+J
+cat > "$FX/show1.json" <<'J'
+{"id":"https://openalex.org/W77","doi":"https://doi.org/10.1000/SHOW.1","title":"A  Shown\nPaper","publication_year":2022,"publication_date":"2022-05-06","type":"article",
+"authorships":[{"author":{"display_name":"Ann One"}},{"author":{"display_name":"Bo Two"}}],"primary_location":{"source":{"display_name":"Journal X","host_organization_name":"Pub Y"}},
+"cited_by_count":5,"open_access":{"is_oa":true,"oa_url":"https://x.org/y.pdf"},"is_retracted":false,
+"abstract_inverted_index":{"Abstract":[0],"We":[1],"study":[2,4],"cats":[3],"and":[5],"dogs.":[6]}}
+J
+cat > "$FX/show3.json" <<'J'
+{"id":"https://openalex.org/W79","doi":"https://doi.org/10.48550/arXiv.2401.00001","title":"Arx via OpenAlex","publication_year":2024,"publication_date":"2024-01-02","type":"preprint","authorships":[],"primary_location":null,"cited_by_count":2,"open_access":{"is_oa":true,"oa_url":null},"is_retracted":false,"abstract_inverted_index":null}
+J
+cat > "$FX/show2.json" <<'J'
+{"id":"https://openalex.org/W78","doi":null,"title":null,"publication_year":null,"publication_date":null,"type":null,"authorships":[],"primary_location":null,"cited_by_count":null,"open_access":{"is_oa":false,"oa_url":null},"is_retracted":true,"abstract_inverted_index":null}
+J
+sch_entry() { # id version title cat doi authors...
+  local id="$1" v="$2" t="$3" cat="$4" doi="$5"; shift 5
+  printf '<entry>\n <id>http://arxiv.org/abs/%sv%s</id>\n <updated>2024-02-04T10:00:00Z</updated>\n <published>2024-02-03T10:00:00Z</published>\n <title>%s</title>\n <summary>  Sum &amp; text\n line two. </summary>\n' "$id" "$v" "$t"
+  for a in "$@"; do printf ' <author>\n  <name>%s</name>\n </author>\n' "$a"; done
+  [ -n "$doi" ] && printf ' <arxiv:doi xmlns:arxiv="http://arxiv.org/schemas/atom">%s</arxiv:doi>\n' "$doi"
+  printf ' <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="%s" scheme="http://arxiv.org/schemas/atom"/>\n</entry>\n' "$cat"
+}
+sch_feed() { printf '<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">\n <id>x</id>\n'; cat; printf '</feed>\n'; }
+{ sch_entry 2401.00001 2 "Arx paper" cs.LG "" "Zed"; sch_entry 2402.00002 1 "Title &amp;
+   more" cs.CL "" "Bob Smith" "Carol"; sch_entry hep-th/9901001 1 "Old style" hep-th "" "Old Author"; sch_entry 2403.00003 1 "Cut by limit" cs.AI "" "Q"; } | sch_feed > "$FX/ax_search.xml"
+sch_entry 2401.00001 2 "Shown arXiv" cs.LG "10.1000/Mixed.Case" "First Au" "Second Au" | sch_feed > "$FX/ax_show.xml"
+sch_feed < /dev/null > "$FX/ax_empty.xml"
+printf '<entry>\n <id>http://arxiv.org/api/errors#incorrect_id_format</id>\n <summary>bad id</summary>\n</entry>\n' | sch_feed > "$FX/ax_err.xml"
+cat > "$SCH/stublib.sh" <<'S'
+# stub_args "$@": sets out, df and url; logs the contents and mode of every -H @file (User-Agent files to $SCH_LOG.ua, the others to $SCH_LOG.hdr),
+# and what the pacing stamp and its lock look like at the time of the call (to $SCH_LOG.stamp)
+stub_args() {
+  out=""; df=""; local i=1 a j f lf
+  while [ $i -le $# ]; do
+    a="${!i}"
+    case "$a" in
+      -o) j=$((i+1)); out="${!j}";;
+      -D) j=$((i+1)); df="${!j}";;
+      -H) j=$((i+1)); case "${!j}" in @*) f="${!j#@}"; if head -1 "$f" | grep -q '^User-Agent:'; then lf="$SCH_LOG.ua"; else lf="$SCH_LOG.hdr"; fi
+          { echo "${@: -1}"; cat "$f"; echo "MODE $(ls -l "$f" | cut -c1-10)"; } >> "$lf";; esac;;
+    esac
+    i=$((i+1))
+  done
+  url="${@: -1}"
+  if [ -n "${SCHOLAR_STATE_DIR:-}" ]; then
+    echo "stamp=$(cat "$SCHOLAR_STATE_DIR/orca-roles-scholar-arxiv.last" 2>/dev/null) lock=$([ -d "$SCHOLAR_STATE_DIR/orca-roles-scholar-arxiv.last.lock" ] && echo held || echo free)" >> "$SCH_LOG.stamp"
+  fi
+}
+# stub_dump <status>: writes the -D file, one block per hop from $SCH_FX/ctype (one header line per hop, '-' for none; the last hop is the answer)
+stub_dump() {
+  [ -n "$df" ] || return 0
+  : > "$df"
+  local vals n k=0 v
+  if [ -f "$SCH_FX/ctype" ]; then vals="$(cat "$SCH_FX/ctype")"; else vals="Content-Type: application/x-bibtex"; fi
+  n="$(printf '%s\n' "$vals" | wc -l)"
+  while IFS= read -r v; do
+    k=$((k + 1))
+    if [ "$k" -lt "$n" ]; then printf 'HTTP/1.1 302 Found\r\n' >> "$df"; else printf 'HTTP/2 %s\r\n' "$1" >> "$df"; fi
+    [ "$v" = - ] || printf '%s\r\n' "$v" >> "$df"
+    printf '\r\n' >> "$df"
+  done <<EOT
+$vals
+EOT
+}
+S
+cat > "$SCH/curl" <<'S'
+#!/bin/bash
+. "$SCH_FX/../stublib.sh"; stub_args "$@"
+echo "$*" >> "$SCH_LOG"
+case "$url" in
+  *api.openalex.org/works/*) kind=oa; case "$url" in *doi:10.404*|*/W999*) body=404;; *doi:10.1000/retracted*|*/W78\?*) body=show2.json;; */W79\?*) body=show3.json;; *) body=show1.json;; esac;;
+  *api.openalex.org/works?*) kind=oa; body=oa_search.json;;
+  *api.openalex.org/publishers?*) kind=oa; case "$url" in *search=nomatch*) body=empty.json;; *) body=pub.json;; esac;;
+  *api.openalex.org/sources?*) kind=oa; case "$url" in *search=zzz*) body=empty.json;; *) body=src.json;; esac;;
+  *export.arxiv.org*) kind=ax; case "$url" in *id_list=9999*) body=ax_empty.xml;; *id_list=err*) body=ax_err.xml;; *id_list=*) body=ax_show.xml;; *) body=ax_search.xml;; esac;;
+  *api.semanticscholar.org*) kind=s2; body=s2.json;;
+  *) kind=x; body=empty.json;;
+esac
+cf="$SCH_FX/code.$kind"; code=200
+if [ -f "$cf" ]; then code="$(head -1 "$cf")"; [ "$(wc -l < "$cf")" -gt 1 ] && tail -n +2 "$cf" > "$cf.n" && mv "$cf.n" "$cf"; fi
+[ "$code" = FAIL ] && exit 7
+if [ "$code" != 200 ]; then echo "oops $code" > "$out"
+elif [ "$body" = 404 ]; then echo "<html>404</html>" > "$out"; code=404
+else cp "$SCH_FX/$body" "$out"; fi
+printf '%s' "$code"
+S
+chmod +x "$SCH/curl"
+sc() { # runs scholar.sh with the stub; stdout $SCH/out, stderr $SCH/err, rc $SCH/rc, calls $SCH/log
+  : > "$SCH/log"; rm -f "$SCH/log.hdr" "$SCH/log.ua" "$SCH/log.stamp"
+  (cd "$SCH/run" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY="${SCHOLAR_ARXIV_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true
+}
+scn() { grep -c . "$SCH/log" || true; }
+scg() { grep -c -- "$1" "$2" || true; }   # lines of a file with the fragment (0 is not a failure)
+scu() { grep -cF -- "$1" "$SCH/log" || true; }   # calls whose line has the fragment
+sch_codes() { rm -f "$FX"/code.* "$FX/ctype"; }
+}
+
+sec_scholar() {
+sch_setup
+# search, all sources without a key: rows, cleaning, ids, limit, cross-source dedupe, one call per source
+sch_codes; sc search "graph neural" --limit 3
+EXP="$(printf 'source\tid\tyear\tfirst_author\tvenue\tcitations\toa\ttitle\nopenalex\tdoi:10.1000/abc.1\t2023\tAlma Larkin\tNature\t42\tyes\tDeep Learning for Tabs\nopenalex\tarxiv:2401.00001\t2024\t-\t-\t0\tno\tArx paper\nopenalex\topenalex:W3\t-\t-\t-\t-\tno\tNo doi\narxiv\tarxiv:2402.00002\t2024\tBob Smith\tarXiv cs.CL\t-\tyes\tTitle & more\narxiv\tarxiv:hep-th/9901001\t2024\tOld Author\tarXiv hep-th\t-\tyes\tOld style')"
+check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:graph+AND+all:neural&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
+# filters per source
+sch_codes
+sc search "rag models" --from 2023-01-01 --to 2024-12-31 --type proceedings --oa --sort citations --limit 05 --source openalex
+R1="$(cat "$SCH/rc"):$(scu 'filter=from_publication_date:2023-01-01,to_publication_date:2024-12-31,type:conference-paper,is_oa:true&sort=cited_by_count:desc&per_page=5&select='):$(scn)"
+sc search "x y" --type article --source openalex; R2="$(scu 'filter=type:article&sort='):$(scu 'filter=type:preprint')"
+sc search "x" --type preprint --source openalex; R2="$R2:$(scu 'filter=type:preprint&sort=')"
+sc search "graph neural" --from 2023-01-01 --source arxiv --sort date --limit 4; R3="$(scu 'search_query=all:graph+AND+all:neural+AND+submittedDate:%5B202301010000+TO+209912312359%5D&start=0&max_results=4&sortBy=submittedDate&sortOrder=descending')"
+sc search "graph" --to 2024-12-31 --source arxiv --sort citations; R3="$R3:$(scu 'submittedDate:%5B199101010000+TO+202412312359%5D&start=0&max_results=10&sortBy=relevance&'):$(cat "$SCH/err")"
+sc search "big" --publisher big --venue NeurIPS --source openalex
+R4="$(cat "$SCH/rc"):$(scu 'publishers?search=big&per_page=25&select=id,display_name,lineage,works_count'):$(scu 'sources?search=Neural%20Information%20Processing%20Systems&per_page=10&select=id,display_name,works_count'):$(scu 'filter=primary_location.source.publisher_lineage:P2,primary_location.source.id:S2&sort='):$(cat "$SCH/err" | tr '\n' '|')"
+sc search "q" --publisher nomatch --source openalex; R5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu 'api.openalex.org/works?')"
+sc search "q" --venue "zzz" --source openalex; R5="$R5:$(cat "$SCH/rc"):$(cat "$SCH/err")"
+check "scholar search filters: OpenAlex filters/sort/per_page, arXiv dates and sort, notes" "$R1:$R2:$R3:$R4:$R5" "0:1:1:1:0:1:1:1:note: arxiv has no citation counts; sorted by relevance:0:1:1:1:note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|note: venue 'NeurIPS' -> neural information processing systems (S2)|note: other candidates: Other Conf (S1), NIPS Workshop (S3)|:1:scholar.sh: no OpenAlex publisher matches 'nomatch':0:1:scholar.sh: no OpenAlex venue matches 'zzz'"
+
+# option validation: every bad call is a usage error (exit 1) and never reaches the network
+sch_codes; BAD=""
+for a in "search" "search   " "search q --from 2024-1-1" "search q --to 24-01-01" "search q --type book" "search q --sort best" "search q --source crossref" "search q --limit 0" "search q --limit 101" "search q --limit abc" "search q --limit -1" "search q --limit 1.5" "search q --limit" "search q --limit ''" "search q --oa --oa" "search q --limit 2 --limit 3" "search q --bogus" "search q q2" "search q --" "search q --venue" "show" "show a b" "show foo" "show arxiv:" "show doi:10.1" "show 10.1000/" "show openalex:Wabc" "show https://example.org/10.1000/x" "frobnicate"; do
+  eval "sc $a"; [ "$(cat "$SCH/rc")" = 1 ] && [ "$(scn)" = 0 ] && [ ! -s "$SCH/out" ] || BAD="$BAD [$a rc=$(cat "$SCH/rc") calls=$(scn)]"
+done
+sc search q --limit 007; L1="$(cat "$SCH/rc"):$(scu 'per_page=7&')"
+sc -h; H1="$(cat "$SCH/rc"):$(grep -c 'scholar.sh search' "$SCH/out")"; sc; H2="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' ')"
+check "scholar usage errors: exit 1, no call, empty stdout; --limit 007 ok; -h exit 0; no arguments exit 1" "$BAD:$L1:$H1:$H2" ":0:1:0:1:1:0"
+# skipped and refused sources
+sch_codes
+sc search q --type article; N1="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu export.arxiv.org)"
+sc search q --publisher big; N2="$(cat "$SCH/rc"):$(cat "$SCH/err" | tr '\n' '|'):$(scu export.arxiv.org)"
+sc search q --source arxiv --venue V; N3="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"
+sc search q --source arxiv --type proceedings; N3="$N3:$(cat "$SCH/rc"):$(cat "$SCH/err")"
+S2_API_KEY=k sc search q --type preprint; N4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu semanticscholar)"
+S2_API_KEY=k sc search q --publisher big; N5="$(cat "$SCH/rc"):$(scu semanticscholar):$(scu export.arxiv.org)"
+sc search q --source s2 --type preprint; N6="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"
+S2_API_KEY=k sc search q; N7="$(scu semanticscholar):$(scu export.arxiv.org):$(scu 'api.openalex.org/works?')"
+check "scholar search: unsupported options skip a source under all, refuse it when explicit; s2 only with a key" "$N1|$N2|$N3|$N4|$N5|$N6|$N7" "0:note: arxiv skipped: arXiv only has preprints:0|0:note: arxiv skipped: arXiv has no publisher/venue filter|note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|:0|1:scholar.sh: --source arxiv: arXiv has no publisher/venue filter:0:1:scholar.sh: --source arxiv: arXiv only has preprints|0:note: s2 skipped: Semantic Scholar has no preprint type:0|0:0:0|1:scholar.sh: --source s2: Semantic Scholar has no preprint type:0|1:1:1"
+# Semantic Scholar: rows (id routing, limit, dedupe against OpenAlex), keyed relevance vs keyless bulk URLs
+sch_codes
+sc search "a-b c" --source s2 --limit 3
+K1="$(cat "$SCH/rc"):$(cat "$SCH/out" | tr '\t' '~' | tr '\n' '|'):$(cat "$SCH/err"):$(scu 'search/bulk?query=a-b%20c&fields=title,year,externalIds,authors,venue,citationCount,isOpenAccess&sort=citationCount:desc')"
+S2_API_KEY=k sc search "a-b c" --source s2 --from 2020-01-01 --type article --oa --venue "Nat Lang"
+K2="$(scu 'paper/search?query=a%20b%20c&limit=10&fields=title,year,externalIds,authors,venue,citationCount,isOpenAccess'):$(scu 'publicationDateOrYear=2020-01-01:'):$(scu 'publicationTypes=JournalArticle'):$(scu '&openAccessPdf'):$(scu '&venue=Nat%20Lang'):$(scu search/bulk)"
+sc search "q" --source s2 --sort date --to 2021-05-05 --type proceedings; K3="$(scu 'search/bulk?query=q&'):$(scu 'sort=publicationDate:desc'):$(scu 'publicationDateOrYear=:2021-05-05'):$(scu 'publicationTypes=Conference'):$(cat "$SCH/err")"
+S2_API_KEY=k sc search "q" --source s2 --sort citations; K4="$(scu 'search/bulk'):$(scu 'sort=citationCount:desc'):$(scu 'paper/search?')"
+S2_API_KEY=k sc search "graph neural" --limit 3; K5="$(cut -f1,2 "$SCH/out" | tr '\t' '~' | tr '\n' '|')"
+check "scholar s2: id routing, limit, dedupe, keyless bulk note, filters, keyed relevance endpoint, order openalex/arxiv/s2" "$K1|$K2|$K3|$K4|$K5" "0:source~id~year~first_author~venue~citations~oa~title|s2~doi:10.1000/abc.1~2023~X~V~1~yes~Dup of OpenAlex|s2~arxiv:2405.00005~2024~Dan~-~7~yes~S2 arx|s2~s2:p3~2020~-~ICML~0~no~Only s2|:note: Semantic Scholar without S2_API_KEY has no relevance ranking; sorted by citations:1|1:1:1:1:1:0|1:1:1:1:|1:1:0|source~id|openalex~doi:10.1000/abc.1|openalex~arxiv:2401.00001|openalex~openalex:W3|arxiv~arxiv:2402.00002|arxiv~arxiv:hep-th/9901001|s2~arxiv:2405.00005|s2~s2:p3|"
+# failing sources: partial success keeps the rest, total failure exits 3 and prints nothing, 429 retried for OpenAlex/S2 only
+sch_codes
+echo 500 > "$FX/code.oa"; sc search q --limit 2; F1="$(cat "$SCH/rc"):$(cut -f1 "$SCH/out" | sort -u | tr '\n' ,):$(cat "$SCH/err")"
+echo 500 > "$FX/code.oa"; echo 503 > "$FX/code.ax"; sc search q; F2="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo FAIL > "$FX/code.oa"; sc search q --source openalex; F3="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo 200 > "$FX/code.oa"; echo 200 > "$FX/code.ax"; printf 'x\n' > /dev/null
+cp "$FX/ax_err.xml" "$FX/ax_search.keep"; cp "$FX/ax_search.xml" "$FX/ax_search.good"; cp "$FX/ax_err.xml" "$FX/ax_search.xml"; sc search q --source arxiv; F4="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|')"; cp "$FX/ax_search.good" "$FX/ax_search.xml"
+sch_codes; printf '429\n429\n200\n' > "$FX/code.oa"; sc search q --source openalex --limit 1; F5="$(cat "$SCH/rc"):$(scn):$(grep -c '^openalex' "$SCH/out")"
+sch_codes; printf '429\n429\n429\n200\n' > "$FX/code.oa"; sc search q --source openalex; F6="$(cat "$SCH/rc"):$(scn):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo 429 > "$FX/code.ax"; sc search q --source arxiv; F7="$(cat "$SCH/rc"):$(scn):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; echo 429 > "$FX/code.s2"; sc search q --source s2; F8="$(cat "$SCH/rc"):$(scn):$(cat "$SCH/err" | tr '\n' '|')"
+sch_codes; printf '403\n200\n' > "$FX/code.s2"; S2_API_KEY=k sc search q --source s2 --limit 2; F9="$(cat "$SCH/rc"):$(scn):$(grep -c '^s2' "$SCH/out"):$(grep -c 'x-api-key' "$SCH/log.hdr"):$(cat "$SCH/err" | tr '\n' '|')"
+check "scholar failures: partial success keeps the rest, total failure exits 3 with empty stdout, retries only for OpenAlex/S2" "$F1|$F2|$F3|$F4|$F5|$F6|$F7|$F8|$F9" "0:arxiv,source,:warning: openalex failed (HTTP 500)|3:0:warning: openalex failed (HTTP 500)|warning: arxiv failed (HTTP 503)|scholar.sh: every source failed||3:0:warning: openalex failed (HTTP 000)|scholar.sh: every source failed||3:0:warning: arxiv returned an error: bad id|scholar.sh: every source failed||0:3:1|3:3:warning: openalex failed (HTTP 429)|scholar.sh: every source failed||3:1:warning: arxiv failed (HTTP 429)|scholar.sh: every source failed||3:3:note: Semantic Scholar without S2_API_KEY has no relevance ranking; sorted by citations|warning: s2 failed (HTTP 429)|scholar.sh: every source failed||0:2:2:1:warning: S2_API_KEY was rejected; retried without it|"
+# keys: only in a header file read by curl (-H @file), never in an argument, a URL, stdout, stderr or a file left behind; the temp dir is removed
+sch_codes; LEAK=0; SEEN=""
+for a in "search q --publisher big --venue zz" "show 10.1000/x.1" "show arxiv:2401.00001" "search q --sort date"; do
+  for fail in 0 1; do
+    sch_codes; [ "$fail" = 1 ] && { echo 500 > "$FX/code.oa"; echo 429 > "$FX/code.s2"; }
+    OPENALEX_API_KEY=KEYOA_SECRET S2_API_KEY=KEYS2_SECRET SCHOLAR_EMAIL=me@x.org sc $a
+    cat "$SCH/out" "$SCH/err" "$SCH/log" > "$SCH/all"
+    grep -q 'KEYOA_SECRET\|KEYS2_SECRET' "$SCH/all" && LEAK=$((LEAK + 1))
+    grep -q 'me@x.org' "$SCH/log" && LEAK=$((LEAK + 1000))
+    grep -rq 'KEYOA_SECRET\|KEYS2_SECRET' "$SCH/tmp" "$SCH/state" "$SCH/run" 2>/dev/null && LEAK=$((LEAK + 10))
+    [ -z "$(ls -A "$SCH/tmp")" ] || LEAK=$((LEAK + 100))
+    [ -f "$SCH/log.hdr" ] && SEEN="$SEEN$(scg 'Authorization: Bearer KEYOA_SECRET' "$SCH/log.hdr")$(scg 'x-api-key: KEYS2_SECRET' "$SCH/log.hdr")."
+  done
+done
+sch_codes; sc search q --source openalex; U1="$(scg ' -A ' "$SCH/log")$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$([ -f "$SCH/log.hdr" ] && echo hdr || echo nohdr)"
+SCHOLAR_EMAIL=me@x.org sc search q --source openalex; U2="$(scg ' -A ' "$SCH/log")$(scg 'User-Agent: orca-roles-scholar (mailto:me@x.org)$' "$SCH/log.ua")$(scg 'MODE -rw-------$' "$SCH/log.ua")$(scg 'me@x.org' "$SCH/log")"
+OPENALEX_API_KEY=KEYOA_SECRET sc search q --source openalex; U3="$(scg '-H @' "$SCH/log"):$(scg 'KEYOA' "$SCH/log")"
+check "scholar keys: header file only (-H @file), no key in arguments, output or leftovers; the User-Agent goes in a 0600 header file, never in -A, and the email never reaches a command line of the API calls" "$LEAK:$SEEN:$U1:$U2:$U3" "0:30.10.10.10.11.13.:01:nohdr:0110:1:0"
+# show on OpenAlex: fields in order, cleaning, abstract, not found, API error, and every identifier form reaches the same work
+sch_codes; sc show 10.1000/SHOW.1
+EXPS="$(printf 'id: doi:10.1000/show.1\ntitle: A Shown Paper\nyear: 2022\ndate: 2022-05-06\ntype: article\nauthors: Ann One; Bo Two\nvenue: Journal X\npublisher: Pub Y\ndoi: 10.1000/show.1\narxiv: -\ncitations: 5\noa: yes\noa_url: https://x.org/y.pdf\nretracted: no\nabstract: We study cats study and dogs.')"
+bvu() { grep -o 'https://[^ ]*' "$SCH/log" | sed -e 's#https://api.crossref.org/works/#CR #' -e 's#https://export.arxiv.org/api/query?id_list=#AX #' | tr '\n' ' '; }
+V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPS" ] && echo same || cat "$SCH/out"):$(cat "$SCH/err"):$(scu 'https://api.openalex.org/works/doi:10.1000/show.1?select=id,doi,title,publication_year,publication_date,type,authorships,primary_location,cited_by_count,open_access,is_retracted,abstract_inverted_index')"
+sc show 10.1000/retracted; V2="$(cat "$SCH/rc"):$(sed -n '1p;2p;3p;6p;8p;9p;10p;11p;13p;14p;15p' "$SCH/out" | tr '\n' '|')"
+for id in "doi:10.1000/SHOW.1" "DOI:10.1000/SHOW.1" "https://doi.org/10.1000/SHOW.1" "http://doi.org/10.1000/SHOW.1" "10.1000/SHOW.1" "doi: 10.1000/SHOW.1" "HTTPS://DOI.ORG/10.1000/SHOW.1" "HTTP://DOI.ORG/10.1000/SHOW.1" "Https://Doi.Org/10.1000/SHOW.1"; do sc show "$id"; V3="${V3:-}$(cat "$SCH/rc")$(scu 'works/doi:10.1000/show.1?')"; done
+sc show "10.1000/a?b#c%d e"; V4="$(scu 'works/doi:10.1000/a%3Fb%23c%25de?select=')"
+sc show doi:10.404/none; V5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+echo 500 > "$FX/code.oa"; sc show 10.1000/x; V6="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
+sc show 10.48550/arXiv.2401.00001; V7="$(cat "$SCH/rc"):$(scu api.openalex.org):$(scu 'export.arxiv.org/api/query?id_list=2401.00001')"
+check "scholar show (OpenAlex): fields and cleaning, abstract, retracted, identifier forms, DOI encoding, 404 -> 2, error -> 3, arXiv DOI never asked to OpenAlex" "$V1|$V2|$V3|$V4|$V5|$V6|$V7" "0:same::1|0:id: openalex:W78|title: -|year: -|authors: -|publisher: -|doi: -|arxiv: -|citations: -|oa_url: -|retracted: yes|abstract: -||010101010101010101|1|2:scholar.sh: doi:10.404/none not found in OpenAlex:0|3:scholar.sh: OpenAlex failed (HTTP 500):1|0:0:1"
+sch_codes; sc show openalex:W78; W1="$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W78?select='):$(head -1 "$SCH/out"):$(scg '^arxiv: -$' "$SCH/out")"
+sc show OPENALEX:w78; W1="$W1:$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W78?select='):$(head -1 "$SCH/out")"
+sc show openalex:W77; W2="$(cat "$SCH/rc"):$(scu 'https://api.openalex.org/works/W77?select='):$(head -1 "$SCH/out")"
+sc show openalex:W79; W3="$(cat "$SCH/rc"):$(scg '^id: arxiv:2401.00001$' "$SCH/out"):$(scg '^arxiv: 2401.00001$' "$SCH/out"):$(scg '^doi: 10.48550/arxiv.2401.00001$' "$SCH/out"):$(scu export.arxiv.org)"
+sc show OpenAlex:w999; W4="$(cat "$SCH/rc"):$(scu 'works/W999?select='):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+W5=""; for b in "openalex:" "openalex:W" "openalex:Wx1" "openalex:W1x" "openalex:W1 2x"; do sc show "$b"; W5="$W5$(cat "$SCH/rc")$(scn)"; done
+check "scholar show openalex:W<id>: any case of prefix and W, uppercase W in URL, DOI-less work prints openalex:W, a work with a DOI prints its DOI id, arXiv-DOI work fills 'arxiv:', missing -> 2, malformed -> 1" "$W1|$W2|$W3|$W4|$W5" "0:1:id: openalex:W78:1:0:1:id: openalex:W78|0:1:id: doi:10.1000/show.1|0:1:1:1:0|2:1:scholar.sh: OpenAlex:w999 not found in OpenAlex:0|1010101010"
+# redirects and header file mode: no API call follows redirects (-L), with or without a key; the key and User-Agent header files are 0600
+sch_codes; OPENALEX_API_KEY=KEYOA_SECRET S2_API_KEY=KEYS2_SECRET sc search q
+R1="$(scn):$(scg ' -L ' "$SCH/log"):$(scu 'export.arxiv.org'):$(scg 'MODE -rw-------$' "$SCH/log.hdr"):$(scg MODE "$SCH/log.hdr"):$(scg 'MODE -rw-------$' "$SCH/log.ua"):$(scg MODE "$SCH/log.ua"):$(scg '-H @.* -H @' "$SCH/log")"
+OPENALEX_API_KEY=KEYOA_SECRET sc search q --publisher big --venue zz --source openalex; R2="$(scn):$(scg ' -L ' "$SCH/log")"
+sc search q --publisher big --venue zz --source openalex; R3="$(scn):$(scg ' -L ' "$SCH/log")"
+sch_codes; printf '403\n200\n' > "$FX/code.s2"; S2_API_KEY=KEYS2_SECRET sc search q --source s2; R4="$(scn):$(scg ' -L ' "$SCH/log")"
+sch_codes; echo 302 > "$FX/code.oa"; OPENALEX_API_KEY=KEYOA_SECRET sc search q --source openalex; R5="$(cat "$SCH/rc"):$(tr '\n' '|' < "$SCH/err"):$(scn)"
+check "scholar redirects: no API call is made with -L (key or not), the key and User-Agent header files are 0600 and both are passed on a keyed call, a 3xx is a failure" "$R1|$R2|$R3|$R4|$R5" "3:0:1:2:2:3:3:2|3:0|3:0|2:0|3:warning: openalex failed (HTTP 302)|scholar.sh: every source failed|:1"
+# show on arXiv (paced, never OpenAlex), and the pacing across runs
+sch_codes; sc show arxiv:2401.00001v3
+EXPA="$(printf 'id: arxiv:2401.00001\ntitle: Shown arXiv\nyear: 2024\ndate: 2024-02-03\ntype: preprint\nauthors: First Au; Second Au\nvenue: arXiv cs.LG\npublisher: -\ndoi: 10.1000/mixed.case\narxiv: 2401.00001\ncitations: -\noa: yes\noa_url: https://arxiv.org/pdf/2401.00001v2\nretracted: -\nabstract: Sum & text line two.')"
+A1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPA" ] && echo same || cat "$SCH/out"):$(scu 'https://export.arxiv.org/api/query?id_list=2401.00001'):$(scu api.openalex.org)"
+for id in "ARXIV:2401.00001" "https://arxiv.org/abs/2401.00001v2" "arxiv:hep-th/9901001v2" "10.48550/ARXIV.2401.00001" "HTTPS://ARXIV.ORG/ABS/2401.00001v2" "http://arxiv.org/abs/2401.00001" "HTTP://ARXIV.ORG/ABS/hep-th/9901001"; do sc show "$id"; A2="${A2:-}$(cat "$SCH/rc")$(scu api.openalex.org)$(scu 'id_list=')"; done
+sc show arxiv:9999.99999; A3="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+sc show arxiv:err; A4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
+echo 500 > "$FX/code.ax"; sc show arxiv:2401.00001; A5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
+# pacing: the stamp is written after an arXiv call; a run within the delay waits for the rest of it; an old, empty or garbled stamp does not
+rm -f "$SCH/state/orca-roles-scholar-arxiv.last"
+SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P1="$([ -f "$SCH/state/orca-roles-scholar-arxiv.last" ] && echo stamp || echo nostamp)"
+T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P2="$(( $(date +%s) - T0 >= 1 ? 1 : 0 ))"
+for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 1 ? 0 : 1 ))$(cat "$SCH/rc")"; done
+P5="$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -le "$(( $(date +%s) + 1 ))" ] && echo rewritten || echo kept)"
+SCHOLAR_ARXIV_DELAY=2 sc search q --source arxiv; P4="$(scu export.arxiv.org)"
+check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
+# pacing across runs and processes: the stamp is taken before the call and the wait is d+1 whole seconds after it; a lock dir serializes the runs
+LK="$SCH/state/orca-roles-scholar-arxiv.last.lock"; ST="$SCH/state/orca-roles-scholar-arxiv.last"
+rm -rf "$LK"; S0="$(date +%s)"; echo "$S0" > "$ST"
+SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; G1="$(cat "$SCH/rc"):$(( $(date +%s) - S0 >= 3 ? 1 : 0 ))"; G2="$(sed -n 's/^stamp=\([0-9]*\) lock=.*/\1/p' "$SCH/log.stamp")"
+check "scholar arXiv pacing: a stamp in the current second waits d+1 whole seconds, the stamp is already written when the call is made, the lock is free during the call and gone after" "$G1:$(( ${G2:-0} >= S0 + 3 ? 1 : 0 )):$(sed -n 's/.*lock=//p' "$SCH/log.stamp"):$([ -e "$LK" ] && echo left || echo gone):$([ "$(cat "$ST")" = "$G2" ] && echo same || echo moved)" "0:1:1:free:gone:same"
+echo 1000 > "$ST"; mkdir "$LK"; ( sleep 2; rmdir "$LK" ) & T0="$(date +%s)"
+SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; wait; H1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 >= 1 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)"
+mkdir "$LK"; T0="$(date +%s)"; sc show arxiv:2401.00001; H2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 1 ? 1 : 0 )):$([ -d "$LK" ] && echo untouched || echo removed):$(scu export.arxiv.org)"; rmdir "$LK"
+check "scholar arXiv pacing: a run waits while another holds the lock and leaves nothing behind; with the delay 0 there is no lock at all" "$H1:$H2" "0:1:gone:1:0:1:untouched:1"
+mkdir "$LK"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
+check "scholar arXiv pacing: a lock nobody releases is taken over after 30 s (not before, not never) and removed" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)" "0:1:gone:1"
+# no usable state dir or no lock: the call is made unpaced (no lock, no sleep, no stamp), one note on stderr per run, same exit code; never a hang
+SD="$SCH/state"; rm -rf "$SD" "$SCH/nostate"; T0="$(date +%s)"
+SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 2 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$([ -e "$SD" ] && echo created || echo none)"
+printf 'x' > "$SCH/nostate"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=3 sc search q --source arxiv; U2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 2 ? 1 : 0 )):$(grep -c 'not paced' "$SCH/err" || true)"
+SCHOLAR_ARXIV_DELAY=0 sc show arxiv:2401.00001; U3="$(cat "$SCH/rc"):$(wc -c < "$SCH/err" | tr -d ' ')"; mkdir -p "$SD"
+U4=skipped; if [ "$(id -u)" != 0 ]; then chmod 555 "$SD"; SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu export.arxiv.org):$(ls -A "$SD" | wc -l | tr -d ' ')"; chmod 755 "$SD"; fi
+check "scholar arXiv pacing: a missing or read-only state dir (or delay 0) never hangs: the call is made at once without lock, sleep or stamp, with the note 'arXiv calls are not paced: <dir> is not a writable directory'" "$U1|$U2|$U3|$U4" "0:1:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:none|0:1:1|0:0|$([ "$(id -u)" != 0 ] && echo "0:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:0" || echo skipped)"
+mkdir -p "$LK"; : > "$LK/pin"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
+check "scholar arXiv pacing: a lock that cannot be removed ends the wait once after 30 s (no restart), the call is made unpaced with the note 'cannot take the lock', the stamp is not touched" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$(cat "$ST"):$([ -e "$LK/pin" ] && echo kept || echo gone)" "0:1:scholar.sh: arXiv calls are not paced: cannot take the lock $ST.lock:1:1000:kept"
+rm -rf "$LK"
+rm -f "$ST"; mkdir "$ST"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Y="$(cat "$SCH/rc"):$(grep -c 'not paced' "$SCH/err" || true):$(scu export.arxiv.org):$([ -e "$LK" ] && echo left || echo gone)"; rmdir "$ST"
+check "scholar arXiv pacing: a lock taken but a stamp that cannot be written is silent (no 'cannot take the lock' note), the call is made and the lock is released" "$Y" "0:0:1:gone"
+# bibtex and verify: doi.org / Crossref / arXiv stub serving files named after the request; anything else is flagged
+BV="$FX/bv"; rm -rf "$BV"; mkdir -p "$BV" "$SCH/bvg"; git -C "$SCH/bvg" init -q
+cat > "$SCH/curl2" <<'S'
+#!/bin/bash
+. "$SCH_FX/../stublib.sh"; stub_args "$@"
+echo "$*" >> "$SCH_LOG"
+case "$url" in
+  https://doi.org/*) n="doi_$(printf '%s' "${url#https://doi.org/}" | sed 's/[^A-Za-z0-9]/_/g')";;
+  https://api.crossref.org/works/*) u="${url#https://api.crossref.org/works/}"; n="cr_$(printf '%s' "${u%%\?*}" | sed 's/[^A-Za-z0-9]/_/g')";;
+  https://export.arxiv.org/api/query?id_list=*) n="ax_$(printf '%s' "${url##*id_list=}" | sed 's/[^A-Za-z0-9]/_/g')";;
+  *) echo "$url" >> "$SCH_LOG.bad"; exit 7;;
+esac
+code=200; [ -f "$SCH_FX/bv/$n.code" ] && code="$(cat "$SCH_FX/bv/$n.code")"
+[ "$code" = FAIL ] && exit 7
+if [ "$code" = 200 ] && [ -f "$SCH_FX/bv/$n" ]; then cp "$SCH_FX/bv/$n" "$out"
+elif [ "$code" = 200 ]; then echo "<html>404</html>" > "$out"; code=404
+else echo "oops $code" > "$out"; fi
+stub_dump "$code"
+printf '%s' "$code"
+S
+chmod +x "$SCH/curl2"
+bv() { # like sc, for bibtex/verify: cwd $BVDIR (default $SCH/run), stub curl2, no Crossref delay unless set
+  : > "$SCH/log"; rm -f "$SCH/log.bad" "$SCH/log.hdr" "$SCH/log.ua" "$SCH/log.stamp"
+  (cd "${BVDIR:-$SCH/run}" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl2" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY=0 SCHOLAR_CROSSREF_DELAY="${SCHOLAR_CROSSREF_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true
+}
+bvr() { echo "$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err" | tr '\n' '|'):$(scn)"; }   # rc:stdout bytes:stderr:calls
+echo ' @article{Varga_2023, title={Large language models encode clinical knowledge}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Varga, Karl and Lindqvist, Sigrid}, year={2023}, month=July, pages={172–180} }' > "$BV/doi_10_1038_s41586_023_06291_2"
+printf '@misc{https://doi.org/10.48550/arxiv.2005.11401,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Okafor, Paulo and Ibarra, Elena},\n  title = {Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks},\n  publisher = {arXiv},\n  year = {2020}\n}\n' > "$BV/doi_10_48550_arXiv_2005_11401"
+echo '<html>Error</html>' > "$BV/doi_10_1000_html"; echo 500 > "$BV/doi_10_1000_err.code"; echo FAIL > "$BV/doi_10_1000_net.code"
+cr() { local e="${4:-}"; [ -n "$e" ] || e="{}"; jq -nc --arg t "$1" --arg a "$2" --argjson y "$3" --argjson extra "$e" '{status:"ok",message:({title:[$t],author:[{family:$a}],issued:{"date-parts":[[$y]]}} + $extra)}'; }
+BERT="BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+cr "$BERT" Hartwell 2019 > "$BV/cr_10_18653_v1_n19_1423"
+cr "RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" Castellan 1998 '{"updated-by":[{"DOI":"10.1016/s0140-6736(04)15715-2","type":"correction"},{"DOI":"10.1016/s0140-6736(10)60175-4","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_97_11096_0"
+cr "Retraction—Ileal" "The Editors" 2010 '{"update-to":[{"DOI":"10.1016/s0140-6736(97)11096-0","type":"retraction"}]}' > "$BV/cr_10_1016_s0140_6736_10_60175_4"
+cr "Paper with concern" Ng 2021 '{"updated-by":[{"DOI":"10.1/eoc","type":"expression_of_concern"}]}' > "$BV/cr_10_1_concern"
+cr "Paper withdrawn" Ng 2021 '{"updated-by":[{"DOI":"10.1/wd","type":"withdrawal"}]}' > "$BV/cr_10_1_withdrawn"
+cr "Paper erratum" Ng 2021 '{"updated-by":[{"DOI":"10.1/er","type":"erratum"}]}' > "$BV/cr_10_1_erratum"
+jq -nc '{status:"ok",message:{title:["No author paper"],issued:{"date-parts":[[null]]}}}' > "$BV/cr_10_1_noauthor"
+echo '<html>oops</html>' > "$BV/cr_10_1_html"; echo 500 > "$BV/cr_10_1_err.code"; echo FAIL > "$BV/cr_10_1_net.code"; echo 429 > "$BV/cr_10_1_rate.code"
+sch_entry 2005.11401 1 "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" cs.CL "" "Paulo Okafor" "Elena Ibarra" | sch_feed > "$BV/ax_2005_11401"
+sch_feed < /dev/null > "$BV/ax_9999_99999"
+W="$SCH/bvw"; rm -rf "$W"; mkdir -p "$W"
+bvent() { printf '@article{%s, title={%s}, author={%s}, year={%s}, doi={%s}}\n' "$@"; }
+E1='@article{varga2023large, title={{Large language models encode clinical knowledge}}, DOI={10.1038/s41586-023-06291-2}, journal={Nature}, author={Varga, Karl and Lindqvist, Sigrid}, year={2023}, month = jul, pages={172--180} }'
+E2="$(printf '@misc{okafor2020retrieval,\n  doi = {10.48550/ARXIV.2005.11401},\n  author = {Okafor, Paulo and Ibarra, Elena},\n  title = {{Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks}},\n  publisher = {arXiv},\n  year = {2020}\n}')"
+# bibtex without --add: fixed entry on stdout (key, braced title, month macro, pages --), Accept header, DOI lowercased, arXiv id -> arXiv DOI, nothing written
+bv bibtex doi:10.1038/S41586-023-06291-2; X1="$(bvr):$([ "$(cat "$SCH/out")" = "$E1" ] && echo same || echo differs):$(scu 'https://doi.org/10.1038/s41586-023-06291-2'):$(scu '-H Accept: application/x-bibtex'):$(scu ' -L ')"
+bv bibtex arxiv:2005.11401v2; X2="$(bvr):$([ "$(cat "$SCH/out")" = "$E2" ] && echo same || echo differs):$(scu 'https://doi.org/10.48550/arXiv.2005.11401')"
+check "scholar bibtex: fixed doi.org entry on stdout (doi and arxiv id), Accept header, follows redirects, empty stderr, nothing written" "$X1|$X2|$(ls "$SCH/run" | wc -l | tr -d ' ')" "0:$(( $(printf '%s' "$E1" | wc -c) + 1 ))::1:same:1:1:1|0:$(printf '%s\n' "$E2" | wc -c | tr -d ' ')::1:same:1|0"
+# bibtex: the LAST Content-Type of the doi.org answer (the -D file holds every hop) must contain application/x-bibtex, in any case; same failure as a body that does not start with '@'
+CT=""
+for c in 'Content-Type: application/x-bibtex' 'content-type: Application/X-BibTeX; charset=utf-8' 'CONTENT-TYPE:application/x-bibtex' 'Content-Type: text/html\nContent-Type: application/x-bibtex' 'Content-Type: application/x-bibtex\nContent-Type: text/html' 'Content-Type: text/html' 'Content-Type: application/json' '-' 'X-Content-Type: application/x-bibtex'; do
+  printf '%b\n' "$c" > "$FX/ctype"; bv bibtex doi:10.1038/S41586-023-06291-2
+  CT="$CT$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$E1" ] && echo same || wc -c < "$SCH/out" | tr -d ' '):$(tr '\n' '|' < "$SCH/err")|"
+done; rm -f "$FX/ctype"; bv bibtex doi:10.1038/S41586-023-06291-2; CT="$CT$(scu ' -D ')"
+check "scholar bibtex content type: accepted when the last hop says application/x-bibtex (case and parameters free); html, json, none, an X- header or an earlier hop only -> exit 3 'doi.org failed (HTTP 200)', empty stdout" "$CT" "0:same:|0:same:|0:same:|0:same:|3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||3:0:scholar.sh: doi.org failed (HTTP 200)||1"
+# the email never goes to doi.org (which redirects to publishers): plain User-Agent, with -L, no -A, no email anywhere in the call
+SCHOLAR_EMAIL=me@x.org bv bibtex doi:10.1038/S41586-023-06291-2; EM1="$(cat "$SCH/rc"):$(scg ' -L ' "$SCH/log"):$(scg ' -A ' "$SCH/log"):$(scg 'me@x.org' "$SCH/log"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$(scg 'me@x.org' "$SCH/log.ua")"
+SCHOLAR_EMAIL=me@x.org bv bibtex arxiv:2005.11401; EM2="$(cat "$SCH/rc"):$(scg ' -L ' "$SCH/log"):$(scg 'me@x.org' "$SCH/log" "$SCH/log.ua")"
+check "scholar bibtex with SCHOLAR_EMAIL: the doi.org request follows redirects with the plain User-Agent (header file) and the email is nowhere in the call" "$EM1|$EM2" "0:1:0:0:1:0|0:1:0"
+# bibtex failures: usage before any call, 404 -> 2, other status / curl failure / HTML page with 200 -> 3; no file, no stdout
+Y=""; for a in "openalex:W12" "10.9999/none" "10.1000/err" "10.1000/net" "10.1000/html" "nonsense"; do bv bibtex "$a" --add --bib "$W/f.bib"; Y="$Y$(bvr)|"; done
+bv bibtex 10.1/x --bib "$W/f.bib"; Y="$Y$(bvr)|"; bv bibtex 10.1038/s41586-023-06291-2 --add; Y="$Y$(bvr)|"; bv bibtex; Y="$Y$(bvr)|"; bv bibtex 10.1/x --add --add --bib "$W/f.bib"; Y="$Y$(bvr)"
+check "scholar bibtex failures: usage errors make no call, 404 -> 2, 5xx/curl/HTML-200 -> 3, empty stdout, nothing written" "$Y:$([ -e "$W/f.bib" ] && echo written || echo none)" "1:0:scholar.sh: bibtex needs a DOI or an arXiv id (run: scholar.sh show <id> to see its DOI)|:0|2:0:scholar.sh: 10.9999/none not found at doi.org|:1|3:0:scholar.sh: doi.org failed (HTTP 500)|:1|3:0:scholar.sh: doi.org failed (HTTP 000)|:1|3:0:scholar.sh: doi.org failed (HTTP 200)|:1|1:0:scholar.sh: unrecognized identifier 'nonsense' (use doi:<doi> or arxiv:<id>)|:0|1:0:scholar.sh: --bib needs --add|:0|1:0:scholar.sh: not in a git repository; pass --bib <path>|:0|1:0:scholar.sh: bibtex needs exactly one identifier|:0|1:0:scholar.sh: option --add given twice|:0:none"
+# bibtex: a 200 body that is not one complete entry (truncated, unbalanced, text after the closing brace, '}' before the '@') is refused untouched
+printf '@article{x, title={T}' > "$BV/doi_10_1000_trunc"; printf '@article{x, title={T}}}\n' > "$BV/doi_10_1000_extra"; printf '@article{x, title={{T}}\n' > "$BV/doi_10_1000_open"
+printf '@article{x, title={T}}\ntrailing\n' > "$BV/doi_10_1000_tail"; printf '}\n@article{x, title={T}}\n' > "$BV/doi_10_1000_lead"; printf '@article{x,\r\n title={A {nested} {T}},\r\n year={2020}\r\n}\r\n\r\n' > "$BV/doi_10_1000_crlf"
+Q=""; for a in trunc extra open tail lead; do bv bibtex "10.1000/$a" --add --bib "$W/q.bib"; Q="$Q$(bvr)|"; done; bv bibtex 10.1000/crlf --add --bib "$W/q.bib"; Q="$Q$(bvr):$(cat "$SCH/out"):$(grep -c . "$W/q.bib")"
+check "scholar bibtex: incomplete or unbalanced doi.org body -> exit 3 'incomplete BibTeX entry', empty stdout, nothing written; leading-@ rule first; nested braces and CRLF accepted" "$Q" "3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org returned an incomplete BibTeX entry|:1|3:0:scholar.sh: doi.org failed (HTTP 200)|:1|0:11:note: added 2020nested to $W/q.bib|:1:2020nested:4"
+# --bib on something that exists and is not a regular file: exit 1 before any call, no raw shell error; symlink to a file works, dangling link as before
+mkdir -p "$W/d.bib" "$W/dd"; ln -sfn "$W/dd" "$W/lnk-dir.bib"; ln -sfn "$W/nowhere.bib" "$W/dangling.bib"; printf '@article{k, doi={10.18653/v1/n19-1423}, title={%s}, author={Hartwell, J}, year={2019}}\n' "$BERT" > "$W/real.bib"; ln -sfn "$W/real.bib" "$W/lnk-file.bib"
+NR=""; for f in d.bib lnk-dir.bib; do bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/$f"; NR="$NR$(bvr)|"; bv verify --bib "$W/$f"; NR="$NR$(bvr)|"; done
+bv verify --bib "$W/lnk-file.bib"; NR="$NR$(cat "$SCH/rc"):$(tail -n 1 "$SCH/out")|"; bv verify --bib "$W/dangling.bib"; NR="$NR$(bvr)|"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/lnk-file.bib"; NR="$NR$(cat "$SCH/rc"):$(grep -c '^@' "$W/real.bib")"
+check "scholar --bib on a directory (or link to one): bibtex --add and verify exit 1 'is not a regular file' with no call; link to a file works; dangling link keeps the old messages" "$NR" "1:0:scholar.sh: $W/d.bib is not a regular file|:0|1:0:scholar.sh: $W/d.bib is not a regular file|:0|1:0:scholar.sh: $W/lnk-dir.bib is not a regular file|:0|1:0:scholar.sh: $W/lnk-dir.bib is not a regular file|:0|0:k$(printf '\t')ok$(printf '\t')-|1:0:scholar.sh: $W/dangling.bib not found|:0|0:2"
+# --add: new nested file, default <git top>/article/refs.bib, append-only with the right separators, empty file
+bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/n/e/refs.bib"; Z1="$(bvr):$(cat "$W/n/e/refs.bib" | cmp -s - <(printf '%s\n' "$E1") && echo exact || echo differs):$(cat "$SCH/out")"
+BVDIR="$SCH/bvg" bv bibtex 10.1038/s41586-023-06291-2 --add; Z2="$(cmp -s "$SCH/bvg/article/refs.bib" <(printf '%s\n' "$E1") && echo exact || echo differs):$(cat "$SCH/out")"
+printf '%% my comment\n@string{nat = "Nature"}\r\n\n@article{old,\n  title = {Old}, author = "Zed, A", doi = "10.1/OLD",\n  year = 1999\n}' > "$W/nonl.bib"; cp "$W/nonl.bib" "$W/nonl0.bib"
+bv bibtex arxiv:2005.11401 --add --bib "$W/nonl.bib"; Z3="$(bvr):$(head -c "$(wc -c < "$W/nonl0.bib")" "$W/nonl.bib" | cmp -s - "$W/nonl0.bib" && echo kept || echo CHANGED):$(cmp -s <(tail -c +"$(( $(wc -c < "$W/nonl0.bib") + 1 ))" "$W/nonl.bib") <(printf '\n\n%s\n' "$E2") && echo tail-ok || echo tail-bad)"
+printf '@article{old,\n  doi = {10.1/old}\n}\n' > "$W/nl.bib"; cp "$W/nl.bib" "$W/nl0.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/nl.bib"
+Z4="$(cmp -s <(tail -c +"$(( $(wc -c < "$W/nl0.bib") + 1 ))" "$W/nl.bib") <(printf '\n%s\n' "$E1") && echo tail-ok || echo tail-bad)"
+: > "$W/zero.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/zero.bib"; Z5="$(cmp -s "$W/zero.bib" <(printf '%s\n' "$E1") && echo exact || echo differs)"
+check "scholar bibtex --add: creates dirs/file, default path in a git repo, append-only with blank-line separator, no existing byte touched, stdout key, note on stderr" "$Z1|$Z2|$Z3|$Z4|$Z5" "0:15:note: added varga2023large to $W/n/e/refs.bib|:1:exact:varga2023large|exact:varga2023large|0:20:note: added okafor2020retrieval to $W/nonl.bib|:1:kept:tail-ok|tail-ok|exact"
+# --add duplicates by DOI (case, https prefix, quoted, other key, arXiv DOI in any case) never write; key collisions
+printf '@article{theirs, doi = "https://doi.org/10.1038/S41586-023-06291-2"}\n@misc{lw, doi={https://doi.org/10.48550/ARXIV.2005.11401}}\n' > "$W/dup.bib"; cp "$W/dup.bib" "$W/dup0.bib"
+bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/dup.bib"; D1="$(bvr):$(cat "$SCH/out")"; bv bibtex arxiv:2005.11401 --add --bib "$W/dup.bib"; D2="$(bvr):$(cat "$SCH/out")"
+check "scholar bibtex --add: a DOI already present (case, prefix, quotes, arXiv DOI) is not added: file untouched, key on stdout, note, exit 0" "$D1|$D2|$(cmp -s "$W/dup.bib" "$W/dup0.bib" && echo same || echo CHANGED)" "0:7:note: already in $W/dup.bib as theirs|:1:theirs|0:3:note: already in $W/dup.bib as lw|:1:lw|same"
+printf '@article{Varga2023Large,\n doi={10.1/zzz}\n}\n' > "$W/col.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/col.bib"; C1="$(cat "$SCH/out")"
+sed -e 's/10.1038\/s41586-023-06291-2/10.1038\/other/' "$BV/doi_10_1038_s41586_023_06291_2" > "$BV/doi_10_1038_other"; bv bibtex 10.1038/other --add --bib "$W/col.bib"; C2="$(cat "$SCH/out")"
+: > "$W/z.bib"; for l in "" b c d e f g h i j k l m n o p q r s t u v w x y z; do echo "@article{varga2023large$l, doi={10.1/q$l}}" >> "$W/z.bib"; done; cp "$W/z.bib" "$W/z0.bib"
+bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z.bib"; C3="$(bvr):$(cmp -s "$W/z.bib" "$W/z0.bib" && echo same || echo CHANGED)"
+grep -v 'largez,' "$W/z0.bib" > "$W/z2.bib"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/z2.bib"; C4="$(cat "$SCH/out"):$(tail -n 1 "$W/z2.bib" | cut -c1-24)"
+check "scholar bibtex --add: taken key (any case) gets b, c, ...; 26 taken -> exit 3 untouched; z still free" "$C1|$C2|$C3|$C4" "varga2023largeb|varga2023largec|3:0:scholar.sh: no free key for varga2023large in $W/z.bib|:1:same|varga2023largez:@article{varga2023largez"
+# verify: table of statuses over every identity/retraction/mismatch path, exit codes, pacing, request URLs
+BVF() { printf '%s\n' '@comment{ignored @article{fake, doi={10.1/x}} }' '@string{n = "N"}'; }
+{ BVF
+bvent ok1 "$BERT" "Hartwell, Jonas and Ito, Mei" 2019 10.18653/V1/N19-1423
+bvent sub "BERT: Pre-training of Deep Bidirectional Transformers" "Jonas Hartwell and Ito, Mei" 2019 https://doi.org/10.18653/v1/n19-1423
+bvent bad "Totally other" "Smith, J" 2020 10.18653/v1/n19-1423
+bvent wake "Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children" "Castellan, AJ and Moreau, SH" 1998 10.1016/S0140-6736\(97\)11096-0
+bvent notice Retraction Editors 2010 10.1016/s0140-6736\(10\)60175-4
+bvent missing T "A, B" 2000 10.9999/none
+printf '@article{nodoi, title={T}, author={A, B}, year={2000}}\n'
+printf '@misc{rag, title = "Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks", author = "Okafor, Paulo and Ibarra, Elena", year = 2024, eprint = {arXiv:2005.11401v3}, archivePrefix = {arXiv}}\n'
+bvent ragdoi "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" "Okafor, Paulo" 2024 10.48550/arXiv.2005.11401
+printf '@misc{axmissing, title={T}, author={A}, year={2000}, eprint={9999.99999}, archiveprefix={arXiv}}\n@misc{eprintonly, title={T}, author={A}, year={2000}, eprint={2005.11401}}\n'
+bvent concern "Paper with concern" "Ng, A" 2021 10.1/concern
+bvent wd "Paper withdrawn" "Ng, A" 2021 10.1/withdrawn
+bvent er "Paper erratum" "Ng, A" 2021 10.1/erratum
+bvent noauth "No author paper" "Ng, A" 2021 10.1/noauthor
+printf '@article{notitle, author={Hartwell, Jonas}, year={2019}, doi={10.18653/v1/n19-1423}}\n'
+bvent html t a 1 10.1/html; bvent err t a 1 10.1/err; bvent net t a 1 10.1/net; bvent rate t a 1 10.1/rate; } > "$W/v.bib"
+sed -i.bak 's/\\(/(/g; s/\\)/)/g' "$W/v.bib"; rm -f "$W/v.bib.bak"; cp "$W/v.bib" "$W/v0.bib"
+bv verify --bib "$W/v.bib"
+T="$(printf '\t')"
+EXPV="key${T}status${T}detail
+ok1${T}ok${T}-
+sub${T}warn${T}title differs (subtitle?)
+bad${T}fail${T}title mismatch: \"$BERT\"; first author mismatch: Hartwell; year mismatch: 2019
+wake${T}retracted${T}title mismatch: \"RETRACTED: Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children\"; correction (10.1016/s0140-6736(04)15715-2); retracted (10.1016/s0140-6736(10)60175-4); title says RETRACTED
+notice${T}fail${T}title differs (subtitle?); this DOI is a notice, not the paper
+missing${T}notfound${T}not in Crossref
+nodoi${T}nodoi${T}no doi or arXiv eprint
+rag${T}ok${T}-
+ragdoi${T}ok${T}-
+axmissing${T}notfound${T}not in arXiv
+eprintonly${T}nodoi${T}no doi or arXiv eprint
+concern${T}warn${T}expression of concern (10.1/eoc)
+wd${T}retracted${T}retracted (10.1/wd)
+er${T}ok${T}correction (10.1/er)
+noauth${T}warn${T}first author unknown; year unknown
+notitle${T}fail${T}title mismatch: \"$BERT\"
+html${T}error${T}unreadable Crossref response
+err${T}error${T}Crossref HTTP 500
+net${T}error${T}Crossref HTTP 000
+rate${T}error${T}Crossref HTTP 429"
+V1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPV" ] && echo table-ok || echo table-differs):$(cat "$SCH/err"):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,):$(cmp -s "$W/v.bib" "$W/v0.bib" && echo same || echo CHANGED):$([ -f "$SCH/log.bad" ] && echo NETWORK || echo contained)"
+check "scholar verify: one TAB line per entry in file order (ok/warn/fail/retracted/notfound/nodoi/error), every identity and retraction path, exit 4, bib untouched; Crossref DOI lowercased, arXiv id without prefix/version, one call per looked-up entry" "$V1:$(bvu)" "4:table-ok::3,:same:contained:CR 10.18653/v1/n19-1423 CR 10.18653/v1/n19-1423 CR 10.18653/v1/n19-1423 CR 10.1016/s0140-6736(97)11096-0 CR 10.1016/s0140-6736(10)60175-4 CR 10.9999/none AX 2005.11401 AX 2005.11401 AX 9999.99999 CR 10.1/concern CR 10.1/withdrawn CR 10.1/erratum CR 10.1/noauthor CR 10.18653/v1/n19-1423 CR 10.1/html CR 10.1/err CR 10.1/net CR 10.1/rate "
+# exit codes
+{ bvent a "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; bvent b t a 1 10.1/err; } > "$W/m1.bib"
+{ bvent b t a 1 10.1/err; bvent c t a 1 10.1/rate; } > "$W/m2.bib"
+{ bvent b t a 1 10.1/err; bvent a x "Ng, A" 2019 10.1/concern; } > "$W/m3.bib"
+{ bvent b t a 1 10.1/err; printf '@misc{n, title={t}}\n'; } > "$W/m4.bib"
+: > "$W/empty.bib"; printf '%% c\n@comment{x}\n@string{a="b"}\n' > "$W/cm.bib"
+X=""; for f in m1 m2 m3 m4 empty cm; do bv verify --bib "$W/$f.bib"; X="$X$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ') "; done
+check "scholar verify exit codes: ok+error 0, only errors 3, error+fail 4, error+nodoi 4, no entries 0 with header only" "$X" "0:3 3:3 4:3 4:3 0:1 0:1 "
+bv verify --bib "$W/nope.bib"; U1="$(bvr)"; bv verify x; U2="$(bvr)"; bv verify --x; U3="$(bvr)"; bv verify --bib; U4="$(bvr)"; bv verify; U5="$(bvr)"
+mkdir -p "$SCH/bvg/article"; cp "$W/m1.bib" "$SCH/bvg/article/refs.bib"; BVDIR="$SCH/bvg" bv verify; U7="$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ')"
+check "scholar verify usage: missing file / bad args / no git without --bib -> exit 1 with no call; default <git top>/article/refs.bib" "$U1|$U2|$U3|$U4|$U5|$U7" "1:0:scholar.sh: $W/nope.bib not found|:0|1:0:scholar.sh: verify takes no argument (got 'x')|:0|1:0:scholar.sh: unknown option '--x'|:0|1:0:scholar.sh: option --bib needs a value|:0|1:0:scholar.sh: not in a git repository; pass --bib <path>|:0|0:3"
+# odd files: CRLF, mixed-case type/fields, tab and space in keys, bare/quoted values, unreadable file
+printf '@Article{CRLF,\r\n  Title = {%s},\r\n  Author = {Hartwell, Jonas},\r\n  Year = {2019},\r\n  DOI = {10.18653/v1/n19-1423}\r\n}\r\n' "$BERT" > "$W/crlf.bib"
+printf '@article{k\tx, title={%s}, author={Hartwell, J}, year={2019}, doi="10.18653/v1/n19-1423"}\n@article{sp ace,doi={10.1/err}}\n' "$BERT" > "$W/odd.bib"
+bv verify --bib "$W/crlf.bib"; O1="$(cat "$SCH/out" | tail -n 1)"; bv verify --bib "$W/odd.bib"; O2="$(tail -n +2 "$SCH/out" | tr '\t\n' '~|')"
+O3=skipped; if [ "$(id -u)" != 0 ]; then cp "$W/m1.bib" "$W/ro.bib"; chmod 000 "$W/ro.bib"; bv verify --bib "$W/ro.bib"; O3="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(tail -n 1 "$SCH/err")"; bv bibtex 10.1038/s41586-023-06291-2 --add --bib "$W/ro.bib"; O3="$O3:$(cat "$SCH/rc"):$(tail -n 1 "$SCH/err")"; chmod 644 "$W/ro.bib"; fi
+check "scholar verify odd files: CRLF and mixed-case fields, tab in key collapsed, quoted doi; unreadable .bib -> exit 3 for verify and bibtex --add" "$O1|$O2|$O3" "CRLF${T}ok${T}-|k x~ok~-|sp ace~error~Crossref HTTP 500||3:0:scholar.sh: cannot read $W/ro.bib:3:scholar.sh: cannot read $W/ro.bib"
+# Crossref pacing (SCHOLAR_CROSSREF_DELAY between calls, none before the first), SCHOLAR_EMAIL in the User-Agent
+{ bvent a "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; bvent b "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; } > "$W/p.bib"
+T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=2 bv verify --bib "$W/p.bib"; PA="$(( $(date +%s) - T0 >= 2 ? 1 : 0 ))"
+head -n 1 "$W/p.bib" > "$W/p1.bib"; T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=5 bv verify --bib "$W/p1.bib"; PB="$(( $(date +%s) - T0 <= 3 ? 1 : 0 ))"
+SCHOLAR_EMAIL='a+b@x.org' bv verify --bib "$W/p.bib"
+check "scholar verify: Crossref delay between calls but not before the first; SCHOLAR_EMAIL goes in the User-Agent header file only, no mailto parameter in the URL, no -A, no redirects" "$PA$PB:$(scu 'mailto'):$(scg 'User-Agent: orca-roles-scholar (mailto:a+b@x.org)$' "$SCH/log.ua"):$(scg 'a+b@x.org' "$SCH/log"):$(scg ' -A \| -L ' "$SCH/log"):$(cat "$SCH/rc")" "11:0:2:0:0:0"
+# pdf / pdfs: stub curl3 maps a URL (query stripped, non-alphanumerics -> _) to a fixture in fx/pd; no fixture -> 404, <name>.code overrides the status, FAIL -> curl exit 7
+PD="$FX/pd"; mkdir -p "$PD"
+cat > "$SCH/curl3" <<'S'
+#!/bin/bash
+. "$SCH_FX/../stublib.sh"; stub_args "$@"
+echo "$*" >> "$SCH_LOG"
+n="$(printf '%s' "${url%%\?*}" | sed -e 's#^https\{0,1\}://##' -e 's/[^A-Za-z0-9]/_/g')"
+code=200; [ -f "$SCH_FX/pd/$n.code" ] && code="$(cat "$SCH_FX/pd/$n.code")"
+[ "$code" = FAIL ] && exit 7
+if [ "$code" = 200 ] && [ -f "$SCH_FX/pd/$n" ]; then cp "$SCH_FX/pd/$n" "$out"
+elif [ "$code" = 200 ]; then echo "<html>404</html>" > "$out"; code=404
+else echo "oops $code" > "$out"; fi
+printf '%s' "$code"
+S
+chmod +x "$SCH/curl3"
+pdfbody() { printf '%%PDF-1.4\n'; head -c "$1" /dev/zero | tr '\0' a; }
+pdfbody 3000 > "$PD/arxiv_org_pdf_1706_03762"; pdfbody 3100 > "$PD/pub_example_org_p_pdf"; pdfbody 3200 > "$PD/repo_example_org_h_pdf"; pdfbody 3300 > "$PD/oa_example_org_o_pdf"
+{ printf '<html>'; head -c 3000 /dev/zero | tr '\0' a; } > "$PD/pub_example_org_h_pdf"; cp "$PD/pub_example_org_h_pdf" "$PD/pub_example_org_n_html"
+echo FAIL > "$PD/pub_example_org_f_pdf.code"; echo 500 > "$PD/repo_example_org_f_pdf.code"
+echo '{"oa_locations":[{"host_type":"repository","url_for_pdf":"https://repo.example.org/p.pdf"},{"host_type":"publisher","url_for_pdf":"https://pub.example.org/p.pdf"},{"host_type":"publisher","url_for_pdf":null},{"host_type":"repository","url_for_pdf":"https://pub.example.org/p.pdf"}]}' > "$PD/api_unpaywall_org_v2_10_1_pub"
+echo '{"oa_locations":[{"host_type":"repository","url_for_pdf":"https://repo.example.org/h.pdf"},{"host_type":"publisher","url_for_pdf":"https://pub.example.org/h.pdf"}]}' > "$PD/api_unpaywall_org_v2_10_1_html"
+echo '{"oa_locations":[{"host_type":"publisher","url_for_pdf":"https://pub.example.org/f.pdf"},{"host_type":"repository","url_for_pdf":"https://repo.example.org/f.pdf"}]}' > "$PD/api_unpaywall_org_v2_10_1_fail"
+echo '{"oa_locations":[{"host_type":"repository","url_for_pdf":"https://arxiv.org/pdf/1706.03762"}]}' > "$PD/api_unpaywall_org_v2_10_1_viaarxiv"
+echo '{"open_access":{"oa_url":"https://oa.example.org/o.pdf"}}' > "$PD/api_openalex_org_works_doi_10_1_oaonly"
+echo '{"open_access":{"oa_url":"https://pub.example.org/n.html"}}' > "$PD/api_openalex_org_works_doi_10_1_none"
+echo '{"open_access":{"oa_url":"https://pub.example.org/f.pdf"}}' > "$PD/api_openalex_org_works_doi_10_1_fail"
+W2="$SCH/pw"; rm -rf "$W2"; mkdir -p "$W2/article"; git -C "$W2" init -q; W2R="$(cd "$W2" && pwd -P)"
+cat > "$W2/article/refs.bib" <<'B'
+@article{brandt2017attention, title={{Attention} is all you need}, author={Brandt, A}, year={2017}, eprint={1706.03762v5}, archivePrefix={arXiv}}
+@article{oa2020, doi={10.1/OAonly}, title={}, author={A, B}, year={2020}}
+@article{pub2020, doi={10.1/pub}, title={Pub  paper}, author={A, B}, year={2020}}
+@article{html2020, doi={10.1/html}, title={Html first}, author={A, B}, year={2020}}
+@article{none2020, doi={10.1/none}, title={Nothing | here, {at} all}, author={A, B}, year={2020}}
+@article{fail2020, doi={10.1/fail}, title={Fails}, author={A, B}, year={2020}}
+@misc{okafor2020rag, doi={10.48550/ARXIV.2005.11401}, title={RAG}, author={Okafor, P}, year={2020}}
+@article{via2020, doi={10.1/viaarxiv}, title={Via arxiv host}, author={A, B}, year={2020}}
+@article{a/../b, doi={10.1/evil}, title={Evil}, author={A, B}, year={2020}}
+@article{noid2020, title={No id}, author={A, B}, year={2020}}
+B
+pd() { : > "$SCH/log"; rm -f "$SCH/log.hdr" "$SCH/log.ua" "$SCH/log.stamp"; (cd "${PWD2:-$W2}" && TMPDIR="$SCH/tmp" SCHOLAR_CURL="$SCH/curl3" SCH_LOG="$SCH/log" SCH_FX="$FX" SCHOLAR_ARXIV_DELAY="${SCHOLAR_ARXIV_DELAY:-0}" SCHOLAR_RETRY_DELAY=0 SCHOLAR_STATE_DIR="$SCH/state" "$KIT/bin/scholar.sh" "$@" > "$SCH/out" 2> "$SCH/err"; echo $? > "$SCH/rc") || true; }
+pdr() { echo "$(cat "$SCH/rc"):$(tr '\n' '|' < "$SCH/out"):$(tr '\n' '|' < "$SCH/err"):$(scn)"; }
+LIT2="$W2/article/literature"; TB="$(printf '\t')"
+pd pdf arxiv:1706.03762v5
+check "scholar pdf arXiv id: matched through eprint, one paced arXiv call with size/redirect/time caps, file identical, manifest row, 'None' list" "$(pdr):$(cmp -s "$LIT2/pdfs/brandt2017attention.pdf" "$PD/arxiv_org_pdf_1706_03762" && echo same || echo differs):$(scu 'https://arxiv.org/pdf/1706.03762'):$(scu '--max-time 60 --max-redirs 10 --max-filesize 50000000'):$(cat "$LIT2/manifest.tsv" | tr '\t\n' '~|'):$(tr '\n' '|' < "$LIT2/missing.md")" "0:downloaded brandt2017attention article/literature/pdfs/brandt2017attention.pdf|::1:same:1:1:key~id~title~pdf~source|brandt2017attention~arxiv:1706.03762~Attention is all you need~oa~https://arxiv.org/pdf/1706.03762|:# PDFs to download by hand||None: every paper in the manifest has its PDF.|"
+OPENALEX_API_KEY=sekrit-key pd pdf 10.1/oaonly
+check "scholar pdf DOI without SCHOLAR_EMAIL: Unpaywall skipped with a note and never called, OpenAlex oa_url used, empty title -> '-', key only in the header file" "$(pdr):$(scu unpaywall):$(scu sekrit-key):$(scu 'api.openalex.org/works/doi:10.1/oaonly?select=open_access'):$(grep -c '^oa2020' "$LIT2/manifest.tsv")" "0:downloaded oa2020 article/literature/pdfs/oa2020.pdf|:note: Unpaywall skipped: set SCHOLAR_EMAIL to use it|:2:0:0:1:1"
+SCHOLAR_EMAIL='a+b@x.org' pd pdf doi:10.1/Pub
+P1="$(pdr):$(scu 'https://api.unpaywall.org/v2/10.1/pub?email=a%2Bb%40x.org'):$(scg 'User-Agent: orca-roles-scholar (mailto:a+b@x.org)$' "$SCH/log.ua"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$(scu 'repo.example.org'):$(scu openalex):$(cat "$SCH/out" "$SCH/err" "$LIT2/manifest.tsv" "$LIT2/missing.md" | grep -c 'a+b@x.org' || true):$(scg ' -L ' "$SCH/log")$(scg ' -A ' "$SCH/log")"
+SCHOLAR_EMAIL='a+b@x.org' pd pdf 10.1/html
+check "scholar pdf Unpaywall (email in its User-Agent, downloads plain): publisher URLs first, null and duplicate URLs dropped, stop at the first PDF, email URL-encoded and never in outputs; HTML first then PDF -> 'tried ... not a PDF', source is the PDF URL" "$P1|$(pdr):$(grep "^html2020" "$LIT2/manifest.tsv" | cut -f4,5)" "0:downloaded pub2020 article/literature/pdfs/pub2020.pdf|::2:1:1:1:0:0:0:10|0:downloaded html2020 article/literature/pdfs/html2020.pdf|:tried https://pub.example.org/h.pdf: not a PDF|:3:oa${TB}https://repo.example.org/h.pdf"
+SCHOLAR_EMAIL=me@x.org pd pdf 10.1/none; N1="$(pdr):$(scg 'User-Agent: orca-roles-scholar (mailto:me@x.org)$' "$SCH/log.ua"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua")"
+SCHOLAR_EMAIL=me@x.org pd pdf 10.1/fail; N2="$(pdr):$(scu 'pub.example.org/f.pdf')"
+pd pdf arxiv:2005.11401; N3="$(pdr)"
+check "scholar pdf nothing found: exit 2 'missing', per-candidate reasons (HTTP code, curl failure 000, not a PDF), a URL is never tried twice, no file in the PDF folder" "$N1|$N2|$N3|$(ls "$LIT2/pdfs" | tr '\n' ' ')" "2:missing none2020 (listed in article/literature/missing.md)|:note: Unpaywall HTTP 404|tried https://pub.example.org/n.html: not a PDF|:3:2:1|2:missing fail2020 (listed in article/literature/missing.md)|:tried https://pub.example.org/f.pdf: HTTP 000|tried https://repo.example.org/f.pdf: HTTP 500|:4:1|2:missing okafor2020rag (listed in article/literature/missing.md)|:tried https://arxiv.org/pdf/2005.11401: HTTP 404|:1|brandt2017attention.pdf html2020.pdf oa2020.pdf pub2020.pdf "
+MEXP="$(printf 'key\tid\ttitle\tpdf\tsource\nbrandt2017attention\tarxiv:1706.03762\tAttention is all you need\toa\thttps://arxiv.org/pdf/1706.03762\noa2020\tdoi:10.1/oaonly\t-\toa\thttps://oa.example.org/o.pdf\npub2020\tdoi:10.1/pub\tPub paper\toa\thttps://pub.example.org/p.pdf\nhtml2020\tdoi:10.1/html\tHtml first\toa\thttps://repo.example.org/h.pdf\nnone2020\tdoi:10.1/none\tNothing | here, at all\tmissing\t-\nfail2020\tdoi:10.1/fail\tFails\tmissing\t-\nokafor2020rag\tarxiv:2005.11401\tRAG\tmissing\t-\n')"
+MDEXP="$(printf '# PDFs to download by hand\n\nSave each PDF in article/literature/pdfs/ with exactly the file name shown, then run: scholar.sh pdfs\n\n| File name | Title | Link |\n|---|---|---|\n| none2020.pdf | Nothing \\| here, at all | https://doi.org/10.1/none |\n| fail2020.pdf | Fails | https://doi.org/10.1/fail |\n| okafor2020rag.pdf | RAG | https://arxiv.org/abs/2005.11401 |\n')"
+pd pdf 10.1/none; pd pdf 10.48550/arXiv.2005.11401
+check "scholar manifest/missing.md: header, rows in order, titles cleaned (braces, spaces, tabs), arXiv DOI -> arxiv id, in-place replace on rerun (no duplicate), missing table with escaped '|' and links" "$([ "$(cat "$LIT2/manifest.tsv")" = "$MEXP" ] && echo same || echo differs):$([ "$(cat "$LIT2/missing.md")" = "$MDEXP" ] && echo same || echo differs)" "same:same"
+echo x > "$W2/mark"; find "$W2" -type f -not -path '*/.git/*' | sed "s#$W2/##" | sort | tr '\n' ' ' > "$SCH/tree0"
+for a in 10.9/none openalex:W12 "doi:10.1/evil" noid x; do pd pdf "$a"; PR="${PR:-}$(pdr)|"; done
+pd pdf; PR="$PR$(pdr)|"; pd pdf 10.1/pub --bib "$W2/nofile.bib"; PR="$PR$(pdr)|"; mkdir -p "$W2/dirbib"; pd pdf 10.1/pub --bib "$W2/dirbib"; PR="$PR$(pdr)|"
+PWD2="$TMP" pd pdf 10.1/pub; PR="$PR$(pdr)|"; PWD2="$TMP" pd pdfs; PR="$PR$(pdr)|"; pd pdf 10.1/pub 10.1/html; PR="$PR$(pdr)|"
+find "$W2" -type f -not -path '*/.git/*' | sed "s#$W2/##" | sort | tr '\n' ' ' > "$SCH/tree1"
+check "scholar pdf refusals: not in the .bib, openalex id, key unusable as a file name, no .bib / directory .bib, outside git, bad arguments -> exit 1, no network call, nothing written" "$PR$([ "$(cat "$SCH/tree0")" = "$(cat "$SCH/tree1")" ] && echo untouched || echo CHANGED)" "1::scholar.sh: 10.9/none is not in $W2R/article/refs.bib; add it first: scholar.sh bibtex 10.9/none --add|:0|1::scholar.sh: pdf needs a DOI or an arXiv id|:0|1::scholar.sh: the key 'a/../b' cannot be used as a file name|:0|1::scholar.sh: unrecognized identifier 'noid' (use doi:<doi> or arxiv:<id>)|:0|1::scholar.sh: unrecognized identifier 'x' (use doi:<doi> or arxiv:<id>)|:0|1::scholar.sh: pdf needs exactly one identifier|:0|1::scholar.sh: $W2/nofile.bib not found|:0|1::scholar.sh: $W2/dirbib is not a regular file|:0|1::scholar.sh: not in a git repository|:0|1::scholar.sh: not in a git repository|:0|1::scholar.sh: pdf needs exactly one identifier|:0|untouched"
+mkdir -p "$LIT2/pdfs"; pdfbody 2000 > "$LIT2/pdfs/none2020.pdf"; cp "$LIT2/manifest.tsv" "$SCH/m.before"
+pd pdf 10.1/none; D1="$(pdr):$(grep '^none2020' "$LIT2/manifest.tsv" | cut -f4,5 | tr '\t' '~'):$(grep -c none2020 "$LIT2/missing.md" || true)"
+pd pdf 10.1/oaonly; D2="$(pdr):$(grep '^oa2020' "$LIT2/manifest.tsv" | cut -f4,5 | tr '\t' '~')"
+{ printf '<html>'; head -c 4000 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/fail2020.pdf"; cp "$LIT2/pdfs/fail2020.pdf" "$SCH/fail.keep"
+SCHOLAR_EMAIL=me@x.org pd pdf 10.1/fail; D3="$(pdr):$(cmp -s "$LIT2/pdfs/fail2020.pdf" "$SCH/fail.keep" && echo kept || echo changed)"
+{ printf '%%PDF-'; head -c 1019 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/fail2020.pdf"; SCHOLAR_EMAIL=me@x.org pd pdf 10.1/fail; D4="$(cat "$SCH/rc"):$(wc -c < "$LIT2/pdfs/fail2020.pdf" | tr -d ' ')"
+check "scholar pdf already present: valid dropped file -> 'present', no call, row manual with source '-', off the missing list; oa row keeps its source; invalid (HTML or exactly 1024 bytes) file is not a PDF and is left on failure" "$D1|$D2|$D3|$D4" "0:present none2020 article/literature/pdfs/none2020.pdf|::0:manual~-:0|0:present oa2020 article/literature/pdfs/oa2020.pdf|::0:oa~https://oa.example.org/o.pdf|2:missing fail2020 (listed in article/literature/missing.md)|:tried https://pub.example.org/f.pdf: HTTP 000|tried https://repo.example.org/f.pdf: HTTP 500|:4:kept|2:1024"
+printf '<html>old</html>' > "$LIT2/pdfs/via2020.pdf"; date +%s > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"
+SCHOLAR_ARXIV_DELAY=2 SCHOLAR_EMAIL=me@x.org pd pdf 10.1/viaarxiv; X1="$(pdr):$(scg 'User-Agent: orca-roles-scholar (mailto:me@x.org)$' "$SCH/log.ua"):$(scg 'User-Agent: orca-roles-scholar$' "$SCH/log.ua"):$(( $(date +%s) - T0 >= 1 ? 1 : 0 )):$(cmp -s "$LIT2/pdfs/via2020.pdf" "$PD/arxiv_org_pdf_1706_03762" && echo replaced || echo kept):$(grep '^via2020' "$LIT2/manifest.tsv" | cut -f4,5 | tr '\t' '~')"
+echo 1000 > "$SCH/state/orca-roles-scholar-arxiv.last"; SCHOLAR_ARXIV_DELAY=2 SCHOLAR_EMAIL=me@x.org pd pdf 10.1/viaarxiv >/dev/null; rm -f "$LIT2/pdfs/via2020.pdf"; SCHOLAR_ARXIV_DELAY=2 SCHOLAR_EMAIL=me@x.org pd pdf 10.1/viaarxiv
+check "scholar pdf: an arXiv download is sent with the plain User-Agent; an invalid file is replaced on success; an arXiv URL from Unpaywall (and the arXiv PDF) is paced like the arXiv API and stamps the pacing file" "$X1:$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -gt 1000 ] && echo stamped || echo nostamp)" "0:downloaded via2020 article/literature/pdfs/via2020.pdf|::2:1:1:1:replaced:oa~https://arxiv.org/pdf/1706.03762:stamped"
+pdfbody 2000 > "$LIT2/pdfs/oa2020.pdf"; rm -f "$LIT2/pdfs/pub2020.pdf"
+{ printf '%%PDF-'; head -c 1019 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/html2020.pdf"; { printf '%%PDF-'; head -c 1020 /dev/zero | tr '\0' a; } > "$LIT2/pdfs/okafor2020rag.pdf"
+cp "$W2/article/refs.bib" "$SCH/refs.keep"; rm -f "$W2/article/refs.bib"
+pd pdfs; Z1="$(pdr)"; cp "$LIT2/manifest.tsv" "$SCH/m.1"; pd pdfs; Z2="$(cmp -s "$LIT2/manifest.tsv" "$SCH/m.1" && echo stable || echo moved)"
+cp "$SCH/refs.keep" "$W2/article/refs.bib"
+check "scholar pdfs: no network call, no .bib needed; per row key/pdf/note in manifest order; missing->manual when a valid file was dropped (1025 bytes), oa/manual->missing 'file gone' / 'not a valid PDF' (1024 bytes, HTML), source reset to '-'; idempotent" "$Z1:$Z2:$(awk -F'\t' '{print $1"~"$4"~"$5}' "$LIT2/manifest.tsv" | tr '\n' ' '):$(grep -c '^| ' "$LIT2/missing.md")" "0:key${TB}pdf${TB}note|brandt2017attention${TB}oa${TB}-|oa2020${TB}oa${TB}-|pub2020${TB}missing${TB}file gone|html2020${TB}missing${TB}not a valid PDF|none2020${TB}manual${TB}-|fail2020${TB}missing${TB}not a valid PDF|okafor2020rag${TB}manual${TB}-|via2020${TB}oa${TB}-|::0:stable:key~pdf~source brandt2017attention~oa~https://arxiv.org/pdf/1706.03762 oa2020~oa~https://oa.example.org/o.pdf pub2020~missing~- html2020~missing~- none2020~manual~- fail2020~missing~- okafor2020rag~manual~- via2020~oa~https://arxiv.org/pdf/1706.03762 :4"
+# pdfs: a manifest key that cannot be a file name (path parts, spaces, empty) is not tested on disk: its row is kept as it is and the note is 'invalid key'
+W4="$SCH/pw4"; rm -rf "$W4"; mkdir -p "$W4/article/literature/pdfs"; git -C "$W4" init -q; LIT4="$W4/article/literature"
+pdfbody 2000 > "$LIT4/out.pdf"; pdfbody 2000 > "$LIT4/pdfs/good.pdf"
+{ printf 'key\tid\ttitle\tpdf\tsource\n'; printf '../out\tdoi:10.1/a\tOut\tmissing\t-\n'; printf 'x/y\tdoi:10.1/b\tSlash\toa\thttps://x.org/y.pdf\n'; printf 'a b\tdoi:10.1/c\tSpace\tmissing\t-\n'; printf 'good\tdoi:10.1/d\tGood\tmissing\t-\n'; printf '\tdoi:10.1/e\tNo key\toa\thttps://x.org/e.pdf\n'; printf 'gone.v-1:2+3\tdoi:10.1/f\tOdd but valid\toa\thttps://x.org/f.pdf\n'; } > "$LIT4/manifest.tsv"
+PWD2="$W4" pd pdfs; IK="$(pdr)"
+check "scholar pdfs: invalid keys keep their row unchanged and say 'invalid key' (never tested outside pdfs/), valid keys are reconciled as before" "$IK:$(cat "$LIT4/manifest.tsv" | tr '\t\n' '~|')" "0:key${TB}pdf${TB}note|../out${TB}missing${TB}invalid key|x/y${TB}oa${TB}invalid key|a b${TB}missing${TB}invalid key|good${TB}manual${TB}-|${TB}oa${TB}invalid key|gone.v-1:2+3${TB}missing${TB}file gone|::0:key~id~title~pdf~source|../out~doi:10.1/a~Out~missing~-|x/y~doi:10.1/b~Slash~oa~https://x.org/y.pdf|a b~doi:10.1/c~Space~missing~-|good~doi:10.1/d~Good~manual~-|~doi:10.1/e~No key~oa~https://x.org/e.pdf|gone.v-1:2+3~doi:10.1/f~Odd but valid~missing~-|"
+W3="$SCH/pw3"; rm -rf "$W3"; mkdir -p "$W3/article/literature"; git -C "$W3" init -q; W3R="$(cd "$W3" && pwd -P)"
+PWD2="$W3" pd pdfs; M1="$(pdr)"; PWD2="$W3" pd pdfs x; M2="$(pdr)"; PWD2="$W3" pd pdfs --bib "$W2/dirbib"; M3="$(pdr)"
+printf 'key\tpdf\n' > "$W3/article/literature/manifest.tsv"; printf 'k\t10\n' >> "$W3/article/literature/manifest.tsv"; cp "$W3/article/literature/manifest.tsv" "$SCH/m.foreign"
+PWD2="$W3" pd pdfs; M4="$(pdr)"; PWD2="$W3" pd pdf 10.1/pub --bib "$W2/article/refs.bib"; M5="$(pdr)"
+check "scholar pdfs errors: no manifest, bad arguments, foreign manifest header (pdfs and pdf refuse it) -> exit 1, no call, manifest untouched, no missing.md" "$M1|$M2|$M3|$M4|$M5|$(cmp -s "$W3/article/literature/manifest.tsv" "$SCH/m.foreign" && echo same || echo CHANGED):$(ls "$W3/article/literature" | tr '\n' ' ')" "1::scholar.sh: no manifest yet (article/literature/manifest.tsv); run scholar.sh pdf <id> first|:0|1::scholar.sh: pdfs takes no argument (got 'x')|:0|1::scholar.sh: $W2/dirbib is not a regular file|:0|1::scholar.sh: $W3R/article/literature/manifest.tsv does not start with the header (key, id, title, pdf, source)|:0|1::scholar.sh: $W3R/article/literature/manifest.tsv does not start with the header (key, id, title, pdf, source)|:0|same:manifest.tsv "
 }
 
 sec_cli() {

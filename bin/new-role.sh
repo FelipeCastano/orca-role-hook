@@ -5,11 +5,12 @@
 #   new-role --repo <clone-path>   # saves it in your clone of the repo (versioned) and reinstalls
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
 #   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompts
-#     The JSON has: id, description and prompt required; modes, title, agent, model, permissionMode, command,
+#     The JSON has: id, description and prompt required; modes, phases, title, agent, model, permissionMode, command,
 #     addDirFlag, modelError, models, trust, clearCommand, mcp, allowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs, enabled,
 #     after and overwrite optional.
 #     modes: "all", or one mode id (a string or a one-element list); missing = "programmer". prompt: Markdown text
 #     (a role with one mode) or {"<mode>": "<Markdown>"} covering exactly the role's modes ("all" = every mode).
+#     phases (academic-writer only, the other modes have none): a non-empty list of "experiment", "writing"; missing = both phases.
 #     Each mode has its own prompt file: roles/<mode>/<id>.md (local) or prompts/<mode>/<id>.md (--repo).
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
@@ -190,6 +191,9 @@ if [ -n "$FROM_JSON" ]; then
            else empty end)
       else "The prompt must be Markdown text or an object {\"<mode>\": Markdown}" end' "$FROM_JSON")"
   [ -z "$PROMPT_ERR" ] || { echo "$PROMPT_ERR" >&2; exit 1; }
+  if jq -e 'has("phases")' "$FROM_JSON" >/dev/null && [ "$MODES_FIELD" != '"all"' ] && [ "$MODES_FIELD" != '["academic-writer"]' ]; then
+    echo "phases is only for mode academic-writer (the other modes have no phases)" >&2; exit 1
+  fi
   repo_collision_check || exit 1
   AGENT="$(J agent)"; AGENT="${AGENT:-claude}"
   case "$AGENT" in claude|codex|custom) ;; *) echo "Invalid agent: $AGENT" >&2; exit 1;; esac
@@ -204,6 +208,7 @@ if [ -n "$FROM_JSON" ]; then
       {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
       + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","modelError","models","trust","clearCommand","mcp","allowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs"))))
       + {modes: $modes}
+      + (if has("phases") then {phases: .phases} else {} end)
       + (if ($prompt | length) > 0 then {prompt: $prompt} else {} end)' "$FROM_JSON"
   }
   ROLE_JSON="$(json_role '{}')"; validate_role
@@ -262,6 +267,22 @@ repo_collision_check || exit 1
 for m in $NEW_MODES; do
   ! mode_unavailable "$m" || echo "  Note: mode '$m' is not available yet; the role will launch once that mode exists."
 done
+
+PHASES_JSON='null'
+if [ "$MODES_FIELD" = '"all"' ] || [ "$MODES_FIELD" = '["academic-writer"]' ]; then
+  section "Phases (academic-writer)"
+  echo "Only academic-writer has phases; in the other modes the role always opens."
+  echo "1) experiment"
+  echo "2) writing"
+  echo "3) both"
+  ask PSEL "In which phase does it open?" "3"
+  case "$PSEL" in
+    1) PHASES_JSON='["experiment"]';;
+    2) PHASES_JSON='["writing"]';;
+    3) PHASES_JSON='null';;
+    *) echo "Invalid option" >&2; exit 1;;
+  esac
+fi
 
 # ---------- agent and model ----------
 section "Agent"
@@ -344,8 +365,9 @@ build_role() {  # uses PROMPT_OBJ
   --arg merr "$MERR" --arg mlist "$MLIST" --arg mparse "$MPARSE" --arg mprobe "$MPROBE" \
   --argjson mcp "$MCP_JSON" --argjson tools "$TOOLS_JSON" --argjson dirs "$DIRS_JSON" \
   --argjson extra "$EXTRA_JSON" --argjson env "$ENV_JSON" --argjson params "$PARAMS_JSON" \
-  --argjson prompt "$PROMPT_OBJ" --argjson modes "$MODES_FIELD" '
+  --argjson prompt "$PROMPT_OBJ" --argjson modes "$MODES_FIELD" --argjson phases "$PHASES_JSON" '
   {title:$title, description:$desc, enabled:$enabled, agent:$agent, modes:$modes}
+  + (if $phases != null then {phases:$phases} else {} end)
   + (if $model != "" then {model:$model} else {} end)
   + (if $perm != "auto" then {permissionMode:$perm} else {} end)
   + (if $command != "" then {command:$command} else {} end)
@@ -418,7 +440,7 @@ ask_prompt() {  # ask_prompt <mode> <previous mode, if any>: writes $PROMPT_FILE
       ask_lines REPORT "What its report must include"
       ask_yn "Does it issue an ACCEPTED/REJECTED verdict?" n && VERDICT=1 || VERDICT=0
       write_skeleton "$MISSION" "$RESP" "$LIMITS" "$REPORT" "$VERDICT"
-      ask_yn "Open it in the editor to review it?" n && "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"
+      if ask_yn "Open it in the editor to review it?" n; then "${EDITOR:-nano}" "$PROMPT_FILE" < "$TTY" > "$TTY"; fi
       ;;
     2)
       ask SRCF "File path"; SRCF="${SRCF/#\~/$HOME}"
