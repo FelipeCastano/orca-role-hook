@@ -46,6 +46,8 @@ mkdir -p "$KIT"
 rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp"   # regenerated; config.json and roles/ are not touched
 cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
 chmod +x "$KIT/bin/"*.sh
+mkdir -p "$KIT/pw"   # the pinned browser stack: node_modules and browsers/ are kept across updates
+cp "$SRC/pw/package.json" "$SRC/pw/package-lock.json" "$SRC/pw/e2e.config.js" "$KIT/pw/"
 rm -f "$KIT/config.env"   # old format
 . "$KIT/bin/lib.sh"
 CONF="$KIT/config.json"

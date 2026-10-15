@@ -115,15 +115,18 @@ prompt_of() {
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
 LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
+# The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
+OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
 # ["programmer"] was the default of researcher's modes before academic-writer joined it: a user still on it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
-  jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
+  jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
-    | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)' "$1" "$2"
+    | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
+    | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
 #   {"only": [...], "enable": [...], "disable": [...], "set": [{"path": [...], "value": ...}], "mode": "<mode id>"}
@@ -408,12 +411,62 @@ project_name() {
     common="$(cd "$1" && cd "$common" && pwd)"; basename "$(dirname "$common")"
   else basename "$(cd "$1" && pwd)"; fi
 }
+# The saved browser session of an identity of a project: ~/.orca-roles/browser/<project>/<identity>.json (identity default: "default").
+# An identity is lowercase letters, digits and hyphens, starting with a letter or digit; anything else is refused (1).  session_file <project> [<identity>]
+session_file() {
+  local id=default
+  if [ $# -ge 2 ]; then id="$2"; fi
+  case "$id" in
+    ''|-*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "ERROR: invalid identity '$id': use lowercase letters, digits and hyphens, starting with a letter or digit." >&2; return 1;;
+  esac
+  echo "$KIT/browser/$1/$id.json"
+}
+# The host (lowercase, without userinfo and port) and the origin (scheme://host[:port], default port dropped) of an http(s) URL,
+# as two lines. Refuses (1) anything that is not http(s) with a host.  url_host_origin <url>
+url_host_origin() {
+  local url="$1" scheme rest auth host port origin
+  case "$url" in http://?*|https://?*) ;; *) return 1;; esac
+  scheme="${url%%://*}"; rest="${url#*://}"; auth="${rest%%[/?#]*}"; auth="${auth##*@}"
+  case "$auth" in
+    \[*) host="${auth%%]*}]"; port="${auth#"$host"}"; port="${port#:}";;
+    *) host="${auth%%:*}"; port=""; case "$auth" in *:*) port="${auth#*:}";; esac;;
+  esac
+  [ -n "$host" ] || return 1
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  case "$scheme:$port" in http:80|https:443) port="";; esac
+  origin="$scheme://$host"; [ -z "$port" ] || origin="$origin:$port"
+  printf '%s\n%s\n' "$host" "$origin"
+}
+# 0 if a saved session file has a cookie for the URL's host (by host or domain, leading dot included) or localStorage for its origin.
+# session_matches <state-file> <url>
+session_matches() {
+  local ho host origin
+  ho="$(url_host_origin "$2")" || return 1
+  host="$(printf '%s\n' "$ho" | sed -n 1p)"; origin="$(printf '%s\n' "$ho" | sed -n 2p)"
+  jq -e --arg host "$host" --arg origin "$origin" '
+    def hostmatch($d): ($d // "") as $d | if ($d | startswith(".")) then ($host == $d[1:] or ($host | endswith($d))) else $host == $d end;
+    def norm: ascii_downcase | sub("^(?<s>http://[^/]*):80$"; .s) | sub("^(?<s>https://[^/]*):443$"; .s);
+    ((.cookies // []) | map(select(hostmatch(.domain))) | length > 0)
+    or ((.origins // []) | map(select((.origin // "" | norm) == $origin and ((.localStorage // []) | length) > 0)) | length > 0)' "$1" >/dev/null 2>&1
+}
+# Moves the single-session file of earlier versions (browser/<project>.json) to browser/<project>/default.json when that one is missing or
+# an empty stub; a destination with a session is never overwritten (the old file stays and a warning goes to stderr).  migrate_session <project>
+migrate_session() {
+  local old="$KIT/browser/$1.json" new="$KIT/browser/$1/default.json"
+  [ -f "$old" ] || return 0
+  if [ -f "$new" ] && ! jq -e '((.cookies // []) | length) + ((.origins // []) | length) == 0' "$new" >/dev/null 2>&1; then
+    echo "WARNING: $old was not migrated: $new already has a session. Delete $old if you no longer need it." >&2
+    return 0
+  fi
+  mkdir -p "$KIT/browser/$1" && mv -f "$old" "$new"
+}
 # A role's context for the mcpServers placeholders; exports ORCA_ROLES_WORKTREE/PROJECT/EVIDENCE_DIR/BROWSER_STATE.  role_context <config> <role> <worktree>
 role_context() {
   ORCA_ROLES_WORKTREE="$(cd "$3" && pwd)"
   ORCA_ROLES_PROJECT="$(project_name "$3")"
   ORCA_ROLES_EVIDENCE_DIR="$(jq -r --arg r "$2" '.roles[$r].params.evidenceDir // .roles["e2e-tester"].params.evidenceDir // .defaults.params.evidenceDir // "qa-evidence"' "$1")"
-  ORCA_ROLES_BROWSER_STATE="$KIT/browser/$ORCA_ROLES_PROJECT.json"
+  migrate_session "$ORCA_ROLES_PROJECT"
+  ORCA_ROLES_BROWSER_STATE="$(session_file "$ORCA_ROLES_PROJECT")"
   export ORCA_ROLES_WORKTREE ORCA_ROLES_PROJECT ORCA_ROLES_EVIDENCE_DIR ORCA_ROLES_BROWSER_STATE
 }
 # Creates an empty browser state if none exists (Playwright accepts {"cookies":[],"origins":[]}); browser-login.sh fills it.

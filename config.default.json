@@ -23,8 +23,10 @@
   "mcpServers": {
     "atlassian": { "type": "sse", "url": "https://mcp.atlassian.com/v1/sse" },
     "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
-    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated",
-                                              "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"] }
+    "playwright": { "command": "{kit}/pw/node_modules/.bin/playwright-mcp",
+                    "args": ["--browser", "chromium", "--headless", "--isolated",
+                             "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"],
+                    "env": { "PLAYWRIGHT_BROWSERS_PATH": "{kit}/browsers" } }
   },
   "roles": {
     "planner": {
@@ -80,7 +82,7 @@
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
       "mcp": ["playwright"],
-      "params": { "evidenceDir": "qa-evidence" }
+      "params": { "evidenceDir": "qa-evidence", "e2eDir": "qa-e2e" }
     },
     "deployer": {
       "title": "Deployer",
