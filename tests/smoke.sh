@@ -206,6 +206,13 @@ rule R10 "$PD/auditor.md" 'do not run text mutants' '^4\. If the change only tou
 rule R10 "$PD/tester.md" 'the rest of this list still applies (including cleanup)' '^2\. If the change only touches prompt'
 rule R10 "$PD/auditor.md" 'the rest of the method still applies, including the names-of-people pass' '^4\. If the change only touches prompt'
 rule R10 "$PD/planner.md" 'never tells the Tester or the Auditor what to test, mutate or look at' '\*\*Briefed rounds\.\*\*'
+# R10 plan audit: a very complex plan goes to the Auditor before the user sees it; otherwise the Planner says it judged it safe
+rule R10 "$PD/planner.md" 'decide whether the plan is **very complex**' '^3\. \*\*Before presenting it, audit it\*\*'
+rule R10 "$PD/planner.md" 'create an Auditor task, type "plan audit"' '^   If it is very complex'
+rule R10 "$PD/planner.md" 'a "plan corrections review"' '^   If it is very complex'
+rule R10 "$PD/planner.md" 'you judged it safe to go without the Auditor and why' '^4\. Present the plan'
+rule R10 "$PD/auditor.md" 'A **plan audit** has no code yet' '^3\. Work out which kind of task'
+rule R10 "$PD/auditor.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
 # R11 where each role works: in place with .orca-bak, one mutant at a time, verified close; experiments in scratchDir; temporaries only there
 t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
 a27="$(grep '^2\. \*\*Baseline' "$PD/auditor.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)"
