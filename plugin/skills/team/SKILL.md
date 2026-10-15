@@ -32,6 +32,9 @@ orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Re
 | `<repo root>/.orca-roles.json` | Configuration for that project only, merged on top of the global one. |
 | The project's setup script | The `launch.sh` line with its options: the project's exceptions. |
 | The worktree's git dir (`git rev-parse --git-dir`) | `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (saved exceptions), `orca-roles.env` (handles), `orca-roles.notes/<role>.md` (instructions for this worktree), `orca-roles.lock` (a directory, present while a launch runs, with the holder's pid in `pid`), `orca-roles.kicked` (the handle each role had when it got its role message), `orca-roles.kickoff.d/` (one file per running kickoff, named by its pid, with the roles it will kick; removed when it ends), `orca-roles.wtid` (the worktree id of the last launch), logs `orca-roles-launch.log` and `orca-roles-kickoff.log`. |
+| `~/.orca-roles/pw/`, `~/.orca-roles/browsers/` | The kit's pinned Playwright (MCP, login and flow runner), installed by `~/.orca-roles/bin/e2e-browser.sh install`, and its Chromium. |
+| `~/.orca-roles/browser/<project>/<identity>.json` | The user's saved browser sessions for the E2E-Tester and its flows (saved by `browser-login.sh`). |
+| The worktree's `qa-e2e/<flow>/` and `qa-evidence/<flow>/` | The E2E-Tester's flows (Playwright scripts) and their evidence; ignored locally, never committed. |
 | `refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>` | The Planner's snapshots of the tree, kept out of every branch. Managed with `~/.orca-roles/bin/checkpoint.sh` (`<step> <n>`, `--list [<step>]`, `--clear <step>`, `--clear-all`). |
 
 ## 1. Installing and updating
@@ -43,7 +46,7 @@ git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook
 git -C orca-role-hook pull && bash orca-role-hook/install.sh                                     # update
 ```
 
-- Requirements: `jq` (essential), Orca with Orchestration enabled (Settings > Experimental), Claude Code; Node and `npx playwright install chromium` for the E2E-Tester.
+- Requirements: `jq` (essential), Orca with Orchestration enabled (Settings > Experimental), Claude Code; Node and `~/.orca-roles/bin/e2e-browser.sh install` (the kit's pinned Playwright and Chromium, about 400 MB, no sudo) for the E2E-Tester. The E2E-Tester plans and explores with the Playwright MCP and delivers each E2E as a Playwright script run with `e2e-run.sh`; only the user logs in (`browser-login.sh <url> [--as <identity>]`), agents never do.
 - Updating keeps `config.json` and `roles/`, and adds the new options. The Visual-Tester is now the E2E-Tester (`e2e-tester`): an old `visual-tester` in `config.json`, `.orca-roles.json` or the setup script options is renamed automatically, keeping its settings.
 - The installer adds the `roles`, `new-role` and `roles-yaml` commands (active in new terminals, or after `source ~/.bashrc`).
 - **Windows**: the kit runs in WSL2. The repo goes inside WSL (`~/...`), the project is added in Orca with its WSL path (`\\wsl.localhost\Ubuntu\home\<user>\<repo>`), and `jq`, Claude Code and Node are installed inside WSL. In Orca's WSL terminals the CLI is called `$ORCA_CLI_COMMAND` (e.g. `orca-ide`); the installer adds an `orca` alias for it.
@@ -201,6 +204,11 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | `roles` says a tab "never got its role message" | Expected after an interrupted launch: that tab gets its role now and is not reopened |
 | A role of the other phase is missing (academic-writer) | Expected: only the current phase's roles open; `roles --status` shows the phase; switch with `~/.orca-roles/bin/phase.sh <phase>` |
 | The review skill is missing (pr-reviewer mode) | `~/.orca-roles/bin/review-skill.sh status`: `installed`, `disabled`, `missing` or `error <reason>`; after the user's yes, `review-skill.sh install` adds the marketplace and installs the plugin (`settings.prReviewer` names them), and `path` prints the skill file |
+| The E2E browser is missing, `Chromium distribution 'chrome' is not found`, or a Playwright version mismatch | `~/.orca-roles/bin/e2e-browser.sh check` says what is missing; then `install` (the Planner has the Deployer run it, after the user's yes); then reopen the E2E-Tester's tab (`close-role.sh e2e-tester`, then `roles`) so its MCP connects |
+| The E2E-Tester asks for a login, or the session expired | `~/.orca-roles/bin/e2e-browser.sh session <url> --as <identity>` says why; the user signs in again with `~/.orca-roles/bin/browser-login.sh <url> --as <identity>` (no `--as` = `default`). Agents never log in |
+| The E2E-Tester's tab still starts `npx @playwright/mcp@latest` | A `mcpServers.playwright` override (saved in the worktree or in the user's config) was not migrated to the pinned stack: drop the override with `roles --reset`, or edit the config entry (confirm first, see Rules) |
+| `e2e-run.sh` refuses a real `qa-e2e/node_modules` | Remove it (never `npm install` there): the kit links its own pinned packages |
+| `e2e-run.sh` does not find the flow | It must be a folder `qa-e2e/<flow>/` (`e2eDir` param) of the worktree with at least one `*.flow.ts` or `*.flow.js` |
 | A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
 | A role lost its role after a manual `/clear` or `/new` | Claude and Codex roles ask for it again on the next message (`clean.sh --msg <role>`, from a line outside the conversation). A `custom` role only if its `command` passes `{anchor}`; otherwise `clean.sh <role>`, or tell it to run `clean.sh --msg <role>` |
 
