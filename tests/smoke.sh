@@ -896,7 +896,7 @@ cat > "$TMP/obin/orca" <<'EOS'
 #!/bin/sh
 case "$1 $2" in
   "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
-  "terminal show") exit 1;;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
@@ -930,7 +930,7 @@ cat > "$TMP/lbin/orca" <<'EOS'
 #!/bin/sh
 case "$1 $2" in
   "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
-  "terminal show") exit 1;;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
@@ -953,7 +953,7 @@ mkdir -p "$TMP/lbin2"; cat > "$TMP/lbin2/orca" <<'EOS'
 #!/bin/sh
 case "$1 $2" in
   "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
-  "terminal show") [ -n "$FAKE_SHOW" ] && echo "$FAKE_SHOW" && exit 0; exit 1;;
+  "terminal show") [ -n "$FAKE_SHOW" ] && echo "$FAKE_SHOW" && exit 0; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
   "repo show") cat "$FAKE_REPO" 2>/dev/null;;
 esac
 exit 0
@@ -969,6 +969,79 @@ try launch2 --reset; check "launch: a failing check does not change the outcome"
 printf '%s' '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$TMP/l2.json"
 try launch2 --reset; check "launch: the warning comes after the team is saved and before it is printed" "$RC:$(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1):$(printf '%s\n' "$OUT" | grep -n '^PLANNER=' | cut -d: -f1 | head -1)" "0:$(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1):$(( $(printf '%s\n' "$OUT" | grep -n 'WARNING' | cut -d: -f1 | head -1) + 1 ))"
 FAKE_SHOW='{"result":{"terminal":{"agentIdentity":"claude"}}}' try launch2; check "launch: the warning also shows when every role is already open" "$RC:$(printf '%s\n' "$OUT" | grep -c 'All roles are already open'):$(printf '%s\n' "$OUT" | grep -c 'WARNING: new worktrees of this project will not start the kit')" "0:1:1"
+
+# unknown results, lock and worktree id (own fake orca: each handle's answer is a file in $LK)
+LK="$TMP/lk"; mkdir -p "$LK/bin" "$LK/proj"; git -C "$LK/proj" init -q; LKG="$LK/proj/.git"; LKL="$LK/orca.log"; : > "$LKL"
+cat > "$LK/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LKL"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; [ -f "$LK/failcreate-\$t" ] && exit 1; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal list") [ -f "$LK/listfail" ] && exit 1; echo '{"terminals":[]}';;
+  "terminal show") case "\$4" in
+    h-*) echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\"}}}";;
+    *) m="\$(cat "$LK/show.\$4" 2>/dev/null)"; case "\$m" in
+      alive) echo '{"result":{"terminal":{"agentIdentity":"claude"}}}';;
+      rt) echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1;;
+      *) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; esac;; esac;;
+esac
+exit 0
+EOS
+chmod +x "$LK/bin/orca"; printf '#!/bin/sh\nexit 0\n' > "$LK/bin/kickoff"; chmod +x "$LK/bin/kickoff"
+lkl() { (cd "$LK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LK/bin:$PATH" ORCA_ROLES_KICKOFF="${LKK:-$LK/bin/kickoff}" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+lkreset() { rm -rf "$LKG"/orca-roles.* "$LK"/show.* "$LK"/listfail "$LK"/failcreate-*; : > "$LKL"; }
+lkcnt() { grep -cE "^terminal $1" "$LKL" || true; }
+lksum() { cat "$LKG/orca-roles.env" "$LKG/orca-roles.pty" 2>/dev/null | cksum; }
+lkseed() { printf 'PLANNER=p1\nDEV=d1\nDEPLOYER=x1\n' > "$LKG/orca-roles.env"; printf 'PLANNER=pty1\nDEV=pty2\nDEPLOYER=pty3\n' > "$LKG/orca-roles.pty"; cp "$KIT/config.json" "$LKG/orca-roles.config.json"; }
+# role 2 unknown: the stale role 1 is not reopened either; nothing is closed or opened and the state is byte-identical
+lkreset; lkseed; echo alive > "$LK/show.x1"; echo rt > "$LK/show.d1"; B="$(lksum)"
+try lkl; R1="$RC:$(printf '%s' "$OUT" | grep -c 'ERROR: Orca is not ready (runtime_unavailable) for Dev: no tab was closed or opened'):$(lkcnt create):$(lkcnt close):$(lksum)"
+try lkl --status
+check "launch: a role with an unknown tab state stops the launch before any close or create, state byte-identical; --status prints 'unknown (<code>)', exits 0" "$R1:$RC:$(printf '%s' "$OUT" | grep -c '^Dev	d1	unknown (runtime_unavailable)	'):$(lkcnt create):$(lkcnt close)" "1:1:0:0:$B:0:1:0:0"
+# LISTOK: a saved handle that Orca calls stale cannot be told from a restored tab when the list failed
+lkreset; lkseed; echo alive > "$LK/show.p1"; echo alive > "$LK/show.x1"; : > "$LK/listfail"; B="$(lksum)"
+try lkl; check "launch: terminal list failed and a role with a saved handle has no tab: stop, nothing closed or opened, state byte-identical" "$RC:$(printf '%s' "$OUT" | grep -c "ERROR: 'orca terminal list' failed: cannot tell whether Dev's tab was restored"):$(lkcnt create):$(lkcnt close):$(lksum)" "1:1:0:0:$B"
+lkreset; : > "$LK/listfail"; try lkl; R1="$RC:$(lkcnt create):$(cut -d= -f1 "$LKG/orca-roles.env" 2>/dev/null | tr '\n' ' ' || true)"
+lkreset; printf 'PLANNER=p1\n' > "$LKG/orca-roles.env"; cp "$KIT/config.json" "$LKG/orca-roles.config.json"; echo alive > "$LK/show.p1"; : > "$LK/listfail"; try lkl
+check "launch: terminal list failed proceeds on a first launch and for a newly enabled role without a saved handle" "$R1:$RC:$(lkcnt create):$(cut -d= -f1 "$LKG/orca-roles.env" 2>/dev/null | tr '\n' ' ' || true)" "0:3:PLANNER DEV DEPLOYER :0:2:PLANNER DEV DEPLOYER "
+# interrupted launch: the tabs opened so far stay in the state files
+lkreset; : > "$LK/failcreate-Dev"; try lkl
+check "launch: an interrupted launch keeps the tab it opened in orca-roles.env and .pty" "$RC:$(cat "$LKG/orca-roles.env" 2>/dev/null | tr '\n' ' '):$(cat "$LKG/orca-roles.pty" 2>/dev/null | tr '\n' ' ')" "1:PLANNER=h-Planner :PLANNER=pty-h-Planner "
+# H1: a tab opened by an interrupted launch gets its role message on the rerun and is not opened again
+printf '#!/bin/sh\necho "$4|$7" >> "%s"\ncp "$2" "$(dirname "$2")/orca-roles.kicked"\n' "$LK/kick.log" > "$LK/bin/kickoff2"; chmod +x "$LK/bin/kickoff2"
+lkreset; : > "$LK/kick.log"; : > "$LK/failcreate-Dev"; try lkl; R1="$RC:$(cat "$LKG/orca-roles.kicked" 2>/dev/null | wc -c | tr -d ' '):$(wc -l < "$LK/kick.log" | tr -d ' ')"
+rm -f "$LK/failcreate-Dev"; : > "$LKL"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+R2="$RC:$(lkcnt create):$(grep -c '^The tab of Planner (h-Planner) never got its role message; sending it now.$' <<<"$OUT" || true):$(tr '\n' ' ' < "$LK/kick.log"):$(cut -d= -f1 "$LKG/orca-roles.kicked" 2>/dev/null | tr '\n' ' ' || true)"
+: > "$LKL"; : > "$LK/kick.log"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: an interrupted launch, then a rerun: the tab opened in run 1 is kicked (reused), not opened again; a further rerun does nothing" "$R1:$R2:$RC:$(lkcnt create):$(wc -c < "$LK/kick.log" | tr -d ' '):$(printf '%s' "$OUT" | grep -c 'All roles are already open')" "1:0:0:0:2:1: planner dev deployer| planner :PLANNER DEV DEPLOYER :0:0:0:1"
+# upgrade from an older kit: no marker file and a saved team: every alive tab counts as kicked
+lkreset; lkseed; for h in p1 d1 x1; do echo alive > "$LK/show.$h"; done; : > "$LK/kick.log"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: no orca-roles.kicked and an existing team (older kit): nothing is kicked or opened, the marker is seeded from orca-roles.env" "$RC:$(lkcnt create):$(wc -c < "$LK/kick.log" | tr -d ' '):$(printf '%s' "$OUT" | grep -c 'never got its role message'):$(cmp -s "$LKG/orca-roles.env" "$LKG/orca-roles.kicked" && echo same || echo differ)" "0:0:0:0:same"
+# an alive tab whose marker holds another handle is kicked again, the others are not
+printf 'PLANNER=p1\nDEV=old\nDEPLOYER=x1\n' > "$LKG/orca-roles.kicked"; : > "$LK/kick.log"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: an alive tab whose marker has another handle is kicked as reused, the other alive tabs are left alone" "$RC:$(lkcnt create):$(tr '\n' ' ' < "$LK/kick.log"):$(grep -c '^DEV=d1$' "$LKG/orca-roles.kicked")" "0:0: dev| dev :1"
+# lock
+lkreset; mkdir "$LKG/orca-roles.lock"; sleep 30 & HP=$!; echo "$HP" > "$LKG/orca-roles.lock/pid"
+ORCA_ROLES_LOCK_WAIT=2 try lkl
+check "launch: a lock held by a live pid waits, then stops with nothing changed and the lock left to its owner" "$RC:$(printf '%s' "$OUT" | grep -c "^Another roles is running in this worktree (pid $HP); waiting...$"):$(printf '%s' "$OUT" | grep -c "^ERROR: another roles is still running in this worktree (pid $HP). Nothing was changed."):$(lkcnt create):$([ -e "$LKG/orca-roles.env" ] && echo 1 || echo 0):$(cat "$LKG/orca-roles.lock/pid")" "1:1:1:0:0:$HP"
+kill "$HP" 2>/dev/null; wait "$HP" 2>/dev/null || true
+sleep 0 & DP=$!; wait "$DP"; echo "$DP" > "$LKG/orca-roles.lock/pid"
+try lkl; R1="$RC:$(printf '%s' "$OUT" | grep -c "^Took over a stale lock (pid $DP is gone).$"):$(lkcnt create):$([ -e "$LKG/orca-roles.lock" ] && echo held || echo free)"
+lkreset; mkdir "$LKG/orca-roles.lock"; ORCA_ROLES_LOCK_WAIT=1 try lkl
+check "launch: a lock whose pid is dead is taken over; one without a pid file is waited for, then taken over; both run and remove the lock" "$R1:$RC:$(lkcnt create):$([ -e "$LKG/orca-roles.lock" ] && echo held || echo free)" "0:1:3:free:0:3:free"
+# a launch blocked by the lock reads the state the first one wrote: every role alive, nothing opened
+lkreset; mkdir "$LKG/orca-roles.lock"; sleep 30 & HP=$!; echo "$HP" > "$LKG/orca-roles.lock/pid"
+(cd "$LK" && sleep 2; lkseed; for h in p1 d1 x1; do echo alive > "$LK/show.$h"; done; kill "$HP"; rm -rf "$LKG/orca-roles.lock") &
+ORCA_ROLES_LOCK_WAIT=20 try lkl; wait
+check "launch: blocked by the lock, it reads the state written meanwhile and opens nothing when every role is alive" "$RC:$(printf '%s' "$OUT" | grep -c 'All roles are already open'):$(lkcnt create):$(lkcnt close)" "0:1:0:0"
+# worktree id
+lkreset
+try lkl id:AAA; R1="$RC:$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before' || true)"
+try lkl id:AAA; R2="$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before' || true)"
+try lkl id:BBB; R3="$RC:$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before as worktree id:AAA and now as id:BBB; if Orca lists it twice, its tabs may be duplicated.$'):$(cat "$LKG/orca-roles.wtid")"
+try lkl active; R4="$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before' || true):$(cat "$LKG/orca-roles.wtid")"
+check "launch: a changed worktree id warns (and is saved), the same id or 'active' does not" "$R1:$R2:$R3:$R4" "0:0:0:0:1:id:BBB:0:id:BBB"
+lkreset
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
 }
 
@@ -984,7 +1057,7 @@ case "\$1 \$2" in
   "terminal show") case "\$4" in
     h-up) echo '{"result":{"terminal":{"agentIdentity":"claude"}}}';;
     h-gone) echo '{"result":{"terminal":{"title":"x"}}}';;
-    *) exit 1;; esac;;
+    *) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; esac;;
 esac
 exit 0
 EOS
@@ -1012,7 +1085,7 @@ case "\$1 \$2" in
   "terminal show") case "\$4" in
     h-orph) echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}';;
     h-cust) echo '{"result":{"terminal":{"title":"x"}}}';;
-    *) exit 1;; esac;;
+    *) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; esac;;
 esac
 exit 0
 EOS
@@ -1045,7 +1118,7 @@ jq '.roles["e2e-tester"] = {title: "E2E-Tester"} | .defaults.model = "m-def"' "$
 printf 'E2E_TESTER=h-up\nPLANNER=h-up\n' > "$G/orca-roles.env"
 printf '#!/bin/sh\necho '"'"'{"result":{"terminal":{"agentIdentity":"claude"}}}'"'"'\n' > "$TMP/sbin/orca"
 try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +2 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-/Planner|h-up|alive|m-def|-"
-try status -h; check "status: -h prints the whole header, ending at the open-team rule" "$(printf '%s\n' "$OUT" | tail -1 | cut -c1-38)" "# The mode of a worktree cannot change"
+try status -h; check "status: -h prints the whole header, ending at the lock and not-ready lines" "$(printf '%s\n' "$OUT" | grep -c '^# The mode of a worktree cannot change'):$(printf '%s\n' "$OUT" | tail -2 | head -1 | cut -c1-40):$(printf '%s\n' "$OUT" | tail -1 | cut -c1-30)" '1:# Only one launch runs per worktree at a:# ("Orca is not ready"), it st'
 }
 
 sec_modes() {
@@ -1070,7 +1143,7 @@ echo "\$*" >> "$MLOG"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
   "terminal list") [ -f "$TMP/m-listfail" ] && exit 1; exit 0;;
-  "terminal show") [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+  "terminal show") [ -f "$TMP/m-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
@@ -1284,6 +1357,10 @@ try ml --mode pr-reviewer; check "open team: a saved config without settings.mod
 try ml --mode pr-reviewer; check "terminal list fails: a mode change with a saved team is refused, nothing changes" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
 case "$OUT" in *"cannot tell whether this worktree's team"*) echo "ok   terminal list fails: the error explains it";; *) echo "FAIL list failure message: $OUT"; FAIL=1;; esac
 rm -f "$TMP/m-listfail"
+# 'orca terminal show' failing for a reason other than a stale handle: the open-team check cannot tell, so a mode change is refused
+: > "$TMP/m-rt"; B="$(mstate)"; N="$(mcreates)"
+try ml --mode pr-reviewer; check "terminal show unknown: a mode change with a saved team stops with 'Orca is not ready', nothing changes" "$RC:$(printf '%s' "$OUT" | grep -c 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree.s team is still open'):$(mcreates):$(mstate)" "1:1:$N:$B"
+rm -f "$TMP/m-rt"
 rm -f "$TMP/m-alive"
 try ml --mode pr-reviewer; check "closed team: the mode change proceeds" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
 # the team is open in pr-reviewer: every way back to another mode is rejected
@@ -1668,7 +1745,7 @@ cat > "$TMP/cbin/orca" <<EOS
 echo "\$*" >> "$COLOG"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
-  "terminal show") exit 1;;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
   "terminal list")
     if [ -f "$TMP/clist.seen" ]; then t=done; else t=feat-x; : > "$TMP/clist.seen"; fi
     echo "{\"terminals\":[{\"handle\":\"x1\",\"title\":\"\$t\",\"agentIdentity\":\"claude\",\"preview\":\"\"},{\"handle\":\"s1\",\"title\":\"feat-x\",\"agentIdentity\":\"\",\"preview\":\"\"}]}";;
@@ -1757,7 +1834,7 @@ cat > "$TMP/sbin/orca" <<EOS
 echo "\$*" >> "$SLOG"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
-  "terminal show") exit 1;;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
   "terminal list") echo '{"terminals":[{"handle":"x1","title":"✳ Claude Code","agentIdentity":"claude","preview":""},{"handle":"s1","title":"bash","agentIdentity":null,"preview":""}]}';;
 esac
 exit 0
@@ -1871,7 +1948,7 @@ echo "\$*" >> "$RLOG"
 case "\$1 \$2" in
   "terminal list") echo '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"},{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"},{"handle":"other","ptyId":"wt@@p9","title":"z"}]}';;
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"new-\$t\"}";;
-  "terminal show") case "\$*" in *old-*) exit 1;; *new-Planner*) echo '{"result":{"terminal":{"ptyId":"wt@@n1","agentIdentity":"claude"}}}';; *new-Dev*) echo '{"result":{"terminal":{"ptyId":"wt@@n2","agentIdentity":"claude"}}}';; *) echo '{"result":{"terminal":{"ptyId":"wt@@n3","agentIdentity":"claude"}}}';; esac;;
+  "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *new-Planner*) echo '{"result":{"terminal":{"ptyId":"wt@@n1","agentIdentity":"claude"}}}';; *new-Dev*) echo '{"result":{"terminal":{"ptyId":"wt@@n2","agentIdentity":"claude"}}}';; *) echo '{"result":{"terminal":{"ptyId":"wt@@n3","agentIdentity":"claude"}}}';; esac;;
 esac
 exit 0
 EOS
@@ -1900,7 +1977,7 @@ check "restart: the Planner reopens with --resume and the kit's launcher" "$(gre
 check "restart: Dev reopens without --resume" "$(grep -c "agent.sh' dev --json" "$RLOG")" "1"
 check "restart: new handles saved" "$(cut -d= -f2 "$RP/.git/orca-roles.env" | tr '\n' ' ')" "new-Planner new-Dev new-Tst "
 check "restart: new terminal identities saved" "$(cut -d= -f2 "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "wt@@n1 wt@@n2 wt@@n3 "
-sleep 1; check "restart: kickoff gets the resumed and the remembered roles" "$(cut -d" " -f2- "$TMP/rkick.args" | sed "s#$RP/.git#GD#g")" "GD/orca-roles.env GD/orca-roles.config.json  planner dev tst  dev tst  planner"
+sleep 1; check "restart: kickoff gets the resumed and the remembered roles" "$(cut -d" " -f2- "$TMP/rkick.args" | sed "s#$RP/.git#GD#g")" "GD/orca-roles.env GD/orca-roles.config.json  planner dev tst  dev tst  planner "
 M4="$(planner_msg "$KIT/config.json" "planner dev" "$RP/.git/orca-roles.env" "" "" 2)"
 case "$M4" in *"you are BACK after a restart, with your previous conversation"*"Coming back with your memory"*) echo "ok   planner_msg: back with memory";; *) echo "FAIL planner_msg memory: $M4"; FAIL=1;; esac
 case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in *"Your terminal handle is now new-Dev"*"do not continue it on your own"*) echo "ok   worker_back_msg";; *) echo "FAIL worker_back_msg"; FAIL=1;; esac
@@ -2342,7 +2419,8 @@ case "\$1 \$2" in
     else echo ready >> "$MF/hist.\$h"; fi;;
   "terminal read") v=1000000; [ -f "$MF/view" ] && v="\$(cat "$MF/view")"; jq -nc --arg s "\$(tail -n "\$v" "$MF/hist.\$h" 2>/dev/null)" '{text: \$s}';;
   "orchestration send")
-    to=""; sub=""; body=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; esac; shift; done
+    to=""; sub=""; body=""; ty=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; --type) ty="\$2";; esac; shift; done
+    if [ "\$ty" = status ]; then echo "HND \$to|\$ty|\$sub|\$(printf '%s' "\$body" | tr '\\n' '/')" >> "\$L"; [ -f "$MF/failhnd" ] && exit 1; exit 0; fi
     echo "ESC \$to|\$sub|\$body" >> "\$L"; [ -f "$MF/failsend" ] && exit 1;;
 esac
 exit 0
@@ -2351,16 +2429,17 @@ chmod +x "$MF/bin/orca"
 CLERR="There's an issue with the selected model (x). It may not exist or you may not have access to it."
 echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
 mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE
-  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/failsend" "$MF/waits.log"
+  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/waits.log"
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
-  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'PLANNER=hp\nDEV=hd\nTESTER=ht\nAUDITOR=ha\n' > "$MF/gd/orca-roles.env"
+  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'PLANNER=hp\nDEV=hd\nTESTER=ht\nAUDITOR=ha\n' > "$MF/gd/orca-roles.env"
   echo "$2" > "$MF/mode"
-  (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" > "$MF/out.log" 2>&1)
+  (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" "${REUSED:-}" > "$MF/out.log" 2>&1)
 }
 mfc() { printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner", "model": "claude-opus-5-5" }, "dev": { %s } } }' "$1"; }
 models() { cat "$MF/gd/orca-roles.models" 2>/dev/null | tr '\n' ' '; }
 nomodel() { grep -c '/model' "$MF/orca.log" || true; }
+hnds() { grep '^HND ' "$MF/orca.log" || true; }
 escs() { grep '^ESC ' "$MF/orca.log" || true; }
 nesc() { escs | wc -l | tr -d ' '; }
 DEVOK='"title": "Dev", "model": "claude-opus-5-5"'
@@ -2462,7 +2541,32 @@ ERRTXT="ERROR: unexpected status 404 $PAD gpt-5.5 $PAD does not exist" mf "$(mfc
 check "model-check: matched text in the escalation is cut to 200 characters" "$(escs | sed 's/^[^(]*(//; s/)\. config.json.*$//' | tr -d '\n' | wc -c | tr -d ' ')" "200"
 mkdir -p "$TMP/home"; HB="$(cd "$TMP/home" && find . | sort | shasum)"
 mf "$(mfc "$DEVOK")" bad "dev tester"
-check "model-check: nothing outside the git dir is written" "$(find "$MF/wt" -mindepth 1 -not -path "$MF/wt/.git" -not -path "$MF/wt/.git/*" | wc -l | tr -d ' '):$(ls "$MF/gd" | tr '\n' ' '):$(cd "$TMP/home" && find . | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed)" "0:orca-roles.env orca-roles.models :same"
+check "model-check: nothing outside the git dir is written" "$(find "$MF/wt" -mindepth 1 -not -path "$MF/wt/.git" -not -path "$MF/wt/.git/*" | wc -l | tr -d ' '):$(ls "$MF/gd" | tr '\n' ' '):$(cd "$TMP/home" && find . | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed)" "0:orca-roles.env orca-roles.kicked orca-roles.models :same"
+# the live Planner is told the new handles
+HB1="HND hp|status|Role handles changed|roles opened or reopened: Dev. Use these handles from now on:/PLANNER=hp/DEV=hd/TESTER=ht/AUDITOR=ha"
+mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: one status to the live Planner with every handle" "$(hnds)" "$HB1"
+check "handles: the user is told" "$(grep -c '^Told the Planner the new handles\.$' "$MF/out.log")" "1"
+mf "$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')" clean "dev tester"
+check "handles: two reopened workers, one message naming both" "$(hnds | wc -l | tr -d ' '):$(hnds | grep -c 'roles opened or reopened: Dev, Tester\. Use')" "1:1"
+REM=dev mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: a remembered worker also counts" "$(hnds | wc -l | tr -d ' ')" "1"
+mf "$(mfc "$DEVOK")" clean "planner"
+check "handles: only the Planner reopened, no message" "$(hnds | wc -l | tr -d ' ')" "0"
+mf "$(mfc "$DEVOK")" clean "planner dev"
+check "handles: Planner and worker reopened, no message" "$(hnds | wc -l | tr -d ' ')" "0"
+mf "$(mfc "$DEVOK")" clean ""
+check "handles: nothing reopened, no message" "$(hnds | wc -l | tr -d ' ')" "0"
+OTH=hp mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: the Planner ran it itself, no send, says so" "$(hnds | wc -l | tr -d ' '):$(grep -c '^Not telling the Planner the new handles: it ran this launch itself\.$' "$MF/out.log")" "0:1"
+OTH=other mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: another terminal ran it, the Planner is told" "$(hnds | wc -l | tr -d ' ')" "1"
+REUSED=dev OTH=other mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: a reused role is kicked and recorded in orca-roles.kicked but does not trigger 'Role handles changed'" "$(hnds | wc -l | tr -d ' '):$(grep -c '^SEND ' "$MF/orca.log"):$(cat "$MF/gd/orca-roles.kicked" | tr '\n' ' ')" "0:1:DEV=hd "
+REUSED=dev OTH=other mf "$(mfc "$DEVOK")" clean "dev planner"
+check "handles: a reused role next to a reopened Planner: both kicked, both recorded" "$(hnds | wc -l | tr -d ' '):$(grep -c '^SEND ' "$MF/orca.log"):$(sort "$MF/gd/orca-roles.kicked" | tr '\n' ' ')" "0:2:DEV=hd PLANNER=hp "
+FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: a failed send is reported with the cat hint" "$(grep -c "^Could not tell the Planner the new handles; tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log")" "1"
 # check_config and docs
 cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }
 # defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
@@ -2822,7 +2926,7 @@ echo "\$*" >> "$RLOG"
 case "\$1 \$2" in
   "terminal create") [ -f "$TMP/r-failcreate" ] && exit 1
     while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t-\$(grep -c '^terminal create' "$RLOG")\"}";;
-  "terminal show") [ -f "$TMP/r-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+  "terminal show") [ -f "$TMP/r-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
@@ -2836,7 +2940,7 @@ case "\$m" in
   *) echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
 esac
 EOS
-printf '#!/bin/sh\necho "$4" >> "%s"\n' "$RKL" > "$TMP/rbin/kickoff"; chmod +x "$TMP/rbin"/*
+printf '#!/bin/sh\necho "$4" >> "%s"\ncp "$2" "$(dirname "$2")/orca-roles.kicked"\n' "$RKL" > "$TMP/rbin/kickoff"; chmod +x "$TMP/rbin"/*
 rl() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
 rr() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/relaunch-role.sh" "$@" 2>&1); }
 rstate() { cat "$RG/orca-roles.env" "$RG/orca-roles.pty" "$RG/orca-roles.overrides.json" "$RG/orca-roles.config.json" | cksum; }
@@ -2924,7 +3028,7 @@ echo "\$*" >> "$ALOG"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
   "terminal list") [ -f "$TMP/aw-listfail" ] && exit 1; exit 0;;
-  "terminal show") [ -f "$TMP/aw-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; exit 1;;
+  "terminal show") [ -f "$TMP/aw-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/aw-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
@@ -2941,7 +3045,10 @@ SD1="$(ls -A "$AM" | tr '\n' ' ')"
 check "launch: starts in experiment with the experiment roles only, prints Phase, runs the scaffold; --status shows Phase" "$RC:$(ah):$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$SD1:$(jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"):$(al --status | grep -c '^Phase: experiment$')" "0:PLANNER EXP BOTH NOP :1:.git .gitignore article experimentation :unset:1"
 # phase guard
 touch "$TMP/aw-alive"; B="$(astate)"; N="$(grep -c '^terminal create' "$ALOG" || true)"
-try al --set settings.phase=writing; R_A="$RC:$(printf '%s' "$OUT" | grep -c "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Exp is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed." || true):$(astate):$(grep -c '^terminal create' "$ALOG" || true)"
+C_PH="$(acl)"; try al --set settings.phase=writing; R_A="$RC:$(printf '%s' "$OUT" | grep -c "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Exp is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed." || true):$(astate):$(grep -c '^terminal create' "$ALOG" || true)"
+touch "$TMP/aw-rt"; try al --set settings.phase=writing
+check "launch: a phase change when 'terminal show' gives an unknown error stops with 'Orca is not ready', nothing changed" "$RC:$(printf '%s' "$OUT" | grep -c 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree.s team is still open'):$(astate):$(grep -c '^terminal create' "$ALOG" || true):$(acl)" "1:1:$B:$N:$C_PH"
+rm -f "$TMP/aw-rt"
 touch "$TMP/aw-listfail"; try al --set settings.phase=writing; R_B="$RC:$(printf '%s' "$OUT" | grep -c "phase 'experiment'.*Phase 'writing' was requested; nothing was changed" || true):$(astate)"; rm -f "$TMP/aw-listfail"
 check "launch: phase change under an open team of the old phase is refused (also when Orca cannot be listed), nothing changed" "$R_A:$R_B" "1:1:$B:$N:1:1:$B"
 # phase.sh

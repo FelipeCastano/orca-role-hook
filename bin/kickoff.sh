@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the Planner,
 # tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
-# Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>" ["<remembered roles>"]]
-#   resumed: reopened without memory (the Planner recovers the state); remembered: reopened with their previous conversation.
+# Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>" ["<remembered roles>" ["<reused roles>"]]]
+#   resumed: reopened without memory (the Planner recovers the state); remembered: reopened with their previous conversation;
+#   reused: in <new roles> only because their tab never got its role message (same handle, not told to the Planner as changed).
+# Each role's handle is recorded in orca-roles.kicked (next to <state>) once its message is sent.
 set -uo pipefail
-WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"; REMEMBERED="${6:-}"
+WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"; REMEMBERED="${6:-}"; REUSED="${7:-}"
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 # shellcheck source=/dev/null
 . "$STATE"
@@ -48,6 +50,10 @@ check_model() {  # $1 handle, $2 role, $3 model errors on screen before the mess
   [ "$2" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $model is not available ($text). config.json is unchanged. To fix it yourself: set roles.$2.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $2 and run roles (without options, so this worktree's saved options are kept)."
 }
 
+kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds it), atomically
+  local f tmp v; f="$(dirname "$STATE")/orca-roles.kicked"; tmp="$f.tmp.$$"; v="$(var_of "$1")"; [ -f "$f" ] || : > "$f"
+  awk -v k="$v" -v h="$2" 'index($0, k "=") == 1 { if (!d) print k "=" h; d = 1; next } { print } END { if (!d) print k "=" h }' "$f" > "$tmp" && mv "$tmp" "$f"
+}
 kick() {  # $1 handle, $2 role, $3 message
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
@@ -57,7 +63,7 @@ kick() {  # $1 handle, $2 role, $3 message
   done
   local before rx; rx="$(model_error_regex "$CFG" "$2" "$(rstr "$CFG" "$2" model)")"
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
-  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && echo "Prompt sent to $1"
+  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; kicked_set "$2" "$1"; }
   [ -z "$rx" ] || { check_model "$1" "$2" "$before" "$rx" & CHECK_PIDS="$CHECK_PIDS $!"; }
 }
 is_new() { case " $NEW " in *" $1 "*) return 0;; *) return 1;; esac; }
@@ -113,12 +119,29 @@ if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
   kick "$PLANNER" planner "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
 fi
+OPENED_WORKERS=""
 for id in $ROLES; do
   [ "$id" = planner ] && continue
   is_new "$id" || continue
   v=$(var_of "$id")
+  case " $REUSED " in *" $id "*) ;; *) OPENED_WORKERS="${OPENED_WORKERS:+$OPENED_WORKERS, }$(title_of "$CFG" "$id")";; esac
   if remembers "$id"; then kick "${!v}" "$id" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$id" "$(worker_msg "$CFG" "$id")"; fi
 done
+
+# A live Planner learns the new handles only from this message: its role message (with the handles) is sent only when it is (re)opened.
+if ! is_new planner && [ -n "$OPENED_WORKERS" ] && [ -n "${PLANNER:-}" ]; then
+  if [ "${ORCA_TERMINAL_HANDLE:-}" = "$PLANNER" ]; then
+    echo "Not telling the Planner the new handles: it ran this launch itself."
+  else
+    HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
+$(cat "$STATE")"
+    if orca orchestration send --to "$PLANNER" --type status --subject "Role handles changed" --body "$HANDLES_BODY" --json >/dev/null 2>&1; then
+      echo "Told the Planner the new handles."
+    else
+      echo "Could not tell the Planner the new handles; tell it to run: cat $STATE"
+    fi
+  fi
+fi
 
 for p in $CHECK_PIDS; do wait "$p"; done
 merge_models
