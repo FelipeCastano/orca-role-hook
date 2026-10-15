@@ -282,12 +282,27 @@ for id in $ROLES; do
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
   fi
 done
+KICKOFFS="$GITDIR/orca-roles.kickoff.d"   # one file per running kickoff, named by its pid, listing the roles it will kick
+for f in "$KICKOFFS"/*; do [ -f "$f" ] && ! kill -0 "$(basename "$f")" 2>/dev/null && rm -f "$f"; done
+kickoff_of() {  # kickoff_of <role>: prints the pid of a live kickoff that will still kick that role
+  local f p
+  for f in "$KICKOFFS"/*; do
+    [ -f "$f" ] || continue
+    p="$(basename "$f")"
+    kill -0 "$p" 2>/dev/null || continue
+    case " $(cat "$f") " in *" $1 "*) echo "$p"; return 0;; esac
+  done
+  return 1
+}
 NEW=""; REUSED=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
   sv="ST_$v"; st="${!sv}"
   if [ "$st" = 0 ]; then   # alive: reused as is, but a tab that never got its role message (interrupted launch) is kicked now
-    if [ "$(kicked_of "$v")" != "${!v}" ]; then NEW="$NEW $id"; REUSED="$REUSED $id"; echo "The tab of $t (${!v}) never got its role message; sending it now."; fi
+    if [ "$(kicked_of "$v")" != "${!v}" ]; then
+      if kp="$(kickoff_of "$id")"; then echo "The kickoff of the previous launch is still running (pid $kp): $t gets its role from it."; continue; fi
+      NEW="$NEW $id"; REUSED="$REUSED $id"; echo "The tab of $t (${!v}) never got its role message; sending it now."
+    fi
     continue
   fi
   if [ "$st" = 3 ]; then
@@ -331,4 +346,5 @@ if [ -z "$NEW" ]; then echo "All roles are already open."; exit 0; fi
 [ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; the Planner will recover the previous state and give you a summary."
 case " $NEW " in *" planner "*) ;; *) [ "${ORCA_TERMINAL_HANDLE:-}" = "${PLANNER:-}" ] || echo 'The Planner kept its tab: it is told the new handles by a message ("Role handles changed"); if it does not pick them up, ask it to read its messages.';; esac
 nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" > "$GITDIR/orca-roles-kickoff.log" 2>&1 &
+mkdir -p "$KICKOFFS" && printf '%s\n' "${NEW# }" > "$KICKOFFS/$!"
 echo "Role kickoff in progress (log: $GITDIR/orca-roles-kickoff.log)"

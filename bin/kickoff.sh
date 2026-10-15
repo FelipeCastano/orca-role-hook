@@ -14,6 +14,7 @@ ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 SETTLE="${ORCA_ROLES_KICK_SETTLE:-2}"
 CHECK_PIDS=""
+trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
 press_enter() { orca terminal send --terminal "$1" --enter --json >/dev/null 2>&1 || orca terminal send --terminal "$1" --text "" --enter --json >/dev/null 2>&1; }

@@ -1020,6 +1020,29 @@ check "launch: no orca-roles.kicked and an existing team (older kit): nothing is
 # an alive tab whose marker holds another handle is kicked again, the others are not
 printf 'PLANNER=p1\nDEV=old\nDEPLOYER=x1\n' > "$LKG/orca-roles.kicked"; : > "$LK/kick.log"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
 check "launch: an alive tab whose marker has another handle is kicked as reused, the other alive tabs are left alone" "$RC:$(lkcnt create):$(tr '\n' ' ' < "$LK/kick.log"):$(grep -c '^DEV=d1$' "$LKG/orca-roles.kicked")" "0:0: dev| dev :1"
+# a running kickoff of a previous launch will reach the unmarked alive tab: it is not kicked again
+lkkick() { lkreset; lkseed; for h in p1 d1 x1; do echo alive > "$LK/show.$h"; done; printf 'PLANNER=p1\nDEV=old\nDEPLOYER=x1\n' > "$LKG/orca-roles.kicked"; : > "$LK/kick.log"; mkdir -p "$LKG/orca-roles.kickoff.d"; }
+lkkick; sleep 30 & KP=$!; echo "dev deployer" > "$LKG/orca-roles.kickoff.d/$KP"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: a live kickoff listing the unmarked alive role: no re-kick, the line is printed, nothing opened, its file is kept" "$RC:$(lkcnt create):$(wc -c < "$LK/kick.log" | tr -d ' '):$(printf '%s' "$OUT" | grep -c "^The kickoff of the previous launch is still running (pid $KP): Dev gets its role from it.$"):$(printf '%s' "$OUT" | grep -c 'never got its role message'):$(printf '%s' "$OUT" | grep -c 'All roles are already open'):$([ -f "$LKG/orca-roles.kickoff.d/$KP" ] && echo kept || echo gone)" "0:0:0:1:0:1:kept"
+# a live kickoff that does not list the role: the role is kicked as before
+echo "planner" > "$LKG/orca-roles.kickoff.d/$KP"; : > "$LK/kick.log"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: a live kickoff that does not list the unmarked role: it is kicked as reused" "$RC:$(lkcnt create):$(tr '\n' ' ' < "$LK/kick.log"):$(printf '%s' "$OUT" | grep -c 'The kickoff of the previous launch is still running'):$(printf '%s' "$OUT" | grep -c '^The tab of Dev (d1) never got its role message; sending it now.$')" "0:0: dev| dev :0:1"
+# a role name that only contains the listed one as a substring is not listed
+lkkick; echo "devx xdev" > "$LKG/orca-roles.kickoff.d/$KP"; LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: a live kickoff listing only roles that merely contain the role's name does not count" "$RC:$(tr '\n' ' ' < "$LK/kick.log")" "0: dev| dev "
+# a dead pid: its file is removed and the role is kicked as before; a live one is left alone
+kill "$KP" 2>/dev/null; wait "$KP" 2>/dev/null || true
+lkkick; sleep 30 & KP2=$!; echo "dev" > "$LKG/orca-roles.kickoff.d/$KP"; echo "dev" > "$LKG/orca-roles.kickoff.d/$KP2"; kill "$KP2"; wait "$KP2" 2>/dev/null || true
+sleep 30 & KP3=$!; echo "planner" > "$LKG/orca-roles.kickoff.d/$KP3"
+LKK="$LK/bin/kickoff2" try lkl; sleep 1
+check "launch: files of dead pids are removed, a live kickoff's file is kept, and the role of a dead kickoff is kicked" "$RC:$(tr '\n' ' ' < "$LK/kick.log"):$([ -f "$LKG/orca-roles.kickoff.d/$KP" ] && echo kept || echo gone):$([ -f "$LKG/orca-roles.kickoff.d/$KP2" ] && echo kept || echo gone):$([ -f "$LKG/orca-roles.kickoff.d/$KP3" ] && echo kept || echo gone)" "0: dev| dev :gone:gone:kept"
+kill "$KP3" 2>/dev/null; wait "$KP3" 2>/dev/null || true
+# a launch that starts a kickoff registers it under the kickoff's pid with the roles it kicks
+printf '#!/bin/sh\nsleep 5\n' > "$LK/bin/kickoff3"; chmod +x "$LK/bin/kickoff3"
+lkreset; LKK="$LK/bin/kickoff3" try lkl
+RF="$(ls "$LKG/orca-roles.kickoff.d" 2>/dev/null | head -1)"
+check "launch: a started kickoff is registered by its pid with the roles it will kick" "$RC:$(ls "$LKG/orca-roles.kickoff.d" | wc -l | tr -d ' '):$(cat "$LKG/orca-roles.kickoff.d/$RF" 2>/dev/null):$(kill -0 "$RF" 2>/dev/null && echo alive || echo dead)" "0:1:planner dev deployer:alive"
+kill "$RF" 2>/dev/null || true
 # lock
 lkreset; mkdir "$LKG/orca-roles.lock"; sleep 30 & HP=$!; echo "$HP" > "$LKG/orca-roles.lock/pid"
 ORCA_ROLES_LOCK_WAIT=2 try lkl
@@ -2456,6 +2479,14 @@ mf "$(mfc "$DEVOK")" bad "dev"
 check "model-check: bad model recorded as FAILED" "$(models)" "DEV=FAILED:claude-opus-5-5 "
 check "model-check: exact escalation" "$(escs)" "$BODY"
 check "model-check: no /model is ever sent" "$(nomodel)" "0"
+# kickoff.sh removes only its own registry file when it ends
+printf '#!/bin/sh\nmkdir -p "%s/gd/orca-roles.kickoff.d"; echo dev > "%s/gd/orca-roles.kickoff.d/$$"; echo "$$" > "%s/own.pid"\nexec "$@"\n' "$MF" "$MF" "$MF" > "$MF/regrun"; chmod +x "$MF/regrun"
+printf '%s' "$(mfc "$DEVOK")" > "$MF/cfg.json"; : > "$MF/orca.log"; echo clean > "$MF/mode"; rm -rf "$MF/gd/orca-roles.kickoff.d"; mkdir -p "$MF/gd/orca-roles.kickoff.d"
+sleep 30 & OP=$!; echo dev > "$MF/gd/orca-roles.kickoff.d/$OP"
+(cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" "$MF/regrun" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "dev" "" "" "" > "$MF/out.log" 2>&1)
+OWN="$(cat "$MF/own.pid")"
+check "kickoff.sh: when it ends it removes its own registry file and leaves another kickoff's" "$([ -f "$MF/gd/orca-roles.kickoff.d/$OWN" ] && echo kept || echo gone):$([ -f "$MF/gd/orca-roles.kickoff.d/$OP" ] && echo kept || echo gone)" "gone:kept"
+kill "$OP" 2>/dev/null; wait "$OP" 2>/dev/null || true; rm -rf "$MF/gd/orca-roles.kickoff.d"
 check "model-check: role message sent once" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
 mf "$(mfc "$DEVOK")" clean "dev"
 check "model-check: good model recorded, no escalation" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
