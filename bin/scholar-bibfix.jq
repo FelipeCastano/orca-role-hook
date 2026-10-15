@@ -1,4 +1,3 @@
-include "scholar-norm";
 # Input: raw BibTeX string of ONE entry (jq -Rs). Output: fixed entry.
 # field($name): value inside the outermost braces of `name = {...}` (case-insensitive name), or null.
 def field_span($name):
@@ -32,12 +31,12 @@ def fix_month:
   | gsub("month\\s*=\\s*(?<m>[A-Za-z]+)"; "month = " + ($mm[(.m|ascii_downcase|.[0:3])] // ("{" + .m + "}")));
 def fix_pages: (field_span("pages")) as $p | if $p == null then . else .[:$p.start] + (.[$p.start:$p.end] | gsub("–|—|-+"; "--")) + .[$p.end:] end;
 def stop: ["a","an","the","on","of","for","in","and","to","with","from","towards","toward","via","is","are"];
-def makekey:
+def makekey(lastname; norm):
   (field("author") // "" | (split(" and ")[0] // "") | lastname | gsub(" ";"")) as $a
   | (field("year") // "" | gsub("[^0-9]";"")) as $y
   | (field("title") // "" | norm | split(" ") | map(select(. as $w | stop | index($w) | not)) | first // "") as $w
   | $a + $y + $w;
-def fixentry: sub("^\\s+"; "") | sub("\\s+$"; "") | . as $raw | makekey as $k | rekey($k) | protect_title | fix_month | fix_pages;
+def fixentry(lastname; norm): sub("^\\s+"; "") | sub("\\s+$"; "") | . as $raw | makekey(lastname; norm) as $k | rekey($k) | protect_title | fix_month | fix_pages;
 # Input: raw text of a whole .bib file. Output: array of the raw entry strings (string, comment and preamble blocks excluded).
 def entries:
   [splits("\n(?=[ \t]*@)")] | map(select(test("^\\s*@")) | select(test("^\\s*@\\s*(string|comment|preamble)\\b"; "i") | not));

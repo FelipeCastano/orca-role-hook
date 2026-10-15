@@ -406,7 +406,7 @@ default_bib() {
 }
 
 # bibjq <program> [jq options...]: jq over the text on stdin (-Rs) with the bib helpers loaded
-bibjq() { local prog="$1"; shift; jq -Rrs -L "$HERE" "$@" 'include "scholar-bibfix"; '"$prog"; }
+bibjq() { local prog="$1"; shift; jq -Rrs -L "$HERE" "$@" 'include "scholar-norm"; include "scholar-bibfix"; '"$prog"; }
 
 cmd_bibtex() {
   local ident="" add=0 bib="" have_bib=0 doi code body="$TMP/bibtex.body" entry info base key n kf letter
@@ -441,9 +441,9 @@ cmd_bibtex() {
     || ! tr -cd '{}' < "$body" | fold -w 1 | awk '$0 == "{" { d++ } $0 == "}" { if (--d < 0) bad = 1 } END { exit (bad || d != 0) }'; then
     CODE=3 die "doi.org returned an incomplete BibTeX entry"
   fi
-  entry="$(jq -Rrs -L "$HERE" 'include "scholar-bibfix";
+  entry="$(jq -Rrs -L "$HERE" 'include "scholar-norm"; include "scholar-bibfix";
     sub("^\\s+"; "") | sub("\\s+$"; "") | . as $raw
-    | ($raw | makekey | if . == "" then "ref" + ($raw | field("year") // "" | gsub("[^0-9]"; "")) else . end) as $k
+    | ($raw | makekey(lastname; norm) | if . == "" then "ref" + ($raw | field("year") // "" | gsub("[^0-9]"; "")) else . end) as $k
     | $raw | rekey($k) | protect_title | fix_month | fix_pages' "$body")" || { CODE=3 die "doi.org returned an unreadable body"; }
   if [ "$add" = 0 ]; then printf '%s\n' "$entry"; return 0; fi
 
