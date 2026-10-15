@@ -338,6 +338,38 @@ rule A11 "$AD/planner.md" 'you commit it with the user'"'"'s yes; then `phase.sh
 rule A12 "$AD/writer.md" 'only keys that exist in article/refs.bib' '^2\. Cite only'
 rule A12 "$AD/writer.md" '[CITATION NEEDED:' '^5\. Where a claim needs'
 rule A12 "$AD/writer.md" 'never invent a key' '^5\. Where a claim needs'
+# pins of rules the prompts already state: pr-reviewer and academic-writer limits, the programmer Planner's relaunch and escalation rules, the Report line of the skeleton
+# R2 an ambiguous answer is not a yes to the commits
+rule R2 "$PD/planner.md" 'neither is an ambiguous answer ("ok, continue"): ask again' '\*\*Set audit\.\*\*'
+# pr-reviewer: no worktrees or terminals, no git state changes, context cleaned only with the user's yes, no AI attribution, kit changes only with the user's yes
+prrule R5 planner "Limits" 'Never create worktrees or terminals'
+prrule R5 planner "Limits" 'nobody checks out, resets or otherwise changes its git state without the user.s explicit yes'
+prrule R1 planner "Limits" 'Never clean a worker.s context without the user.s confirmation'
+prrule R3 planner "Limits" 'never carry attribution to an AI'
+prrule R6 planner "Limits" 'Never change the kit.s configuration or prompts without the user.s confirmation'
+prrule R5 common-workers "Limits" 'Never create worktrees or terminals'
+prrule R9 common-workers "Limits" 'Never wrap commands in .bash -c. or .sh -c.'
+prrule R5 lens-reviewer "Limits" 'Do not run the project.s code, tests or build unless the brief says so'
+prrule R5 auditor "Limits" 'every file you write goes in your scratchDir'
+# academic-writer: the same limits, closing and cleaning only with the user's yes, kit files only after a yes, the earlier-version folder, the convention check
+rule R5 "$AD/common-workers.md" 'Never create worktrees or terminals' '^- Never create worktrees'
+rule R9 "$AD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`' '^- Never wrap commands'
+rule R11 "$AD/common-workers.md" 'rev-$sha' '^- If you need an earlier version of the code'
+rule R11 "$AD/common-workers.md" 'it is read-only: do not modify it' '^- If you need an earlier version of the code'
+rule R5 "$AD/planner.md" 'Never create worktrees or terminals' '^- Never create worktrees'
+rule R5 "$AD/planner.md" "Never close the roles' tabs" '^- After each'
+rule R6 "$AD/planner.md" "Never change the kit's configuration or prompts without the user's confirmation" '^- Never change the kit'
+rule R1 "$AD/planner.md" "Never clean a worker's context without the user's confirmation" '^- Never clean a worker'
+rule R6 "$AD/planner.md" 'Before writing any kit file or opening tabs, explain what you will change and what it affects, and wait for a yes' '^- Before writing any kit file'
+rule R15 "$AD/planner.md" 'checked every time before you propose it' '^- Everything you draft for outside the repository'
+rule R15 "$AD/planner.md" 'git log -15' '^- Everything you draft for outside the repository'
+rule R15 "$AD/planner.md" 'A subject-only commit is not acceptable unless the history does it' '^- Everything you draft for outside the repository'
+rule A8 "$AD/tech-verifier.md" 'Never submit HPC jobs' '^- Never submit'
+rule A10 "$AD/researcher.md" 'Never change a result by hand and never drop runs that do not fit' '^- Never change a result'
+# programmer Planner: relaunch-role.sh only with the user's confirmation, nothing edited in the kit without their yes, no task to a role that did not start
+rule R6 "$PD/planner.md" 'the only way to relaunch one with another model is `~/.orca-roles/bin/relaunch-role.sh`, all with the user'"'"'s confirmation' '^- Never create worktrees'
+rule R6 "$PD/planner.md" '(edit nothing in `~/.orca-roles` without it; do not use `roles --set` for this)' 'model unavailable'
+rule R6 "$PD/planner.md" 'Never dispatch tasks to a role that did not start' 'model unavailable'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
@@ -1166,7 +1198,7 @@ echo "\$*" >> "$MLOG"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
   "terminal list") [ -f "$TMP/m-listfail" ] && exit 1; exit 0;;
-  "terminal show") [ -f "$TMP/m-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+  "terminal show") [ -f "$TMP/m-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/m-orphan" ] && { echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}'; exit 0; }; [ -f "$TMP/m-noagent" ] && { echo '{"result":{"terminal":{"handle":"x"}}}'; exit 0; }; [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
@@ -1384,6 +1416,12 @@ rm -f "$TMP/m-listfail"
 : > "$TMP/m-rt"; B="$(mstate)"; N="$(mcreates)"
 try ml --mode pr-reviewer; check "terminal show unknown: a mode change with a saved team stops with 'Orca is not ready', nothing changes" "$RC:$(printf '%s' "$OUT" | grep -c 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree.s team is still open'):$(mcreates):$(mstate)" "1:1:$N:$B"
 rm -f "$TMP/m-rt"
+# a tab that still exists but is orphaned, or whose agent is gone, is still an open team: the mode change is refused
+for st in orphan noagent; do
+  : > "$TMP/m-$st"; B="$(mstate)"; N="$(mcreates)"
+  try ml --mode pr-reviewer; check "open team: a tab that is $st still blocks a mode change; nothing changes" "$RC:$(printf '%s' "$OUT" | grep -c 'Close the team first'):$(mcreates):$(mstate)" "1:1:$N:$B"
+  rm -f "$TMP/m-$st"
+done
 rm -f "$TMP/m-alive"
 try ml --mode pr-reviewer; check "closed team: the mode change proceeds" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
 # the team is open in pr-reviewer: every way back to another mode is rejected
@@ -1549,12 +1587,20 @@ try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous 
 printf '%s\n' wz-bad "" "x" 2 9 > "$TMP/nw3.in"; S1="$(snap)"
 try nrw "$TMP/nw3.in"; check "modes wizard: an invalid mode is refused, nothing written" "$RC:$([ "$(snap)" = "$S1" ] && echo unchanged)" "1:unchanged"
 
+printf '%s\n' wz-byid "" "by id" 2 pr-reviewer "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" y > "$TMP/nw5.in"
+try nrw "$TMP/nw5.in"; check "modes wizard: the mode can be picked by its id" "$RC:$(jq -c '.roles["wz-byid"].modes' "$NRC")" '0:["pr-reviewer"]'
+printf '%s\n' wz-dflt "" "defaults" "" "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" y > "$TMP/nw6.in"
+try nrw "$TMP/nw6.in"; check "modes wizard: Enter on 'in all modes or in one' and on the mode means one mode, the first (programmer)" "$RC:$(jq -c '.roles["wz-dflt"].modes' "$NRC")" '0:["programmer"]'
+S6="$(cksum < "$NRC")"; printf '%s\n' wz-nosave "" "no save" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" n > "$TMP/nw7.in"
+try nrw "$TMP/nw7.in"; check "modes wizard: answering n to 'Save?' exits 1 with 'Cancelled' and leaves the configuration unchanged" "$RC:$(printf '%s' "$OUT" | grep -c '^Cancelled'):$(jq -r '.roles | has("wz-nosave")' "$NRC"):$([ "$(cksum < "$NRC")" = "$S6" ] && echo unchanged)" "1:1:false:unchanged"
+
 # wizard, prompt option 1 (generate): the editor question answered n or y must not stop the wizard
 printf '%s\n' '#!/bin/sh' 'echo opened > "$0.mark"' > "$TMP/fake-editor.sh"; chmod +x "$TMP/fake-editor.sh"; rm -f "$TMP/fake-editor.sh.mark"
 printf '%s\n' wz-gen-n "" "gen n" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission n" "step" "" "lim" "" "rep" "" n n y > "$TMP/nwg.in"
 EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering n to the editor question saves the role, the editor stays closed" "$RC:$(jq -r '.roles["wz-gen-n"] | has("prompt")' "$NRC"):$(grep -c 'mission n' "$PK/roles/pr-reviewer/wz-gen-n.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:true:1:"
 printf '%s\n' wz-gen-d "" "gen d" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission d" "step" "" "lim" "" "rep" "" n "" y > "$TMP/nwg.in"
 EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: the default answer to the editor question saves the role" "$RC:$(grep -c 'mission d' "$PK/roles/pr-reviewer/wz-gen-d.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:"
+check "wizard option 1: the skeleton's Report line says the body stays complete (following the Output rules)" "$(grep -c -F 'Report with `worker_done`, following the Output rules (the body stays complete):' "$PK/roles/pr-reviewer/wz-gen-d.md")" "1"
 printf '%s\n' wz-gen-y "" "gen y" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission y" "step" "" "lim" "" "rep" "" n y y > "$TMP/nwg.in"
 EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering y opens the editor and the wizard still saves the role" "$RC:$(grep -c 'mission y' "$PK/roles/pr-reviewer/wz-gen-y.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:opened"
 
@@ -1961,7 +2007,7 @@ rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 
 sec_restart() {
 # After a restart, Orca restores the tabs with new handles: the kit finds each one by its ptyId, reads the resumed session and reopens the role with it
-RP="$TMP/rproj"; mkdir -p "$RP" "$TMP/rbin"; git -C "$RP" init -q -b main
+RP="$TMP/rproj"; rm -rf "$RP" "$TMP/rbin"; mkdir -p "$RP" "$TMP/rbin"; git -C "$RP" init -q -b main
 printf 'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' > "$RP/.git/orca-roles.env"
 printf 'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' > "$RP/.git/orca-roles.pty"
 RLOG="$TMP/rorca.log"; : > "$RLOG"
@@ -1985,12 +2031,13 @@ cat > "$KIT/config.json" <<'J'
 J
 : > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
 # the mode cannot change under a team Orca restored after a restart (new handles, same ptyId)
+PRB="$TMP/restart-pr-prompts"; rm -rf "$PRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$PRB"
 mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
 HB="$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum)"; : > "$RLOG"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode pr-reviewer 2>&1)" && RC=0 || RC=$?
 check "restart: restored tabs block a mode change; nothing saved, closed or opened" "$RC:$(grep -cE 'terminal (close|create)' "$RLOG" || true):$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum):$([ -e "$RP/.git/orca-roles.overrides.json" ] && echo ovr)" "1:0:$HB:"
 case "$OUT" in *"Close the team first"*) echo "ok   restart: the mode change error explains it";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
-rm -rf "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
+rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$PRB" ] || cp -R "$PRB" "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"Orca restored the tab of Planner after a restart (rs-pl) without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
 case "$OUT" in *"Orca restored the tab of Dev after a restart (rs-dev), but its session could not be read"*) echo "ok   restart: restored tab without a readable session starts fresh";; *) echo "FAIL restart dev: $OUT"; FAIL=1;; esac
@@ -2263,6 +2310,12 @@ check "new-role --repo: prompt in prompts/programmer/, none flat" "$([ -f "$NR/p
 check "new-role --repo: prompt_of resolves to an existing file" "$(p="$(KIT="$NR" prompt_of "$NR/config.default.json" repo-sec)"; [ "$p" = "$NR/prompts/programmer/repo-sec.md" ] && [ -f "$p" ] && echo y)" "y"
 try nr_run --remove repo-sec --repo "$NR"; check "new-role --remove --repo: removes the role" "$RC:$(jq -r '.roles | has("repo-sec")' "$NR/config.default.json")" "0:false"
 check "new-role --remove --repo: only its prompt is deleted, the 8 defaults remain" "$([ -e "$NR/prompts/programmer/repo-sec.md" ] && echo left):$(find "$NR/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" ":8"
+# a folder that is not a clone (config.default.json but flat prompts, or no config.default.json) is refused and nothing is written
+NN="$TMP/nr-notclone"; rm -rf "$NN"; mkdir -p "$NN/prompts"; cp "$ROOT/config.default.json" "$NN/"; : > "$NN/prompts/dev.md"; mkdir -p "$TMP/nr-noconf/prompts/programmer"
+H0="$(cd "$NN" && find . -type f | sort | xargs shasum | shasum)"
+try nr_run --from-json "$TMP/nr-role.json" --repo "$NN"; N1="$RC:$(printf '%s' "$OUT" | grep -c "$NN does not look like a clone of orca-roles." || true)"
+try nr_run --from-json "$TMP/nr-role.json" --repo "$TMP/nr-noconf"; N2="$RC:$(printf '%s' "$OUT" | grep -c 'does not look like a clone of orca-roles.' || true)"
+check "new-role --repo: a folder with flat prompts or without config.default.json is not a clone -> exit 1 with the message, nothing written" "$N1:$N2:$([ "$(cd "$NN" && find . -type f | sort | xargs shasum | shasum)" = "$H0" ] && echo untouched):$(ls "$TMP/nr-noconf/prompts/programmer" | wc -l | tr -d ' ')" "1:1:1:1:untouched:0"
 }
 
 sec_install_flat() {
@@ -2633,6 +2686,7 @@ for bad in '""' '5'; do
 done
 check "check_config: modelError string accepted" "$(cc '{"roles":{"dev":{"modelError":"x {model}"}}}')" ""
 echo "ok   model-check: config"
+unset ORCA_ROLES_KICK_SETTLE
 }
 
 sec_models() {
@@ -2948,6 +3002,12 @@ RSCFG="$RS/cfg2.json" rs_try status; check "review-skill: status uses the config
 rs_state missing; RSCFG="$RS/cfg2.json" rs_try install; check "review-skill: install with another plugin adds its marketplace and installs it" "$RC:$(grep -v 'plugin list' "$RS/argv.log" | tr '\n' ';')" "2:plugin marketplace add me/mkt;plugin install mine@mkt;"
 rs_state installed; RSCFG="$RS/none.json" rs_try status; check "review-skill: without a saved configuration it uses the merged one" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
 jq 'del(.settings.prReviewer)' "$RSC" > "$RS/cfg3.json"; RSCFG="$RS/cfg3.json" rs_try status; check "review-skill: a configuration without prReviewer falls back to the default" "$RC" "0"
+# without ORCA_ROLES_CONFIG: the worktree's saved <gitdir>/orca-roles.config.json is the configuration (what the Planner really uses)
+RSG="$(cd "$RS/wt" && cd "$(git rev-parse --git-dir)" && pwd)"; cp "$RS/mine.json" "$RS/list.json"
+rs_dflt() { OUT="$(cd "$RS/wt" && env -u ORCA_ROLES_CONFIG PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err")" && RC=0 || RC=$?; }
+cp "$RS/cfg2.json" "$RSG/orca-roles.config.json"; rs_dflt path; D1="$RC:$OUT"
+rm -f "$RSG/orca-roles.config.json"; rs_dflt path; D2="$RC:$OUT:$(cat "$RS/err")"
+check "review-skill: without ORCA_ROLES_CONFIG the saved <gitdir>/orca-roles.config.json supplies prReviewer (a custom skill path), and without it the default applies" "$D1|$D2" "0:$RS/plug/a/B.md|2::missing"
 # check_config and upgrade_config
 chk() { jq --argjson v "$1" '.settings.prReviewer = $v' "$KIT/config.default.json" > "$RS/chk.json"; check_config "$RS/chk.json"; }
 MSG="ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"
@@ -2958,6 +3018,7 @@ done
 echo '{"settings":{"language":"es"},"roles":{}}' > "$RS/old.json"
 check "review-skill: upgrade_config adds prReviewer to an old configuration" "$(upgrade_config "$KIT/config.default.json" "$RS/old.json" | jq -r '.settings.prReviewer.plugin + " " + .settings.language')" "lens-review@lens-review es"
 check "review-skill: nothing is written in the worktree" "$(git -C "$RS/wt" status --porcelain | wc -l | tr -d ' ')" "0"
+unset RS
 }
 
 sec_relaunch() {
@@ -2968,19 +3029,20 @@ cat > "$PK/config.json" <<'J'
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" }, "deployer": { "title": "Deployer" } } }
 J
-RW="$TMP/rproj"; mkdir -p "$RW" "$TMP/rbin"; git -C "$RW" init -q; RG="$RW/.git"
-RLOG="$TMP/rorca.log"; RKL="$TMP/rkick.log"; RCL="$TMP/rclaude.log"; : > "$RLOG"; : > "$RKL"; : > "$RCL"
-cat > "$TMP/rbin/orca" <<EOS
+RW="$TMP/rlproj"; mkdir -p "$RW" "$TMP/rlbin"; git -C "$RW" init -q; RG="$RW/.git"
+RLOG="$TMP/rlorca.log"; RKL="$TMP/rlkick.log"; RCL="$TMP/rlclaude.log"; : > "$RLOG"; : > "$RKL"; : > "$RCL"
+cat > "$TMP/rlbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$RLOG"
 case "\$1 \$2" in
-  "terminal create") [ -f "$TMP/r-failcreate" ] && exit 1
+  "terminal create") [ -f "$TMP/rl-failcreate" ] && exit 1
     while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t-\$(grep -c '^terminal create' "$RLOG")\"}";;
+  "terminal close") [ -f "$TMP/rl-failclose" ] && exit 1;;
   "terminal show") [ -f "$TMP/r-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
 EOS
-cat > "$TMP/rbin/claude" <<EOS
+cat > "$TMP/rlbin/claude" <<EOS
 #!/bin/bash
 m=""; pv=""; for x in "\$@"; do [ "\$pv" = --model ] && m="\$x"; pv="\$x"; done
 echo "\$m" >> "$RCL"
@@ -2990,9 +3052,9 @@ case "\$m" in
   *) echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
 esac
 EOS
-printf '#!/bin/sh\necho "$4" >> "%s"\ncp "$2" "$(dirname "$2")/orca-roles.kicked"\n' "$RKL" > "$TMP/rbin/kickoff"; chmod +x "$TMP/rbin"/*
-rl() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
-rr() { (cd "$RW" && HOME="$PH" PATH="$TMP/rbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/relaunch-role.sh" "$@" 2>&1); }
+printf '#!/bin/sh\necho "$4" >> "%s"\ncp "$2" "$(dirname "$2")/orca-roles.kicked"\n' "$RKL" > "$TMP/rlbin/kickoff"; chmod +x "$TMP/rlbin"/*
+rl() { (cd "$RW" && HOME="$PH" PATH="$TMP/rlbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rlbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+rr() { (cd "$RW" && HOME="$PH" PATH="$TMP/rlbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rlbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/relaunch-role.sh" "$@" 2>&1); }
 rstate() { cat "$RG/orca-roles.env" "$RG/orca-roles.pty" "$RG/orca-roles.overrides.json" "$RG/orca-roles.config.json" | cksum; }
 rclosed() { grep -c '^terminal close' "$RLOG" || true; }
 rkicks() { sleep 1; tr -d ' ' < "$RKL" | tr '\n' ','; }
@@ -3016,9 +3078,17 @@ check "relaunch: the saved --only is kept, the model is saved and effective" "$(
 check "relaunch: kickoff for that role only" "$(rkicks)" "dev,"
 : > "$RCL"; try rr Dev --model gone --no-check
 check "relaunch: --no-check skips the probe, matches the title in any case" "$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")" "0:0:gone"
-touch "$TMP/r-failcreate"; try rr dev --model good --no-check
+touch "$TMP/rl-failclose"; B="$(rstate)"; N0="$(grep -c '^terminal create' "$RLOG")"; : > "$RKL"
+try rr dev --model good --no-check
+check "relaunch: a failing close stops before launching; nothing created, state unchanged, no kickoff" "$RC:$(printf '%s' "$OUT" | grep -c 'Could not close the tab of Dev; nothing was relaunched.'):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(rstate):$(rkicks)" "1:1:0:$B:"
+rm -f "$TMP/rl-failclose"
+touch "$TMP/rl-failcreate"; try rr dev --model good --no-check
 check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
-rm -f "$TMP/r-failcreate"
+rm -f "$TMP/rl-failcreate"
+# outside a team: no saved state or configuration in this git dir
+RN="$TMP/rlnone"; rm -rf "$RN"; mkdir -p "$RN"; git -C "$RN" init -q; N0="$(grep -c . "$RLOG")"
+OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/rlbin:$PATH" "$PKL/bin/relaunch-role.sh" dev --model good --no-check 2>&1)" && RC=0 || RC=$?
+check "relaunch: outside a team -> exit 1 with the 'run this from the worktree' message, no Orca call at all" "$RC:$(printf '%s' "$OUT" | grep -c 'not found: run this from the worktree where the roles were opened.'):$(( $(grep -c . "$RLOG") - N0 )):$(find "$RN/.git" -maxdepth 1 -name "orca-roles*" | wc -l | tr -d " ")" "1:1:0:0"
 }
 
 sec_academic_writer() {
@@ -3076,8 +3146,9 @@ cat > "$TMP/awbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$ALOG"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
-  "terminal list") [ -f "$TMP/aw-listfail" ] && exit 1; exit 0;;
+  "terminal create") [ -f "$TMP/aw-createfail" ] && exit 1; while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal close") [ -f "$TMP/aw-closefail" ] && exit 1; exit 0;;
+  "terminal list") [ -f "$TMP/aw-listfail" ] && exit 1; [ -f "$TMP/aw-listjson" ] && cat "$TMP/aw-listjson"; exit 0;;
   "terminal show") [ -f "$TMP/aw-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/aw-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
@@ -3123,6 +3194,33 @@ check "phase.sh experiment with STATE.md committed: closes the writing role, reo
 AP2="$TMP/aw-prog"; mkdir -p "$AP2"; git -C "$AP2" init -q; (cd "$AP2" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" --mode programmer >/dev/null 2>&1)
 try bash -c 'cd "$0" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$1" PATH="$2" "$1/.orca-roles/bin/phase.sh" writing 2>&1' "$AP2" "$PH" "$TMP/awbin:$PATH"
 PR_RC="$RC:$OUT"
+# phase.sh: a failing close stops before the launch; a failing launch after the close is reported; it prints the new handles
+awcfg() { jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"; }
+touch "$TMP/aw-alive" "$TMP/aw-closefail"; B="$(astate)"; N="$(grep -c '^terminal create' "$ALOG" || true)"
+try ap writing
+check "phase.sh: a failing close-role stops before launching; nothing created, phase and handles unchanged" "$RC:$(printf '%s' "$OUT" | grep -c 'phase.sh: could not close every role of phase experiment; run it again.'):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(awcfg):$(astate)" "1:1:0:experiment:$B"
+rm -f "$TMP/aw-closefail"
+try ap writing
+AWL="$(grep -n '^Phase: writing\.$' <<<"$OUT" | cut -d: -f1)"; AWE=""; for l in $(cat "$AG/orca-roles.env"); do AWE="$AWE$(grep -nxF "$l" <<<"$OUT" | head -1 | cut -d: -f1),"; done
+check "phase.sh prints every orca-roles.env line, each before the final 'Phase: writing.' line" "$RC:$(wc -l < "$AG/orca-roles.env" | tr -d ' '):$(printf '%s' "$AWE" | tr ',' '\n' | grep -c .):$(for n in $(printf '%s' "$AWE" | tr ',' ' '); do [ "$n" -lt "$AWL" ] && echo y; done | grep -c y):$(printf '%s\n' "$OUT" | tail -1)" "0:$(wc -l < "$AG/orca-roles.env" | tr -d ' '):$(wc -l < "$AG/orca-roles.env" | tr -d ' '):$(wc -l < "$AG/orca-roles.env" | tr -d ' '):Phase: writing."
+try ap experiment; touch "$TMP/aw-createfail"; N="$(grep -c '^terminal create' "$ALOG" || true)"
+try ap writing
+check "phase.sh: a failing launch after the close says the roles were closed, to run roles, and to rerun phase.sh only if the phase did not change; nothing after the error" "$RC:$(printf '%s' "$OUT" | grep -c 'phase.sh: the roles of phase experiment were closed but opening phase writing failed (see above); run roles to open them. If roles --status still shows phase experiment, run phase.sh writing again.'):$(printf '%s\n' "$OUT" | tail -1 | grep -c '^phase.sh: the roles of phase experiment were closed'):$(ah | grep -c EXP)" "1:1:1:0"
+rm -f "$TMP/aw-createfail"; try al
+# launch's phase guard: a role of the old phase whose tab is gone does not block; one Orca restored under a new handle does
+rm -f "$TMP/aw-alive"; N="$(grep -c '^terminal create' "$ALOG" || true)"
+try al --set settings.phase=experiment
+check "launch: a phase change with the old-phase role's tab gone goes ahead and opens the new phase's role" "$RC:$(awcfg):$(tail -n +$((N + 1)) <<<"$(grep '^terminal create' "$ALOG")" | grep -c -- '--title Exp'):$(ah | grep -c EXP)" "0:experiment:1:1"
+try al --set settings.phase=writing
+printf 'WR=pty-wr\n' > "$AG/orca-roles.pty"; printf '{"terminals":[{"handle":"h-restored","ptyId":"pty-wr"}]}' > "$TMP/aw-listjson"; B="$(astate)"; N="$(grep -c '^terminal create' "$ALOG" || true)"
+try al --set settings.phase=experiment
+check "launch: a phase change is refused when the old-phase role's saved pty is a tab Orca restored; nothing changed" "$RC:$(printf '%s' "$OUT" | grep -c "phase 'writing' and phase 'experiment' was requested while Wr is still open"):$(awcfg):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(astate)" "1:1:writing:0:$B"
+rm -f "$TMP/aw-listjson" "$AG/orca-roles.pty"
+# --reset drops the saved phase
+OSAVED="$(jq -c '[.set[] | select(.path == ["settings","phase"]) | .value]' "$AG/orca-roles.overrides.json")"
+try al --reset --mode academic-writer
+check "launch --reset: the phase saved by a switch is forgotten and the team goes back to experiment" "$OSAVED:$RC:$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$(jq -c '[.set[] | select(.path == ["settings","phase"]) | .value]' "$AG/orca-roles.overrides.json"):$(awcfg)" '["writing"]:0:1:[]:unset'
+touch "$TMP/aw-alive"
 # close-role hint
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" "$PKL/bin/close-role.sh" nop 2>&1) > "$TMP/aw-h1.out"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
@@ -3272,6 +3370,13 @@ sc search "q" --publisher nomatch --source openalex; R5="$(cat "$SCH/rc"):$(cat 
 sc search "q" --venue "zzz" --source openalex; R5="$R5:$(cat "$SCH/rc"):$(cat "$SCH/err")"
 check "scholar search filters: OpenAlex filters/sort/per_page, arXiv dates and sort, notes" "$R1:$R2:$R3:$R4:$R5" "0:1:1:1:0:1:1:1:note: arxiv has no citation counts; sorted by relevance:0:1:1:1:note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|note: venue 'NeurIPS' -> neural information processing systems (S2)|note: other candidates: Other Conf (S1), NIPS Workshop (S3)|:1:scholar.sh: no OpenAlex publisher matches 'nomatch':0:1:scholar.sh: no OpenAlex venue matches 'zzz'"
 
+sch_codes
+sc search "q" --sort date --source openalex; D1="$(cat "$SCH/rc"):$(scu 'sort=publication_date:desc&per_page=10&'):$(scu 'sort=relevance_score'):$(cat "$SCH/err")"
+check "scholar search --sort date on OpenAlex sorts by publication_date:desc (not relevance_score)" "$D1" "0:1:0:"
+echo 500 > "$FX/code.oa"; sc search "q" --publisher big --source openalex; P1="$(cat "$SCH/rc"):$(wc -c < "$SCH/out" | tr -d ' '):$(cat "$SCH/err"):$(scu 'publishers?search=big'):$(scu 'api.openalex.org/works?')"; sch_codes
+check "scholar search: OpenAlex HTTP 500 while resolving --publisher -> exit 3, named in the error, empty stdout, no works call" "$P1" "3:0:scholar.sh: OpenAlex failed (HTTP 500) while resolving the publisher 'big':1:0"
+echo 500 > "$FX/code.oa"; sc search "q" --venue NeurIPS --source openalex; P2="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu 'api.openalex.org/works?')"; sch_codes
+check "scholar search: OpenAlex HTTP 500 while resolving --venue -> exit 3, says venue, no works call" "$P2" "3:scholar.sh: OpenAlex failed (HTTP 500) while resolving the venue 'NeurIPS':0"
 # option validation: every bad call is a usage error (exit 1) and never reaches the network
 sch_codes; BAD=""
 for a in "search" "search   " "search q --from 2024-1-1" "search q --to 24-01-01" "search q --type book" "search q --sort best" "search q --source crossref" "search q --limit 0" "search q --limit 101" "search q --limit abc" "search q --limit -1" "search q --limit 1.5" "search q --limit" "search q --limit ''" "search q --oa --oa" "search q --limit 2 --limit 3" "search q --bogus" "search q q2" "search q --" "search q --venue" "show" "show a b" "show foo" "show arxiv:" "show doi:10.1" "show 10.1000/" "show openalex:Wabc" "show https://example.org/10.1000/x" "frobnicate"; do
@@ -3544,6 +3649,13 @@ check "scholar verify: one TAB line per entry in file order (ok/warn/fail/retrac
 : > "$W/empty.bib"; printf '%% c\n@comment{x}\n@string{a="b"}\n' > "$W/cm.bib"
 X=""; for f in m1 m2 m3 m4 empty cm; do bv verify --bib "$W/$f.bib"; X="$X$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ') "; done
 check "scholar verify exit codes: ok+error 0, only errors 3, error+fail 4, error+nodoi 4, no entries 0 with header only" "$X" "0:3 3:3 4:3 4:3 0:1 0:1 "
+# verify: arXiv error branches (HTTP error, an arXiv error feed, an id that cannot be a query), each reported per entry and never fatal
+echo 500 > "$BV/ax_5000_00500.code"; cp "$FX/ax_err.xml" "$BV/ax_5000_00501"
+{ printf '@misc{axhttp, title={T}, author={A}, year={2000}, eprint={5000.00500}, archiveprefix={arXiv}}\n'; printf '@misc{axfeed, title={T}, author={A}, year={2000}, eprint={5000.00501}, archiveprefix={arXiv}}\n'
+  printf '@misc{axbad, title={T}, author={A}, year={2000}, eprint={bad id!}, archiveprefix={arXiv}}\n'; printf '@misc{axdoi, title={T}, author={A}, year={2000}, doi={10.48550/arXiv.5000.00500}}\n'; } > "$W/ax.bib"
+bv verify --bib "$W/ax.bib"
+check "scholar verify arXiv errors: HTTP status, error feed and unusable id are 'error' rows with their detail; all-error run exits 3; bib untouched; the bad id is never requested" "$(cat "$SCH/rc"):$(tr '\t' '~' < "$SCH/out" | tr '\n' '|'):$(bvu)" "3:key~status~detail|axhttp~error~arXiv HTTP 500|axfeed~error~arXiv returned an error: bad id|axbad~error~unusable arXiv id|axdoi~error~arXiv HTTP 500|:AX 5000.00500 AX 5000.00501 AX 5000.00500 "
+rm -f "$BV/ax_5000_00500.code" "$BV/ax_5000_00501"
 bv verify --bib "$W/nope.bib"; U1="$(bvr)"; bv verify x; U2="$(bvr)"; bv verify --x; U3="$(bvr)"; bv verify --bib; U4="$(bvr)"; bv verify; U5="$(bvr)"
 mkdir -p "$SCH/bvg/article"; cp "$W/m1.bib" "$SCH/bvg/article/refs.bib"; BVDIR="$SCH/bvg" bv verify; U7="$(cat "$SCH/rc"):$(wc -l < "$SCH/out" | tr -d ' ')"
 check "scholar verify usage: missing file / bad args / no git without --bib -> exit 1 with no call; default <git top>/article/refs.bib" "$U1|$U2|$U3|$U4|$U5|$U7" "1:0:scholar.sh: $W/nope.bib not found|:0|1:0:scholar.sh: verify takes no argument (got 'x')|:0|1:0:scholar.sh: unknown option '--x'|:0|1:0:scholar.sh: option --bib needs a value|:0|1:0:scholar.sh: not in a git repository; pass --bib <path>|:0|0:3"
@@ -3671,6 +3783,21 @@ check "cli: valid name first, unknown last -> exit 2, nothing ran" "$(cli_bad ga
 check "cli: one argument made of two valid names -> exit 2" "$(cli_bad 'alpha beta-x')" "2:0:4:1"
 check "cli: empty argument -> exit 2" "$(cli_bad '')" "2:0:4:1"
 check "cli: every listed section has a function, and no function is unlisted" "$(for k in $SECTIONS; do [ "$(type -t "sec_${k//-/_}")" = function ] || echo "$k"; done | wc -l | tr -d ' '):$(compgen -A function sec_ | wc -l | tr -d ' '):$(printf '%s\n' $SECTIONS | wc -l | tr -d ' ')" "0:$(printf '%s\n' $SECTIONS | wc -l | tr -d ' '):$(printf '%s\n' $SECTIONS | wc -l | tr -d ' ')"
+# a failing check ends in FAILURES with exit 1, and a section that ends the script early with exit 0 is not a pass
+CF="$TMP/cli-fail"; rm -rf "$CF"; mkdir -p "$CF/tests"; ln -sfn "$ROOT/bin" "$CF/bin"; ln -sfn "$ROOT/prompts" "$CF/prompts"; ln -sfn "$ROOT/config.default.json" "$CF/config.default.json"
+sed -e 's/^SECTIONS=.*/SECTIONS="bad quit"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_bad() { check "marker bad" a b; }; sec_quit() { exit 0; }\
+&/' "$ROOT/tests/smoke.sh" > "$CF/tests/smoke.sh"
+cli_f() { CRC=0; bash "$CF/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
+cli_f bad; check "cli: a failing check prints its FAIL line and FAILURES, exits 1, no ALL OK" "$CRC:$(grep -c '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:1:0"
+cli_f quit; check "cli: a section that exits 0 early -> exit 1, 'ended before its summary' on stderr, no ALL OK" "$CRC:$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:0"
+# the rules helpers fail loudly: an unmodified copy of the prompts passes, a lost fragment or a renamed pr-reviewer section does not
+RT="$TMP/rules-selftest"; rm -rf "$RT"; mkdir -p "$RT/tests"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$ROOT/README.md" "$RT/"; mkdir -p "$RT/plugin"; cp -R "$ROOT/plugin/skills" "$RT/plugin/"; cp "$ROOT/tests/smoke.sh" "$RT/tests/smoke.sh"
+rt_run() { CRC=0; bash "$RT/tests/smoke.sh" rules > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
+rt_run; check "rules helpers: an unmodified copy of the prompts passes" "$CRC:$(grep -c '^FAIL' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1"
+sed -i.bak "s/Nothing leaves the worktree without the user's explicit yes/Nothing leaves/" "$RT/prompts/programmer/planner.md"; rm -f "$RT/prompts/programmer/planner.md.bak"
+rt_run; check "rules helpers: a pinned fragment removed from a prompt -> 'FAIL rules R1' naming the file, FAILURES, exit 1, no ALL OK" "$CRC:$(grep -c "^FAIL rules R1: prompts/programmer/planner.md lost 'Nothing leaves the worktree without the user's explicit yes'$" "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:1:0"
+rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review skill$/## Review skill/' "$RT/prompts/pr-reviewer/planner.md"; rm -f "$RT/prompts/pr-reviewer/planner.md.bak"
+rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer planner.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
