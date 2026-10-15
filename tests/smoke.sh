@@ -238,6 +238,15 @@ done
 prrule caps auditor "Limits" 'Cap every process you run at .maxWorkers. parallel workers'
 # R14 no heartbeats
 rule R14 "$PD/common-workers.md" 'No heartbeats'
+# R16 message batches are acknowledged: the Planner never ends a turn with one open; workers ack what they read and the ack is not a heartbeat
+for m in programmer pr-reviewer academic-writer; do
+  rule R16 "$ROOT/prompts/$m/planner.md" 'Never end a turn holding an unacknowledged delivery' '^  - Never end a turn'
+  rule R16 "$ROOT/prompts/$m/planner.md" 'orca orchestration check --ack <delivery_id> --json' '^- \*\*Never block waiting'
+  rule R16 "$ROOT/prompts/$m/common-workers.md" 'acknowledges each batch once read, with `--ack <delivery_id>`' '^- A worker that reads its messages'
+  rule R16 "$ROOT/prompts/$m/common-workers.md" 'is not a heartbeat' '^- A worker that reads its messages'
+  rule R16 "$ROOT/prompts/$m/common-workers.md" 'do not send them' '^- \*\*No heartbeats'
+  grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" | grep -vq -- '--wait' && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
+done
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
 rule R15 "$PD/planner.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'

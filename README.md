@@ -694,6 +694,7 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | Which models a role can use | `~/.orca-roles/bin/models.sh <role> --check` ([Models of a role](#models-of-a-role)) |
 | An agent starts with another model or MCP | `orca-roles.config.json` in the worktree's git dir shows the configuration that was used, and `orca-roles-launch.log` the exceptions applied |
 | A role does not appear even though `enabled` is `true` | The worktree's saved exceptions: `orca-roles.overrides.json` in its git dir. Drop them with `roles --reset` |
+| The Planner is not notified when workers finish | A message batch it read but did not acknowledge: Orca types no notice while one is open. `orca orchestration check --peek --json` from the Planner's tab shows the unread messages; ask the Planner to read and acknowledge its messages (`check --ack <delivery_id> --json` until `count` is 0) |
 | The Planner replies in another language | `settings.language` (or a `--set settings.language=...` in the setup script); with `"auto"` it replies in the language you write in |
 | An agent asks for permissions | That it is in auto mode (`Shift+Tab` shows the current mode) |
 | A tab stays on Claude Code's "Do you trust the files in this folder?" dialog and never gets its role | The kit marks the worktree as trusted in `~/.claude.json` before starting the agents (`orca-roles-launch.log` says "Marked ... as trusted") and presses Enter if the dialog still shows. If a tab is stuck anyway, answer the dialog once and run `roles`; and tell us the exact text it showed |
