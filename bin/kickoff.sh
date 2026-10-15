@@ -58,7 +58,7 @@ kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds
 kick() {  # $1 handle, $2 role, $3 message
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-    if screen_of "$1" | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
+    if { screen_of "$1" || true; } | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
       press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
     else break; fi
   done

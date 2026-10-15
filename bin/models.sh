@@ -107,7 +107,7 @@ one() {  # <i> <model> → writes $T/<i>.res
       fi;;
     codex)
       if [ "$RC" = 0 ]; then res="ok	-"
-      elif cat "$T/$i.out" "$T/$i.err" | grep -qE 'does not exist|not supported|model_not_found'; then res="unavailable"
+      elif grep -qE 'does not exist|not supported|model_not_found' "$T/$i.out" "$T/$i.err"; then res="unavailable"
       else why="$(codex_why "$i")"; [ -n "$why" ] || why="exit $RC"; res="unknown	${why:0:80}"; fi;;
     custom) if [ "$RC" = 0 ]; then res="ok	-"; else res="unavailable"; fi;;
   esac; fi
