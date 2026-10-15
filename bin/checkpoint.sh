@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Records the worktree as it is now (tracked and untracked files, honouring .gitignore) as a commit under refs/orca-roles/checkpoints/,
 # without touching HEAD, the index, the branch or the working tree, so workers can diff a round against the previous one.
-# Usage (from the worktree):  checkpoint.sh [--force] <step> <n>   |   checkpoint.sh --list [<step>]   |   checkpoint.sh --clear <step>
+# Usage (from the worktree):  checkpoint.sh [--force] <step> <n>   |   checkpoint.sh --list [<step>]
+#                             checkpoint.sh --clear <step>   |   checkpoint.sh --clear-all
 # <step> is [a-z0-9-]+ (starting with a letter or digit) and <n> an integer; the ref is refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>.
 set -uo pipefail
 NS=refs/orca-roles/checkpoints
@@ -24,9 +25,24 @@ list_step() {  # <step|""> → ref names, ordered by n
     if [ -z "$1" ] || [[ "$s" =~ ^$1-c[0-9]+$ ]]; then echo "$r"; fi
   done | sort -t c -k 2 -V 2>/dev/null || true
 }
+seq_of() {  # <ref> → creation sequence number recorded in its message (0 if none)
+  local k; k="$(git log -1 --format=%s "$1" 2>/dev/null | sed -n 's/^.* seq \([0-9][0-9]*\)$/\1/p')"
+  echo "${k:-0}"
+}
+max_seq() { local r m=0 k; while IFS= read -r r; do [ -n "$r" ] || continue; k="$(seq_of "$r")"; [ "$k" -gt "$m" ] && m="$k"; done < <(list_step ""); echo "$m"; }
 diff_hints() {  # <step> <n>
-  local ref="$BASE/$1-c$2" prev="$BASE/$1-c$(($2 - 1))"
-  echo "Whole step since HEAD (the first brief):  git diff HEAD $ref"
+  local ref="$BASE/$1-c$2" prev="$BASE/$1-c$(($2 - 1))" r k best="" bk=-1 first
+  if [ "$1" = set ]; then
+    first="Whole set since the branch base (HEAD):  git diff HEAD $ref"
+  else
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      [[ "${r#"$BASE"/}" =~ ^$1-c[0-9]+$ ]] && continue
+      k="$(seq_of "$r")"; if [ "$k" -gt "$bk" ]; then bk="$k"; best="$r"; fi
+    done < <(list_step "")
+    first="Whole step since ${best:-HEAD} (the first brief):  git diff ${best:-HEAD} $ref"
+  fi
+  echo "$first"
   if [ "$2" -gt 0 ] && git show-ref --verify --quiet "$prev"; then echo "Since the previous checkpoint:             git diff $prev $ref"; fi
 }
 
@@ -36,6 +52,10 @@ case "${1:-}" in
     [ -z "${2:-}" ] || valid_step "$2" || die "invalid step '$2': use [a-z0-9-]+"
     list_step "${2:-}" | while IFS= read -r r; do echo "$r $(git rev-parse --short "$r") $(git log -1 --format=%cd --date=iso "$r")"; done
     exit 0 ;;
+  --clear-all)
+    [ $# = 1 ] || usage
+    N=0; while IFS= read -r r; do [ -n "$r" ] || continue; git update-ref -d "$r" && N=$((N + 1)); done < <(list_step "")
+    echo "Deleted $N checkpoint(s)"; exit 0 ;;
   --clear)
     [ $# = 2 ] || usage
     valid_step "$2" || die "invalid step '$2': use [a-z0-9-]+"
@@ -67,7 +87,8 @@ TREE="$(git write-tree)" || die "git write-tree failed; nothing written"
 unset GIT_INDEX_FILE
 PARENT=(); git rev-parse --verify -q HEAD >/dev/null && PARENT=(-p HEAD)
 export GIT_AUTHOR_NAME=orca-roles GIT_AUTHOR_EMAIL=orca-roles@localhost GIT_COMMITTER_NAME=orca-roles GIT_COMMITTER_EMAIL=orca-roles@localhost
-C="$(git commit-tree "$TREE" ${PARENT[@]+"${PARENT[@]}"} -m "checkpoint $STEP-c$N")" || die "git commit-tree failed; nothing written"
+SEQ=$(( $(max_seq) + 1 ))
+C="$(git commit-tree "$TREE" ${PARENT[@]+"${PARENT[@]}"} -m "checkpoint $STEP-c$N seq $SEQ")" || die "git commit-tree failed; nothing written"
 if [ "$FORCE" = 1 ]; then git update-ref "$REF" "$C"; else git update-ref "$REF" "$C" ""; fi || die "could not write $REF"
 echo "$REF"
 diff_hints "$STEP" "$N"

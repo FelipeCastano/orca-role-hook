@@ -126,15 +126,16 @@ prrule() { local r="$1" f="$2" sec="$3" pat="$4"; prsec "$f" "$sec" | grep -qE -
 # R1 nothing leaves the worktree without the user's explicit yes
 rule R1 "$PD/planner.md" "Nothing leaves the worktree without the user's explicit yes"
 rule R1 "$PD/planner.md" 'Approving the plan, a step or a commit is not approving a push or a Jira update'
-rule R1 "$PD/planner.md" 'the force-push needs its own yes'
-rule R1 "$PD/planner.md" 'rewrite only on their yes'
-# R2 commit only on the user's explicit yes; audit fixes folded into the step commits
-rule R2 "$PD/planner.md" "only on the user's explicit yes to that commit" 'One commit per step, made at close'
-rule R2 "$PD/planner.md" 'commit only on a clear yes to that commit' 'One commit per step, now'
-rule R2 "$PD/planner.md" 'is not approving the commit' 'One commit per step, now'
-rule R2 "$PD/planner.md" 'never become new commits on top' '\*\*Set audit\.\*\*'
-rule R2 "$PD/planner.md" '--fixup=' '\*\*Set audit\.\*\*'
-rule R2 "$PD/planner.md" '--autosquash' '\*\*Set audit\.\*\*'
+rule R1 "$PD/planner.md" 'Never fixup, autosquash, rebase, amend an earlier commit or force-push' '\*\*Set audit\.\*\*'
+rule R1 "$PD/planner.md" 'Push, and open the PR, each only on the user'"'"'s explicit yes' '\*\*Set audit\.\*\*'
+# R2 the set is committed at its close in logical commits, only on the user's explicit yes to that list of commits; nothing rewrites history
+rule R2 "$PD/planner.md" "only on the user's explicit yes to that list of commits" '^- The set is committed at its close'
+rule R2 "$PD/planner.md" 'commit only on a clear yes to that list of commits' '\*\*Set audit\.\*\*'
+rule R2 "$PD/planner.md" 'the commits add up exactly to the reviewed tree' '\*\*Set audit\.\*\*'
+rule R2 "$PD/planner.md" 'is not approving the commit' '\*\*Set audit\.\*\*'
+rule R2 "$PD/planner.md" 'fixed with a normal commit on top, on the user'"'"'s yes' '\*\*Set audit\.\*\*'
+rule R2 "$PD/planner.md" 'never a commit per step, per pipeline stage or per fix round' '^- The set is committed at its close'
+rule R2 "$PD/planner.md" 'Nothing is committed at step close' '\*\*No commit\.\*\*'
 # R3 no AI attribution in commits and PRs, and the check after every commit
 for p in common-workers planner; do
   rule R3 "$PD/$p.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
@@ -192,9 +193,9 @@ rule R8 "$ROOT/plugin/skills/team/SKILL.md" 'https://github.com/romerox3/lens-re
 OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$PD/common-workers.md")"
 printf '%s' "$OUTSEC" | grep -qF 'Always write in English' || { echo "FAIL rules R9: common-workers.md Output section lost 'Always write in English'"; FAIL=1; }
 rule R9 "$PD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`'
-# R10 workflow: one code task in flight, Dev -> Tester per step, audit once per set, commit after the Tester's ACCEPTED, the Planner writes no production code
+# R10 workflow: one code task in flight, Dev -> Tester per step, audit once per set, no commit per step (one per set), the Planner writes no production code
 rule R10 "$PD/planner.md" 'Only one code task is in flight at any moment' '^- \*\*One step at a time\.\*\*'
-rule R10 "$PD/planner.md" "Nobody commits before the Tester's ACCEPTED"
+rule R10 "$PD/planner.md" 'nobody commits before the set is complete' '\*\*No commit\.\*\*'
 rule R10 "$PD/planner.md" "closes only with the Tester's ACCEPTED" '^8\. \*\*Close and report'
 rule R10 "$PD/planner.md" 'audits once per set, not per step' '\*\*Set audit\.\*\*'
 rule R10 "$PD/planner.md" 'after the previous report' 'Never pre-create Tester or Auditor tasks'
@@ -2266,6 +2267,38 @@ cpg update-index --no-assume-unchanged f; cpg update-index --skip-worktree g; cp
 check "checkpoint: warns about a skip-worktree file" "$CPRC:$(printf '%s' "$CPERR" | grep -c '^Warning: 1 file(s).*: g$')" "0:1"
 cpg update-index --no-skip-worktree g; cprun s3 4; check "checkpoint: no warning once the flags are cleared" "$CPRC:$CPERR" "0:"
 cprun s3 4; check "checkpoint: an existing ref is refused without --force (again)" "$CPRC:$(printf '%s' "$CPERR" | grep -c 'already exists')" "1:1"
+# seq number, first hint line across steps and sets, --clear-all
+CQ="$TMP/cp-seq"; rm -rf "$CQ" "$TMP/cp-seq-wt"; mkdir "$CQ"; cq() { git -C "$CQ" "$@"; }
+cq init -q -b main; cq config user.email t@example.com; cq config user.name tester; printf 'a\n' > "$CQ/f"; cq add -A; cq commit -q -m init
+cqrun() { CPDIR="$CQ" cprun "$@"; }; cqref() { printf '%s\n' "$CPOUT" | head -1; }; cqhint() { printf '%s\n' "$CPOUT" | sed -n "${1:-2}p"; }; cqsubj() { cq log -1 --format=%s "$1"; }
+cqrun a 1; QA1="$(cqref)"; QH1="$(cqhint)"
+cqrun a 2; QA2="$(cqref)"
+cqrun b 1; QB1="$(cqref)"; QBH="$(cqhint)"
+check "checkpoint: seq is 1 + the highest seq of the worktree, across steps" "$(cqsubj "$QA1")|$(cqsubj "$QA2")|$(cqsubj "$QB1")" "checkpoint a-c1 seq 1|checkpoint a-c2 seq 2|checkpoint b-c1 seq 3"
+check "checkpoint: the first hint of the first step starts from HEAD" "$QH1" "Whole step since HEAD (the first brief):  git diff HEAD $QA1"
+check "checkpoint: the first hint of a later step starts from the highest-seq checkpoint of another step" "$QBH" "Whole step since $QA2 (the first brief):  git diff $QA2 $QB1"
+cqrun b 2; QB2="$(cqref)"
+check "checkpoint: a later round of the same step still skips its own step in the first hint" "$(cqhint):$(cqhint 3)" "Whole step since $QA2 (the first brief):  git diff $QA2 $QB2:Since the previous checkpoint:             git diff $QB1 $QB2"
+cqrun a 3; QA3="$(cqref)"
+check "checkpoint: a returning step starts from the other step with the highest seq" "$(cqhint)" "Whole step since $QB2 (the first brief):  git diff $QB2 $QA3"
+cqrun set 1; QS1="$(cqref)"; QS1H="$(cqhint)"
+cqrun set 2; QS2="$(cqref)"
+check "checkpoint: step set always starts from HEAD (set 1 and 2); set 2 also prints the corrections diff" "$QS1H|$(cqhint)|$(cqhint 3)" "Whole set since the branch base (HEAD):  git diff HEAD $QS1|Whole set since the branch base (HEAD):  git diff HEAD $QS2|Since the previous checkpoint:             git diff $QS1 $QS2"
+cqrun c 1; check "checkpoint: a step after the set starts from the set's last checkpoint" "$(cqhint)" "Whole step since $QS2 (the first brief):  git diff $QS2 $(cqref)"
+OLDC="$(cq commit-tree "$(cq rev-parse 'HEAD^{tree}')" -p HEAD -m 'checkpoint old-c1')"; cq update-ref "${QA1%/a-c1}/old-c1" "$OLDC"
+cqrun after 1; check "checkpoint: a checkpoint with no seq counts as 0 and the next seq follows the highest" "$(cqsubj "$(cqref)")" "checkpoint after-c1 seq 9"
+git -C "$CQ" worktree add -q "$TMP/cp-seq-wt" -b seqwt; CPDIR="$TMP/cp-seq-wt" cprun w 1; QW="$(cqref)"
+check "checkpoint: seq counts per worktree" "$(cqsubj "$QW")" "checkpoint w-c1 seq 1"
+CQS="$(cq rev-parse HEAD) $(cq status --porcelain | shasum)"
+cqrun --list; NMINE="$(printf '%s\n' "$CPOUT" | grep -c '^refs/')"
+cqrun --clear-all x; XRC="$CPRC"; cqrun --list
+check "checkpoint: --clear-all with an argument is refused and deletes nothing" "$([ "$XRC" != 0 ] && echo fail):$(printf '%s\n' "$CPOUT" | grep -c '^refs/')" "fail:$NMINE"
+cqrun --clear-all; CLR="$CPRC:$CPOUT"; cqrun --list
+check "checkpoint: --clear-all deletes every checkpoint of this worktree and reports the count" "$CLR:$(printf '%s\n' "$CPOUT" | grep -c '^refs/')" "0:Deleted 10 checkpoint(s):0"
+check "checkpoint: --clear-all keeps the other worktree's refs and leaves HEAD and the tree alone" "$(cq for-each-ref refs/orca-roles | grep -c '/w-c1$'):$(cq rev-parse HEAD) $(cq status --porcelain | shasum)" "1:$CQS"
+cqrun --clear-all; check "checkpoint: --clear-all with nothing recorded exits 0" "$CPRC:$CPOUT" "0:Deleted 0 checkpoint(s)"
+cqrun a 1; check "checkpoint: after --clear-all seq restarts at 1 and the first hint falls back to HEAD" "$(cqsubj "$(cqref)")|$(cqhint)" "checkpoint a-c1 seq 1|Whole step since HEAD (the first brief):  git diff HEAD $(cqref)"
+cq worktree remove --force "$TMP/cp-seq-wt"
 check "defaults: maxMutants 8 and maxSelfMutants 3 in config" "$(jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json")" '[8,3]'
 mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]'; }
 check "upgrade_config moves the old defaults 15/5 to 8/3" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":15}},"tester":{"params":{"maxSelfMutants":5}}}}')" "[8,3]"
