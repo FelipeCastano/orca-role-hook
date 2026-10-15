@@ -2271,6 +2271,23 @@ IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
 check "install.sh: no flat prompt left, 8 in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:8"
+# the "Enabled" line names the mode of the installed configuration
+ic() { jq "$1" "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; }
+irun() { if IOUT="$(cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null 2>"$IH/err.txt")"; then IRC=0; else IRC=$?; fi; IENA="$(printf '%s\n' "$IOUT" | grep '^Enabled')"; }
+iroles() { ( . "$ROOT/bin/lib.sh"; KIT="$IH/.orca-roles"; enabled_roles "$IH/.orca-roles/config.json" | tr '\n' ' ' ); }
+ic 'del(.settings.mode)'; irun
+check "install.sh Enabled: no settings.mode is programmer" "$IRC:$IENA" "0:Enabled (programmer): $(iroles)"
+ic '.settings.mode = "pr-reviewer"'; irun
+check "install.sh Enabled: names a set mode and lists its roles" "$IRC:$IENA" "0:Enabled (pr-reviewer): $(iroles)"
+ic '.settings.mode = "academic-writer" | del(.settings.phase)'; irun
+check "install.sh Enabled: academic-writer without phase says experiment" "$IRC:$IENA" "0:Enabled (academic-writer, phase experiment): $(iroles)"
+ic '.settings.phase = "writing"'; irun
+check "install.sh Enabled: academic-writer names its phase" "$IRC:$IENA" "0:Enabled (academic-writer, phase writing): $(iroles)"
+for bad in '"nope"' '5' 'null' '""'; do
+  ic ".settings.mode = $bad"; irun
+  check "install.sh Enabled: invalid settings.mode $bad is unknown, exit 0, error on stderr" "$IRC:$IENA:$(grep -c . "$IH/err.txt" | tr -d ' ')" "0:Enabled: unknown (invalid settings.mode):1"
+  check "install.sh Enabled: invalid settings.mode $bad, the install goes on" "$(printf '%s\n' "$IOUT" | grep -c '^To enable or disable roles')" "1"
+done
 }
 
 sec_guard() {
