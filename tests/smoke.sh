@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer aw-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer aw-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -370,6 +370,22 @@ rule A10 "$AD/researcher.md" 'Never change a result by hand and never drop runs 
 rule R6 "$PD/planner.md" 'the only way to relaunch one with another model is `~/.orca-roles/bin/relaunch-role.sh`, all with the user'"'"'s confirmation' '^- Never create worktrees'
 rule R6 "$PD/planner.md" '(edit nothing in `~/.orca-roles` without it; do not use `roles --set` for this)' 'model unavailable'
 rule R6 "$PD/planner.md" 'Never dispatch tasks to a role that did not start' 'model unavailable'
+# R5 E2E browser: the install only after the user's yes and never by the Planner, never with sudo; the E2E-Tester installs and logs in nothing; only the user saves sessions
+rule R5 "$PD/planner.md" 'You never run the install yourself' '^ +- Run `~/.orca-roles/bin/e2e-browser.sh check`'
+rule R5 "$PD/planner.md" 'do not ask the user for credentials' '^ +- Once the Deployer has started'
+rule R5 "$PD/planner.md" 'Never ask the E2E-Tester to log in or to save a session' '^ +- Once the Deployer has started'
+rule R5 "$PD/deployer.md" 'Only when the Planner'"'"'s task says the user approved it' '^Only when'
+rule R5 "$PD/deployer.md" 'Never use `sudo`' '^1\. Run `~/.orca-roles/bin/e2e-browser.sh install`'
+rule R5 "$PD/deployer.md" 'do not run it: report it for the user' '^2\. Report its output'
+rule R5 "$PD/e2e-tester.md" 'do not try to install anything or to authenticate' '^- If a browser tool fails'
+rule R5 "$PD/e2e-tester.md" '(and do not install anything)' '^- Do not sign in'
+# R5 E2E flows: the E2E-Tester writes only in the flows and evidence folders, never commits or installs there, and writes to shared services only with the user's typed authorization; the Planner asks for it and checks nothing of those folders is staged
+rule R5 "$PD/e2e-tester.md" 'never commit or stage them, and never `npm install` inside `<e2eDir>`' '^- You do not modify anything in the project'
+rule R5 "$PD/e2e-tester.md" "only after the user's authorization for that scope is in your conversation" '^4\. Writes to a shared service'
+rule R5 "$PD/e2e-tester.md" 'otherwise stop and ask' '^4\. Writes to a shared service'
+rule R5 "$PD/planner.md" "ask the user, when approving the plan, to type the authorization in the E2E-Tester's tab" '^   c\. Review that plan'
+rule R5 "$PD/planner.md" 'before you dispatch the execution' '^   c\. Review that plan'
+rule R5 "$PD/planner.md" 'confirm that nothing under `<e2eDir>/` or `<evidenceDir>/` is staged or part of any commit' '\*\*Set audit\.\*\*'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
@@ -432,6 +448,14 @@ check "upgrade: user's value kept" "$(echo "$U" | jq -r '.roles.dev.model')" "m-
 check "upgrade: user's enabled kept" "$(echo "$U" | jq -r '.roles.tester.enabled')" "false"
 check "upgrade: new setting added" "$(echo "$U" | jq -r '.settings.kickoffTimeoutSeconds')" "180"
 check "upgrade: mcpServers merged" "$(echo "$U" | jq -r '.mcpServers | keys | join(" ")')" "atlassian context7 ctx playwright"
+# The playwright MCP entry: only the exact previous default moves to the pinned stack
+D="$ROOT/config.default.json"
+pwu() { echo "{\"roles\":{},\"mcpServers\":{\"playwright\":$1}}" > "$TMP/pw-user.json"; upgrade_config "$D" "$TMP/pw-user.json" | jq -c '.mcpServers.playwright'; }
+OLDPW='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
+check "upgrade_config: the exact previous playwright default moves to the new default entry" "$(pwu "$OLDPW")" "$(jq -c '.mcpServers.playwright' "$D")"
+check "upgrade_config: the old default with a flag added or removed is kept" "$(pwu "$(echo "$OLDPW" | jq -c '.args += ["--viewport-size=1x1"]')" | jq -c '.args | length'):$(pwu "$(echo "$OLDPW" | jq -c '.args |= map(select(. != "--isolated"))')" | jq -r '.command + (.args | length | tostring)')" "9:npx7"
+check "upgrade_config: a custom playwright entry keeps its command and args, and one differing only in order or extra key is not migrated" "$(pwu '{"command":"mine","args":["a"]}' | jq -c '[.command, .args]'):$(pwu "$(echo "$OLDPW" | jq -c '.args = (.args[2:] + .args[0:2])')" | jq -r .command):$(pwu "$(echo "$OLDPW" | jq -c '.env = {"X":"1"}')" | jq -r .command)" '["mine",["a"]]:npx:npx'
+check "upgrade_config: an unrelated user config gets the default playwright entry" "$(echo '{"roles":{}}' > "$TMP/pw-none.json"; upgrade_config "$D" "$TMP/pw-none.json" | jq -c '.mcpServers.playwright')" "$(jq -c '.mcpServers.playwright' "$D")"
 }
 
 sec_planner_msg() {
@@ -554,6 +578,18 @@ OUT="$(run_agent cu)"; F="${OUT#run --mcp }"
 check "agent.sh custom: {mcp} points to a file with the servers" "$(jq -c '.mcpServers | keys' "$F" 2>/dev/null)" '["pw"]'
 check "agent.sh custom: {mcp} empty with all" "$(run_agent cua)" "run --mcp "
 rm -f "$TMP/fakebin/codex" "$TMP/fakebin/claude"
+# the default pinned playwright entry, expanded for claude (mcp file) and codex (-c overrides)
+cp "$ROOT/config.default.json" "$TMP/pwdef.json"
+( role_context "$TMP/pwdef.json" e2e-tester "$PROJ"
+  mcp_file "$TMP/pwdef.json" e2e-tester > "$TMP/pwdef-mcp.json"
+  check "default playwright entry: command and env expand from the kit for claude" "$(jq -r '.mcpServers.playwright | [.command, .env.PLAYWRIGHT_BROWSERS_PATH] | join(" ")' "$TMP/pwdef-mcp.json")" "$KIT/pw/node_modules/.bin/playwright-mcp $KIT/browsers"
+  check "default playwright entry: args pick chromium, with session and evidence expanded" "$(jq -c '.mcpServers.playwright.args[0:2], (.mcpServers.playwright.args | index("{browserState}"), index("{worktree}/{evidenceDir}"))' "$TMP/pwdef-mcp.json" | tr '\n' ' ')" '["--browser","chromium"] null null '
+  OVR="$(codex_mcp_overrides "$TMP/pwdef-mcp.json" | grep '^mcp_servers.playwright' | tr '\n' '|')"
+  case "$OVR" in
+    'mcp_servers.playwright.command="'"$KIT"'/pw/node_modules/.bin/playwright-mcp"|mcp_servers.playwright.args=["--browser","chromium","--headless","--isolated","--storage-state","'"$KIT"'/browser/'*'.json","--output-dir","'*'"]|mcp_servers.playwright.env={PLAYWRIGHT_BROWSERS_PATH = "'"$KIT"'/browsers"}|') echo "ok   default playwright entry: codex overrides carry command, args and env";;
+    *) echo "FAIL default playwright entry for codex: $OVR"; FAIL=1;;
+  esac
+  [ "$FAIL" = 0 ] ) || FAIL=1
 }
 
 sec_mcp_placeholders() {
@@ -566,17 +602,17 @@ mkdir -p "$TMP/plain"; check "project_name without git" "$(project_name "$TMP/pl
 ( role_context "$C" vt "$PROJ"
   check "role_context: worktree" "$ORCA_ROLES_WORKTREE" "$(cd "$PROJ" && pwd)"
   check "role_context: the role's evidenceDir" "$ORCA_ROLES_EVIDENCE_DIR" "ev"
-  check "role_context: browser state per project" "$ORCA_ROLES_BROWSER_STATE" "$KIT/browser/proj.json"
+  check "role_context: browser state per project" "$ORCA_ROLES_BROWSER_STATE" "$KIT/browser/proj/default.json"
   A="$(mcp_file "$C" vt | jq -c '.mcpServers.pw.args')"
-  check "mcp_file expands placeholders in args" "$A" "[\"-y\",\"@playwright/mcp@latest\",\"--headless\",\"--storage-state\",\"$KIT/browser/proj.json\",\"--output-dir\",\"$(cd "$PROJ" && pwd)/ev\"]"
+  check "mcp_file expands placeholders in args" "$A" "[\"-y\",\"@playwright/mcp@latest\",\"--headless\",\"--storage-state\",\"$KIT/browser/proj/default.json\",\"--output-dir\",\"$(cd "$PROJ" && pwd)/ev\"]"
   check "mcp_file expands in env and url" "$(mcp_file "$C" vt | jq -r '.mcpServers.pw.env.P + " " + .mcpServers.pw.env.K + " " + .mcpServers.h.url')" "proj $KIT http://$HOME/x"
   [ "$FAIL" = 0 ] ) || FAIL=1
 ( role_context "$C" other "$PROJ"; check "role_context: default evidenceDir" "$ORCA_ROLES_EVIDENCE_DIR" "qa-evidence"; [ "$FAIL" = 0 ] ) || FAIL=1
 OUT="$(cd "$PROJ" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$C" "$TMP/home/.orca-roles/bin/agent.sh" vt 2>&1)"; F="${OUT#run }"
-check "agent.sh creates the empty browser state" "$(cat "$TMP/home/.orca-roles/browser/proj.json" 2>/dev/null)" '{"cookies":[],"origins":[]}'
-check "agent.sh: MCP file with expanded placeholders" "$(jq -r '.mcpServers.pw.args[4]' "$F" 2>/dev/null)" "$TMP/home/.orca-roles/browser/proj.json"
-echo '{"cookies":[{"n":1}],"origins":[]}' > "$KIT/browser/proj.json"
-( role_context "$C" vt "$PROJ"; ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"; check "ensure_browser_state does not overwrite an existing session" "$(jq -c '.cookies | length' "$KIT/browser/proj.json")" "1"; [ "$FAIL" = 0 ] ) || FAIL=1
+check "agent.sh creates the empty browser state" "$(cat "$TMP/home/.orca-roles/browser/proj/default.json" 2>/dev/null)" '{"cookies":[],"origins":[]}'
+check "agent.sh: MCP file with expanded placeholders" "$(jq -r '.mcpServers.pw.args[4]' "$F" 2>/dev/null)" "$TMP/home/.orca-roles/browser/proj/default.json"
+echo '{"cookies":[{"n":1}],"origins":[]}' > "$KIT/browser/proj/default.json"
+( role_context "$C" vt "$PROJ"; ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"; check "ensure_browser_state does not overwrite an existing session" "$(jq -c '.cookies | length' "$KIT/browser/proj/default.json")" "1"; [ "$FAIL" = 0 ] ) || FAIL=1
 grep -q -- '--headless' "$ROOT/config.default.json" && grep -q '{browserState}' "$ROOT/config.default.json" && grep -q '{worktree}/{evidenceDir}' "$ROOT/config.default.json" && echo "ok   config.default: headless playwright with session and evidence" || { echo "FAIL config.default playwright"; FAIL=1; }
 }
 
@@ -968,6 +1004,7 @@ exit 0
 EOS
 chmod +x "$TMP/lbin/orca"
 launch() { (cd "$L" && HOME="$TMP/home" PATH="$TMP/lbin:$PATH" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+launch_from() { local d="$1"; shift; (cd "$d" && HOME="$TMP/home" PATH="$TMP/lbin:$PATH" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 handles() { cut -d= -f1 "$L/.git/orca-roles.env" | tr '\n' ' '; }
 try launch --disable deployer --set roles.dev.model=m3; check "launch: --disable" "$RC:$(handles)" "0:PLANNER DEV "
 check "launch: --set in the effective config" "$(jq -r '.roles.dev.model' "$L/.git/orca-roles.config.json")" "m3"
@@ -978,6 +1015,16 @@ try launch --reset; check "launch: --reset goes back to the configuration" "$RC:
 check "launch creates the scratch folder of each enabled role only" "$(for r in planner dev deployer tester; do [ -d "$(cd "$L" && KIT="$TMP/home/.orca-roles" scratch_dir $r)" ] && printf y || printf n; done)" "yyyn"
 try launch --only dev; check "launch: --only" "$RC:$(handles)" "0:PLANNER DEV "
 check "launch.sh leaves pre-seeded scratch content intact" "$(for r in planner dev deployer; do d="$(cd "$L" && KIT="$TMP/home/.orca-roles" scratch_dir $r)"; [ -f "$d/f" ] && [ -f "$d/sub/g" ] && [ -f "$d/.hidden" ] && printf y || printf n; done)" "yyy"
+try launch --only dev; X1="$(grep -cxF '/qa-e2e/' "$L/.git/info/exclude"):$(grep -cxF 'qa-evidence/' "$L/.git/info/exclude"):$(printf '%s\n' "$OUT" | grep -c 'tracked by git' || true)"
+mkdir -p "$L/qa-e2e/f" "$L/sub/qa-e2e"; touch "$L/qa-e2e/f/a.flow.ts" "$L/sub/qa-e2e/b.flow.ts"
+X2="$(git -C "$L" check-ignore -q qa-e2e/f/a.flow.ts && echo y || echo n)$(git -C "$L" check-ignore -q sub/qa-e2e/b.flow.ts && echo y || echo n):$(git -C "$L" status --porcelain | grep -c 'qa-e2e/f' || true)"
+check "launch: the anchored /qa-e2e/ goes once into info/exclude (not a second time on relaunch), qa-e2e at the root is ignored and a nested qa-e2e is not, no warning when nothing is tracked" "$X1:$X2" "1:1:0:yn:0"
+git -C "$L" add -f qa-e2e/f/a.flow.ts; try launch --only dev
+check "launch: a tracked file under qa-e2e/ -> a warning naming the folder, launch still succeeds" "$RC:$(printf '%s\n' "$OUT" | grep -c 'Warning: files under qa-e2e/ are tracked by git'):$(handles):$(grep -cxF '/qa-e2e/' "$L/.git/info/exclude")" "0:1:PLANNER DEV :1"
+mkdir -p "$L/sub/deep"; try launch_from "$L/sub/deep" --only dev; Y1="$RC:$(printf '%s\n' "$OUT" | grep -c 'Warning: files under qa-e2e/ are tracked by git')"
+git -C "$L" rm -q --cached qa-e2e/f/a.flow.ts; try launch_from "$L/sub/deep" --only dev; Y2="$RC:$(printf '%s\n' "$OUT" | grep -c 'tracked by git' || true)"
+check "launch: the tracked-qa-e2e warning also fires when launched from a subdirectory, and not once nothing is tracked" "$Y1|$Y2" "0:1|0:0"
+rm -rf "$L/qa-e2e" "$L/sub"
 try launch --enable nobody; check "launch: unknown role fails" "$RC" "1"
 check "launch: an error does not overwrite the saved exceptions" "$(jq -c .only "$L/.git/orca-roles.overrides.json")" '["dev"]'
 # launch.sh warns when new worktrees would not start the kit, and a failing check never changes its outcome
@@ -2338,6 +2385,12 @@ ic '.settings.mode = "academic-writer" | del(.settings.phase)'; irun
 check "install.sh Enabled: academic-writer without phase says experiment" "$IRC:$IENA" "0:Enabled (academic-writer, phase experiment): $(iroles)"
 ic '.settings.phase = "writing"'; irun
 check "install.sh Enabled: academic-writer names its phase" "$IRC:$IENA" "0:Enabled (academic-writer, phase writing): $(iroles)"
+# the pinned browser stack: package.json and the lockfile are copied, an installed node_modules and the browsers are kept
+mkdir -p "$IH/.orca-roles/pw/node_modules/x" "$IH/.orca-roles/browsers/b"; echo keep > "$IH/.orca-roles/pw/node_modules/x/f"; echo keep > "$IH/.orca-roles/browsers/b/f"; echo old > "$IH/.orca-roles/pw/package.json"; rm -f "$IH/.orca-roles/pw/package-lock.json"
+irun
+check "install.sh: pw/package.json and the lockfile are copied, node_modules and browsers are kept" "$IRC:$(cmp -s "$ROOT/pw/package.json" "$IH/.orca-roles/pw/package.json" && echo p):$(cmp -s "$ROOT/pw/package-lock.json" "$IH/.orca-roles/pw/package-lock.json" && echo l):$(cat "$IH/.orca-roles/pw/node_modules/x/f" "$IH/.orca-roles/browsers/b/f" | tr '\n' ' '):$(test -x "$IH/.orca-roles/bin/e2e-browser.sh" && echo x)" "0:p:l:keep keep :x"
+rm -f "$IH/.orca-roles/pw/e2e.config.js"; irun
+check "install.sh: pw/e2e.config.js is copied to the kit's pw" "$IRC:$(cmp -s "$ROOT/pw/e2e.config.js" "$IH/.orca-roles/pw/e2e.config.js" && echo same)" "0:same"
 for bad in '"nope"' '5' 'null' '""'; do
   ic ".settings.mode = $bad"; irun
   check "install.sh Enabled: invalid settings.mode $bad is unknown, exit 0, error on stderr" "$IRC:$IENA:$(grep -c . "$IH/err.txt" | tr -d ' ')" "0:Enabled: unknown (invalid settings.mode):1"
@@ -3470,7 +3523,7 @@ check "scholar redirects: no API call is made with -L (key or not), the key and 
 sch_codes; sc show arxiv:2401.00001v3
 EXPA="$(printf 'id: arxiv:2401.00001\ntitle: Shown arXiv\nyear: 2024\ndate: 2024-02-03\ntype: preprint\nauthors: First Au; Second Au\nvenue: arXiv cs.LG\npublisher: -\ndoi: 10.1000/mixed.case\narxiv: 2401.00001\ncitations: -\noa: yes\noa_url: https://arxiv.org/pdf/2401.00001v2\nretracted: -\nabstract: Sum & text line two.')"
 A1="$(cat "$SCH/rc"):$([ "$(cat "$SCH/out")" = "$EXPA" ] && echo same || cat "$SCH/out"):$(scu 'https://export.arxiv.org/api/query?id_list=2401.00001'):$(scu api.openalex.org)"
-for id in "ARXIV:2401.00001" "https://arxiv.org/abs/2401.00001v2" "arxiv:hep-th/9901001v2" "10.48550/ARXIV.2401.00001" "HTTPS://ARXIV.ORG/ABS/2401.00001v2" "http://arxiv.org/abs/2401.00001" "HTTP://ARXIV.ORG/ABS/hep-th/9901001"; do sc show "$id"; A2="${A2:-}$(cat "$SCH/rc")$(scu api.openalex.org)$(scu 'id_list=')"; done
+A2=""; for id in "ARXIV:2401.00001" "https://arxiv.org/abs/2401.00001v2" "arxiv:hep-th/9901001v2" "10.48550/ARXIV.2401.00001" "HTTPS://ARXIV.ORG/ABS/2401.00001v2" "http://arxiv.org/abs/2401.00001" "HTTP://ARXIV.ORG/ABS/hep-th/9901001"; do sc show "$id"; A2="${A2:-}$(cat "$SCH/rc")$(scu api.openalex.org)$(scu 'id_list=')"; done
 sc show arxiv:9999.99999; A3="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
 sc show arxiv:err; A4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(wc -c < "$SCH/out" | tr -d ' ')"
 echo 500 > "$FX/code.ax"; sc show arxiv:2401.00001; A5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scn)"; sch_codes
@@ -3478,7 +3531,7 @@ echo 500 > "$FX/code.ax"; sc show arxiv:2401.00001; A5="$(cat "$SCH/rc"):$(cat "
 rm -f "$SCH/state/orca-roles-scholar-arxiv.last"
 SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P1="$([ -f "$SCH/state/orca-roles-scholar-arxiv.last" ] && echo stamp || echo nostamp)"
 T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P2="$(( $(date +%s) - T0 >= 1 ? 1 : 0 ))"
-for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 1 ? 0 : 1 ))$(cat "$SCH/rc")"; done
+P3=""; for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 1 ? 0 : 1 ))$(cat "$SCH/rc")"; done
 P5="$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -le "$(( $(date +%s) + 1 ))" ] && echo rewritten || echo kept)"
 SCHOLAR_ARXIV_DELAY=2 sc search q --source arxiv; P4="$(scu export.arxiv.org)"
 check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
@@ -3765,6 +3818,260 @@ PWD2="$W3" pd pdfs; M1="$(pdr)"; PWD2="$W3" pd pdfs x; M2="$(pdr)"; PWD2="$W3" p
 printf 'key\tpdf\n' > "$W3/article/literature/manifest.tsv"; printf 'k\t10\n' >> "$W3/article/literature/manifest.tsv"; cp "$W3/article/literature/manifest.tsv" "$SCH/m.foreign"
 PWD2="$W3" pd pdfs; M4="$(pdr)"; PWD2="$W3" pd pdf 10.1/pub --bib "$W2/article/refs.bib"; M5="$(pdr)"
 check "scholar pdfs errors: no manifest, bad arguments, foreign manifest header (pdfs and pdf refuse it) -> exit 1, no call, manifest untouched, no missing.md" "$M1|$M2|$M3|$M4|$M5|$(cmp -s "$W3/article/literature/manifest.tsv" "$SCH/m.foreign" && echo same || echo CHANGED):$(ls "$W3/article/literature" | tr '\n' ' ')" "1::scholar.sh: no manifest yet (article/literature/manifest.tsv); run scholar.sh pdf <id> first|:0|1::scholar.sh: pdfs takes no argument (got 'x')|:0|1::scholar.sh: $W2/dirbib is not a regular file|:0|1::scholar.sh: $W3R/article/literature/manifest.tsv does not start with the header (key, id, title, pdf, source)|:0|1::scholar.sh: $W3R/article/literature/manifest.tsv does not start with the header (key, id, title, pdf, source)|:0|same:manifest.tsv "
+}
+
+sec_e2e_browser() {
+# bin/e2e-browser.sh with stubbed node and npm: no network, no real browser
+EB="$TMP/eb"; rm -rf "$EB"; mkdir -p "$EB/bin" "$EB/pw" "$EB/stubs"
+cp "$ROOT/bin/e2e-browser.sh" "$EB/bin/"; chmod +x "$EB/bin/e2e-browser.sh"
+printf '{"dependencies":{"@playwright/mcp":"1.2.3","@playwright/test":"4.5.6-alpha-1"}}' > "$EB/pw/package.json"
+EBX="$EB/browsers/chromium-1/chrome-linux/chrome"
+printf '#!/bin/sh\necho noise\necho "$EB_EXE"\n' > "$EB/stubs/node"
+printf '#!/bin/sh\necho "npm $* | PW=${PLAYWRIGHT_BROWSERS_PATH:-}" >> "$EB_LOG"\n[ -z "${EB_NPM_FAIL:-}" ]\n' > "$EB/stubs/npm"
+printf '#!/bin/sh\necho "pw $* | PW=${PLAYWRIGHT_BROWSERS_PATH:-}" >> "$EB_LOG"\n[ -z "${EB_PW_FAIL:-}" ]\n' > "$EB/stubs/playwright"
+printf '#!/bin/sh\necho Linux\n' > "$EB/stubs/uname"
+chmod +x "$EB/stubs/"*
+eb_ver() { mkdir -p "$EB/pw/node_modules/$1"; printf '{"version":"%s"}' "$2" > "$EB/pw/node_modules/$1/package.json"; }
+eb_full() {
+  eb_ver @playwright/mcp 1.2.3; eb_ver @playwright/test 4.5.6-alpha-1; mkdir -p "$EB/pw/node_modules/playwright-core" "$EB/pw/node_modules/.bin" "${EBX%/*}"
+  cp "$EB/stubs/playwright" "$EB/pw/node_modules/.bin/playwright"; printf '#!/bin/sh\n' > "$EBX"; chmod +x "$EBX"; : > "$EB/browsers/chromium-1/INSTALLATION_COMPLETE"
+}
+eb() { : > "$EB/log"; if OUT="$(KIT="$EB" E2E_NODE="$EB/stubs/node" E2E_NPM="$EB/stubs/npm" EB_EXE="$EBX" EB_LOG="$EB/log" PATH="$EB/stubs:$PATH" "$EB/bin/e2e-browser.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi; }
+# a bare uname stub would make every call think it is Linux: only the Linux cases put the stubs dir first
+eb_mac() { : > "$EB/log"; mkdir -p "$EB/macpath"; if OUT="$(KIT="$EB" E2E_NODE="$EB/stubs/node" E2E_NPM="$EB/stubs/npm" EB_EXE="$EBX" EB_LOG="$EB/log" "$EB/bin/e2e-browser.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi; }
+eb_mac check
+check "e2e-browser check: empty tree -> exit 2, lists what is missing, prints the install command" "$RC:$(printf '%s\n' "$OUT" | grep -c 'not installed'):$(printf '%s\n' "$OUT" | grep -c "^Fix: $EB/bin/e2e-browser.sh install$")" "2:3:1"
+eb_full; eb_mac check
+check "e2e-browser check: complete tree -> exit 0 and the executable path" "$RC:$OUT" "0:E2E browser ready: $EBX"
+eb_ver @playwright/mcp 1.2.4; eb_mac check
+check "e2e-browser check: a different mcp version than the pin -> exit 2 naming both" "$RC:$(printf '%s\n' "$OUT" | grep -c 'is 1.2.4 .* pins 1.2.3')" "2:1"
+eb_ver @playwright/mcp 1.2.3; eb_ver @playwright/test 4.5.6; eb_mac check
+check "e2e-browser check: a different test version than the pin -> exit 2" "$RC:$(printf '%s\n' "$OUT" | grep -c 'is 4.5.6 .* pins 4.5.6-alpha-1')" "2:1"
+eb_ver @playwright/test 4.5.6-alpha-1
+chmod -x "$EBX"; eb_mac check
+check "e2e-browser check: Chromium not executable -> exit 2" "$RC:$(printf '%s\n' "$OUT" | grep -c 'Chromium is not installed')" "2:1"
+chmod +x "$EBX"; rm "$EB/browsers/chromium-1/INSTALLATION_COMPLETE"; eb_mac check
+check "e2e-browser check: INSTALLATION_COMPLETE missing -> exit 2 naming the marker" "$RC:$(printf '%s\n' "$OUT" | grep -c 'INSTALLATION_COMPLETE is missing')" "2:1"
+: > "$EB/browsers/chromium-1/INSTALLATION_COMPLETE"
+eb check
+check "e2e-browser check on Linux, ready: no install-deps output" "$RC:$(grep -c install-deps "$EB/log")" "0:0"
+rm "$EB/browsers/chromium-1/INSTALLATION_COMPLETE"; eb check
+check "e2e-browser check on Linux, not ready: install-deps only as --dry-run, the sudo command only printed" "$RC:$(grep -c '^pw install-deps --dry-run chromium' "$EB/log"):$(grep -c 'install-deps' "$EB/log"):$(printf '%s\n' "$OUT" | grep -c "sudo $EB/pw/node_modules/.bin/playwright install-deps chromium")" "2:1:1:1"
+: > "$EB/browsers/chromium-1/INSTALLATION_COMPLETE"
+eb_mac bogus; check "e2e-browser: unknown argument -> exit 1 with the usage" "$RC:$(printf '%s\n' "$OUT" | grep -c '^# Usage\|^Usage')" "1:1"
+eb_mac install
+check "e2e-browser install: npm ci --prefix the tree, then playwright install --no-shell chromium into the kit browsers, no sudo, ends with check" "$RC:$(sed -n 1p "$EB/log"):$(sed -n 2p "$EB/log"):$(grep -c sudo "$EB/log"):$(printf '%s\n' "$OUT" | tail -1)" "0:npm ci --prefix $EB/pw | PW=$EB/browsers:pw install --no-shell chromium | PW=$EB/browsers:0:E2E browser ready: $EBX"
+EB_NPM_FAIL=1 eb_mac install
+check "e2e-browser install: a failing npm ci stops there, exit 1, ERROR on output" "$RC:$(grep -c '^pw ' "$EB/log"):$(printf '%s\n' "$OUT" | grep -c 'ERROR: npm ci failed')" "1:0:1"
+EB_PW_FAIL=1 eb_mac install
+check "e2e-browser install: a failing browser install -> exit 1, ERROR on output, no 'ready'" "$RC:$(printf '%s\n' "$OUT" | grep -c 'ERROR: playwright install chromium failed'):$(printf '%s\n' "$OUT" | grep -c 'E2E browser ready')" "1:1:0"
+
+# session: reads the saved state, starts nothing; every exit code with its boundaries
+cp "$ROOT/bin/lib.sh" "$EB/bin/"; SNOW="$(date +%s)"; SF1=$((SNOW+1000)); SF2=$((SNOW+5000)); SPAST=$((SNOW-1000))
+ebs_state() { mkdir -p "$EB/browser/p"; printf '%s' "$1" > "$EB/browser/p/${2:-default}.json"; }
+ck() { printf '{"name":"s","value":"v","domain":"%s","path":"/","expires":%s}' "$1" "$2"; }
+rm -rf "$EB/browser"; eb session http://app.example.com p
+S1="$RC"; ebs_state '{"cookies":[],"origins":[]}'; eb session http://app.example.com p; S2="$RC"; ebs_state '{not json'; eb session http://app.example.com p
+check "e2e-browser session: no file, empty stub and invalid JSON -> 3 missing, each with the login command" "$S1:$S2:$RC:$(printf '%s\n' "$OUT" | grep -c '^missing')" "3:3:3:1"
+ebs_state "{\"cookies\":[$(ck .example.com $SF2),$(ck .example.com $SF1),$(ck .example.com $SPAST)],\"origins\":[]}"; eb session http://app.example.com p
+S1="$RC:$(printf '%s\n' "$OUT" | grep -c "^ok: session for http://app.example.com saved .*; earliest cookie expiry $(date -u -r "$SF1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$SF1" +%Y-%m-%dT%H:%M:%SZ || true)\$"):$(printf '%s\n' "$OUT" | grep -c '^Login' || true)"
+eb session http://example.com p; S2="$RC"; ebs_state "{\"cookies\":[$(ck app.example.com $SF1)],\"origins\":[]}"; eb session http://APP.example.com p
+check "e2e-browser session: leading-dot cookie matches subdomain and apex, exact domain matches its host; ok names the earliest live expiry, skips the expired one, prints no login line" "$S1:$S2:$RC" "0:1:0:0:0"
+ebs_state "{\"cookies\":[$(ck app.example.com $SF1)],\"origins\":[]}"; eb session http://www.example.com p; S1="$RC"
+ebs_state "{\"cookies\":[$(ck .example.com $SF1)],\"origins\":[]}"; eb session http://badexample.com p; S2="$RC"; eb session http://other.org p
+check "e2e-browser session: a host-only cookie does not match a sibling, a leading-dot domain not a lookalike suffix nor another host -> 4 no-session-for-host" "$S1:$S2:$RC:$(printf '%s\n' "$OUT" | grep -c '^no-session-for-host')" "4:4:4:1"
+ebs_state "{\"cookies\":[$(ck .example.com $SPAST),$(ck .example.com "$SNOW")],\"origins\":[]}"; eb session http://app.example.com p; S1="$RC:$(printf '%s\n' "$OUT" | grep -c '^expired' || true)"
+ebs_state "{\"cookies\":[$(ck .example.com $SPAST),$(ck .example.com -1)],\"origins\":[]}"; eb session http://app.example.com p; S2="$RC"
+ebs_state "{\"cookies\":[$(ck .example.com -1)],\"origins\":[]}"; eb session http://app.example.com p
+check "e2e-browser session: all persistent cookies expired (also just now, and next to a session cookie) -> 5; only session cookies -> 6 unknown" "$S1:$S2:$RC:$(printf '%s\n' "$OUT" | grep -c '^unknown')" "5:1:5:6:1"
+LS='{"origin":"http://localhost:3000","localStorage":[{"name":"t","value":"x"}]}'
+ebs_state "{\"cookies\":[],\"origins\":[$LS]}"; eb session http://localhost:3000 p; S1="$RC:$(printf '%s\n' "$OUT" | grep -c 'no persistent cookie, localStorage for the origin' || true)"
+eb session http://localhost:3001 p; S2="$RC"; eb session https://localhost:3000 p; S3="$RC"
+ebs_state '{"cookies":[],"origins":[{"origin":"https://app.example.com","localStorage":[{"name":"t","value":"x"}]}]}'; eb session https://app.example.com:443 p; S4="$RC"
+ebs_state '{"cookies":[],"origins":[{"origin":"http://localhost:3000","localStorage":[]}]}'; eb session http://localhost:3000 p; S5="$RC"
+ebs_state '{"cookies":[],"origins":[{"origin":"https://APP.example.com:443","localStorage":[{"name":"t","value":"x"}]}]}'; eb session https://app.example.com p; S6="$RC"
+ebs_state "{\"cookies\":[$(ck localhost $SPAST)],\"origins\":[$LS]}"; eb session http://localhost:3000 p
+check "e2e-browser session: localStorage counts only for the exact origin (port, scheme), a default port is normalised, an empty localStorage array counts for nothing, localStorage beats expired cookies" "$S1:$S2:$S3:$S4:$S5:$S6:$RC" "0:1:4:4:0:4:0:0"
+ebs_state "{\"cookies\":[$(ck localhost $SF1)],\"origins\":[]}"; eb session http://localhost:3000 p --as admin; S1="$RC:$(printf '%s\n' "$OUT" | grep -c 'identity .admin.' || true)"
+ebs_state "{\"cookies\":[$(ck localhost $SF1)],\"origins\":[]}" admin; eb session http://localhost:3000 p --as admin; S2="$RC"
+check "e2e-browser session: --as reads that identity's file (missing for admin until saved)" "$S1:$S2" "3:1:0"
+rm -rf "$EB/browser"; eb session http://localhost:3000 p; S1="$(printf '%s\n' "$OUT" | grep '^Login:')"; eb session http://localhost:3000 p --as admin; S2="$(printf '%s\n' "$OUT" | grep '^Login:')"
+eb session http://localhost:3000 --as qa; S3="$(printf '%s\n' "$OUT" | grep '^Login:')"
+check "e2e-browser session: the login command is exact (project only if given, --as omitted for default)" "$S1|$S2|$S3" 'Login: ~/.orca-roles/bin/browser-login.sh http://localhost:3000 p|Login: ~/.orca-roles/bin/browser-login.sh http://localhost:3000 p --as admin|Login: ~/.orca-roles/bin/browser-login.sh http://localhost:3000 --as qa'
+eb session http://localhost:3000 p --as Bad_Id; S1="$RC"; eb session localhost:3000 p; S2="$RC"; eb session; S3="$RC"; eb session http://localhost:3000 p --as; S4="$RC"; eb session http://localhost:3000 p extra; S5="$RC"; : > "$EB/log"; eb session http://localhost:3000 p
+check "e2e-browser session: invalid identity, URL without http(s), no URL, --as without value, extra argument -> 1; it starts no node, npm or playwright" "$S1:$S2:$S3:$S4:$S5:$(wc -c < "$EB/log" | tr -d ' ')" "1:1:1:1:1:0"
+}
+
+sec_browser_login() {
+# session_file, migrate_session and bin/browser-login.sh with a fake playwright and a stubbed stack check: no browser, no network
+BL="$TMP/bl"; rm -rf "$BL"; mkdir -p "$BL/bin" "$BL/pw/node_modules/.bin" "$BL/stubs"
+cp "$ROOT/bin/lib.sh" "$ROOT/bin/browser-login.sh" "$BL/bin/"
+printf '#!/bin/sh\n[ "${BL_CHECK_RC:-0}" = 0 ] && { echo "E2E browser ready: x"; exit 0; }\necho "E2E browser: not installed"; echo "Fix: $0 install"; exit "$BL_CHECK_RC"\n' > "$BL/bin/e2e-browser.sh"
+cat > "$BL/pw/node_modules/.bin/playwright" <<'PWEOF'
+#!/bin/sh
+echo "$* | PW=${PLAYWRIGHT_BROWSERS_PATH:-}" >> "$BL_LOG"
+out=""; for a in "$@"; do case "$a" in --save-storage=*) out="${a#--save-storage=}";; esac; done
+case "${BL_MODE:-valid}" in
+  valid) echo '{"cookies":[{"name":"a","domain":"u"},{"name":"b","domain":"u"}],"origins":[{"origin":"o"}]}' > "$out";;
+  validfail) echo '{"cookies":[{"name":"a","domain":"u"}],"origins":[]}' > "$out"; exit 1;;
+  other) echo '{"cookies":[{"name":"a","domain":"other.test"}],"origins":[{"origin":"http://other.test","localStorage":[{"name":"k","value":"v"}]}]}' > "$out";;
+  empty) echo '{"cookies":[],"origins":[]}' > "$out";;
+  nokeys) echo '{}' > "$out";;
+  garbage) echo 'not json' > "$out";;
+  fail) exit 1;;
+esac
+PWEOF
+printf '#!/bin/sh\necho "npx $*" >> "$BL_LOG"\n' > "$BL/stubs/npx"
+chmod +x "$BL/bin/"*.sh "$BL/pw/node_modules/.bin/playwright" "$BL/stubs/npx"
+BL_LOG="$BL/log"; BLERR="$BL/err"; BLS="$BL/browser/p/default.json"
+OLD='{"cookies":[{"name":"old"}],"origins":[]}'
+bl() { : > "$BL_LOG"; if OUT="$(cd "$PROJ" && KIT="$BL" BL_LOG="$BL_LOG" PATH="$BL/stubs:$PATH" "$BL/bin/browser-login.sh" "$@" 2> "$BLERR")"; then RC=0; else RC=$?; fi; }
+# the old single file <project>.json and the destination content ($2, absent = no destination) -> "destination:old file state:stderr lines"
+mig() { rm -rf "$BL/browser"; mkdir -p "$BL/browser/p"; printf '%s' "$1" > "$BL/browser/p.json"; [ -z "${2+x}" ] || printf '%s' "$2" > "$BLS"
+  ( KIT="$BL"; . "$BL/bin/lib.sh"; migrate_session p 2> "$BLERR" ); echo "$(cat "$BLS" 2>/dev/null):$(test -e "$BL/browser/p.json" && echo old-kept || echo old-gone):$(wc -l < "$BLERR" | tr -d ' ')"; }
+( KIT="$BL"; . "$BL/bin/lib.sh"
+  ok="$(for i in default a 0 a-b a1-2 9x; do session_file p "$i" >/dev/null 2>&1 && printf y; done)"
+  bad="$(for i in Bad_ID -x '' a/b a.b Admin ../x 'a b' -; do if session_file p "$i" >/dev/null 2>&1; then printf y; else printf n; fi; done)"
+  check "session_file: <project>/<identity>.json, default identity, only [a-z0-9][a-z0-9-]* accepted, refusal names the rule" "$(session_file p):$(session_file p a-1):$ok:$bad:$(session_file p Bad 2>&1 >/dev/null | grep -c 'invalid identity')" "$BL/browser/p/default.json:$BL/browser/p/a-1.json:yyyyyy:nnnnnnnnn:1"
+  [ "$FAIL" = 0 ] ) || FAIL=1
+check "migrate_session: old file only (or an old file holding {}) -> moved to <project>/default.json, no warning" "$(mig "$OLD")|$(mig '{}')" "$OLD:old-gone:0|{}:old-gone:0"
+check "migrate_session: empty stub or key-less destination -> replaced by the old file, no warning" "$(mig "$OLD" '{"cookies":[],"origins":[]}')|$(mig "$OLD" '{}')" "$OLD:old-gone:0|$OLD:old-gone:0"
+NEWC='{"cookies":[{"name":"new"}],"origins":[]}'; NEWO='{"cookies":[],"origins":[{"origin":"o"}]}'
+R1="$(mig "$OLD" "$NEWC")"; W1="$(grep -c "WARNING.*$BL/browser/p.json.*$BL/browser/p/default.json" "$BLERR" || true)"
+check "migrate_session: a destination with cookies, with origins only or unreadable is never overwritten: old kept, one warning naming both files" "$R1:$W1|$(mig "$OLD" "$NEWO")|$(mig "$OLD" 'not json')" "$NEWC:old-kept:1:1|$NEWO:old-kept:1|not json:old-kept:1"
+rm -rf "$BL/browser"; mkdir -p "$BL/browser"; printf '%s' "$OLD" > "$BL/browser/proj.json"
+echo '{"roles":{"x":{}}}' > "$BL/cfg.json"
+( KIT="$BL"; . "$BL/bin/lib.sh"; role_context "$BL/cfg.json" x "$PROJ"
+  check "role_context: migrates browser/<project>.json into the default identity's file and points the MCP state at it" "$ORCA_ROLES_BROWSER_STATE:$(cat "$BL/browser/proj/default.json" 2>/dev/null):$(test -e "$BL/browser/proj.json" && echo old-kept || echo old-gone)" "$BL/browser/proj/default.json:$OLD:old-gone"
+  [ "$FAIL" = 0 ] ) || FAIL=1
+rm -rf "$BL/browser"
+bl http://u p
+check "browser-login: valid save -> exit 0, default.json written, counts printed, pinned binary with the kit browsers, temp file gone, no npx" "$RC:$(jq -c '[(.cookies|length),(.origins|length)]' "$BLS"):$(printf '%s\n' "$OUT" | grep -c '^Session saved: 2 cookies, 1 origins\.$'):$(printf '%s\n' "$OUT" | grep -c '^Identity: default$'):$(sed 's#--save-storage=[^ ]*#SAVE#' "$BL_LOG"):$(ls "$BL/browser/p" | tr '\n' ' ')" "0:[2,1]:1:1:open SAVE http://u | PW=$BL/browsers:default.json "
+bl http://u p --as admin; A1="$RC:$(ls "$BL/browser/p" | tr '\n' ' ')"; rm -f "$BL/browser/p/admin.json"
+bl http://u --as admin p; A2="$RC:$(ls "$BL/browser/p" | tr '\n' ' '):$(printf '%s\n' "$OUT" | grep -c '^Project: p$')"; rm -f "$BL/browser/p/admin.json"
+bl http://u --as admin; A3="$RC:$(ls "$BL/browser/proj" | tr '\n' ' ')"
+check "browser-login: --as before or after the positional project (or alone, project from the repo) saves <project>/<identity>.json and leaves default.json" "$A1|$A2|$A3" "0:admin.json default.json |0:admin.json default.json :1|0:admin.json "
+rm -rf "$BL/browser"; BADN="$(for i in Bad_ID -x a/b ../x Admin ""; do bl http://u p --as "$i"; printf '%s:%s:%s:%s;' "$RC" "$(grep -c 'invalid identity' "$BLERR")" "$(wc -l < "$BL_LOG" | tr -d ' ')" "$(test -e "$BL/browser" && echo made || echo none)"; done)"
+bl http://u p --as; BADN="$BADN$RC:$(grep -c -- '--as needs' "$BLERR")"
+check "browser-login: invalid identities (also an empty one) and a bare --as -> exit 1 with the message, playwright never run, nothing created" "$BADN" "1:1:0:none;1:1:0:none;1:1:0:none;1:1:0:none;1:1:0:none;1:1:0:none;1:1"
+rm -rf "$BL/browser"; FS=""; for m in empty nokeys garbage fail; do mkdir -p "$BL/browser/p"; printf '%s' "$OLD" > "$BLS"; BL_MODE=$m bl http://u p; FS="$FS$m=$RC:$(cat "$BLS"):$(printf '%s\n' "$OUT" "$(cat "$BLERR")" | grep -c '^Nothing was saved'):$(grep -c 'previous session.*unchanged' "$BLERR"):$(ls "$BL/browser/p" | tr '\n' ' ');"; done
+check "browser-login: empty stub, {}, invalid JSON or a failing playwright -> exit 1, previous session byte-identical, 'Nothing was saved' + 'unchanged', no temp file" "$FS" "empty=1:$OLD:1:1:default.json ;nokeys=1:$OLD:1:1:default.json ;garbage=1:$OLD:1:1:default.json ;fail=1:$OLD:1:1:default.json ;"
+rm -rf "$BL/browser"; FN=""; for m in empty garbage fail; do BL_MODE=$m bl http://u p; FN="$FN$m=$RC:$(grep -c 'Nothing was saved' "$BLERR"):$(grep -c 'unchanged' "$BLERR"):$(ls "$BL/browser/p" 2>/dev/null | wc -l | tr -d ' ');"; done
+check "browser-login: failed save with no previous session -> exit 1, no default.json, no 'unchanged' claim" "$FN" "empty=1:1:0:0;garbage=1:1:0:0;fail=1:1:0:0;"
+rm -rf "$BL/browser"; mkdir -p "$BL/browser/p"; printf '%s' "$OLD" > "$BL/browser/p.json"; BL_MODE=fail bl http://u p
+M1="$RC:$(cat "$BLS" 2>/dev/null)"; rm -rf "$BL/browser"; BL_MODE=validfail bl http://u p
+check "browser-login: migrates the old file before opening; a failing exit status does not matter when the file is valid" "$M1|$RC:$(jq -c '.cookies|length' "$BLS")" "1:$OLD|0:1"
+rm -rf "$BL/browser"; mkdir -p "$BL/browser/p"; printf '%s' "$OLD" > "$BLS"; BL_MODE=other bl http://u p; XS="$RC:$(cmp -s "$BLS" <(printf '%s' "$OLD") && echo same || echo changed):$(grep -c '^Nothing was saved for u: the browser stored no cookie for that host' "$BLERR"):$(grep -c 'previous session.*unchanged' "$BLERR"):$(ls "$BL/browser/p" | tr '\n' ' ')"
+rm -rf "$BL/browser"; BL_MODE=other bl http://u p; XN="$RC:$(grep -c 'Nothing was saved for u:' "$BLERR"):$(grep -c unchanged "$BLERR"):$(ls "$BL/browser/p" 2>/dev/null | wc -l | tr -d ' ')"
+BL_MODE=other bl http://other.test p; XO="$RC:$(jq -c '.cookies|length' "$BLS")"; rm -rf "$BL/browser"; BL_MODE=other bl http://localhost:3000 p; XP="$RC:$(ls "$BL/browser/p" 2>/dev/null | wc -l | tr -d ' ')"
+check "browser-login: a session with cookies only for another host is refused (previous file byte-identical, message names the host), saved when the URL is that host" "$XS|$XN|$XO|$XP" "1:same:1:1:default.json |1:1:0:0|0:1|1:0"
+MT="$BL/mt.json"; SM=""; smt() { printf '%s' "$1" > "$MT"; if ( KIT="$BL"; . "$BL/bin/lib.sh"; session_matches "$MT" "$2" ); then SM="${SM}y"; else SM="${SM}n"; fi; }
+smt '{"cookies":[{"domain":"app.example.com"}]}' https://app.example.com/x
+smt '{"cookies":[{"domain":"app.example.com"}]}' https://APP.Example.COM:443/x
+smt '{"cookies":[{"domain":"app.example.com"}]}' https://example.com
+smt '{"cookies":[{"domain":"app.example.com"}]}' https://x.app.example.com
+smt '{"cookies":[{"domain":".example.com"}]}' https://app.example.com
+smt '{"cookies":[{"domain":".example.com"}]}' https://example.com
+smt '{"cookies":[{"domain":".example.com"}]}' https://badexample.com
+smt '{"cookies":[{"domain":".example.com"}]}' https://example.com.evil.test
+smt '{"cookies":[{"name":"nodomain"}]}' https://example.com
+smt '{"cookies":[],"origins":[{"origin":"http://localhost:3000","localStorage":[{"name":"a","value":"b"}]}]}' http://localhost:3000/app
+smt '{"cookies":[],"origins":[{"origin":"http://localhost:3000","localStorage":[{"name":"a","value":"b"}]}]}' http://localhost:3001
+smt '{"cookies":[],"origins":[{"origin":"http://localhost:3000","localStorage":[]}]}' http://localhost:3000
+smt '{"cookies":[],"origins":[{"origin":"http://h:80","localStorage":[{"name":"a","value":"b"}]}]}' http://h
+smt '{"cookies":[],"origins":[{"origin":"https://h:443","localStorage":[{"name":"a","value":"b"}]}]}' https://H:443
+smt '{"cookies":[{"domain":"example.com"}]}' ftp://example.com
+smt '{"cookies":[{"domain":"example.com"}]}' example.com
+smt '{"cookies":[{"domain":"example.com"}]}' http://
+smt 'not json' http://example.com
+smt '{"cookies":[{"domain":"example.com"}]}' http://user:pw@example.com:8080/p
+check "session_matches: exact host, case and default port, subdomain of a host-only cookie no, dot-domain matches host and subdomains but not look-alikes, localStorage by normalized origin (port, non-empty), non-http URL, bad JSON" "$SM" "yynnyynnnynnyynnnny"
+rm -rf "$BL/browser"; BL_CHECK_RC=2 bl http://u p; C1="$RC:$(printf '%s\n' "$OUT" "$(cat "$BLERR")" | grep -c 'not installed'):$(wc -l < "$BL_LOG" | tr -d ' '):$(test -e "$BL/browser" && echo made || echo none)"
+rm "$BL/pw/node_modules/.bin/playwright"; bl http://u p; C2="$RC:$(grep -c 'missing' "$BLERR"):$(wc -l < "$BL_LOG" | tr -d ' ')"
+check "browser-login: stack check failing or binary missing -> exit 2 with the message, nothing opened, no npx; the script has no bare npx playwright" "$C1|$C2|$(grep -c 'npx' "$ROOT/bin/browser-login.sh")" "2:1:0:none|2:1:0|0"
+}
+
+
+sec_e2e_run() {
+# bin/e2e-run.sh with a fake playwright binary and a stubbed stack check: no browser, no network, a scratch kit
+set +e   # a mutant makes some greps count 0: report it as a FAIL line instead of ending the script
+ER="$TMP/er"; rm -rf "$ER"; mkdir -p "$ER/kit/bin" "$ER/kit/pw/node_modules/.bin" "$ER/kit/browser/proj" "$ER/proj"
+cp "$ROOT/bin/e2e-run.sh" "$ROOT/bin/lib.sh" "$ER/kit/bin/"; cp "$ROOT/config.default.json" "$ER/kit/"
+printf '#!/bin/sh\n[ "${ER_CHECK_RC:-0}" = 0 ] && { echo "E2E browser ready: x"; exit 0; }\necho "E2E browser: not installed"; echo "Fix: install"; exit "$ER_CHECK_RC"\n' > "$ER/kit/bin/e2e-browser.sh"
+cat > "$ER/kit/pw/node_modules/.bin/playwright" <<'PWEOF'
+#!/bin/sh
+{ printf 'ARGS=%s\n' "$*"; for v in E2E_FLOW_DIR E2E_EVIDENCE_DIR E2E_TIMEOUT_MS E2E_PARAMS E2E_STORAGE_STATE PLAYWRIGHT_BROWSERS_PATH; do eval "printf '%s=%s\\n' $v \"\${$v-UNSET}\""; done; } > "$ER_LOG"
+[ -z "${ER_RESULT:-}" ] || echo '[]' > "$E2E_EVIDENCE_DIR/result.json"
+exit "${ER_PW_RC:-0}"
+PWEOF
+chmod +x "$ER/kit/bin/"*.sh "$ER/kit/pw/node_modules/.bin/playwright"
+git -C "$ER/proj" init -q; ERL="$ER/log"; ERK="$ER/kit"; ERW="$(cd "$ER/proj" && pwd -P)"
+mkdir -p "$ERW/qa-e2e/one" "$ERW/qa-e2e/three/sub" "$ERW/qa-e2e/none"
+touch "$ERW/qa-e2e/one/a.flow.ts" "$ERW/qa-e2e/three/a.flow.ts" "$ERW/qa-e2e/three/b.flow.js" "$ERW/qa-e2e/three/c.flow.ts" "$ERW/qa-e2e/three/d.txt" "$ERW/qa-e2e/three/e.flow.ts.bak" "$ERW/qa-e2e/three/sub/f.flow.ts" "$ERW/qa-e2e/none/x.spec.ts"
+er() { : > "$ERL"; if OUT="$(cd "$ERW" && KIT="$ERK" ER_LOG="$ERL" "$ERK/bin/e2e-run.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi; }
+erv() { grep "^$1=" "$ERL" | head -1 | cut -d= -f2-; }
+erran() { [ -s "$ERL" ] && echo ran || echo not-run; }
+erlink() { [ -L "$ERW/qa-e2e/node_modules" ] && readlink "$ERW/qa-e2e/node_modules" || echo nolink; }
+ERS="$ERK/browser/proj/default.json"; ERA="$ERK/browser/proj/admin.json"; ERFULL='{"cookies":[{"name":"a"}],"origins":[]}'
+
+BAD=""; for f in nope none ../one .hid a/b 'a b' 'one;x' qa-e2e/one; do er "$f"; BAD="$BAD$RC:$(erran):$(erlink);"; done
+er; BAD="$BAD$RC:$(erran);"; er one two; BAD="$BAD$RC:$(erran);"; er one --bogus; BAD="$BAD$RC:$(erran)"
+check "e2e-run: missing flow, no *.flow file (only a spec, nothing), path-like or odd names, no flow, two flows, unknown option -> exit 1, playwright never run, no link made" "$BAD" "1:not-run:nolink;1:not-run:nolink;1:not-run:nolink;1:not-run:nolink;1:not-run:nolink;1:not-run:nolink;1:not-run:nolink;1:not-run:nolink;1:not-run;1:not-run;1:not-run"
+ER_CHECK_RC=2 er one; S1="$RC:$(erran):$(erlink):$(printf '%s\n' "$OUT" | grep -c 'not installed')"
+ER_CHECK_RC=7 er one; check "e2e-run: stack not ready -> exit 2 with the check's message (whatever its status), playwright not run, nothing linked" "$S1|$RC:$(erran):$(erlink)" "2:not-run:nolink:1|2:not-run:nolink"
+
+er one
+HAPPY="$RC:$(erv ARGS):$(erv E2E_FLOW_DIR):$(erv E2E_EVIDENCE_DIR):$(erv E2E_TIMEOUT_MS):$(erv E2E_PARAMS):$(erv E2E_STORAGE_STATE):$(erv PLAYWRIGHT_BROWSERS_PATH)"
+check "e2e-run: happy path -> the kit binary with test --config <kit>/pw/e2e.config.js --global-timeout 300000 and nothing else, env of the contract, no session, no params" "$HAPPY" "0:test --config $ERK/pw/e2e.config.js --global-timeout 300000:$ERW/qa-e2e/one:$ERW/qa-evidence/one:60000:{}::$ERK/browsers"
+check "e2e-run: links qa-e2e/node_modules to the kit's tree, writes the package.json, creates the evidence dir, prints the paths (no result.json line unless the flow wrote one)" "$(erlink):$(cat "$ERW/qa-e2e/one/../package.json"):$(test -d "$ERW/qa-evidence/one" && echo evid):$(printf '%s\n' "$OUT" | grep -c "^Evidence: $ERW/qa-evidence/one\$"):$(printf '%s\n' "$OUT" | grep -c "^report.json: $ERW/qa-evidence/one/report.json\$"):$(printf '%s\n' "$OUT" | grep -c '^result.json')" "$ERK/pw/node_modules:{\"private\": true, \"type\": \"commonjs\"}:evid:1:1:0"
+ER_RESULT=1 ER_PW_RC=3 er one
+check "e2e-run: playwright's exit status is the script's; result.json is printed when the flow wrote it" "$RC:$(printf '%s\n' "$OUT" | grep -c "^result.json: $ERW/qa-evidence/one/result.json\$")" "3:1"
+
+mkdir -p "$ERW/other"; ln -sfn "$ERW/other" "$ERW/qa-e2e/node_modules"; echo '{"mine":1}' > "$ERW/qa-e2e/package.json"; er one
+check "e2e-run: a link to somewhere else is repointed to the kit; an existing package.json is not overwritten" "$RC:$(erlink):$(cat "$ERW/qa-e2e/package.json")" "0:$ERK/pw/node_modules:{\"mine\":1}"
+rm "$ERW/qa-e2e/node_modules"; mkdir -p "$ERW/qa-e2e/node_modules/real"; echo keep > "$ERW/qa-e2e/node_modules/real/f"; er one
+R1="$RC:$(erran):$(cat "$ERW/qa-e2e/node_modules/real/f"):$(test -L "$ERW/qa-e2e/node_modules" && echo link || echo dir):$(printf '%s\n' "$OUT" | grep -c 'real file or folder' || true)"
+rm -rf "$ERW/qa-e2e/node_modules"; echo keep > "$ERW/qa-e2e/node_modules"; er one
+check "e2e-run: a real node_modules (folder with content, or a file) is refused with exit 1, left untouched, playwright not run" "$R1|$RC:$(erran):$(cat "$ERW/qa-e2e/node_modules")" "1:not-run:keep:dir:1|1:not-run:keep"
+rm -f "$ERW/qa-e2e/node_modules"
+
+er three; G1="$(erv ARGS | sed 's/.*--global-timeout //')"; er three --timeout 200; G2="$(erv ARGS | sed 's/.*--global-timeout //'):$(erv E2E_TIMEOUT_MS)"
+er one --timeout 10; G3="$(erv ARGS | sed 's/.*--global-timeout //'):$(erv E2E_TIMEOUT_MS)"; er three --timeout 30; G4="$(erv ARGS | sed 's/.*--global-timeout //')"
+check "e2e-run: global timeout = per-test x top-level flow files x 5, at least 300000 (3 files; ignored .txt, .bak and nested files are not counted); --timeout is seconds" "$G1|$G2|$G3|$G4" "900000|3000000:200000|300000:10000|450000"
+TB=""; for t in 0 abc -5 1.5 '' 1e3 ' 5'; do er one --timeout "$t"; TB="$TB$RC:$(erran);"; done; er one --timeout; TB="$TB$RC:$(erran)"
+check "e2e-run: --timeout must be a positive whole number (0, text, negative, decimal, empty, exponent, blank, missing) -> exit 1, not run" "$TB" "1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;1:not-run"
+TZ=""; for t in 00 000 0000; do er one --timeout "$t"; TZ="$TZ$RC:$(erran):$(printf '%s\n' "$OUT" | grep -c 'positive whole number');"; done
+er one --timeout 08; TZ="$TZ$RC:$(erv E2E_TIMEOUT_MS)"; er one --timeout 010; TZ="$TZ:$RC:$(erv E2E_TIMEOUT_MS)"; er one --timeout 09 --list; TZ="$TZ:$RC"
+check "e2e-run: --timeout made only of zeros (00, 000, 0000) -> exit 1 with the message, not run; leading zeros are decimal (08 -> 8000 ms, 010 -> 10000 ms, no octal error)" "$TZ" "1:not-run:1;1:not-run:1;1:not-run:1;0:8000:0:10000:0"
+rm -rf "$ERW/qa-evidence"; rm -f "$ERA"; printf '%s' "$ERFULL" > "$ERS"
+er one --list; L1="$RC:$(erv ARGS):$(erv E2E_STORAGE_STATE):$(erv E2E_FLOW_DIR):$(test -e "$ERW/qa-evidence" && echo evid || echo noevid):$(printf '%s\n' "$OUT" | grep -c '^Evidence:')"
+er one --as admin --list; L2="$RC:$(erran):$(erv E2E_STORAGE_STATE):$(test -e "$ERW/qa-evidence" && echo evid || echo noevid):$(printf '%s\n' "$OUT" | grep -c 'no saved session')"
+er one --list --timeout 20 -- a=1; L3="$RC:$(erv E2E_TIMEOUT_MS):$(erv E2E_PARAMS):$(erv ARGS | grep -c -- '--global-timeout')"
+ER_PW_RC=4 er one --list; L4="$RC"; ER_CHECK_RC=2 er one --list; L5="$RC:$(erran)"; er nope --list; L6="$RC:$(erran)"
+er one; L7="$(erv ARGS | grep -c -- '--list')$(erv ARGS | grep -c -- '--reporter')"; rm -f "$ERS"
+check "e2e-run --list: playwright test --config <kit config> --list --reporter=list only (no --global-timeout), no storage state even with a saved default session or --as of a missing identity, no evidence dir, no Evidence line, params and timeout still passed, playwright's status returned, stack check and flow checks still apply, a normal run never passes --list" "$L1|$L2|$L3|$L4|$L5|$L6|$L7" "0:test --config $ERK/pw/e2e.config.js --list --reporter=list::$ERW/qa-e2e/one:noevid:0|0:ran::noevid:0|0:20000:{\"a\":\"1\"}:0|4|2:not-run|1:not-run|00"
+
+er one --as admin; A1="$RC:$(erran):$(printf '%s\n' "$OUT" | grep -c "no saved session for identity 'admin'"):$(printf '%s\n' "$OUT" | grep -c '^Login: ~/.orca-roles/bin/browser-login.sh <url> --as admin$')"
+printf '{"cookies":[],"origins":[]}' > "$ERA"; er one --as admin; A2="$RC:$(erran)"; printf '{}' > "$ERA"; er one --as admin; A4="$RC:$(erran)"
+printf '%s' "$ERFULL" > "$ERA"; er one --as admin; A5="$RC:$(erv E2E_STORAGE_STATE)"; printf '{"cookies":[],"origins":[{"origin":"o"}]}' > "$ERA"; er one --as admin; A6="$RC:$(erv E2E_STORAGE_STATE)"
+check "e2e-run --as: missing, empty stub and key-less file -> exit 2 with the login command, not run; a file with cookies or with origins maps to E2E_STORAGE_STATE" "$A1|$A2|$A4|$A5|$A6" "2:not-run:1:1|2:not-run|2:not-run|0:$ERA|0:$ERA"
+printf '%s' "$ERFULL" > "$ERA"; printf '%s' "$ERFULL" > "$ERS"; er one --as default; D1="$RC:$(erv E2E_STORAGE_STATE)"; rm -f "$ERS"; er one --as default; D2="$RC:$(erran):$(printf '%s\n' "$OUT" | grep -c '^Login: ~/.orca-roles/bin/browser-login.sh <url>$')"
+IB=""; for i in Bad_ID -x a/b ../x Admin '' a.b; do er one --as "$i"; IB="$IB$RC:$(erran):$(printf '%s\n' "$OUT" | grep -c 'invalid identity' || true);"; done; er one --as; IB="$IB$RC:$(erran)"
+check "e2e-run --as: default is the default identity's file (login command without --as when missing); invalid identities (also empty) -> exit 1 not run; a bare --as -> 1" "$D1|$D2|$IB" "0:$ERS|2:not-run:1|1:not-run:1;1:not-run:1;1:not-run:1;1:not-run:1;1:not-run:1;1:not-run:1;1:not-run:1;1:not-run"
+rm -f "$ERA"; er one; N1="$(erv E2E_STORAGE_STATE)"; printf '%s' "$ERFULL" > "$ERS"; er one; N2="$(erv E2E_STORAGE_STATE)"
+printf '{"cookies":[],"origins":[]}' > "$ERS"; er one; N3="$RC:$(erv E2E_STORAGE_STATE)"; rm -f "$ERS"
+IJ=""; for j in '{not json' '' '[]' 'null' '"x"' 'junk'; do printf '%s' "$j" > "$ERA"; er one --as admin; IJ="$IJ$RC:$(erran):$(printf '%s\n' "$OUT" | grep -c '^Login: ~/.orca-roles/bin/browser-login.sh <url> --as admin$');"; printf '%s' "$j" > "$ERS"; er one; IJ="$IJ$RC:$(erran):$(erv E2E_STORAGE_STATE);"; er one --as default; IJ="$IJ$RC:$(erran);"; done; rm -f "$ERA" "$ERS"
+check "e2e-run: a session file that is invalid JSON, empty, or not an object ([], null, a string) -> with --as (admin or default) exit 2 with the login command, not run; without --as no storage state and the flow still runs" "$IJ" "$(for i in 1 2 3 4 5 6; do printf '2:not-run:1;0:ran:;2:not-run;'; done)"
+check "e2e-run: without --as the default identity's session is used only when it exists and is not an empty stub (else no storage state, still runs)" "$N1|$N2|$N3" "|$ERS|0:"
+
+er one -- a=1 'b=x=y' 'c=two words' 'd=' 'e=q"u\o\\te' 'f={"j":1}' _g=ü a=2
+P="$(erv E2E_PARAMS)"
+check "e2e-run params: -> E2E_PARAMS JSON object of strings (value with =, spaces, empty, quotes, backslashes, JSON text, unicode; a repeated key keeps the last), and never reach playwright's argv" "$RC:$(printf '%s' "$P" | jq -cS .):$(erv ARGS | grep -c 'a=1\|two words')" '0:{"_g":"ü","a":"2","b":"x=y","c":"two words","d":"","e":"q\"u\\o\\\\te","f":"{\"j\":1}"}:0'
+check "e2e-run: the default e2eDir is qa-e2e next to evidenceDir; the config matches *.flow.(ts|js), uses channel chromium, one worker, and no device preset" "$(jq -r '.roles["e2e-tester"].params | "\(.e2eDir):\(.evidenceDir)"' "$ROOT/config.default.json"):$(grep -c "testMatch: /\.\*\\\.flow\\\.(ts|js)\$/" "$ROOT/pw/e2e.config.js"):$(grep -c "channel: 'chromium'" "$ROOT/pw/e2e.config.js"):$(grep -c 'workers: 1' "$ROOT/pw/e2e.config.js"):$(grep -c devices "$ROOT/pw/e2e.config.js" || true)" "qa-e2e:qa-evidence:1:1:1:0"
+er one -- ; Q1="$RC:$(erv E2E_PARAMS)"; er one -- k=--v; Q2="$RC:$(erv E2E_PARAMS):$(erv E2E_STORAGE_STATE):$(erv ARGS | grep -c 'zz')"
+PB=""; for b in novalue =x 1a=x -a=x --as=zz ''; do er one -- ok=1 "$b"; PB="$PB$RC:$(erran);"; done
+check "e2e-run params: an empty list gives {}; after -- nothing is an option; a pair not key=value with a key starting with a letter or _ -> exit 1 not run" "$Q1|$Q2|$PB" "0:{}|0:{\"k\":\"--v\"}::0|1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;"
+set -e
 }
 
 sec_cli() {

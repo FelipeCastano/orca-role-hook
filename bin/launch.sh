@@ -255,9 +255,13 @@ fi
 
 # The agents' working folders, ignored locally
 EVID="$(jq -r '.roles["e2e-tester"].params.evidenceDir // "qa-evidence"' "$CFG")"
+E2EDIR="$(jq -r '.roles["e2e-tester"].params.e2eDir // "qa-e2e"' "$CFG")"
 if COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"; then
   mkdir -p "$COMMON/info"; touch "$COMMON/info/exclude"
-  for p in research/ "$EVID/"; do grep -qxF "$p" "$COMMON/info/exclude" || echo "$p" >> "$COMMON/info/exclude"; done
+  for p in research/ "$EVID/" "/$E2EDIR/"; do grep -qxF "$p" "$COMMON/info/exclude" || echo "$p" >> "$COMMON/info/exclude"; done
+fi
+if [ -n "$(git -C "$(git rev-parse --show-toplevel)" ls-files -- "$E2EDIR" 2>/dev/null | head -1)" ]; then
+  echo "Warning: files under $E2EDIR/ are tracked by git; the kit's E2E flows folder should not be (it is kept out of git)."
 fi
 
 # shellcheck source=/dev/null

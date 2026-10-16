@@ -1,0 +1,10 @@
+{
+  "name": "orca-roles-pw",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned browser stack of the orca-roles kit (Playwright MCP, Playwright test runner and their Chromium build)",
+  "dependencies": {
+    "@playwright/mcp": "0.0.83",
+    "@playwright/test": "1.64.0-alpha-1790635538000"
+  }
+}

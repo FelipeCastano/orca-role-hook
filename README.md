@@ -47,7 +47,7 @@ By default:
 | **Dev** | Sonnet 5.5 | context7 | Implements the production code. |
 | **Tester** | Sonnet 5.5 | None | Does not review: implements and runs the tests, covering each criterion as a family of inputs with its boundaries, checks them with a few mutants of its own, within limits on quantity, parallelism and time, and cleans up at the end. A change that only touches prompt, README or skill text gets no text checks and no text mutants: it runs the safety-rule checks (`tests/smoke.sh rules`) and reads the diff for weakened rules, and the rest of its review still applies. |
 | **Auditor** | Opus 5.5 | None | Reviews Dev's code and the Tester's tests with its code review method (including mutation, in place in the worktree with a backup and a verified restore). It audits once per set of steps, not per step. It also audits the Planner's plan, read-only, when the Planner judges it very complex. Like the Tester, it runs no text mutants on prompt-only changes. Only findings from the rejection threshold up (default `high`) reject; the rest are notes. Defaults: `maxMutants` 8 (Tester `maxSelfMutants` 3). Existing installs that still had the old defaults (15 and 5) move to the new ones on update; values you set yourself are kept (except exactly 15 and 5 themselves, which every update moves to the new defaults; to keep them, set them in the project's `.orca-roles.json`). |
-| **E2E-Tester** | Opus 5.5 | Playwright | Proposes an E2E test plan for the application (front end or API) and, once you approve it, runs it in a headless browser with your session, with screenshots at the key points. |
+| **E2E-Tester** | Opus 5.5 | Playwright | Proposes an E2E test plan for the application (front end or API) and a Playwright script for it and, once you approve the plan, runs the script in the kit's headless Chromium with your saved sessions, with screenshots and a `result.json`. |
 | **Deployer** | Sonnet 5.5 | None | Starts and stops the application locally (API, front end and required services) when asked, and maintains `DEPLOYMENT.md` with the step-by-step guide for dev and prod. Never deploys. |
 
 They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/programmer/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
@@ -111,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/main/i
 
 The installer takes no options: roles are enabled and disabled with `enabled` in `config.json` (see [Configuration](#configuration)).
 
-The first time the E2E-Tester uses the browser, `npx playwright install chromium` may be needed.
+The first time, the E2E-Tester's browser must be installed with `~/.orca-roles/bin/e2e-browser.sh install` (see [E2E testing](#e2e-testing-browser-session-and-screenshots)).
 
 ## Setting up a project (once per project)
 
@@ -155,23 +155,55 @@ If the Planner says it has no Jira tool, its session is not authenticated: run `
 
 ## E2E testing: browser, session and screenshots
 
-The E2E-Tester does not use Orca's embedded browser: it controls its own Chromium through the Playwright MCP. Screenshots are requested over the protocol, they are not screen captures, so they work even if the window is behind others or does not exist. By default the browser is **headless**: you can keep working while it tests.
+**Stack.** The E2E-Tester does not use Orca's embedded browser. It plans and explores with the Playwright MCP and delivers each E2E as a Playwright script, all on the kit's own pinned stack: the pinned `@playwright/mcp` and `@playwright/test` packages in `~/.orca-roles/pw` and their Chromium in `~/.orca-roles/browsers`. Install it once with `~/.orca-roles/bin/e2e-browser.sh install` (`npm ci` plus the pinned Chromium: network, about 400 MB, no sudo; on Linux, system libraries need a `sudo` command that is only printed for you to run); `e2e-browser.sh check` tells whether it is installed (it starts no browser; exit 0 ready, 2 and the fix if not). Screenshots are requested over the protocol, they are not screen captures, so they work even if the window is behind others or does not exist. By default the browser is **headless**: you can keep working while it tests.
 
-**Session.** If your application requires a login (Entra, Google, MFA...), sign in yourself once:
+**Sessions.** If your application requires a login (Entra, Google, MFA...), sign in yourself once:
 
 ```bash
 ~/.orca-roles/bin/browser-login.sh https://localhost:5173
 ```
 
-It opens a visible browser, you wait for the application to load with your session, you close the window and the session (cookies and localStorage) is saved in `~/.orca-roles/browser/<project>.json`. The E2E-Tester starts with it in isolated mode: nothing is written to disk during the test and several worktrees can test at the same time. If the application asks it to log in, the E2E-Tester does not try to authenticate: it tells the Planner, which will ask you to run the command and will launch the task again. The first time, `npx playwright install chromium` may be needed.
+It opens a visible browser (the kit's pinned Chromium; if the stack is not installed it stops and tells you to run `e2e-browser.sh install`), you wait for the application to load with your session, you close the window and the session (cookies and localStorage) is saved in `~/.orca-roles/browser/<project>/default.json`. The session is written to a temporary file and replaces the previous one only if it holds a cookie for the URL's host or localStorage for its origin (the same match as `e2e-browser.sh session`); otherwise (for example, you closed the window while still at the identity provider) nothing is saved, the command exits with an error and the previous session stays as it was. Cookies are matched by host, not port, so with a local identity provider on the same host (for example Keycloak on `localhost:8080` and the app on `localhost:5173`) the check cannot tell an abandoned login from a finished one: confirm the login finished before closing the window. The E2E-Tester's MCP starts with it in isolated mode: nothing is written to disk during the test and several worktrees can test at the same time. If the application asks it to log in, the E2E-Tester does not try to authenticate: it tells the Planner, which will ask you to run the command and will launch the task again. Only you log in and save sessions; the E2E-Tester never does.
+
+**Identities.** To keep several users of the same project (an admin and a regular user, for example), save each one under its own name with `--as`: `~/.orca-roles/bin/browser-login.sh https://localhost:5173 --as admin` saves `~/.orca-roles/browser/<project>/admin.json`. An identity is lowercase letters, digits and hyphens, starting with a letter or digit; without `--as` it is `default`. The project name can still be given as the second argument (`browser-login.sh <url> <project> --as <identity>`). The E2E-Tester's MCP always uses the `default` identity; flows can use any saved identity (`e2e-run.sh --as`).
+
+**Preflight.** Before any E2E work the Planner runs `~/.orca-roles/bin/e2e-browser.sh check`. If the stack is missing it tells you what is missing and asks whether the Deployer installs it (`e2e-browser.sh install`: network, about 400 MB, no sudo; on Linux, system libraries need a `sudo` command that is only printed for you to run); without a Deployer it gives you the command. `e2e-browser.sh install` ends with `check`. Only the Deployer, with your yes, runs the install; the E2E-Tester never installs anything. After an install the E2E-Tester's tab is reopened (`close-role.sh e2e-tester`, then `roles`) so its Playwright MCP connects. Then, for each identity the E2E plan needs, the Planner runs `~/.orca-roles/bin/e2e-browser.sh session <base-url> [--as <identity>] [project]`. It starts no browser and only reads the saved session, and prints one line and the exact login command when it is not `ok`:
+
+| Exit | Result | Meaning |
+|---|---|---|
+| 0 | `ok` | the file has, for the URL's host, a persistent cookie that has not expired, or localStorage for the URL's origin (it prints the save date and the earliest cookie expiry) |
+| 1 | | usage error or invalid identity |
+| 3 | `missing` | no file, or the empty stub |
+| 4 | `no-session-for-host` | the file has sessions, but none for that host (cookies match by host or domain, including a leading-dot domain; localStorage by exact `scheme://host:port`) |
+| 5 | `expired` | every persistent cookie for the host has expired and there is no localStorage for the origin |
+| 6 | `unknown` | only session cookies (no expiry) for the host and no localStorage: it cannot tell |
+
+Anything but `ok`: the Planner asks you to run the printed `browser-login.sh` command in a worktree terminal and checks again. The session file is read each time a browser context starts, so the Planner does not clean the E2E-Tester after a login.
+
+**Earlier versions.** The single session file of earlier versions (`~/.orca-roles/browser/<project>.json`) is moved to `<project>/default.json` automatically when the roles start or when you run `browser-login.sh`, as long as there is no session in `default.json` yet; if there is, the old file is left in place and a warning names both.
 
 It depends on your application keeping the session in cookies or `localStorage`; if it keeps it in `sessionStorage`, it does not survive. Tokens expire according to your identity provider: when the E2E-Tester sees the login screen again, run the command again.
 
 **Screenshots.** They go to `<evidenceDir>/step-<N>/` in the worktree (by default `qa-evidence/`, locally ignored by git) thanks to `--output-dir`. **Network.** To validate payloads, the E2E-Tester injects a hook on XHR/fetch with `browser_evaluate` and reads the bodies from the page; it never logs headers.
 
-**Regression.** This is exploratory validation. The E2E-Tester reports the exact sequence of steps it ran so that, if a flow deserves to be repeated, the Planner hands it to the Tester as a Playwright test.
+**Flows.** The Playwright MCP only explores. For each E2E the E2E-Tester delivers, with its plan, a Playwright script (a *flow*) in `<e2eDir>/<flow>/` of the worktree (`e2eDir` is a parameter of the E2E-Tester, `qa-e2e` by default; the flow name is kebab-case), as `*.flow.ts` (`import { test, expect } from '@playwright/test'`) or `*.flow.js` (`require`). Once you approve the plan, it runs the script in one command and steps in only on a failure:
 
-All of this is configured in the `playwright` server of `mcpServers`; see [placeholders](#placeholders-in-mcpservers) to remove `--headless` or change paths.
+```bash
+~/.orca-roles/bin/e2e-run.sh <flow> [--as <identity>] [--timeout <seconds>] [--list] [-- key=value ...]
+```
+
+- **Inputs.** `key=value` pairs reach the flow as `JSON.parse(process.env.E2E_PARAMS || '{}')` (strings; a value may contain `=`). `--timeout` is per test (default 60 s); the whole run is limited to that times the number of flow files times 5, at least 300 s.
+- **List.** `--list` only runs `playwright test --list` on the flow: it checks that the script compiles and shows its tests, starts no browser, runs nothing and needs no session.
+- **Identities.** `--as <identity>` starts the flow with that saved session and stops with the login command if it is missing or empty. Without it the flow uses the `default` session if there is one, and none otherwise.
+- **Evidence.** In `<evidenceDir>/<flow>/`: `report.json` (Playwright's), screenshots in `step-<N>/`, network captures (method, URL, status, bodies, never headers) in `network/`, and `result.json`, written by the flow: one `{step, item, expected, got, result}` per check, `result` being `PASS` or `FAIL`. The verdict comes from `result.json` and the review of the screenshots.
+- **Stack.** The script runs on the kit's pinned `@playwright/test` and Chromium (`e2e-run.sh` first runs `e2e-browser.sh check`). It links `<e2eDir>/node_modules` to the kit's packages and writes `<e2eDir>/package.json` (`{"private": true, "type": "commonjs"}`) if missing; if `<e2eDir>/node_modules` is a real folder it stops instead of replacing it.
+- **Writes to shared services.** If the plan writes to a shared backend (DEV, PRE), the Planner asks you to type the authorization in the E2E-Tester's tab before the execution.
+
+**Type checks and linters.** The kit keeps `<e2eDir>/` out of git but cannot keep it out of the project's tools: if your `tsconfig` includes `**/*.ts` or your eslint lints every `*.ts`, they will also check `<e2eDir>/*.flow.ts`; add `<e2eDir>` (`qa-e2e` by default) to the `tsconfig` excludes or the eslint ignores.
+
+**Regression.** The flow is the regression: rerun it with `e2e-run.sh` while the UI does not change. Flows and evidence live in the worktree and are lost with it (copy the folder to keep one); they are never committed. The kit adds `/<e2eDir>/` and `<evidenceDir>/` to the repository's `info/exclude` when the roles start, and warns if files under `<e2eDir>/` are already tracked by git.
+
+All of this is configured in the `playwright` server of `mcpServers`; see [placeholders](#placeholders-in-mcpservers) to remove `--headless` or change paths. When the kit updates and changes its default `playwright` entry, a configuration that still has the previous default is moved to the new one; a customised entry is kept as it is, and saved worktree overrides of `mcpServers.playwright` are not migrated (drop them with `roles --reset` or the specific `--set` path).
 
 ## Cleaning the workers' context
 
@@ -281,7 +313,8 @@ All the configuration lives in `~/.orca-roles/config.json`. It is read every tim
   },
   "mcpServers": {
     "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
-    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] }
+    "playwright": { "command": "{kit}/pw/node_modules/.bin/playwright-mcp", "args": ["--browser", "chromium", "--headless"],
+                    "env": { "PLAYWRIGHT_BROWSERS_PATH": "{kit}/browsers" } }
   },
   "roles": {
     "dev": { "title": "Dev", "enabled": true, "model": "claude-sonnet-5-5", "mcp": ["context7"] },
@@ -517,7 +550,7 @@ With this the Planner is not tied to Claude. By default, `mcpServers` includes `
 "planner": { "agent": "codex", "model": "<model>", "mcp": ["atlassian", "context7"] }
 ```
 
-The E2E-Tester still needs the `playwright` server, which is a local process (`npx @playwright/mcp`): it works in any agent that can start it.
+The E2E-Tester still needs the `playwright` server, which is a local process (`~/.orca-roles/pw/node_modules/.bin/playwright-mcp`): it works in any agent that can start it.
 
 ### Placeholders in `mcpServers`
 
@@ -528,14 +561,16 @@ In the `args`, `env` and `url` of any server they are expanded when each role st
 | `{worktree}` | Absolute path of the worktree |
 | `{project}` | Name of the main repo's folder (not the worktree's) |
 | `{evidenceDir}` | `params.evidenceDir` of the role (or of the E2E-Tester, or `qa-evidence`) |
-| `{browserState}` | `~/.orca-roles/browser/{project}.json`, the session saved by `browser-login.sh` (created empty if missing) |
+| `{browserState}` | `~/.orca-roles/browser/{project}/default.json`, the `default` identity session saved by `browser-login.sh` (created empty if missing) |
 | `{kit}`, `{home}` | `~/.orca-roles` and your `$HOME` |
 
 The default `playwright` server uses them like this:
 
 ```json
-"playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated",
-                                          "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"] }
+"playwright": { "command": "{kit}/pw/node_modules/.bin/playwright-mcp",
+                "args": ["--browser", "chromium", "--headless", "--isolated",
+                         "--storage-state", "{browserState}", "--output-dir", "{worktree}/{evidenceDir}"],
+                "env": { "PLAYWRIGHT_BROWSERS_PATH": "{kit}/browsers" } }
 ```
 
 To see the browser in a project, remove `--headless` in its `.orca-roles.json` (lists are replaced whole, so copy the other args).
@@ -612,10 +647,13 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── scholar-norm.jq          # scholar.sh parser (result normalization)
 │   ├── scholar-bibfix.jq        # scholar.sh parser (BibTeX fixes)
 │   ├── browser-login.sh         # saves your application session for the E2E-Tester
+│   ├── e2e-browser.sh           # checks and installs the E2E browser stack (pinned Playwright packages and Chromium) and checks saved sessions
+│   ├── e2e-run.sh               # runs an E2E flow (a Playwright script) on the pinned stack and writes its evidence
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
 │   └── apply-hooks.sh           # explains at install time how to register the kit in each project
+├── pw/                          # package.json and package-lock.json pinning @playwright/mcp and @playwright/test, and e2e.config.js, the Playwright config e2e-run.sh uses (installed in ~/.orca-roles/pw)
 ├── .claude-plugin/marketplace.json  # makes the repo a Claude Code marketplace (/plugin install orca-roles@orca-role-hook)
 ├── plugin/                      # Claude Code plugin the Planner loads
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
@@ -634,11 +672,11 @@ To change a role's behavior, edit `prompts/<mode>/<role>.md` in the repo and run
 
 Inside each worktree:
 
-- `research/` and `qa-evidence/`: the Researcher's work and the E2E-Tester's screenshots. They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`.
+- `research/`, `qa-evidence/` and `qa-e2e/`: the Researcher's work, the E2E-Tester's evidence (screenshots, `report.json`, `result.json`) and its flows (`qa-e2e/<flow>/`). They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`; never committed.
 - `refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>`: the Planner's per-round snapshots of the tree (commits kept out of every branch, made without touching HEAD, the index or the files); `checkpoint.sh --list` shows them and `--clear <step>` deletes a step's and `--clear-all` every one of the worktree's (after the set's last commit). Each checkpoint's message records a creation sequence number, which the diff hints use to find the previous step's last checkpoint. Files marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree, and `checkpoint.sh` warns about them. Renaming a worktree's folder, or moving the main checkout (its git dir moves with it), changes its id, so checkpoints taken before no longer show in `--list` or `--clear`; remove them with `git update-ref -d <ref>` (`git for-each-ref refs/orca-roles/checkpoints` lists them). Moving a linked worktree to another parent folder with `git worktree move` keeps them.
 - `DEPLOYMENT.md`: the Deployer's guide. It is not committed unless you ask.
 - In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.pty` (each role's terminal identity, to recognize the tabs Orca restores after a restart), `orca-roles.lock` (a directory while a launch runs, holding its pid), `orca-roles.kicked` (the handle each role had when it got its role message), `orca-roles.kickoff.d/` (one file per running kickoff, named by its pid, with the roles it will kick; removed when it ends), `orca-roles.wtid` (the worktree id of the last launch), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json`, `orca-roles.composer-seen.json` and `orca-roles.setup-context` (tabs seen when the worktree was created, and whether Orca's setup script started the kit, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
-- Outside the worktree: `~/.orca-roles/browser/<project>.json`, the browser session for the E2E-Tester.
+- Outside the worktree: `~/.orca-roles/browser/<project>/<identity>.json`, the browser sessions for the E2E-Tester and its flows; `~/.orca-roles/pw/` and `~/.orca-roles/browsers/`, the pinned E2E stack and its Chromium.
 - Outside the worktree too: each role's scratch folder, `~/.orca-roles/tmp/<project>-<hash of the git dir>/<role>/`, one per worktree and role, fixed (the same path every time). Agents put their temporary copies there (the Tester's mutation copy, the Auditor's experiments, the Researcher's earlier versions) and reuse it; they never delete anything in it, so Claude Code does not ask for permission on every `rm`, and the kit never empties it either. `copy/` (the copy of the current tree) stays current because every use runs `rsync -a --delete` into it; earlier versions go in `rev-<full commit hash>/` (one per commit, reused if it exists) and the Researcher's temporaries have fixed names per task, so those accumulate slowly. When a worktree is removed, its folder stays orphaned in `~/.orca-roles/tmp/`; remove it by hand when you want the space back, for example `rm -rf ~/.orca-roles/tmp/<project>-<hash>`. The role receives its path as the `scratchDir` parameter in its startup message, and Claude and Codex agents get it with `--add-dir` (`custom` agents through `{scratch}`/`ORCA_ROLES_SCRATCH` and `addDirFlag`). It is outside the worktree because jest, vitest and eslint collect copies of the project that live inside it, and none of them honors `.gitignore` or `.git/info/exclude`.
 - On Windows (WSL): `~/.orca-roles/shim/orca`, the Orca CLI wrapper (see [Windows with WSL2](#windows-with-wsl2)).
 
@@ -659,7 +697,7 @@ Orca for Windows runs the terminals, and with them the agents and the setup scri
 3. **In Orca, add the project with its WSL path**: `\\wsl.localhost\Ubuntu\home\<user>\<repo>`. That way Orca opens its terminals inside WSL.
 4. **Install inside WSL, from an Orca terminal**: `sudo apt update && sudo apt install -y jq` (if it fails, the Planner's skill covers the usual WSL problems and a no-`sudo` install), Claude Code and Node inside WSL (not the Windows ones), and then the kit's installer.
 5. **Register the kit in each project** with `roles-yaml` or in Settings (see [Setting up a project](#setting-up-a-project-once-per-project)).
-6. **E2E-Tester**: `npx playwright install --with-deps chromium` inside WSL.
+6. **E2E-Tester**: `~/.orca-roles/bin/e2e-browser.sh install` inside WSL; `e2e-browser.sh check` then prints the `sudo` command for any system libraries Chromium still needs.
 
 **Orca's CLI has another name.** In WSL terminals, Orca does not install `orca` but a launcher whose name is given by `$ORCA_CLI_COMMAND` (`orca-ide` in Orca 1.4.219), which calls `orca.exe` on Windows. The kit detects it and creates the `~/.orca-roles/shim/orca` wrapper, which it prepends to the PATH of its scripts and of the agents; the prompts and the permissions (`Bash(orca orchestration:*)`) keep working unchanged. That is why the CLI is only available in terminals opened by Orca: the kit's commands (`roles`, `clean.sh`, the installer) must be run from one of them. So you can also type `orca ...` yourself in those terminals, the installer adds to your `~/.bashrc` an `orca` alias to `$ORCA_CLI_COMMAND`, which only applies when that variable is set and there is no real `orca`. Do not install the `orca` package apt suggests: it is GNOME's screen reader.
 
@@ -671,7 +709,7 @@ The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshr
 - `jq` (macOS: `brew install jq`; Ubuntu/Debian: `sudo apt install jq`). It is essential: the installer and the kit fail with a clear message if it is missing.
 - Claude Code (`claude`) with `--permission-mode auto` available. The installer checks it and warns you if your version does not offer it; in that case update Claude Code or change `permissionMode` in `config.json`. Checked with 2.1.x.
 - The CLIs of any other agent you configure.
-- `curl` and `tar` (they come with macOS and Ubuntu), Node (`npx`, for Playwright). For the E2E-Tester, Playwright's Chromium: `npx playwright install chromium` (on Ubuntu, `npx playwright install --with-deps chromium`, which also installs the system libraries it needs and asks for sudo).
+- `curl` and `tar` (they come with macOS and Ubuntu), Node (`npx`, for Playwright). For the E2E-Tester, the kit's pinned Chromium: `~/.orca-roles/bin/e2e-browser.sh install` (npm is needed; on Ubuntu, `e2e-browser.sh check` prints the `sudo` command for the system libraries it needs, which the kit never runs).
 
 ## Development
 
@@ -713,8 +751,11 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | After a restart, roles come back without their memory | Claude Code was installed with npm (it runs under `node` and renaming its process to `claude` erases its `--resume` argument, so the kit cannot read the resumed session). Use the native installer |
 | Cleaning a worker fails | `clean.sh` says why: dead tab (run `roles`), or a `custom` agent without `clearCommand` |
 | The composer's extra session (the "done" tab) does not close | `orca-roles-kickoff.log` lists the titles it saw; if none was the branch or started with the Jira key, it was left alone. Close it by hand or disable `closeComposerAgent` |
-| The E2E-Tester does not open the browser | `npx playwright install chromium` |
-| The E2E-Tester sees the login screen | Run `~/.orca-roles/bin/browser-login.sh <url>` and ask the Planner to clean the E2E-Tester (`clean.sh e2e-tester`) so it starts with the new session |
+| The E2E browser is missing, the E2E-Tester's browser tools fail, or Playwright says `Chromium distribution 'chrome' is not found` or reports a version mismatch | `~/.orca-roles/bin/e2e-browser.sh check` says what is missing; then `e2e-browser.sh install` (the Planner has the Deployer run it after your yes), then reopen the E2E-Tester's tab (`close-role.sh e2e-tester`, then `roles`) so its Playwright MCP connects |
+| The E2E-Tester asks for a login, or the session expired | `~/.orca-roles/bin/e2e-browser.sh session <url> --as <identity>` says why (`missing`, `no-session-for-host`, `expired`, `unknown`); sign in again with `~/.orca-roles/bin/browser-login.sh <url> --as <identity>` (omit `--as` for `default`). The session is read when a browser context starts: no cleaning needed |
+| The worktree's E2E-Tester still starts `npx @playwright/mcp@latest` | A saved override or your own config has a `mcpServers.playwright` that was not migrated to the kit's pinned stack: drop the override with `roles --reset`, or edit the entry in your configuration |
+| `e2e-run.sh` says `<e2eDir>/node_modules` is a real file or folder | Remove it (never `npm install` inside `qa-e2e/`): the kit links its own pinned packages there |
+| `e2e-run.sh` does not find the flow | The flow is a folder `<e2eDir>/<flow>/` of the worktree (`qa-e2e/` by default) with at least one `*.flow.ts` or `*.flow.js` |
 | `/plugin marketplace add` says `Marketplace file not found` | The marketplace file is not on the repo's `main` branch yet: add it from your clone, `/plugin marketplace add ~/orca-role-hook` |
 | A worker finished its work but the Planner never got its report | It is probably not a Claude agent and ran `orca orchestration send` in a way that never finished (for example as a background task). Look at its tab; the Planner warns you when a worker has been silent for more than 10 minutes |
 | The Planner says it has no Jira tool | Its session is not authenticated with Atlassian: run `/mcp` in its tab and authenticate (see [Connecting Jira](#connecting-jira)) |
