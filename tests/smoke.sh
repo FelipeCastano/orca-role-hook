@@ -386,6 +386,32 @@ rule R5 "$PD/e2e-tester.md" 'otherwise stop and ask' '^4\. Writes to a shared se
 rule R5 "$PD/planner.md" "ask the user, when approving the plan, to type the authorization in the E2E-Tester's tab" '^   c\. Review that plan'
 rule R5 "$PD/planner.md" 'before you dispatch the execution' '^   c\. Review that plan'
 rule R5 "$PD/planner.md" 'confirm that nothing under `<e2eDir>/` or `<evidenceDir>/` is staged or part of any commit' '\*\*Set audit\.\*\*'
+# W written reports (every mode, workers and Planner; W6 the report language is stated by the Planner and used by the worker, W7 the academic-writer paper is out of scope): outline approved by the user before writing and relayed by the Planner, descriptive titles, no names of people, scope excludes worker_done, commits, PRs and Jira
+for m in programmer pr-reviewer academic-writer; do
+  for p in common-workers planner; do
+    wf="$ROOT/prompts/$m/$p.md"
+    ws="$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$wf")"
+    wrule() { printf '%s' "$ws" | grep -qE -- "$2" || { echo "FAIL rules W$1: $m/$p.md Written reports lost '$2'"; FAIL=1; }; }
+    [ -n "$ws" ] || { echo "FAIL rules W: $m/$p.md has no '## Written reports' section"; FAIL=1; }
+    wrule 1 '^These rules apply to every report the user asks for, in any format'
+    wrule 1 'do not apply to worker_done messages, commit messages, pull requests or Jira'
+    wrule 2 '^1\. \*\*Titles\.\*\*.*No value claims.*questions or hooks'
+    wrule 2 'A section is not titled with its conclusion'
+    wrule 3 '^3\. \*\*Sections\.\*\* Before writing, propose the outline .*wait for the user.s approval; a worker sends it to the Planner with `ask`, and the Planner asks the user'
+    wrule 4 '^10\. \*\*No names of people\*\*: refer to roles'
+    wrule 5 '^11\. \*\*Before delivering\*\*, check the report against rules 1-10'
+    if [ "$p" = common-workers ]; then
+      wrule 6 '^9\. \*\*Language\.\*\*.*A worker uses the language the task states; if the task states none, ask the Planner with `ask` before writing'
+    else
+      wrule 6 'When you hand a report to a worker, state in the task the report.s language .* and its audience'
+    fi
+    if [ "$m" = academic-writer ]; then
+      wrule 7 'nor to the paper and its companion files \(the article, supplementary material, cover letter, rebuttal letter\), which follow writer\.md and the paper rules'
+    fi
+  done
+  grep -F "a worker's outline (rule 3) reaches you with \`ask\`: show it to the user, and reply with their answer or their changes" "$ROOT/prompts/$m/planner.md" | grep -q '^When the user asks you' || { echo "FAIL rules W3: $m/planner.md lost the outline relay sentence"; FAIL=1; }
+  [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/planner.md")" = 1 ] || { echo "FAIL rules W: $m/planner.md must hold one Written reports section"; FAIL=1; }
+done
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 

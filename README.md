@@ -52,6 +52,8 @@ By default:
 
 They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/programmer/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
 
+Every role also follows the written-report rules (`## Written reports` in `prompts/<mode>/common-workers.md`) whenever the user asks for a report in any format: descriptive titles, an outline the user approves before writing, an aggregated level of detail, a formal tone and no names of people. Worker messages, commit messages, pull requests and Jira keep their own formats.
+
 This is the programmer team; see [pr-reviewer mode](#pr-reviewer-mode) and [academic-writer mode](#academic-writer-mode) for the other teams.
 
 ### Prompt structure
