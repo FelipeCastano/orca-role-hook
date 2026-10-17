@@ -771,7 +771,7 @@ for l in "npm install" "$KITL"; do
   check "roles-yaml writes nothing when local-only ($l): bytes" "$(git -C "$Y2" status --porcelain --ignored; shasum "$Y2/.git/info/exclude" "$Y2/.worktreeinclude")" "$S1"
 done
 yreset; hsjson local-only "npm i" > "$YP"; yrun; check "roles-yaml error offers both fixes" "$(printf '%s' "$OUT" | grep -c -E '^  [12]\. ')" "2"
-yreset; hsjson local-only "npm i" > "$YP"; yrun; check "roles-yaml error goes to stderr, not stdout" "$(env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>/dev/null' "$Y2" "$ROOT" | wc -c | tr -d ' ')" "0"
+yreset; hsjson local-only "npm i" > "$YP"; yrun; check "roles-yaml error goes to stderr; the only stdout line is the result" "$(env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>/dev/null' "$Y2" "$ROOT")" "ROLES_YAML_RESULT=skipped:local-only-policy"
 
 # roles-yaml: which local script lines count as launching the kit
 # shellcheck disable=SC2088
@@ -919,9 +919,152 @@ ychk MISSING "npm i"; check "roles-yaml --check: no source chosen with a local s
 yreset; printf '{"ok":false,"error":{"code":"not_found"}}' > "$YP"; yrun --check; check "roles-yaml --check: project not registered is silent" "$RC:$OUT" "0:"
 yreset; hsjson local-only "npm i" > "$YP"
 check "roles-yaml --check: the warning goes to stderr, not stdout" "$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" "$ROOT/bin/orca-yaml.sh" --check 2>&1 >/dev/null):$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" "$ROOT/bin/orca-yaml.sh" --check 2>/dev/null | wc -c | tr -d ' ')" "$W_LOCAL:0"
-try yaml "$TMP/ywt" --help; check "roles-yaml --help lists --check" "$RC:$(printf '%s\n' "$OUT" | grep -c -e '--check'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "0:1:6"
+try yaml "$TMP/ywt" --help; check "roles-yaml --help lists --check" "$RC:$(printf '%s\n' "$OUT" | grep -c -e '--check'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "0:1:11"
+check "roles-yaml --help lists --mode, --all, --under, --dry-run and the result line" "$(printf '%s\n' "$OUT" | grep -c -e '--mode'):$(printf '%s\n' "$OUT" | grep -c -e '--all'):$(printf '%s\n' "$OUT" | grep -c -e '--under'):$(printf '%s\n' "$OUT" | grep -c -e '--dry-run'):$(printf '%s\n' "$OUT" | grep -c ROLES_YAML_RESULT)" "5:1:2:1:1"
 yreset; printf 'garbage' > "$YP"; yrun --check; check "roles-yaml --check: unexpected output is silent" "$RC:$OUT" "0:"
 mkdir -p "$TMP/ynogit"; try env PATH="$FB:/usr/bin:/bin" bash -c 'cd "$0" && GIT_CEILING_DIRECTORIES="$0/.." "$1/bin/orca-yaml.sh" --check 2>&1' "$TMP/ynogit" "$ROOT"; check "roles-yaml --check: outside a git repo is silent" "$RC:$OUT" "0:"
+
+# roles-yaml --mode: the setup line carries the mode; rerun updates, drops or leaves it; nothing foreign is touched
+Y3="$TMP/ymode"; mkdir -p "$Y3"; git -C "$Y3" init -q; git -C "$Y3" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+ym() { try yaml "$Y3" "$@"; }
+ysetup() { sed -n 's/^    //p' "$Y3/orca.yaml" | tr '\n' '|'; }
+yfiles3() { { shasum "$Y3/orca.yaml" "$Y3/.worktreeinclude" "$Y3/.git/info/exclude" 2>&1; ls -A "$Y3"; } | tr '\n' ' '; }
+yreset3() { rm -f "$Y3/orca.yaml" "$Y3/.worktreeinclude"; : > "$Y3/.git/info/exclude"; git -C "$Y3" rm -q -f --cached orca.yaml 2>/dev/null || true; }
+has() { case "$OUT" in *"$1"*) printf y;; *) printf n;; esac; }
+LM='$HOME/.orca-roles/bin/launch.sh --mode'
+ym --mode pr-reviewer
+check "roles-yaml --mode: creates the line, ignored, closing lines" "$RC:$(ysetup):$(git -C "$Y3" status --porcelain):$(has 'Created '):$(has 'New worktrees of this project start in mode pr-reviewer'):$(has 'Existing worktrees keep their mode: use roles --mode <mode> in them.')" "0:$LM pr-reviewer|::y:y:y"
+S3="$(yfiles3)"; M=""
+ym --mode pr-reviewer; M="$M same:$RC:$(has 'Nothing changed'):$(has Updated):$(has 'New worktrees of this project'):$([ "$(yfiles3)" = "$S3" ] && echo same || echo diff);"
+ym --mode academic-writer; M="$M other:$RC:$(ysetup):$(has 'Updated '):$(has 'start in mode academic-writer'):$(has 'Existing worktrees keep'):$(grep -c launch.sh "$Y3/orca.yaml");"
+ym --mode programmer; M="$M prog:$RC:$(ysetup);"
+ym --mode pr-reviewer --mode academic-writer; M="$M last:$RC:$(ysetup);"
+ym; M="$M drop:$RC:$(ysetup):$(has 'Updated '):$(has 'default mode (settings.mode');"
+ym; M="$M again:$RC:$(has 'Nothing changed'):$(has 'default mode');"
+check "roles-yaml --mode: rerun same, another, repeated, dropped, default again" "$M" " same:0:y:n:n:same; other:0:$LM academic-writer|:y:y:y:1; prog:0:$LM programmer|; last:0:$LM academic-writer|; drop:0:\$HOME/.orca-roles/bin/launch.sh|:y:y; again:0:y:y;"
+yreset3; ym --mode pr-reviewer; ym --remove; check "roles-yaml --remove after --mode removes it" "$RC:$(ls -A "$Y3" | tr '\n' ' ')" "0:.git "
+M=""; for v in bogus Programmer PR-REVIEWER ../x "pr reviewer" a/b; do
+  yreset3; ym --mode "$v"; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' '):$(has 'modes: programmer, pr-reviewer, academic-writer'):$(has 'Nothing was written');"
+done
+yreset3; ym --mode; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' ');"
+yreset3; ym --mode ""; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' ');"
+yreset3; ym --mode --remove; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' ');"
+yreset3; ym; S3="$(yfiles3)"; ym --mode bogus; M="$M$RC:$([ "$(yfiles3)" = "$S3" ] && echo same || echo diff)"
+check "roles-yaml --mode: invalid, missing, empty values stop and write nothing" "$M" "$(for i in 1 2 3 4 5 6; do printf '1:.git :y:y;'; done)1:.git ;1:.git ;1:.git ;1:same"
+M=""; for a in "--mode pr-reviewer --remove" "--remove --mode pr-reviewer" "--mode pr-reviewer --check" "--check --mode pr-reviewer" "--remove --check"; do
+  ym $a; M="$M$RC:$([ "$(yfiles3)" = "$S3" ] && echo same || echo diff);"
+done
+check "roles-yaml --mode: with --remove/--check, and --remove --check, is a usage error" "$M" "1:same;1:same;1:same;1:same;1:same;"
+yreset3; printf 'scripts:\n  setup: npm i\n' > "$Y3/orca.yaml"; M=""
+ym --mode pr-reviewer; M="$M$RC:$(tr '\n' ' ' < "$Y3/orca.yaml"):$(has "the line $LM pr-reviewer,");"
+ym; M="$M$RC:$(has 'the line $HOME/.orca-roles/bin/launch.sh, or'):$(has '--mode');"
+git -C "$Y3" add -f orca.yaml; git -C "$Y3" -c user.name=t -c user.email=t@t commit -q -m yaml
+ym --mode academic-writer; M="$M$RC:$(tr '\n' ' ' < "$Y3/orca.yaml"):$(has "$LM academic-writer"):$(has committed):$(git -C "$Y3" status --porcelain)"
+check "roles-yaml --mode: foreign and committed orca.yaml are left alone, advice shows --mode" "$M" "1:scripts:   setup: npm i :y;1:y:n;1:scripts:   setup: npm i :y:y:"
+git -C "$Y3" rm -q -f orca.yaml; git -C "$Y3" -c user.name=t -c user.email=t@t commit -q -m rm-yaml
+KIT_YM="scripts:"$'\n'"  setup: |"$'\n'"    \$HOME/.orca-roles/bin/launch.sh --mode pr-reviewer"$'\n'
+M=""
+ychk shared-only "npm i" "" "$KIT_YM" orca.yaml; M="$M$RC:$OUT|"
+ychk run-both "$KITL" "" "$KIT_YM" orca.yaml; M="$M$RC:$OUT|"
+ychk shared-only "npm i" "" "scripts:"$'\n'"  setup: |"$'\n'"    # \$HOME/.orca-roles/bin/launch.sh --mode pr-reviewer"$'\n' orca.yaml; M="$M$RC:$OUT"
+check "roles-yaml --check: a --mode line counts as the kit (silent, twice, commented does not)" "$M" "0:|0:$W_TWICE|0:$W_SHARED"
+yreset; hsjson shared-only "npm i" > "$YP"; yrun --mode pr-reviewer; M="$RC:$(sed -n 's/^    //p' "$Y2/orca.yaml")"
+yreset; hsjson local-only "npm i" > "$YP"; yrun --mode pr-reviewer; M="$M:$(yclass)"
+check "roles-yaml --mode: with a fake policy, shared-only writes the line and local-only without the kit stops" "$M" "0:$LM pr-reviewer:a"
+
+# roles-yaml --all: every result class with scratch repos and a stub 'orca' (repo list / repo show); nothing real is touched
+YA="$TMP/yall"; rm -rf "$YA"; mkdir -p "$YA/u" "$YA/plain" "$YA/bin" "$YA/show"
+for n in fresh reg committed u/a-b u/a-bc askp lo ro; do mkdir -p "$YA/$n"; git -C "$YA/$n" init -q; git -C "$YA/$n" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; done
+git -C "$YA/fresh" worktree add -q "$YA/wt" -b ywtb 2>/dev/null; mkdir -p "$YA/fresh/nested"
+printf 'scripts:\n  setup: npm i\n' > "$YA/committed/orca.yaml"; git -C "$YA/committed" add -f orca.yaml; git -C "$YA/committed" -c user.name=t -c user.email=t@t commit -q -m yaml
+cat > "$YA/bin/orca" <<'FEOF'
+#!/bin/sh
+case "$1 $2" in
+  "repo list") [ -z "${FAKE_LIST_RC:-}" ] || exit "$FAKE_LIST_RC"; cat "$FAKE_LIST";;
+  "repo show") p="${4#path:}"; f="$FAKE_SHOW/$(basename "$p")"; [ -f "$f" ] && cat "$f" || exit 1;;
+  *) exit 1;;
+esac
+FEOF
+chmod +x "$YA/bin/orca"
+printf '{"ok":true,"result":{"repo":{"hookSettings":{"setupRunPolicy":"ask"}}}}' > "$YA/show/askp"
+printf '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$YA/show/lo"
+yall_list() { jq -nc --arg d "$YA" '{ok:true,result:{repos:([
+  ["fresh","fresh"],["reg","reg"],["committed","committed"],["plain","plain"],["missing","missing"],["wt","wt"],["nested","fresh/nested"],["a-b","u/a-b"],["a-bc","u/a-bc"],["fresh-again","fresh"],["askp","askp"],["lo","lo"]
+  ] | map({displayName:.[0], path:($d + "/" + .[1]), kind:"git", gitUsername:"SECRET-USER", projectGroupId:"g"}))}}' > "$YA/list.json"; }
+yall_list
+yallrun() { try env PATH="$YA/bin:$PATH" FAKE_LIST="$YA/list.json" FAKE_SHOW="$YA/show" FAKE_LIST_RC="${FAKE_LIST_RC:-}" "$ROOT/bin/orca-yaml.sh" "$@" 2>/dev/null; }
+yallerr() { ERR="$(env PATH="$YA/bin:$PATH" FAKE_LIST="$YA/list.json" FAKE_SHOW="$YA/show" FAKE_LIST_RC="${FAKE_LIST_RC:-}" "$ROOT/bin/orca-yaml.sh" "$@" 2>&1 >/dev/null)" && RC=0 || RC=$?; OUT="$ERR"; }
+ytree() { (cd "$YA" && find . -type f -not -path './bin/*' -not -path './show/*' -not -name list.json | LC_ALL=C sort | xargs shasum; find . -type d | LC_ALL=C sort; git -C "$YA/fresh" status --porcelain --ignored) | shasum; }
+yl() { printf '%s (%s/%s): %s\n' "$1" "$YA" "$2" "$3"; }
+W_ASK="  WARNING: this project's setup policy is 'ask': Orca asks each time, and 'orca worktree create' needs '--setup run'. The kit does not start by itself."
+# setup of the already-registered project: a mode set earlier with the single path
+yaml "$YA/reg" --mode pr-reviewer >/dev/null
+T0="$(ytree)"
+yallrun --all --dry-run
+EXP="$(yl fresh fresh 'would create'; yl reg reg 'unchanged (mode pr-reviewer kept)'; yl committed committed 'skipped: committed-orca-yaml'; echo "  ERROR: this project already has a committed orca.yaml. Add to its 'scripts: setup:' the line"; yl plain plain 'skipped: not-a-repo'; yl missing missing 'skipped: path-missing'; yl wt wt 'skipped: not-main-checkout'; yl nested fresh/nested 'skipped: not-main-checkout'; yl a-b u/a-b 'would create'; yl a-bc u/a-bc 'would create'; yl fresh-again fresh 'skipped: already-listed'; yl askp askp 'would create'; echo "$W_ASK"; yl lo lo 'skipped: local-only-policy'; echo "  ERROR: this project's setup source is local-only"'*'; echo 'Summary: 4 created, 0 updated, 1 unchanged, 7 skipped, 0 errors'; echo 'Dry run: nothing was written.')"
+ACT="$(printf '%s\n' "$OUT" | sed 's/^\(  ERROR: this project.s setup source is local-only\).*/\1*/')"
+check "roles-yaml --all --dry-run: a line per project, every skip reason, warning indented, summary" "$RC:$ACT" "0:$EXP"
+check "roles-yaml --all --dry-run: nothing written anywhere (tree, exclude, status byte-identical)" "$(ytree)" "$T0"
+check "roles-yaml --all: the output never carries gitUsername" "$(printf '%s' "$OUT" | grep -c SECRET-USER || true)" "0"
+yallrun --all
+EXP2="$(printf '%s\n' "$EXP" | sed -e 's/would create/created/' -e '$d' | sed -e 's/Summary: 4 created, 0 updated, 1 unchanged, 7 skipped/Summary: 4 created, 0 updated, 1 unchanged, 7 skipped/' | sed '/^fresh-again/s/created/skipped: already-listed/')"
+ACT="$(printf '%s\n' "$OUT" | sed 's/^\(  ERROR: this project.s setup source is local-only\).*/\1*/')"
+check "roles-yaml --all: created / unchanged (mode kept) / skipped, no 'Dry run' line" "$RC:$ACT" "0:$EXP2"
+check "roles-yaml --all: orca.yaml only where created, the registered mode is kept, the committed one untouched" "$(for n in fresh reg committed plain u/a-b u/a-bc askp lo wt; do printf '%s=%s;' "$n" "$(sed -n 's/^    //p' "$YA/$n/orca.yaml" 2>/dev/null | tr '\n' '|')"; done)" "fresh=\$HOME/.orca-roles/bin/launch.sh|;reg=\$HOME/.orca-roles/bin/launch.sh --mode pr-reviewer|;committed=;plain=;u/a-b=\$HOME/.orca-roles/bin/launch.sh|;u/a-bc=\$HOME/.orca-roles/bin/launch.sh|;askp=\$HOME/.orca-roles/bin/launch.sh|;lo=;wt=;"
+check "roles-yaml --all: nothing to commit in the created projects" "$(git -C "$YA/fresh" status --porcelain)$(git -C "$YA/u/a-b" status --porcelain)" ""
+yallrun --all --dry-run; check "roles-yaml --all --dry-run after --all: unchanged lines" "$RC:$(printf '%s\n' "$OUT" | grep -c 'unchanged (default mode kept)')/$(printf '%s\n' "$OUT" | grep -c 'unchanged (mode pr-reviewer kept)')/$(printf '%s\n' "$OUT" | grep '^Summary')" "0:4/1/Summary: 0 created, 0 updated, 5 unchanged, 7 skipped, 0 errors"
+yallrun --all; check "roles-yaml --all rerun: nothing created or updated" "$RC:$(printf '%s\n' "$OUT" | grep '^Summary')" "0:Summary: 0 created, 0 updated, 5 unchanged, 7 skipped, 0 errors"
+# a registration with a missing line (.worktreeinclude or info/exclude) is repaired in place, the mode kept
+yrl() { printf '%s\n' "$OUT" | grep "^$1 ("; }
+grep -vxF orca.yaml "$YA/reg/.worktreeinclude" > "$YA/wi.tmp"; cp "$YA/wi.tmp" "$YA/reg/.worktreeinclude"
+grep -vxF orca.yaml "$YA/u/a-b/.git/info/exclude" > "$YA/ex.tmp"; cp "$YA/ex.tmp" "$YA/u/a-b/.git/info/exclude"
+T3="$(ytree)"
+yallrun --all --dry-run
+check "roles-yaml --all --dry-run: a missing .worktreeinclude / exclude line says would repair (mode kept), writes nothing" "$RC:$(yrl reg):$(yrl a-b):$(printf '%s\n' "$OUT" | grep '^Summary'):$([ "$(ytree)" = "$T3" ] && echo same || echo diff)" "0:reg ($YA/reg): would repair (mode pr-reviewer kept):a-b ($YA/u/a-b): would repair (default mode kept):Summary: 0 created, 2 updated, 3 unchanged, 7 skipped, 0 errors:same"
+yallrun --all
+check "roles-yaml --all: repairs the missing line, keeps the mode, counts as updated" "$RC:$(yrl reg):$(yrl a-b):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -cx orca.yaml "$YA/reg/.worktreeinclude"):$(git -C "$YA/u/a-b" check-ignore orca.yaml):$(sed -n 's/^    //p' "$YA/reg/orca.yaml"):$(sed -n 's/^    //p' "$YA/u/a-b/orca.yaml")" "0:reg ($YA/reg): repaired (mode pr-reviewer kept):a-b ($YA/u/a-b): repaired (default mode kept):Summary: 0 created, 2 updated, 3 unchanged, 7 skipped, 0 errors:1:orca.yaml:\$HOME/.orca-roles/bin/launch.sh --mode pr-reviewer:\$HOME/.orca-roles/bin/launch.sh"
+yallrun --all
+check "roles-yaml --all after a repair: unchanged again" "$RC:$(yrl reg):$(yrl a-b):$(printf '%s\n' "$OUT" | grep '^Summary')" "0:reg ($YA/reg): unchanged (mode pr-reviewer kept):a-b ($YA/u/a-b): unchanged (default mode kept):Summary: 0 created, 0 updated, 5 unchanged, 7 skipped, 0 errors"
+T1="$(ytree)"
+yallrun --all --mode academic-writer --dry-run
+check "roles-yaml --all --mode --dry-run: would update to mode X everywhere, writes nothing" "$RC:$(printf '%s\n' "$OUT" | grep -c 'would update to mode academic-writer'):$(printf '%s\n' "$OUT" | grep '^Summary'):$([ "$(ytree)" = "$T1" ] && echo same || echo diff)" "0:5:Summary: 0 created, 5 updated, 0 unchanged, 7 skipped, 0 errors:same"
+yallrun --all --mode academic-writer
+check "roles-yaml --all --mode: updates every registered project (also the one in another mode)" "$RC:$(printf '%s\n' "$OUT" | grep -c ': updated to mode academic-writer$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -c 'launch.sh --mode academic-writer' "$YA/reg/orca.yaml" "$YA/fresh/orca.yaml" "$YA/u/a-b/orca.yaml" "$YA/askp/orca.yaml" | tr '\n' ' ')" "0:5:Summary: 0 created, 5 updated, 0 unchanged, 7 skipped, 0 errors:$(for n in reg fresh u/a-b askp; do printf '%s/%s/orca.yaml:1 ' "$YA" "$n"; done)"
+check "roles-yaml --all --mode: the committed orca.yaml is still skipped and untouched" "$(printf '%s\n' "$OUT" | grep -c 'committed-orca-yaml'):$(tr '\n' ' ' < "$YA/committed/orca.yaml"):$(git -C "$YA/committed" status --porcelain)" "1:scripts:   setup: npm i :"
+yallrun --all --mode programmer --under "$YA/u/a-b"
+check "roles-yaml --all --under: only the folder itself, never the look-alike sibling a-bc" "$RC:$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c '/a-b):'):$(printf '%s\n' "$OUT" | grep -c 'a-bc'):$(grep -c 'academic-writer' "$YA/u/a-bc/orca.yaml"):$(grep -c 'programmer' "$YA/u/a-b/orca.yaml")" "0:2:1:0:1:1"
+yallrun --all --dry-run --under "$YA/u/"; check "roles-yaml --all --under: a folder with a trailing slash matches its children, not the rest" "$RC:$(printf '%s\n' "$OUT" | grep -c '^a-bc\? ('):$(printf '%s\n' "$OUT" | grep -c '^fresh ')" "0:2:0"
+yallrun --all --dry-run --under "$YA/fresh"; check "roles-yaml --all --under: a project folder includes the project and what is nested in it" "$RC:$(printf '%s\n' "$OUT" | grep -c '^fresh \|^nested \|^fresh-again '):$(printf '%s\n' "$OUT" | grep -c '^reg ')" "0:3:0"
+# error class: a project whose orca.yaml path is a directory (fails for any user, root included)
+mkdir "$YA/ro/orca.yaml"; printf '%s\n' "$(jq -c '.result.repos += [{displayName:"ro",path:($d+"/ro"),kind:"git",gitUsername:"SECRET-USER"}]' --arg d "$YA" "$YA/list.json")" > "$YA/list.json"
+yallrun --all; rmdir "$YA/ro/orca.yaml"
+check "roles-yaml --all: a project that fails is an error line and exit 1; the others still run" "$RC:$(printf '%s\n' "$OUT" | grep -c '^ro (.*): error: '):$(printf '%s\n' "$OUT" | grep '^Summary')" "1:1:Summary: 0 created, 0 updated, 5 unchanged, 7 skipped, 1 errors"
+yall_list
+# exit 2 when the list cannot be read; usage errors write nothing
+T2="$(ytree)"; FAKE_LIST_RC=1 yallerr --all; R2="$RC"; check "roles-yaml --all: the list cannot be read -> exit 2 and a message" "$R2:$(printf '%s' "$ERR" | grep -c 'could not read the project list')" "2:1"
+printf 'garbage' > "$YA/list.json"; yallrun --all; check "roles-yaml --all: an unexpected answer from orca -> exit 2" "$RC:$OUT" "2:"; yall_list
+M=""; for a in "--all --remove" "--all --check" "--all --under $YA/nope" "--all --under" "--under $YA/u" "--dry-run --remove" "--dry-run --check" "--all --mode bogus" "--all --mode"; do
+  yallerr $a; M="$M$RC:$([ -z "$OUT" ] && echo silent || echo msg);"
+done
+check "roles-yaml --all: usage errors exit 1 with a message on stderr only" "$M" "$(for i in 1 2 3 4 5 6 7 8 9; do printf '1:msg;'; done)"
+yallrun --all --remove; check "roles-yaml --all --remove: nothing on stdout" "$RC:$OUT" "1:"
+check "roles-yaml --all: usage errors and the failed list wrote nothing" "$([ "$(ytree)" = "$T2" ] && echo same || echo diff)" "same"
+# the single path: a last stdout line ROLES_YAML_RESULT for each result class; an error leaves only that line on stdout
+YS="$TMP/yres"; rm -rf "$YS"; mkdir -p "$YS"; git -C "$YS" init -q; git -C "$YS" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+yres() { (cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" "$@" 2>/dev/null | tail -n 1); }
+M="$(yres)|$(yres)|$(yres --mode pr-reviewer)|$(yres --mode pr-reviewer)|$(yres)"
+check "roles-yaml: ROLES_YAML_RESULT created, unchanged, updated, unchanged, updated" "$M" "ROLES_YAML_RESULT=created|ROLES_YAML_RESULT=unchanged|ROLES_YAML_RESULT=updated|ROLES_YAML_RESULT=unchanged|ROLES_YAML_RESULT=updated"
+check "roles-yaml --dry-run (single): says what would happen and writes nothing" "$(yres --mode academic-writer --dry-run)|$(sed -n 's/^    //p' "$YS/orca.yaml" | tr '\n' ' ')|$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --dry-run 2>/dev/null | grep -c 'Nothing would change')" "ROLES_YAML_RESULT=updated|\$HOME/.orca-roles/bin/launch.sh |1"
+rm -f "$YS/orca.yaml" "$YS/.worktreeinclude"; : > "$YS/.git/info/exclude"; check "roles-yaml --dry-run (single): created, nothing written" "$(yres --dry-run)|$(ls -A "$YS" | tr '\n' ' ')|$(wc -c < "$YS/.git/info/exclude" | tr -d ' ')" "ROLES_YAML_RESULT=created|.git |0"
+printf 'scripts:\n  setup: npm i\n' > "$YS/orca.yaml"; check "roles-yaml: ROLES_YAML_RESULT skipped:foreign-orca-yaml" "$(yres)" "ROLES_YAML_RESULT=skipped:foreign-orca-yaml"
+git -C "$YS" add -f orca.yaml; git -C "$YS" -c user.name=t -c user.email=t@t commit -q -m yaml; check "roles-yaml: ROLES_YAML_RESULT skipped:committed-orca-yaml" "$(yres)" "ROLES_YAML_RESULT=skipped:committed-orca-yaml"
+git -C "$YS" rm -q -f orca.yaml; git -C "$YS" -c user.name=t -c user.email=t@t commit -q -m rm; printf 'keep\n' > "$YS/.worktreeinclude"; git -C "$YS" add -f .worktreeinclude; git -C "$YS" -c user.name=t -c user.email=t@t commit -q -m inc
+check "roles-yaml: ROLES_YAML_RESULT skipped:committed-worktreeinclude" "$(yres)" "ROLES_YAML_RESULT=skipped:committed-worktreeinclude"
+check "roles-yaml: ROLES_YAML_RESULT skipped:not-a-repo / not-main-checkout and error:invalid-mode" "$(cd "$TMP/ynogit" && GIT_CEILING_DIRECTORIES="$TMP" PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" 2>/dev/null | tail -n 1)|$(git init -q --bare "$TMP/ybare" && cd "$TMP/ybare" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" 2>/dev/null | tail -n 1)|$(yres --mode Bogus)" "ROLES_YAML_RESULT=skipped:not-a-repo|ROLES_YAML_RESULT=skipped:not-main-checkout|ROLES_YAML_RESULT=error:invalid-mode"
+yfor local-only "npm i"; M="$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr/bin:/bin" FAKE_LOG="$YLOG" FAKE_PATH="$YP" "$ROOT/bin/orca-yaml.sh" 2>/dev/null | tail -n 1 || true)"
+check "roles-yaml: ROLES_YAML_RESULT skipped:local-only-policy" "$M" "ROLES_YAML_RESULT=skipped:local-only-policy"
+yfor local-only "$KITL"; check "roles-yaml: ROLES_YAML_RESULT skipped:local-script, exit 0" "$RC:$(printf '%s\n' "$OUT" | tail -n 1)" "0:ROLES_YAML_RESULT=skipped:local-script"
+check "roles-yaml --check and --remove print no result line" "$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --check 2>&1 | grep -c ROLES_YAML_RESULT || true)$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --remove 2>&1 | grep -c ROLES_YAML_RESULT || true)" "00"
 }
 
 sec_launch_overrides() {

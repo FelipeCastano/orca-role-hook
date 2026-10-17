@@ -126,9 +126,17 @@ The second line is optional. Keep `launch.sh` first and **Run setup command** on
 
 **b) With `roles-yaml`.** In a terminal inside the project (in any worktree or in the main checkout):
 ```bash
-roles-yaml            # to undo it: roles-yaml --remove
+roles-yaml                        # to undo it: roles-yaml --remove
+roles-yaml --mode pr-reviewer     # every new worktree starts in that mode (see Modes)
+roles-yaml --all --dry-run          # preview: register the kit in every project of Orca at once
 ```
 It creates an `orca.yaml` with the setup script at the main checkout's root and lists it in `.worktreeinclude`. Both stay ignored in `.git/info/exclude`, the local equivalent of `.gitignore`: the project's `.gitignore` is not touched, there is nothing to commit and your teammates see nothing. It works because Orca copies the ignored files listed in `.worktreeinclude` to every new worktree, before looking for its setup script. It only affects the worktrees you create from now on.
+
+With `--mode <mode>` (one of the kit's modes) the setup line becomes `$HOME/.orca-roles/bin/launch.sh --mode <mode>`, so every new worktree of the project starts in that mode. An invalid or missing value stops with the valid modes and writes nothing; `--mode` cannot be combined with `--remove` or `--check`. Running `roles-yaml` again updates the line the kit generated: another `--mode` changes the mode, and running it without `--mode` drops it (back to the default mode); if nothing differs it says nothing changed. The mode is local like the file itself: nothing to commit. Existing worktrees keep the mode they have: use `roles --mode <mode>` in them.
+
+**All projects at once.** `roles-yaml --all [--mode <mode>] [--under <dir>] [--dry-run]` (from any folder) registers the kit in every project registered in Orca, whatever its project group; `--under <dir>` limits it to the projects inside that folder (`/a/b` never matches `/a/bc`). **Run it with `--dry-run` first**: nothing is written, and each line says what would happen (`would create`, `would update to mode X`, `unchanged`, `skipped: <reason>`). It prints one line per project and a final `Summary: N created, N updated, N unchanged, N skipped, N errors`; it exits 0 if no project errored, 1 if one did, and 2 if the project list cannot be read. Without `--mode` it only registers the projects that have no kit `orca.yaml` yet (in the default mode) and leaves every already registered project, and its mode, untouched; with `--mode <mode>` every project is registered or updated to that mode, exactly as `roles-yaml --mode <mode>` in it. Projects that cannot be registered are skipped with their reason: `path-missing` (a remote project shows up like this), `not-a-repo`, `not-main-checkout` (a linked worktree or a folder inside a repo), `committed-orca-yaml`, `foreign-orca-yaml`, `committed-worktreeinclude`, `local-only-policy`, `local-script`. It covers only the projects registered in Orca at that moment: a project added later needs `roles-yaml` in it. `--all` cannot be combined with `--remove` or `--check`.
+
+A single-project run ends with a last line `ROLES_YAML_RESULT=<created|updated|unchanged|skipped:<reason>|error:<reason>>` for scripts.
 
 - If the project already has a committed `orca.yaml` or `.worktreeinclude`, `roles-yaml` does not modify them: it tells you which line to add. Use option a) if you do not want to touch them.
 - Orca decides which setup scripts run with the project's **setup source** (Settings → Repository → *your project*), which has three values:
@@ -332,7 +340,8 @@ Choose it, from lowest to highest priority:
 
 1. `settings.mode` in `config.json` (default `"programmer"`).
 2. `settings.mode` in the project's `.orca-roles.json`.
-3. `launch.sh --mode <mode>` (or `roles --mode <mode>`): saved in the worktree's exceptions, so `roles` re-applies it when resuming; `--reset` forgets it. `--set settings.mode=<mode>` is checked the same way, and is saved like `--mode`.
+3. `roles-yaml --mode <mode>`: the project's local, uncommitted `orca.yaml` runs `launch.sh --mode <mode>`, so every new worktree of the project starts in that mode (existing worktrees keep theirs; run it without `--mode` to drop it).
+4. `launch.sh --mode <mode>` (or `roles --mode <mode>`): saved in the worktree's exceptions, so `roles` re-applies it when resuming; `--reset` forgets it. It beats the mode of the project's setup line, also for worktrees created with it: an explicit `roles --mode` in a worktree is saved per worktree. `--set settings.mode=<mode>` is checked the same way, and is saved like `--mode`.
 
 The id must be exactly one of the three (no uppercase, spaces, slashes or `..`); anything else stops `launch.sh` before any tab opens. The saved mode is kept when later options do not mention it (`roles --enable x` stays in the same mode); `--mode` or `--set settings.mode=<mode>` (the same request, saved the same way) change it and `--reset` drops it.
 
@@ -587,7 +596,7 @@ Objects are merged field by field; lists are replaced whole.
 
 ### Exceptions in the setup script
 
-Without creating any file, you can add options to the `launch.sh` line in the project's setup script (Settings → Repository, or the `orca.yaml` of `roles-yaml`). They are applied on top of `config.json` and `.orca-roles.json`:
+Without creating any file, you can add options to the `launch.sh` line in the project's setup script (Settings → Repository, or the `orca.yaml` of `roles-yaml`; `roles-yaml --mode <mode>` writes `--mode` there for you). They are applied on top of `config.json` and `.orca-roles.json`:
 
 ```
 $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer

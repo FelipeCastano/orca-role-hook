@@ -62,7 +62,7 @@ git -C orca-role-hook pull && bash orca-role-hook/install.sh                    
 Once per project, in one of two ways (Orca's CLI cannot do it):
 
 - **Settings → Repository → project → Setup script**: `$HOME/.orca-roles/bin/launch.sh` (first line), with **Run setup command** on.
-- **`roles-yaml`** in a terminal in the project: creates a local `orca.yaml`, ignored by git, that Orca copies to every new worktree. `roles-yaml --remove` undoes it. If the project already has a setup script in Settings, Orca uses that one.
+- **`roles-yaml`** in a terminal in the project: creates a local `orca.yaml`, ignored by git, that Orca copies to every new worktree. `roles-yaml --mode <mode>` makes every new worktree of the project start in that mode (rerun it without `--mode` to drop it; existing worktrees keep theirs, use `roles --mode <mode>` in them). `roles-yaml --remove` undoes it. `roles-yaml --all [--mode <mode>] [--under <dir>] [--dry-run]` registers the kit in every project registered in Orca at once (run `--dry-run` first; without `--mode` it only registers the projects that are not registered yet and leaves the others and their mode alone; with `--mode` it sets that mode everywhere; remote projects show as path-missing; a project added to Orca later needs `roles-yaml` in it). If the project already has a setup script in Settings, Orca uses that one.
 
 Where the hook does not fire (main checkout, existing worktrees, after a restart), the user runs `roles` in a workspace terminal.
 
