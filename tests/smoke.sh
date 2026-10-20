@@ -2902,7 +2902,7 @@ tk() {  # <extra settings json fragment> <reads before the dialog clears, or non
   rm -f "$TK/orca.log" "$TK/reads" "$TK/clear_after" "$TK/gd/orca-roles.kicked"; : > "$TK/orca.log"; echo "Do you trust the files in this folder?" > "$TK/screen"
   [ "$2" = none ] || echo "$2" > "$TK/clear_after"
   printf 'PLANNER=hp\nDEV=hd\n' > "$TK/gd/orca-roles.env"
-  (cd "$TK/wt" && TK="$TK" HOME="$TMP/home" PATH="$TK/bin:$PATH" ORCA_ROLES_KICK_SETTLE=0 ORCA_ROLES_TRUST_POLL=0.1 "$TMP/home/.orca-roles/bin/kickoff.sh" "$TK/wt" "$TK/gd/orca-roles.env" "$TK/cfg.json" "dev" "" "" "" > "$TK/out.log" 2>&1)
+  (cd "$TK/wt" && env TK="$TK" HOME="$TMP/home" PATH="$TK/bin:$PATH" ORCA_ROLES_KICK_SETTLE=0 ORCA_ROLES_TRUST_POLL=0.1 "$TMP/home/.orca-roles/bin/kickoff.sh" "$TK/wt" "$TK/gd/orca-roles.env" "$TK/cfg.json" "dev" "" "" "" > "$TK/out.log" 2>&1)
 }
 tkenter() { grep -c -- '^SEND terminal send --terminal [^ ]* --enter --json$' "$TK/orca.log" || true; }
 tkrole() { grep -c -- '--text' "$TK/orca.log" || true; }
@@ -3127,9 +3127,9 @@ OCCFG=""
 # the exclude pattern goes in once, in info/exclude; no .gitignore is created
 ocrun opencode-prepare.sh dev >/dev/null; ocrun opencode-prepare.sh dev >/dev/null
 check "opencode: the exclude pattern is added once and no .gitignore is touched" "$(grep -cxF '/.opencode/agents/orca-*.md' "$OC/real/wt/.git/info/exclude"):$(ls "$OC/real/wt/.gitignore" 2>/dev/null | wc -l | tr -d ' '):$(git -C "$OC/real/wt" status --short | wc -l | tr -d ' ')" "1:0:0"
-check "opencode: no temp file left in the agents folder" "$(ls -A "$OCW/.opencode/agents" | grep -vc '^orca-')" "0"
+check "opencode: no temp file left in the agents folder" "$(find "$OCW/.opencode/agents" -mindepth 1 -maxdepth 1 ! -name 'orca-*' | wc -l | tr -d ' ')" "0"
 # the MCP servers are not passed: a role with an mcp list gets one warning and no file
-try ocrun agent.sh tester; check "opencode: a role with an mcp list gets the MCP warning, no MCP file" "$RC:$(grep -c 'does not get the kit.s MCP servers' <<<"$OUT"):$(ls "$OC/real/wt/.git" | grep -c 'orca-roles-mcp' || true)" "0:1:0"
+try ocrun agent.sh tester; check "opencode: a role with an mcp list gets the MCP warning, no MCP file" "$RC:$(grep -c 'does not get the kit.s MCP servers' <<<"$OUT"):$(find "$OC/real/wt/.git" -mindepth 1 -maxdepth 1 -name '*orca-roles-mcp*' | wc -l | tr -d ' ')" "0:1:0"
 try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning" "$(grep -c 'MCP servers' <<<"$OUT")" "0"
 check "opencode: provenance records the opencode version" "$(tail -1 "$OC/real/wt/.git/orca-roles.provenance.jsonl" | jq -r '[.agent, .cliVersion] | join(" ")')" "opencode opencode 9.9.9"
 # failures: outside a repo, and agent.sh stops when the preparation fails
@@ -3337,8 +3337,8 @@ exec tar -czf - -C "$DL/pkg" orca-role-hook-copy
 EOS
 chmod +x "$DL/bin/curl"
 drun() {  # drun [VAR=value]...: installs from stdin into a fresh HOME; the last curl URL and .installed are kept
-  rm -rf "$DL/home" "$DL/curl.log"; mkdir -p "$DL/home"
-  if DOUT="$(cd "$DL/cwd" && env HOME="$DL/home" PATH="$DL/bin:$PATH" "$@" bash < "$ROOT/install.sh" 2>&1)"; then DRC=0; else DRC=$?; fi
+  rm -rf "${DL:?}/home" "${DL:?}/curl.log"; mkdir -p "$DL/home"
+  if (cd "$DL/cwd" && env HOME="$DL/home" PATH="$DL/bin:$PATH" "$@" bash < "$ROOT/install.sh") >/dev/null 2>&1; then DRC=0; else DRC=$?; fi
   DURL="$(tail -1 "$DL/curl.log" 2>/dev/null | grep -o 'https://[^ ]*')"; DINS="$(cat "$DL/home/.orca-roles/.installed" 2>/dev/null)"
 }
 drun ORCA_ROLES_REF=v9.9.9 ORCA_ROLES_BRANCH=other

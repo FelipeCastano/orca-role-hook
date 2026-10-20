@@ -37,7 +37,7 @@ record_provenance() {  # $1 binary to ask for its version, "" for none
   gd="$(git rev-parse --git-dir 2>/dev/null)" && gd="$(cd "$gd" && pwd)" || return 0
   if [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
     out="$(mktemp)"; "$1" --version > "$out" 2>/dev/null < /dev/null & pid=$!
-    for i in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; ver="$(head -1 "$out")"; rm -f "$out"
   fi
   sha_c="$(shasum "$CFG" 2>/dev/null | cut -d' ' -f1)"; sha_p=""; [ -f "$PROMPT" ] && sha_p="$(shasum "$PROMPT" 2>/dev/null | cut -d' ' -f1)"

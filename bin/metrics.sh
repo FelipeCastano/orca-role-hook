@@ -27,7 +27,7 @@ OUTF="$(mktemp "${TMPDIR:-/tmp}/orca-roles-metrics.XXXXXX")"; trap 'rm -f "$OUTF
 limited() {
   local t="$1" pid i; shift
   "$@" > "$OUTF.o" 2>/dev/null < /dev/null & pid=$!
-  for i in $(seq 1 $((t * 10))); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  for _ in $(seq 1 $((t * 10))); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
   if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 124; fi
   wait "$pid"
 }
