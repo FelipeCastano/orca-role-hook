@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # Shared functions. Requires jq. Compatible with bash 3.2 (macOS) and with GNU/BSD tools.
 KIT="${KIT:-$HOME/.orca-roles}"
+# "KIT=<path> " to put in front of a command that runs later in another process (a tab, a message) when this kit is not the
+# installed one, so that process uses this kit too; empty for the installed kit (same folder, even through a link), so those
+# commands stay as they always were.
+kit_env() {
+  [ "$KIT" = "$HOME/.orca-roles" ] && return 0
+  [ -d "$KIT" ] && [ "$(cd "$KIT" && pwd -P)" = "$(cd "$HOME/.orca-roles" 2>/dev/null && pwd -P)" ] && return 0
+  printf 'KIT=%q ' "$KIT"
+}
 
 # Orca's CLI is not always called 'orca': in the WSL terminals Orca manages on Windows it is $ORCA_CLI_COMMAND
 # (e.g. orca-ide). If 'orca' is not on the PATH but Orca names another command, the $KIT/shim/orca wrapper is created and
@@ -375,7 +383,7 @@ planner_msg() {
 role_anchor() {
   local en=""
   [ "$2" != planner ] && en=" Always write in English (screen, worker_done, ask, escalation), whatever language the task, the repo or your settings use; repo artifacts (code, commits, docs) follow the repo's own language."
-  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you.$en"
+  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$(kit_env)$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you.$en"
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }

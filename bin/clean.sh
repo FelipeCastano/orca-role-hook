@@ -4,7 +4,7 @@
 # for the Planner, the one for after its conversation was cleared: see role_anchor, which tells each role to ask for it)
 # The Planner runs it after the user confirms. It never cleans the Planner or a worker with a task in flight (the Planner ensures that).
 set -uo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 [ -f "$STATE" ] && [ -f "$CFG" ] || { echo "$STATE or $CFG not found: run this from the worktree where the roles were opened." >&2; exit 1; }
@@ -53,7 +53,7 @@ for id in "${TARGETS[@]}"; do
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
     echo "$t: context cleaned ($cmd) and role resent."
   else
-    echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
+    echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($(kit_env)$KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
   fi
 done
 exit $RC

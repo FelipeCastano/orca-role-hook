@@ -7,7 +7,7 @@
 # Each role's handle is recorded in orca-roles.kicked (next to <state>) once its message is sent.
 set -uo pipefail
 WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"; REMEMBERED="${6:-}"; REUSED="${7:-}"
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 # shellcheck source=/dev/null
 . "$STATE"
 ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"

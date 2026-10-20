@@ -20,7 +20,7 @@
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,19p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
 WT=""; RESET=0; STATUS=0; FLAGS=()
 while [ $# -gt 0 ]; do
@@ -372,7 +372,7 @@ for id in $ROLES; do
   fi
   h=""
   for try in 1 2 3; do
-    h=$(orca terminal create --worktree "$WT" --title "$t" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
+    h=$(orca terminal create --worktree "$WT" --title "$t" --command "$(kit_env)ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
     [ -n "$h" ] && break
     echo "Retrying $t ($try/3)..."; sleep 2
   done

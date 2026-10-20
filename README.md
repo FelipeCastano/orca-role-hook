@@ -125,6 +125,8 @@ Use the same ref in the script URL and in the variable, so the installer and the
 
 The first time, the E2E-Tester's browser must be installed with `~/.orca-roles/bin/e2e-browser.sh install` (see [E2E testing](#e2e-testing-browser-session-and-screenshots)).
 
+**A second copy of the kit.** The installer always installs into `~/.orca-roles` (the shell aliases point there). Every other script reads the `KIT` variable and falls back to `~/.orca-roles`, so a checkout can run on its own, for example one under test, without touching the installed kit: `KIT=/path/to/checkout /path/to/checkout/bin/launch.sh`. The tabs it opens then run `KIT=/path/to/checkout /path/to/checkout/bin/agent.sh <role>`, and the sub-scripts it starts use the same copy. With the default location the commands are exactly the same as before. Known limits: the prompts and the hints they print still name `~/.orca-roles/bin/...` (a Planner running a second copy has to add `KIT=<path>` itself), and `orca-yaml.sh` (`roles-yaml`) still writes `$HOME/.orca-roles/bin/launch.sh` into `orca.yaml`.
+
 ## Setting up a project (once per project)
 
 **Add Project → Browse folder**, picking the repo root (the folder with `.git`), not a worktree. Then register the kit as the project's setup script in one of these two ways. Orca's CLI has no command for setup scripts, so the installer cannot do it for you.

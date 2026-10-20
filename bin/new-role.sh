@@ -13,7 +13,7 @@
 #     phases (academic-research only, the other modes have none): a non-empty list of "experiment", "writing"; missing = both phases.
 #     Each mode has its own prompt file: roles/<mode>/<id>.md (local) or prompts/<mode>/<id>.md (--repo).
 set -euo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
 
 REPO=""; FROM_JSON=""; REMOVE=""

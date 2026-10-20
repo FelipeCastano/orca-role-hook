@@ -8,7 +8,7 @@
 # The model is saved in the worktree's exceptions ('roles --reset' forgets it). The Planner cannot be relaunched.
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,8p "$0"; exit 0;; esac
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 ROLEARG=""; MODEL=""; CHECK=1
 while [ $# -gt 0 ]; do
   case "$1" in

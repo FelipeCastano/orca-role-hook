@@ -9,7 +9,7 @@
 # Nothing is written outside a temporary folder except the agents' own logs (Codex keeps its logs even for ephemeral runs), and no agent
 # setting is changed. The role's env is exported to the list command and the probes. At most 6 probes run at a time.
 set -uo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 case "${1:-}" in -h|--help) sed -n 2,10p "$0"; exit 0;; esac
 ROLEARG=""; CHECK=0; ONLY=""
 while [ $# -gt 0 ]; do a="$1"; case "$a" in --check) CHECK=1;; --model) [ -n "${2:-}" ] || { echo "models.sh: --model needs a value" >&2; exit 1; }; ONLY="$2"; shift;; -*) echo "models.sh: unknown option $a" >&2; exit 1;; *) [ -z "$ROLEARG" ] && ROLEARG="$a" || { echo "models.sh: only one role at a time" >&2; exit 1; };; esac; shift; done

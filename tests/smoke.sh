@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration install e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
 on_exit() { local rc=$?; rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; }
 trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
-export KIT="$TMP/kit"; mkdir -p "$KIT"
+KIT="$TMP/kit"; mkdir -p "$KIT"   # not exported: the scripts under test find their kit through the fake HOME, as in real use
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
 FAIL=0
@@ -711,10 +711,10 @@ check "clean.sh --all without workers" "$(cd "$TMP" && HOME="$TMP/home" PATH="$T
 sec_cli_shim() {
 cli_shim_dir
 # Orca CLI under another name (WSL: ORCA_CLI_COMMAND=orca-ide): 'orca' wrapper in $KIT/shim
-check "shim: 'orca' calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c '. "$KIT/bin/lib.sh"; orca terminal list')" "orca-ide:terminal list"
+check "shim: 'orca' calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; orca terminal list')" "orca-ide:terminal list"
 rm -f "$KIT/shim/orca"
-check "shim: not created without ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c '. "$KIT/bin/lib.sh"; command -v orca || echo none')" "none"
-check "shim: not created if 'orca' already exists" "$(PATH="$TMP/fakebin:$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c 'printf "#!/bin/sh\n" > "$0/orca"; chmod +x "$0/orca"; . "$KIT/bin/lib.sh"; command -v orca' "$TMP/fakebin")" "$TMP/fakebin/orca"
+check "shim: not created without ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND='' KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; command -v orca || echo none')" "none"
+check "shim: not created if 'orca' already exists" "$(PATH="$TMP/fakebin:$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide KIT="$KIT" bash -c 'printf "#!/bin/sh\n" > "$0/orca"; chmod +x "$0/orca"; . "$KIT/bin/lib.sh"; command -v orca' "$TMP/fakebin")" "$TMP/fakebin/orca"
 rm -f "$TMP/fakebin/orca"
 }
 
@@ -860,7 +860,7 @@ check "roles-yaml kit detection: same forms under run-both write nothing" "$M" "
 
 # roles-yaml: the $ORCA_CLI_COMMAND route (the only one on WSL) when there is no 'orca' on PATH
 FB2="$TMP/yfake3"; mkdir -p "$FB2"; cp "$FB/orca" "$FB2/orca-ide"
-yrun2() { try env PATH="$FB2:/usr/bin:/bin" ORCA_CLI_COMMAND="$1" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" \
+yrun2() { try env KIT="$KIT" PATH="$FB2:/usr/bin:/bin" ORCA_CLI_COMMAND="$1" FAKE_LOG="$YLOG" FAKE_PATH="$YP" FAKE_WT="$YW" FAKE_ID="$YI" \
   bash -c 'cd "$0" && "$1/bin/orca-yaml.sh" 2>&1' "$Y2" "$ROOT"; }
 if ! PATH=/usr/bin:/bin command -v orca >/dev/null 2>&1; then
   yreset; hsjson local-only "npm i" > "$YP"; yrun2 orca-ide
@@ -2274,8 +2274,8 @@ case "$OUT" in *"--add-dir $(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_di
 case "$OUT" in (*--append-system-prompt*) echo "FAIL agent.sh codex got claude's flag: $OUT"; FAIL=1;; (*) echo "ok   agent.sh codex: not claude's flag";; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester)"
 CFGT="$KIT/config.json"   # role_anchor runs with the kit seen from the fake HOME
-check "agent.sh claude: one line in the system prompt that asks for the role after /clear" "$(printf '%s\n' "$OUT" | grep -A1 -x -- --append-system-prompt | tail -1)" "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)"
-case "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)" in (*"after /clear"*"$TMP/home/.orca-roles/bin/clean.sh --msg tester"*) echo "ok   role_anchor: names the role and the command";; (*) echo "FAIL role_anchor"; FAIL=1;; esac
+check "agent.sh claude: one line in the system prompt that asks for the role after /clear" "$(printf '%s\n' "$OUT" | grep -A1 -x -- --append-system-prompt | tail -1)" "$(HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)"
+case "$(HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)" in (*"after /clear"*"$TMP/home/.orca-roles/bin/clean.sh --msg tester"*) echo "ok   role_anchor: names the role and the command";; (*) echo "FAIL role_anchor"; FAIL=1;; esac
 check "agent.sh leaves pre-seeded scratch content intact" "$([ -f "$SDT/f" ] && [ -f "$SDT/sub/g" ] && [ -f "$SDT/.hidden" ] && echo y)" "y"
 # agent.sh: workers cannot edit the kit (deny rules for the folders --add-dir exposes), the Planner can; the scratch folders stay writable
 KH="$TMP/home/.orca-roles"; KR="${KH#/}"   # the kit as agent.sh sees it, and as the "//" rules write it
@@ -2462,9 +2462,9 @@ NP=0; for a in "${CN[@]}"; do case "$a" in projects=*) NP=$((NP+1));; esac; done
 check "codex non-auto: no --sandbox/--ask-for-approval/--full-auto; scratch and one trust" "$(case "$J" in (*--sandbox*|*--ask-for-approval*|*full-auto*) echo BAD;; (*) echo clean;; esac) $(case "$J" in (*"|--add-dir|$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cxn)|"*) echo scratch;; esac) $NP" "clean scratch 1"
 # The anchor that makes a role ask for its role again after its conversation is cleared: codex as developer_instructions (one
 # override that parses as TOML to the exact line), custom through {anchor} and $ORCA_ROLES_ANCHOR
-agent2 cxa >/dev/null; DI="$(tr '\0' '\n' < "$FB2/argv" | grep '^developer_instructions=')"; ANC="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" cxa)"
+agent2 cxa >/dev/null; DI="$(tr '\0' '\n' < "$FB2/argv" | grep '^developer_instructions=')"; ANC="$(cd "$WT2" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" cxa)"
 check "codex: developer_instructions is the anchor, once, after -c" "$(printf '%s\n' "$DI" | grep -c .) $(tr '\0' '\n' < "$FB2/argv" | grep -B1 -x -- "$DI" | head -1) $(python3 -c 'import sys,tomllib; print(tomllib.loads(sys.argv[1])["developer_instructions"] == sys.argv[2])' "$DI" "$ANC")" "1 -c True"
-ANC="$(cd "$WT2" && KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" ca)"
+ANC="$(cd "$WT2" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" ca)"
 case "$DI" in *'Always write in English'*) echo "ok   codex: developer_instructions carries the English rule";; *) echo "FAIL codex developer_instructions without the English rule: $DI"; FAIL=1;; esac
 case "$ANC" in *'Always write in English'*) echo "ok   custom: the anchor carries the English rule";; *) echo "FAIL custom anchor without the English rule: $ANC"; FAIL=1;; esac
 check "custom: {anchor} is the quoted anchor" "$(agent2 ca | head -1)" "run $(printf '%q' "$ANC")"
@@ -2728,6 +2728,54 @@ drun ORCA_ROLES_REF=$SHA40
 check "install download: a 40-hex ref records the sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@$SHA40 $SHA40"
 drun ORCA_ROLES_REF=0123456
 check "install download: a short hex ref is not taken for a full sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@0123456"
+}
+
+sec_kit_path() {
+# KIT: a second copy of the kit runs end to end (own scripts, own tab commands) while HOME points to another kit or to none
+kp_run() { local d="$1"; shift; (cd "$d" && env "$@" 2>&1); }   # run in a folder with exactly the given environment changes
+K2="$TMP/kit2"; NH="$TMP/kp-nohome"; KPB="$TMP/kpbin"; KPL="$TMP/kpproj"; KPO="$TMP/kporca.log"
+rm -rf "$K2" "$NH" "$KPB" "$KPL"; mkdir -p "$K2" "$NH" "$KPB" "$KPL"; git -C "$KPL" init -q
+cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$K2/"; chmod +x "$K2"/bin/*.sh
+cat > "$K2/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" } } }
+J
+printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$KPB/claude"; chmod +x "$KPB/claude"
+cat > "$KPB/orca" <<EOT
+#!/bin/sh
+echo "\$*" >> "$KPO"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+esac
+exit 0
+EOT
+chmod +x "$KPB/orca"
+# agent.sh sources and uses the kit in KIT although HOME has no ~/.orca-roles
+OUT="$(cd "$TMP" && env HOME="$NH" PATH="$KPB:$PATH" KIT="$K2" ORCA_ROLES_CONFIG="$K2/config.json" "$K2/bin/agent.sh" dev 2>&1 | tr '\n' ' ')"
+case "$OUT" in *"--add-dir $K2/prompts "*) echo "ok   kit-path: agent.sh runs the kit in KIT with a HOME that has no ~/.orca-roles";; *) echo "FAIL kit-path agent.sh: $OUT"; FAIL=1;; esac
+# launch.sh: the tab commands carry KIT and call the kit's agent.sh
+mkdir -p "$NH/.orca-roles"; : > "$KPO"
+try kp_run "$KPL" HOME="$NH" PATH="$KPB:$PATH" KIT="$K2" ORCA_ROLES_KICKOFF=/usr/bin/true "$K2/bin/launch.sh"; RCK="$RC"
+KPT="$(grep '^terminal create' "$KPO" | grep -- '--title Dev')"
+KPY=no; case "$KPT" in (*"--command KIT=$K2 ORCA_ROLES_CONFIG="*"'$K2/bin/agent.sh' dev"*) KPY=yes;; esac
+check "kit-path: launch.sh with KIT opens the tab with KIT=<path> and the kit's agent.sh" "$RCK:$KPY" "0:yes"
+# launch.sh without KIT: the command is the one it always was
+rm -rf "$KPL"; mkdir -p "$KPL"; git -C "$KPL" init -q; : > "$KPO"; rmdir "$NH/.orca-roles"; ln -sfn "$K2" "$NH/.orca-roles"
+try kp_run "$KPL" -u KIT HOME="$NH" PATH="$KPB:$PATH" ORCA_ROLES_KICKOFF=/usr/bin/true "$NH/.orca-roles/bin/launch.sh"; RCD="$RC"
+KPT="$(grep '^terminal create' "$KPO" | grep -- '--title Dev')"
+KPY=no; case "$KPT" in (*"--command ORCA_ROLES_CONFIG="*"'$NH/.orca-roles/bin/agent.sh' dev"*) KPY=yes;; esac; case "$KPT" in (*KIT=*) KPY=no;; esac
+check "kit-path: launch.sh without KIT keeps the tab command (no KIT=, ~/.orca-roles/bin/agent.sh)" "$RCD:$KPY" "0:yes"
+# clean.sh --msg: the kit's own files, with HOME pointing nowhere near it
+rm -f "$NH/.orca-roles"; printf 'DEV=t2\n' > "$TMP/kp-state.env"
+try kp_run "$TMP" HOME="$NH" PATH="$KPB:$PATH" KIT="$K2" ORCA_ROLES_STATE="$TMP/kp-state.env" ORCA_ROLES_CONFIG="$K2/config.json" "$K2/bin/clean.sh" --msg dev
+case "$RC:$OUT" in 0:*"$K2/prompts/"*) echo "ok   kit-path: clean.sh honours KIT";; *) echo "FAIL kit-path clean.sh: $RC $OUT"; FAIL=1;; esac
+# the anchor's command names the kit only when it is not the installed one
+check "kit-path: kit_env is empty for the installed kit and KIT=<path> otherwise" "[$(KIT="$HOME/.orca-roles" kit_env)][$(KIT="/x y/kit" kit_env)]" "[][KIT=/x\\ y/kit ]"
+ln -sfn "$K2" "$NH/.orca-roles"
+check "kit-path: kit_env is empty when KIT is the installed kit's folder reached through a link" "[$(HOME="$NH" KIT="$K2" kit_env)]" "[]"
+rm -f "$NH/.orca-roles"
 }
 
 sec_guard() {
@@ -3314,13 +3362,13 @@ echo '[{"id":"other@x","version":"1","enabled":true,"installPath":"/nowhere"}]' 
 RSC="$RS/config.json"; merged_config . > "$RSC"
 rs_state() { cp "$RS/$1.json" "$RS/list.json"; rm -f "${RS:?}"/*.mode "$RS/argv.log" "$RS/hang.pid"; }
 export RS
-rs_run() { (cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="${RSCFG:-$RSC}" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err"); }
+rs_run() { (cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="${RSCFG:-$RSC}" env KIT="$KIT" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err"); }
 rs_try() { if OUT="$(rs_run "$@")"; then RC=0; else RC=$?; fi; ERR="$(cat "$RS/err")"; }
 rs_calls() { tr '\n' ';' < "$RS/argv.log" 2>/dev/null; }
 check "review-skill: the default configuration names the plugin" "$(jq -r '.settings.prReviewer | [.marketplace, .plugin, .skill] | join(" ")' "$KIT/config.default.json")" "romerox3/lens-review lens-review@lens-review skills/lens-review/SKILL.md"
-check "review-skill: -h prints the header and exits 0" "$("$KIT/bin/review-skill.sh" -h | head -1 | cut -c1-31):$?" "# Finds and installs the review:0"
-try "$KIT/bin/review-skill.sh" bogus 2>/dev/null; check "review-skill: an unknown command exits 1" "$RC" "1"
-try "$KIT/bin/review-skill.sh" 2>/dev/null; check "review-skill: no command exits 1" "$RC" "1"
+check "review-skill: -h prints the header and exits 0" "$(env KIT="$KIT" "$KIT/bin/review-skill.sh" -h | head -1 | cut -c1-31):$?" "# Finds and installs the review:0"
+try env KIT="$KIT" "$KIT/bin/review-skill.sh" bogus 2>/dev/null; check "review-skill: an unknown command exits 1" "$RC" "1"
+try env KIT="$KIT" "$KIT/bin/review-skill.sh" 2>/dev/null; check "review-skill: no command exits 1" "$RC" "1"
 rs_state installed; rs_try status
 check "review-skill: status installed" "$RC:$OUT" "0:installed 1.2.3 $RS/plug"
 rs_state disabled; rs_try status; check "review-skill: status disabled" "$RC:$OUT" "3:disabled 1.2.3 $RS/plug"
@@ -3329,7 +3377,7 @@ rs_state installed; echo garbage > "$RS/list.mode"; rs_try status; check "review
 echo fail > "$RS/list.mode"; rs_try status; check "review-skill: status with a failing claude shows the first stderr line" "$RC:$OUT:$ERR" "1::error list boom"
 echo '{"a":1}' > "$RS/list.json"; rm -f "$RS/list.mode"; rs_try status; check "review-skill: status with JSON that is not a list" "$RC:$ERR" "1:error claude plugin list did not print a JSON list"
 jq '.[1].installPath = ""' "$RS/installed.json" > "$RS/list.json"; rs_try status; check "review-skill: an entry without installPath is not installed" "$RC:$OUT" "2:missing"
-(cd "$RS/wt" && PATH="$RS/nobin" ORCA_ROLES_CONFIG="$RSC" "$KIT/bin/review-skill.sh" status 2>"$RS/err") > "$RS/out" && RC=0 || RC=$?
+(cd "$RS/wt" && PATH="$RS/nobin" ORCA_ROLES_CONFIG="$RSC" env KIT="$KIT" "$KIT/bin/review-skill.sh" status 2>"$RS/err") > "$RS/out" && RC=0 || RC=$?
 check "review-skill: status without claude on PATH" "$RC:$(cat "$RS/out"):$(cat "$RS/err")" "1::error claude not found"
 rs_state installed; rs_try path; check "review-skill: path prints installPath/skill" "$RC:$OUT" "0:$RS/plug/skills/lens-review/SKILL.md"
 rm -f "$RS/plug/skills/lens-review/SKILL.md"; rs_try path; check "review-skill: path with the skill file missing" "$RC:$OUT:$ERR" "4::skill file not found: $RS/plug/skills/lens-review/SKILL.md"
@@ -3362,16 +3410,16 @@ mv "$RS/skills.bak" "$RS/plug/skills"
 # a hung claude is killed after the bound, nothing is left running
 for mode in list mkt; do
   rs_state missing; if [ "$mode" = mkt ]; then echo hang > "$RS/mkt.mode"; else echo hang > "$RS/list.mode"; fi
-  T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+  T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 env KIT="$KIT" "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
   HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
   check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 8 ] && echo quick)" "1:error claude timed out:gone:quick"
 done
 rs_state missing; echo hang > "$RS/inst.mode"; rm -f "$RS/hang.pid"
-if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 env KIT="$KIT" "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
 HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
 check "review-skill: a hung plugin install is cut after the bound: exit 1, message, process gone" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
 rs_state installed; echo tree > "$RS/list.mode"; rm -f "$RS/child.pid"
-if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 env KIT="$KIT" "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
 CP="$(cat "$RS/child.pid" 2>/dev/null)"; sleep 0.3
 check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
 rs_state missing; echo fail > "$RS/list.mode"; rs_try install
@@ -3391,7 +3439,7 @@ rs_state installed; RSCFG="$RS/none.json" rs_try status; check "review-skill: wi
 jq 'del(.settings.prReviewer)' "$RSC" > "$RS/cfg3.json"; RSCFG="$RS/cfg3.json" rs_try status; check "review-skill: a configuration without prReviewer falls back to the default" "$RC" "0"
 # without ORCA_ROLES_CONFIG: the worktree's saved <gitdir>/orca-roles.config.json is the configuration (what the Planner really uses)
 RSG="$(cd "$RS/wt" && cd "$(git rev-parse --git-dir)" && pwd)"; cp "$RS/mine.json" "$RS/list.json"
-rs_dflt() { OUT="$(cd "$RS/wt" && env -u ORCA_ROLES_CONFIG PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err")" && RC=0 || RC=$?; }
+rs_dflt() { OUT="$(cd "$RS/wt" && env -u ORCA_ROLES_CONFIG PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" env KIT="$KIT" "$KIT/bin/review-skill.sh" "$@" 2>"$RS/err")" && RC=0 || RC=$?; }
 cp "$RS/cfg2.json" "$RSG/orca-roles.config.json"; rs_dflt path; D1="$RC:$OUT"
 rm -f "$RSG/orca-roles.config.json"; rs_dflt path; D2="$RC:$OUT:$(cat "$RS/err")"
 check "review-skill: without ORCA_ROLES_CONFIG the saved <gitdir>/orca-roles.config.json supplies prReviewer (a custom skill path), and without it the default applies" "$D1|$D2" "0:$RS/plug/a/B.md|2::missing"

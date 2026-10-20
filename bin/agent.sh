@@ -2,7 +2,7 @@
 # Launches a role's agent according to the configuration.  Usage: agent.sh <role> [--resume <claude session id>]
 # --resume: reopen the role's previous Claude Code conversation (launch.sh uses it for a tab Orca restored after a restart).
 set -euo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 ROLE="$1"; shift; RESUME=""
 while [ $# -gt 0 ]; do case "$1" in --resume) RESUME="${2:-}"; shift;; esac; shift; done
 CFG="${ORCA_ROLES_CONFIG:-}"
