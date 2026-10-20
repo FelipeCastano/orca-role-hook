@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -2613,6 +2613,49 @@ for bad in '"nope"' '5' 'null' '""'; do
   check "install.sh Enabled: invalid settings.mode $bad is unknown, exit 0, error on stderr" "$IRC:$IENA:$(grep -c . "$IH/err.txt" | tr -d ' ')" "0:Enabled: unknown (invalid settings.mode):1"
   check "install.sh Enabled: invalid settings.mode $bad, the install goes on" "$(printf '%s\n' "$IOUT" | grep -c '^To enable or disable roles')" "1"
 done
+}
+
+sec_install_migration() {
+# install.sh migrates the renamed mode academic-writer: config, prompt paths, roles folder and the compatibility links
+MH="$TMP/mig-home"; MK="$MH/.orca-roles"; rm -rf "$MH"; mkdir -p "$MK"
+mrun() { if MOUT="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC=0; else MRC=$?; fi; MREN="$(printf '%s\n' "$MOUT" | grep -c '^Renamed mode academic-writer to academic-research in your configuration ' || true)"; MMOV="$(printf '%s\n' "$MOUT" | grep -c '^Moved your academic-writer roles' || true)"; MWARN="$(printf '%s\n' "$MOUT" | grep -c '^WARNING: .*was not moved' || true)"; }
+mstate() { ( cd "$MK" && { shasum config.json; find roles -print 2>/dev/null | sort | xargs -I{} sh -c 'if [ -L "{}" ]; then echo "{} -> $(readlink "{}")"; else echo "{}"; fi'; find roles -type f 2>/dev/null | sort | xargs shasum 2>/dev/null; } | shasum ); }
+cat > "$MK/config.json" <<J
+{ "settings": { "mode": "academic-writer", "phase": "writing" }, "roles": {
+    "zeta": { "title": "Zeta", "modes": ["academic-writer", "programmer"], "prompt": { "academic-writer": "{kit}/roles/academic-writer/z.md", "programmer": "{kit}/roles/zeta-p.md" } },
+    "k1": { "title": "K1", "prompt": "$MK/roles/academic-writer/a.md" },
+    "k2": { "title": "K2", "prompt": "~/.orca-roles/prompts/academic-writer/b.md" },
+    "k3": { "title": "K3", "prompt": "{home}/.orca-roles/roles/academic-writer/sub/c.md" },
+    "k4": { "title": "K4", "prompt": "~/notes/roles/academic-writer/x.md" },
+    "k5": { "title": "K5", "prompt": "{kit}/roles/academic-writer-extra/x.md" },
+    "k6": { "title": "K6", "prompt": "{kit}/roles/foo/roles/academic-writer/x.md" },
+    "k7": { "title": "K7", "prompt": "/data/prompts/academic-writer/x.md" } } }
+J
+mkdir -p "$MK/roles/academic-writer/sub"; echo A > "$MK/roles/academic-writer/a.md"; echo H > "$MK/roles/academic-writer/.hid"; echo C > "$MK/roles/academic-writer/sub/c.md"
+mrun
+MR1="$MRC:$MREN"
+check "install migration: exit 0 and the Renamed line once; settings.mode, role modes and prompt key renamed, phase kept" "$MR1:$(jq -c '[.settings.mode, .settings.phase, .roles.zeta.modes, (.roles.zeta.prompt | keys)]' "$MK/config.json")" '0:1:["academic-research","writing",["academic-research","programmer"],["academic-research","programmer"]]'
+check "install migration: prompt paths in the four prefix forms are rewritten, only that segment" "$(jq -r '[.roles.zeta.prompt["academic-research"], .roles.k1.prompt, .roles.k2.prompt, .roles.k3.prompt] | join(" ")' "$MK/config.json")" "{kit}/roles/academic-research/z.md $MK/roles/academic-research/a.md ~/.orca-roles/prompts/academic-research/b.md {home}/.orca-roles/roles/academic-research/sub/c.md"
+# shellcheck disable=SC2088
+check "install migration: paths outside the kit or not at the folder boundary are untouched, role order kept" "$(jq -r '[.roles.k4.prompt, .roles.k5.prompt, .roles.k6.prompt, .roles.k7.prompt] | join(" ")' "$MK/config.json"):$(jq -r '.roles | keys_unsorted | .[0:3] | join(",")' "$MK/config.json")" "~/notes/roles/academic-writer/x.md {kit}/roles/academic-writer-extra/x.md {kit}/roles/foo/roles/academic-writer/x.md /data/prompts/academic-writer/x.md:zeta,k1,k2"
+check "install migration: the user's roles move (hidden and nested included), the old path is a relative link, Moved line once" "$MMOV:$(readlink "$MK/roles/academic-writer"):$(cat "$MK/roles/academic-research/a.md" "$MK/roles/academic-research/.hid" "$MK/roles/academic-research/sub/c.md" | tr '\n' ' '):$(cat "$MK/roles/academic-writer/a.md")" "1:academic-research:A H C :A"
+check "install migration: prompts/academic-writer is a relative link to prompts/academic-research and resolves" "$(readlink "$MK/prompts/academic-writer"):$(cmp -s "$MK/prompts/academic-writer/planner.md" "$ROOT/prompts/academic-research/planner.md" && echo same)" "academic-research:same"
+S1="$(mstate)"; mrun
+check "install migration: a second install prints none of the migration lines and changes nothing" "$MRC:$MREN:$MMOV:$MWARN:$([ "$(mstate)" = "$S1" ] && echo same)" "0:0:0:0:same"
+# a conflict keeps both, warns per entry, leaves the old folder without a link; once merged by hand the next install links it
+rm -rf "$MK/roles"; mkdir -p "$MK/roles/academic-writer" "$MK/roles/academic-research"; echo OLD > "$MK/roles/academic-writer/a.md"; echo NEW > "$MK/roles/academic-research/a.md"; echo B > "$MK/roles/academic-writer/b.md"; echo OLD2 > "$MK/roles/academic-writer/.h"; echo NEW2 > "$MK/roles/academic-research/.h"
+mrun
+check "install migration conflict: both versions kept, one WARNING per kept entry naming both paths, Moved for the rest, no link" "$MMOV:$MWARN:$(cat "$MK/roles/academic-writer/a.md" "$MK/roles/academic-research/a.md" "$MK/roles/academic-writer/.h" "$MK/roles/academic-research/.h" | tr '\n' ' '):$(cat "$MK/roles/academic-research/b.md"):$([ -L "$MK/roles/academic-writer" ] && echo link || echo dir):$(ls -A "$MK/roles/academic-writer" | tr '\n' ' '):$(printf '%s\n' "$MOUT" | grep -c "^WARNING: $MK/roles/academic-writer/a.md was not moved: $MK/roles/academic-research/a.md already exists. Any prompt path in your configuration that named the old file now names the new one. Merge them by hand, then run install.sh again.$")" "1:2:OLD NEW OLD2 NEW2 :B:dir:.h a.md :1"
+rm -f "$MK/roles/academic-writer/a.md" "$MK/roles/academic-writer/.h"; mrun
+check "install migration conflict: after the manual merge the next install links the old path, no warning" "$MRC:$MWARN:$(readlink "$MK/roles/academic-writer")" "0:0:academic-research"
+# a link to somewhere else is replaced, a user without the old mode sees no change and no new output
+rm -rf "$MK/roles"; mkdir -p "$MK/roles/elsewhere"; ln -s elsewhere "$MK/roles/academic-writer"; mrun
+check "install migration: an old link pointing elsewhere is replaced by the right one, the folder it pointed to is untouched" "$(readlink "$MK/roles/academic-writer"):$([ -d "$MK/roles/elsewhere" ] && echo kept)" "academic-research:kept"
+rm -rf "$MK/roles"; cat > "$MK/config.json" <<J
+{ "settings": { "mode": "programmer" }, "roles": { "foo": { "title": "Foo", "prompt": "{kit}/roles/foo.md" }, "k": { "title": "K", "prompt": "~/notes/roles/academic-writer/x.md" } } }
+J
+mrun; B1="$(shasum < "$MK/config.json")"; mrun
+check "install migration: without the old mode nothing is printed, no roles folder or link appears, config stable" "$MRC:$MREN:$MMOV:$MWARN:$([ -e "$MK/roles/academic-writer" ] || [ -L "$MK/roles/academic-writer" ] || [ -e "$MK/roles/academic-research" ] && echo present || echo none):$([ "$(shasum < "$MK/config.json")" = "$B1" ] && echo same):$(jq -r '.roles.foo.prompt, .roles.k.prompt' "$MK/config.json" | tr '\n' ' ')" "0:0:0:0:none:same:{kit}/roles/foo.md ~/notes/roles/academic-writer/x.md "
 }
 
 sec_guard() {

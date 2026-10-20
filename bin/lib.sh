@@ -125,13 +125,24 @@ def legacy_modes($lm): (if (.settings? | type) == "object" and (.settings.mode |
   | (if (.roles? | type) == "object" then .roles |= with_entries(if (.value | type) == "object" then
       (if (.value.modes | type) == "array" then .value.modes |= map(if type == "string" then ($lm[.] // .) else . end) else . end)
       | (if (.value.prompt | type) == "object" then .value.prompt |= ((to_entries | map(select($lm[.key]) | .key = $lm[.key]) | from_entries) + with_entries(select($lm[.key] | not))) else . end)
-    else . end) else . end);'
+    else . end) else . end);
+def mv_path($kp): . as $p | if type != "string" then . else
+    ([$kp[] | select(. as $k | $p | startswith($k + "roles/academic-writer/") or startswith($k + "prompts/academic-writer/"))] | first) as $k
+    | if $k == null then $p else $k + ($p[($k | length):] | sub("^(?<a>roles|prompts)/academic-writer/"; "\(.a)/academic-research/")) end end;
+def legacy_paths($kp): if (.roles? | type) == "object" then .roles |= with_entries(if (.value | type) == "object" and (.value.prompt | type) != "null" then
+      .value.prompt |= (if type == "string" then mv_path($kp) elif type == "object" then map_values(mv_path($kp)) else . end)
+    else . end) else . end;
+def kit_prefixes($kit; $home): ["{kit}/"] + (if $kit == "" then [] else [$kit + "/"] + (if $home != "" and ($kit | startswith($home + "/")) then ($kit[($home | length + 1):]) as $r | ["~/" + $r + "/", "{home}/" + $r + "/"] else [] end) end);'
 # The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
-upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
-  jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
+# Old mode id in the user's settings.mode, role modes, prompt keys, or prompt paths inside the kit?  config_has_old_mode <config.json>
+config_has_old_mode() {
+  jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
+}
+upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, default $KIT] → stdout
+  jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "${3:-${KIT:-}}" --arg home "$HOME" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l) | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
