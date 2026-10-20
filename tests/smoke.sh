@@ -31,6 +31,13 @@ poll() { local n=0; until "$@" 2>/dev/null || [ "$n" -ge 25 ]; do sleep 0.2; n=$
 pgone() { ! kill -0 "${1:-0}" 2>/dev/null; }
 dir_empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
 nonempty() { [ -s "$1" ]; }
+# bt_run <script> <iterations> <unique|same> <timeout>: runs the bounded() of that script <iterations> times on instant probes (own temp dir, ids p<i> or always x)
+bt_run() { ( set +e; T="$(mktemp -d "$TMP/bt.XXXXXX")"; TO="$4"; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$1")"; i=0; while [ "$i" -lt "$2" ]; do id=x; [ "$3" = unique ] && id="p$i"; bounded "$id" true; i=$((i+1)); done; rm -rf "$T" ); }
+# bt_guard <cap seconds> <bt_run args...>: bt_run in the background, at most <cap> s; prints done, or stalled (and kills it) when bounded() waited for its timer instead of stopping it
+bt_guard() { local cap="$1" n=0 p; shift; bt_run "$@" & p=$!; while kill -0 "$p" 2>/dev/null && [ "$n" -lt $((cap * 5)) ]; do sleep 0.2; n=$((n+1)); done; if kill -0 "$p" 2>/dev/null; then kill_tree "$p"; echo stalled; else echo "done"; fi; wait "$p" 2>/dev/null || true; }
+# bt_left <timeout>: how many 'sleep <timeout>' are alive after a bounded wait (a timer that sleeps its whole timeout and is signalled leaks them); they are killed so a failure leaves nothing behind. The pattern is built here so no command line of this script carries it
+bt_left() { local pat="sleep $1"; poll bt_none "$pat"; pgrep -f "$pat" | wc -l | tr -d ' '; pkill -f "$pat" 2>/dev/null || true; }
+bt_none() { ! pgrep -f "$1" >/dev/null; }
 mkdir -p "$TMP/fakebin" "$TMP/home"; ln -sfn "$KIT" "$TMP/home/.orca-roles"   # fake HOME: ~/.orca-roles → test kit
 PROJ="$TMP/proj"; mkdir -p "$PROJ"; git -C "$PROJ" init -q
 echo '{ "roles": { "dev": { "mcp": [] }, "tester": { "enabled": true } }, "settings": { "jiraHandoff": false } }' > "$PROJ/.orca-roles.json"
@@ -3159,6 +3166,17 @@ check "models: never more than 6 probes run at once, and they did overlap" "$(so
 ORCA_ROLES_PROBE_TIMEOUT=7357 mt fast --check
 for _ in $(seq 25); do pgrep -f 'sleep 7357' >/dev/null || break; sleep 0.2; done
 check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f 'sleep 7357' | wc -l | tr -d ' ')" "40:0"
+# the timer of bounded() is stopped whatever the moment: many instant probes in a row, in parallel, and again under the same id (a stale marker of the previous call)
+t0=$SECONDS; G="$(bt_guard 120 "$KIT/bin/models.sh" 100 unique 23)"
+check "models: 100 instant bounded() calls in a row finish (none waits for its timer), leave no timer sleep behind and cost no more than the stop tick" "$G:$(bt_left 23):$(( SECONDS - t0 < 60 ? 1 : 0 ))" "done:0:1"
+G="$(for k in 1 2 3 4 5 6 7 8; do bt_guard 120 "$KIT/bin/models.sh" 20 unique 24 & done; wait)"
+check "models: 8 x 20 instant bounded() calls in parallel all finish and leave no timer sleep behind" "$(printf '%s\n' "$G" | grep -c '^done$' || true):$(bt_left 24)" "8:0"
+G="$(bt_guard 120 "$KIT/bin/models.sh" 100 same 25)"
+check "models: 100 instant bounded() calls under the same id finish (no stale marker) and leave no timer sleep behind" "$G:$(bt_left 25)" "done:0"
+# the timeout must be a whole number of seconds not starting with 0: anything else says so on stderr and the default is used
+for v in 1.5 2m 0 08 00 -3; do ORCA_ROLES_PROBE_TIMEOUT=$v mt lines
+  check "models: ORCA_ROLES_PROBE_TIMEOUT=$v -> one note, default 90, the probe result is unchanged" "$RC:$(cat "$MM/err"):$(tabs)" "0:models.sh: ORCA_ROLES_PROBE_TIMEOUT must be a whole number of seconds; using 90:alpha;beta"; done
+ORCA_ROLES_PROBE_TIMEOUT=7 mt lines; check "models: a valid ORCA_ROLES_PROBE_TIMEOUT is kept without a note" "$RC:$(cat "$MM/err"):$(tabs)" "0::alpha;beta"
 mt lines; check "models: custom lines parser trims, skips empty lines and deduplicates" "$(tabs)" "alpha;beta"
 mt js; check "models: custom json parser" "$(tabs)" "j1;j2"
 mt re; check "models: custom regex parser" "$(tabs)" "r1;r2"
@@ -3311,6 +3329,14 @@ rs_state installed; echo tree > "$RS/list.mode"; rm -f "$RS/child.pid"
 if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
 CP="$(cat "$RS/child.pid" 2>/dev/null || true)"; poll pgone "$CP"
 check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
+# the timer of bounded() is stopped whatever the moment: instant calls under the same id ('bounded list' runs twice in an install) and a real install
+G="$(bt_guard 120 "$KIT/bin/review-skill.sh" 100 same 26)"
+check "review-skill: 100 instant bounded() calls under the same id finish and leave no timer sleep behind" "$G:$(bt_left 26)" "done:0"
+rs_state missing; t0=$SECONDS; ORCA_ROLES_SKILL_TIMEOUT=27 rs_try install
+check "review-skill: an install (two 'bounded list' calls) succeeds, does not wait for its timers and leaves no timer sleep behind" "$RC:$(( SECONDS - t0 < 20 ? 1 : 0 )):$(bt_left 27)" "0:1:0"
+for v in 1.5 2m 0 08 00 -3; do rs_state installed; ORCA_ROLES_SKILL_TIMEOUT=$v rs_try status
+  check "review-skill: ORCA_ROLES_SKILL_TIMEOUT=$v -> one note, default 60, status unchanged" "$RC:$ERR" "0:review-skill.sh: ORCA_ROLES_SKILL_TIMEOUT must be a whole number of seconds; using 60"; done
+rs_state installed; ORCA_ROLES_SKILL_TIMEOUT=7 rs_try status; check "review-skill: a valid ORCA_ROLES_SKILL_TIMEOUT is kept without a note" "$RC:$ERR" "0:"
 rs_state missing; echo fail > "$RS/list.mode"; rs_try install
 check "review-skill: install with a failing plugin list runs no marketplace add or install" "$RC:$ERR:$(rs_calls)" "1:error list boom:plugin list --json;"
 rs_state missing; echo ALREADY EXISTS > "$RS/mkt.msg"; echo upper > "$RS/mkt.mode"; rs_try install
