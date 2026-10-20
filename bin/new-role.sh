@@ -10,7 +10,7 @@
 #     after and overwrite optional.
 #     modes: "all", or one mode id (a string or a one-element list); missing = "programmer". prompt: Markdown text
 #     (a role with one mode) or {"<mode>": "<Markdown>"} covering exactly the role's modes ("all" = every mode).
-#     phases (academic-writer only, the other modes have none): a non-empty list of "experiment", "writing"; missing = both phases.
+#     phases (academic-research only, the other modes have none): a non-empty list of "experiment", "writing"; missing = both phases.
 #     Each mode has its own prompt file: roles/<mode>/<id>.md (local) or prompts/<mode>/<id>.md (--repo).
 set -euo pipefail
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
@@ -61,6 +61,8 @@ else
   echo "Local mode: the role is saved in your installation ($TARGET_CFG)."
 fi
 
+# The note for a mode id renamed between versions.  legacy_mode_note <old id> <new id> <where it was found>
+legacy_mode_note() { echo "Note: mode '$1' is now called '$2'; the old name works until the next version. Found in: $3. Update it to $2." >&2; }
 # Whether $1 is one of the words of the list $2
 in_list() { case " $2 " in *" $1 "*) return 0;; esac; return 1; }
 # Ids that are kit files, not roles: prompts/<mode>/common-workers.md and the planner's prompt
@@ -161,7 +163,15 @@ fi
 if [ -n "$FROM_JSON" ]; then
   [ -f "$FROM_JSON" ] || { echo "$FROM_JSON does not exist" >&2; exit 1; }
   jq empty "$FROM_JSON" 2>/dev/null || { echo "$FROM_JSON is not valid JSON" >&2; exit 1; }
-  J() { jq -r --arg k "$1" '.[$k] // empty | if type == "string" then . else tojson end' "$FROM_JSON"; }
+  # The JSON is read through a copy with the old mode ids (modes, prompt keys) mapped to the new ones; when both the old and the new key of a prompt are present, the new one wins
+  JF="$(mktemp)"; trap 'rm -f "$JF"' EXIT
+  jq --argjson lm "$LEGACY_MODES" 'if type == "object" then
+      (if (.modes | type) == "string" then .modes |= ($lm[.] // .)
+       elif (.modes | type) == "array" then .modes |= map(if type == "string" then ($lm[.] // .) else . end) else . end)
+      | (if (.prompt | type) == "object" then .prompt |= ((to_entries | map(select($lm[.key]) | .key = $lm[.key]) | from_entries) + with_entries(select($lm[.key] | not))) else . end)
+    else . end' "$FROM_JSON" > "$JF"
+  [ "$(jq -n --slurpfile a "$FROM_JSON" --slurpfile b "$JF" '$a == $b')" = true ] || legacy_mode_note academic-writer academic-research "$FROM_JSON"
+  J() { jq -r --arg k "$1" '.[$k] // empty | if type == "string" then . else tojson end' "$JF"; }
   ID="$(J id)"; DESC="$(J description)"
   [[ "$ID" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "Invalid id (lowercase and hyphens): '$ID'" >&2; exit 1; }
   ! reserved_id "$ID" || { echo "'$ID' is reserved" >&2; exit 1; }
@@ -170,7 +180,7 @@ if [ -n "$FROM_JSON" ]; then
   MODES_FIELD="$(jq -c 'if has("modes") then .modes else "programmer" end
     | if . == "all" then . elif type == "string" then [.]
       elif type == "array" and length == 1 and (.[0] | type) == "string" then .
-      else error("x") end' "$FROM_JSON" 2>/dev/null)" \
+      else error("x") end' "$JF" 2>/dev/null)" \
     || { echo "Invalid modes: use \"all\" or one mode id (modes: $MODE_LIST)" >&2; exit 1; }
   if [ "$MODES_FIELD" = '"all"' ]; then NEW_MODES="$MODE_IDS"
   else
@@ -189,10 +199,10 @@ if [ -n "$FROM_JSON" ]; then
            elif ($miss | length) > 0 then "The prompt is missing the mode(s): \($miss | join(", "))"
            elif ([$p[] | select((type != "string") or (test("\\S") | not))] | length) > 0 then "The prompt of every mode must be non-empty Markdown text"
            else empty end)
-      else "The prompt must be Markdown text or an object {\"<mode>\": Markdown}" end' "$FROM_JSON")"
+      else "The prompt must be Markdown text or an object {\"<mode>\": Markdown}" end' "$JF")"
   [ -z "$PROMPT_ERR" ] || { echo "$PROMPT_ERR" >&2; exit 1; }
-  if jq -e 'has("phases")' "$FROM_JSON" >/dev/null && [ "$MODES_FIELD" != '"all"' ] && [ "$MODES_FIELD" != '["academic-writer"]' ]; then
-    echo "phases is only for mode academic-writer (the other modes have no phases)" >&2; exit 1
+  if jq -e 'has("phases")' "$JF" >/dev/null && [ "$MODES_FIELD" != '"all"' ] && [ "$MODES_FIELD" != '["academic-research"]' ]; then
+    echo "phases is only for mode academic-research (the other modes have no phases)" >&2; exit 1
   fi
   repo_collision_check || exit 1
   AGENT="$(J agent)"; AGENT="${AGENT:-claude}"
@@ -209,13 +219,13 @@ if [ -n "$FROM_JSON" ]; then
       + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","modelError","models","trust","clearCommand","mcp","allowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs"))))
       + {modes: $modes}
       + (if has("phases") then {phases: .phases} else {} end)
-      + (if ($prompt | length) > 0 then {prompt: $prompt} else {} end)' "$FROM_JSON"
+      + (if ($prompt | length) > 0 then {prompt: $prompt} else {} end)' "$JF"
   }
   ROLE_JSON="$(json_role '{}')"; validate_role
   PROMPT_OBJ='{}'; PROMPT_FILES=""
   for m in $NEW_MODES; do
     f="$PROMPT_ROOT/$m/$ID.md"; mkdir -p "$PROMPT_ROOT/$m"
-    jq -r --arg m "$m" '.prompt | if type == "string" then . else .[$m] end' "$FROM_JSON" > "$f"
+    jq -r --arg m "$m" '.prompt | if type == "string" then . else .[$m] end' "$JF" > "$f"
     grep -q '^## Report' "$f" || echo "Warning: the prompt for mode $m has no '## Report' section; check that it follows the pattern of the other roles."
     PROMPT_OBJ="$(jq -c --arg m "$m" --arg f "$f" '. + {($m): $f}' <<<"$PROMPT_OBJ")"
     PROMPT_FILES="$PROMPT_FILES  $m: $f"$'\n'
@@ -258,7 +268,9 @@ case "$MSEL" in
   2)
     i=0; for m in $MODE_IDS; do i=$((i+1)); if mode_unavailable "$m"; then echo "  $i) $m (not available yet)"; else echo "  $i) $m"; fi; done
     ask MPICK "Mode (number)" "1"
-    NEW_MODES=""; i=0; for m in $MODE_IDS; do i=$((i+1)); if [ "$MPICK" = "$i" ] || [ "$MPICK" = "$m" ]; then NEW_MODES="$m"; fi; done
+    MPICK_C="$(canon_mode "$MPICK")"
+    [ "$MPICK_C" = "$MPICK" ] || legacy_mode_note "$MPICK" "$MPICK_C" "the mode typed"
+    NEW_MODES=""; i=0; for m in $MODE_IDS; do i=$((i+1)); if [ "$MPICK" = "$i" ] || [ "$MPICK_C" = "$m" ]; then NEW_MODES="$m"; fi; done
     [ -n "$NEW_MODES" ] || { echo "Invalid mode" >&2; exit 1; }
     MODES_FIELD="[\"$NEW_MODES\"]";;
   *) echo "Invalid option" >&2; exit 1;;
@@ -269,9 +281,9 @@ for m in $NEW_MODES; do
 done
 
 PHASES_JSON='null'
-if [ "$MODES_FIELD" = '"all"' ] || [ "$MODES_FIELD" = '["academic-writer"]' ]; then
-  section "Phases (academic-writer)"
-  echo "Only academic-writer has phases; in the other modes the role always opens."
+if [ "$MODES_FIELD" = '"all"' ] || [ "$MODES_FIELD" = '["academic-research"]' ]; then
+  section "Phases (academic-research)"
+  echo "Only academic-research has phases; in the other modes the role always opens."
   echo "1) experiment"
   echo "2) writing"
   echo "3) both"

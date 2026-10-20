@@ -28,9 +28,14 @@ done
 [ "$ALL" = 1 ] || [ "$HAS_UNDER" = 0 ] || { echo "ERROR: --under only goes with --all. Usage: roles-yaml --all [--mode <mode>] [--under <dir>] [--dry-run]" >&2; exit 1; }
 [ "$ACTION" = add ] || [ "$DRY" = 0 ] || { echo "ERROR: --dry-run only goes with the setup itself (roles-yaml [--mode <mode>] --dry-run, or --all --dry-run); it cannot be combined with --$ACTION." >&2; exit 1; }
 [ "$ALL" = 0 ] || [ "$ACTION" = add ] || { echo "ERROR: --all cannot be combined with --$ACTION. Usage: roles-yaml --all [--mode <mode>] [--under <dir>] [--dry-run]" >&2; exit 1; }
+[ "$HAS_MODE" = 0 ] || [ "$ACTION" = add ] || { echo "ERROR: --mode only goes with the setup itself: roles-yaml [--mode <mode>]; it cannot be combined with --$ACTION." >&2; exit 1; }
+if [ "$ACTION" = add ]; then KIT="${KIT:-$(cd "$(dirname "$0")/.." && pwd)}"; . "$KIT/bin/lib.sh"; fi
 if [ "$HAS_MODE" = 1 ]; then
-  [ "$ACTION" = add ] || { echo "ERROR: --mode only goes with the setup itself: roles-yaml [--mode <mode>]; it cannot be combined with --$ACTION." >&2; exit 1; }
-  KIT="${KIT:-$(cd "$(dirname "$0")/.." && pwd)}"; . "$KIT/bin/lib.sh"
+  NEW_MODE="$(canon_mode "$MODE")"
+  if [ "$NEW_MODE" != "$MODE" ]; then
+    echo "Note: mode '$MODE' is now called '$NEW_MODE'; the old name works until the next version. Found in: --mode. Update it to $NEW_MODE." >&2
+    MODE="$NEW_MODE"
+  fi
   MODE_ERR="$(mode_error "$MODE")"
   [ -z "$MODE_ERR" ] || { echo "ERROR: --mode: $MODE_ERR. Nothing was written." >&2; [ "$ALL" = 1 ] || echo "ROLES_YAML_RESULT=error:invalid-mode"; exit 1; }
 fi
@@ -83,7 +88,24 @@ if [ "$ALL" = 1 ]; then
       if [ -z "$MODE" ] && [ -f "$Y" ] && grep -qxF "$MARK" "$Y" && ! git -C "$PHYS" ls-files --error-unmatch -- orca.yaml >/dev/null 2>&1; then
         KEPT="$(sed -n 's/^ *\$HOME\/\.orca-roles\/bin\/launch\.sh --mode \([^ ]*\) *$/\1/p' "$Y" | head -n 1)"
         if [ -n "$KEPT" ]; then KEPT_TXT="mode $KEPT kept"; else KEPT_TXT="default mode kept"; fi
-        if git -C "$PHYS" check-ignore -q orca.yaml 2>/dev/null && grep -qxF orca.yaml "$PHYS/.worktreeinclude" 2>/dev/null; then
+        NEW_KEPT="$(canon_mode "$KEPT")"
+        if [ "$NEW_KEPT" != "$KEPT" ]; then
+          RENAMED_TXT="mode renamed to $NEW_KEPT"
+          if [ "$DRY" = 1 ]; then
+            LINE="would update ($RENAMED_TXT)"
+          else
+            ERRF="$(mktemp)"
+            OUT="$(cd "$PHYS" && bash "$SELF" --mode "$NEW_KEPT" 2>"$ERRF" </dev/null)" || true
+            WARNS="$(grep -E '^(WARNING|ERROR):' "$ERRF" || true)"; rm -f "$ERRF"
+            RES="$(printf '%s\n' "$OUT" | sed -n 's/^ROLES_YAML_RESULT=//p' | tail -n 1)"
+            case "$RES" in
+              created|updated|unchanged) LINE="updated ($RENAMED_TXT)";;
+              skipped:*) LINE="skipped: ${RES#skipped:}";;
+              error:*) LINE="error: ${RES#error:}";;
+              *) LINE="error: no-result";;
+            esac
+          fi
+        elif git -C "$PHYS" check-ignore -q orca.yaml 2>/dev/null && grep -qxF orca.yaml "$PHYS/.worktreeinclude" 2>/dev/null; then
           LINE="unchanged ($KEPT_TXT)"
         elif [ "$DRY" = 1 ]; then
           LINE="would repair ($KEPT_TXT)"

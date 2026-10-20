@@ -79,7 +79,7 @@ echo "Installed in $KIT"
 echo "Configuration: $CONF"
 echo "Available: $(jq -r '.roles | keys_unsorted | join(" ")' "$CONF")"
 if m="$(mode_of "$CONF")"; then
-  label="$m"; [ "$m" != academic-writer ] || label="$m, phase $(phase_of "$CONF")"
+  label="$m"; [ "$m" != academic-research ] || label="$m, phase $(phase_of "$CONF")"
   echo "Enabled ($label): $(enabled_roles "$CONF" | tr '\n' ' ')"
 else
   echo "Enabled: unknown (invalid settings.mode)"

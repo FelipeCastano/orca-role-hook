@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Switches this worktree's academic-writer team to the other phase.
+# Switches this worktree's academic-research team to the other phase.
 # Usage (from the worktree):  phase.sh <experiment|writing>
 # The Planner runs it after the user confirms, once no role of the current phase has a task in flight (it closes them).
 # It refuses with uncommitted changes (the phase change keeps the work in git), and going back to experiment needs STATE.md
@@ -15,7 +15,7 @@ GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR
 STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 [ -f "$STATE" ] && [ -f "$CFG" ] || { echo "$STATE or $CFG not found: run this from the worktree where the roles were opened." >&2; exit 1; }
 MODE="$(mode_of "$CFG")" || exit 1
-[ "$MODE" = academic-writer ] || { echo "phase.sh: only for mode academic-writer (this worktree: $MODE)" >&2; exit 1; }
+[ "$MODE" = academic-research ] || { echo "phase.sh: only for mode academic-research (this worktree: $MODE)" >&2; exit 1; }
 CURRENT="$(phase_of "$CFG")"
 [ "$CURRENT" != "$TARGET" ] || { echo "Already in phase $TARGET."; exit 0; }
 TOP="$(git rev-parse --show-toplevel)" || exit 1

@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-writer aw-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -61,7 +61,7 @@ printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; exit 0; }\nexec /bin/bash "$@"
 pk_setup() {
 PK="$TMP/pk"; PH="$TMP/pkhome"; mkdir -p "$PK" "$PH" "$TMP/pkbin"
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PK/"; chmod +x "$PK"/bin/*.sh
-rm -rf "$PK/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$PK/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
 ln -sfn "$PK" "$PH/.orca-roles"; PKL="$PH/.orca-roles"
 PKC="$PK/config.default.json"
 }
@@ -239,7 +239,7 @@ prrule caps auditor "Limits" 'Cap every process you run at .maxWorkers. parallel
 # R14 no heartbeats
 rule R14 "$PD/common-workers.md" 'No heartbeats'
 # R16 message batches are acknowledged: the Planner never ends a turn with one open; workers ack what they read and the ack is not a heartbeat
-for m in programmer pr-reviewer academic-writer; do
+for m in programmer pr-reviewer academic-research; do
   rule R16 "$ROOT/prompts/$m/planner.md" 'Never end a turn holding an unacknowledged delivery' '^  - Never end a turn'
   rule R16 "$ROOT/prompts/$m/planner.md" 'orca orchestration check --ack <delivery_id> --json' '^- \*\*Never block waiting'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'acknowledges each batch once read, with `--ack <delivery_id>`' '^- A worker that reads its messages'
@@ -250,8 +250,8 @@ done
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
 rule R15 "$PD/planner.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'
-# academic-writer (A<n> = the rule's number)
-AD="$ROOT/prompts/academic-writer"
+# academic-research (A<n> = the rule's number)
+AD="$ROOT/prompts/academic-research"
 # A1 nothing leaves the repository without the user's yes
 rule A1 "$AD/planner.md" 'Nothing leaves the repository without the user'"'"'s explicit yes'
 rule A1 "$AD/planner.md" 'no HPC job submission' 'Nothing leaves the repository'
@@ -338,7 +338,7 @@ rule A11 "$AD/planner.md" 'you commit it with the user'"'"'s yes; then `phase.sh
 rule A12 "$AD/writer.md" 'only keys that exist in article/refs.bib' '^2\. Cite only'
 rule A12 "$AD/writer.md" '[CITATION NEEDED:' '^5\. Where a claim needs'
 rule A12 "$AD/writer.md" 'never invent a key' '^5\. Where a claim needs'
-# pins of rules the prompts already state: pr-reviewer and academic-writer limits, the programmer Planner's relaunch and escalation rules, the Report line of the skeleton
+# pins of rules the prompts already state: pr-reviewer and academic-research limits, the programmer Planner's relaunch and escalation rules, the Report line of the skeleton
 # R2 an ambiguous answer is not a yes to the commits
 rule R2 "$PD/planner.md" 'neither is an ambiguous answer ("ok, continue"): ask again' '\*\*Set audit\.\*\*'
 # pr-reviewer: no worktrees or terminals, no git state changes, context cleaned only with the user's yes, no AI attribution, kit changes only with the user's yes
@@ -351,7 +351,7 @@ prrule R5 common-workers "Limits" 'Never create worktrees or terminals'
 prrule R9 common-workers "Limits" 'Never wrap commands in .bash -c. or .sh -c.'
 prrule R5 lens-reviewer "Limits" 'Do not run the project.s code, tests or build unless the brief says so'
 prrule R5 auditor "Limits" 'every file you write goes in your scratchDir'
-# academic-writer: the same limits, closing and cleaning only with the user's yes, kit files only after a yes, the earlier-version folder, the convention check
+# academic-research: the same limits, closing and cleaning only with the user's yes, kit files only after a yes, the earlier-version folder, the convention check
 rule R5 "$AD/common-workers.md" 'Never create worktrees or terminals' '^- Never create worktrees'
 rule R9 "$AD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`' '^- Never wrap commands'
 rule R11 "$AD/common-workers.md" 'rev-$sha' '^- If you need an earlier version of the code'
@@ -386,8 +386,8 @@ rule R5 "$PD/e2e-tester.md" 'otherwise stop and ask' '^4\. Writes to a shared se
 rule R5 "$PD/planner.md" "ask the user, when approving the plan, to type the authorization in the E2E-Tester's tab" '^   c\. Review that plan'
 rule R5 "$PD/planner.md" 'before you dispatch the execution' '^   c\. Review that plan'
 rule R5 "$PD/planner.md" 'confirm that nothing under `<e2eDir>/` or `<evidenceDir>/` is staged or part of any commit' '\*\*Set audit\.\*\*'
-# W written reports (every mode, workers and Planner; W6 the report language is stated by the Planner and used by the worker, W7 the academic-writer paper is out of scope): outline approved by the user before writing and relayed by the Planner, descriptive titles, no names of people, scope excludes worker_done, commits, PRs and Jira
-for m in programmer pr-reviewer academic-writer; do
+# W written reports (every mode, workers and Planner; W6 the report language is stated by the Planner and used by the worker, W7 the academic-research paper is out of scope): outline approved by the user before writing and relayed by the Planner, descriptive titles, no names of people, scope excludes worker_done, commits, PRs and Jira
+for m in programmer pr-reviewer academic-research; do
   for p in common-workers planner; do
     wf="$ROOT/prompts/$m/$p.md"
     ws="$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$wf")"
@@ -405,7 +405,7 @@ for m in programmer pr-reviewer academic-writer; do
     else
       wrule 6 'When you hand a report to a worker, state in the task the report.s language .* and its audience'
     fi
-    if [ "$m" = academic-writer ]; then
+    if [ "$m" = academic-research ]; then
       wrule 7 'nor to the paper and its companion files \(the article, supplementary material, cover letter, rebuttal letter\), which follow writer\.md and the paper rules'
     fi
   done
@@ -962,15 +962,15 @@ ym --mode pr-reviewer
 check "roles-yaml --mode: creates the line, ignored, closing lines" "$RC:$(ysetup):$(git -C "$Y3" status --porcelain):$(has 'Created '):$(has 'New worktrees of this project start in mode pr-reviewer'):$(has 'Existing worktrees keep their mode: use roles --mode <mode> in them.')" "0:$LM pr-reviewer|::y:y:y"
 S3="$(yfiles3)"; M=""
 ym --mode pr-reviewer; M="$M same:$RC:$(has 'Nothing changed'):$(has Updated):$(has 'New worktrees of this project'):$([ "$(yfiles3)" = "$S3" ] && echo same || echo diff);"
-ym --mode academic-writer; M="$M other:$RC:$(ysetup):$(has 'Updated '):$(has 'start in mode academic-writer'):$(has 'Existing worktrees keep'):$(grep -c launch.sh "$Y3/orca.yaml");"
+ym --mode academic-research; M="$M other:$RC:$(ysetup):$(has 'Updated '):$(has 'start in mode academic-research'):$(has 'Existing worktrees keep'):$(grep -c launch.sh "$Y3/orca.yaml");"
 ym --mode programmer; M="$M prog:$RC:$(ysetup);"
-ym --mode pr-reviewer --mode academic-writer; M="$M last:$RC:$(ysetup);"
+ym --mode pr-reviewer --mode academic-research; M="$M last:$RC:$(ysetup);"
 ym; M="$M drop:$RC:$(ysetup):$(has 'Updated '):$(has 'default mode (settings.mode');"
 ym; M="$M again:$RC:$(has 'Nothing changed'):$(has 'default mode');"
-check "roles-yaml --mode: rerun same, another, repeated, dropped, default again" "$M" " same:0:y:n:n:same; other:0:$LM academic-writer|:y:y:y:1; prog:0:$LM programmer|; last:0:$LM academic-writer|; drop:0:\$HOME/.orca-roles/bin/launch.sh|:y:y; again:0:y:y;"
+check "roles-yaml --mode: rerun same, another, repeated, dropped, default again" "$M" " same:0:y:n:n:same; other:0:$LM academic-research|:y:y:y:1; prog:0:$LM programmer|; last:0:$LM academic-research|; drop:0:\$HOME/.orca-roles/bin/launch.sh|:y:y; again:0:y:y;"
 yreset3; ym --mode pr-reviewer; ym --remove; check "roles-yaml --remove after --mode removes it" "$RC:$(ls -A "$Y3" | tr '\n' ' ')" "0:.git "
 M=""; for v in bogus Programmer PR-REVIEWER ../x "pr reviewer" a/b; do
-  yreset3; ym --mode "$v"; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' '):$(has 'modes: programmer, pr-reviewer, academic-writer'):$(has 'Nothing was written');"
+  yreset3; ym --mode "$v"; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' '):$(has 'modes: programmer, pr-reviewer, academic-research'):$(has 'Nothing was written');"
 done
 yreset3; ym --mode; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' ');"
 yreset3; ym --mode ""; M="$M$RC:$(ls -A "$Y3" | tr '\n' ' ');"
@@ -985,7 +985,7 @@ yreset3; printf 'scripts:\n  setup: npm i\n' > "$Y3/orca.yaml"; M=""
 ym --mode pr-reviewer; M="$M$RC:$(tr '\n' ' ' < "$Y3/orca.yaml"):$(has "the line $LM pr-reviewer,");"
 ym; M="$M$RC:$(has 'the line $HOME/.orca-roles/bin/launch.sh, or'):$(has '--mode');"
 git -C "$Y3" add -f orca.yaml; git -C "$Y3" -c user.name=t -c user.email=t@t commit -q -m yaml
-ym --mode academic-writer; M="$M$RC:$(tr '\n' ' ' < "$Y3/orca.yaml"):$(has "$LM academic-writer"):$(has committed):$(git -C "$Y3" status --porcelain)"
+ym --mode academic-research; M="$M$RC:$(tr '\n' ' ' < "$Y3/orca.yaml"):$(has "$LM academic-research"):$(has committed):$(git -C "$Y3" status --porcelain)"
 check "roles-yaml --mode: foreign and committed orca.yaml are left alone, advice shows --mode" "$M" "1:scripts:   setup: npm i :y;1:y:n;1:scripts:   setup: npm i :y:y:"
 git -C "$Y3" rm -q -f orca.yaml; git -C "$Y3" -c user.name=t -c user.email=t@t commit -q -m rm-yaml
 KIT_YM="scripts:"$'\n'"  setup: |"$'\n'"    \$HOME/.orca-roles/bin/launch.sh --mode pr-reviewer"$'\n'
@@ -1052,13 +1052,13 @@ check "roles-yaml --all: repairs the missing line, keeps the mode, counts as upd
 yallrun --all
 check "roles-yaml --all after a repair: unchanged again" "$RC:$(yrl reg):$(yrl a-b):$(printf '%s\n' "$OUT" | grep '^Summary')" "0:reg ($YA/reg): unchanged (mode pr-reviewer kept):a-b ($YA/u/a-b): unchanged (default mode kept):Summary: 0 created, 0 updated, 5 unchanged, 7 skipped, 0 errors"
 T1="$(ytree)"
-yallrun --all --mode academic-writer --dry-run
-check "roles-yaml --all --mode --dry-run: would update to mode X everywhere, writes nothing" "$RC:$(printf '%s\n' "$OUT" | grep -c 'would update to mode academic-writer'):$(printf '%s\n' "$OUT" | grep '^Summary'):$([ "$(ytree)" = "$T1" ] && echo same || echo diff)" "0:5:Summary: 0 created, 5 updated, 0 unchanged, 7 skipped, 0 errors:same"
-yallrun --all --mode academic-writer
-check "roles-yaml --all --mode: updates every registered project (also the one in another mode)" "$RC:$(printf '%s\n' "$OUT" | grep -c ': updated to mode academic-writer$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -c 'launch.sh --mode academic-writer' "$YA/reg/orca.yaml" "$YA/fresh/orca.yaml" "$YA/u/a-b/orca.yaml" "$YA/askp/orca.yaml" | tr '\n' ' ')" "0:5:Summary: 0 created, 5 updated, 0 unchanged, 7 skipped, 0 errors:$(for n in reg fresh u/a-b askp; do printf '%s/%s/orca.yaml:1 ' "$YA" "$n"; done)"
+yallrun --all --mode academic-research --dry-run
+check "roles-yaml --all --mode --dry-run: would update to mode X everywhere, writes nothing" "$RC:$(printf '%s\n' "$OUT" | grep -c 'would update to mode academic-research'):$(printf '%s\n' "$OUT" | grep '^Summary'):$([ "$(ytree)" = "$T1" ] && echo same || echo diff)" "0:5:Summary: 0 created, 5 updated, 0 unchanged, 7 skipped, 0 errors:same"
+yallrun --all --mode academic-research
+check "roles-yaml --all --mode: updates every registered project (also the one in another mode)" "$RC:$(printf '%s\n' "$OUT" | grep -c ': updated to mode academic-research$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -c 'launch.sh --mode academic-research' "$YA/reg/orca.yaml" "$YA/fresh/orca.yaml" "$YA/u/a-b/orca.yaml" "$YA/askp/orca.yaml" | tr '\n' ' ')" "0:5:Summary: 0 created, 5 updated, 0 unchanged, 7 skipped, 0 errors:$(for n in reg fresh u/a-b askp; do printf '%s/%s/orca.yaml:1 ' "$YA" "$n"; done)"
 check "roles-yaml --all --mode: the committed orca.yaml is still skipped and untouched" "$(printf '%s\n' "$OUT" | grep -c 'committed-orca-yaml'):$(tr '\n' ' ' < "$YA/committed/orca.yaml"):$(git -C "$YA/committed" status --porcelain)" "1:scripts:   setup: npm i :"
 yallrun --all --mode programmer --under "$YA/u/a-b"
-check "roles-yaml --all --under: only the folder itself, never the look-alike sibling a-bc" "$RC:$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c '/a-b):'):$(printf '%s\n' "$OUT" | grep -c 'a-bc'):$(grep -c 'academic-writer' "$YA/u/a-bc/orca.yaml"):$(grep -c 'programmer' "$YA/u/a-b/orca.yaml")" "0:2:1:0:1:1"
+check "roles-yaml --all --under: only the folder itself, never the look-alike sibling a-bc" "$RC:$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c '/a-b):'):$(printf '%s\n' "$OUT" | grep -c 'a-bc'):$(grep -c 'academic-research' "$YA/u/a-bc/orca.yaml"):$(grep -c 'programmer' "$YA/u/a-b/orca.yaml")" "0:2:1:0:1:1"
 yallrun --all --dry-run --under "$YA/u/"; check "roles-yaml --all --under: a folder with a trailing slash matches its children, not the rest" "$RC:$(printf '%s\n' "$OUT" | grep -c '^a-bc\? ('):$(printf '%s\n' "$OUT" | grep -c '^fresh ')" "0:2:0"
 yallrun --all --dry-run --under "$YA/fresh"; check "roles-yaml --all --under: a project folder includes the project and what is nested in it" "$RC:$(printf '%s\n' "$OUT" | grep -c '^fresh \|^nested \|^fresh-again '):$(printf '%s\n' "$OUT" | grep -c '^reg ')" "0:3:0"
 # error class: a project whose orca.yaml path is a directory (fails for any user, root included)
@@ -1080,7 +1080,7 @@ YS="$TMP/yres"; rm -rf "$YS"; mkdir -p "$YS"; git -C "$YS" init -q; git -C "$YS"
 yres() { (cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" "$@" 2>/dev/null | tail -n 1); }
 M="$(yres)|$(yres)|$(yres --mode pr-reviewer)|$(yres --mode pr-reviewer)|$(yres)"
 check "roles-yaml: ROLES_YAML_RESULT created, unchanged, updated, unchanged, updated" "$M" "ROLES_YAML_RESULT=created|ROLES_YAML_RESULT=unchanged|ROLES_YAML_RESULT=updated|ROLES_YAML_RESULT=unchanged|ROLES_YAML_RESULT=updated"
-check "roles-yaml --dry-run (single): says what would happen and writes nothing" "$(yres --mode academic-writer --dry-run)|$(sed -n 's/^    //p' "$YS/orca.yaml" | tr '\n' ' ')|$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --dry-run 2>/dev/null | grep -c 'Nothing would change')" "ROLES_YAML_RESULT=updated|\$HOME/.orca-roles/bin/launch.sh |1"
+check "roles-yaml --dry-run (single): says what would happen and writes nothing" "$(yres --mode academic-research --dry-run)|$(sed -n 's/^    //p' "$YS/orca.yaml" | tr '\n' ' ')|$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --dry-run 2>/dev/null | grep -c 'Nothing would change')" "ROLES_YAML_RESULT=updated|\$HOME/.orca-roles/bin/launch.sh |1"
 rm -f "$YS/orca.yaml" "$YS/.worktreeinclude"; : > "$YS/.git/info/exclude"; check "roles-yaml --dry-run (single): created, nothing written" "$(yres --dry-run)|$(ls -A "$YS" | tr '\n' ' ')|$(wc -c < "$YS/.git/info/exclude" | tr -d ' ')" "ROLES_YAML_RESULT=created|.git |0"
 printf 'scripts:\n  setup: npm i\n' > "$YS/orca.yaml"; check "roles-yaml: ROLES_YAML_RESULT skipped:foreign-orca-yaml" "$(yres)" "ROLES_YAML_RESULT=skipped:foreign-orca-yaml"
 git -C "$YS" add -f orca.yaml; git -C "$YS" -c user.name=t -c user.email=t@t commit -q -m yaml; check "roles-yaml: ROLES_YAML_RESULT skipped:committed-orca-yaml" "$(yres)" "ROLES_YAML_RESULT=skipped:committed-orca-yaml"
@@ -1091,6 +1091,36 @@ yfor local-only "npm i"; M="$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr
 check "roles-yaml: ROLES_YAML_RESULT skipped:local-only-policy" "$M" "ROLES_YAML_RESULT=skipped:local-only-policy"
 yfor local-only "$KITL"; check "roles-yaml: ROLES_YAML_RESULT skipped:local-script, exit 0" "$RC:$(printf '%s\n' "$OUT" | tail -n 1)" "0:ROLES_YAML_RESULT=skipped:local-script"
 check "roles-yaml --check and --remove print no result line" "$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --check 2>&1 | grep -c ROLES_YAML_RESULT || true)$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --remove 2>&1 | grep -c ROLES_YAML_RESULT || true)" "00"
+# the old mode id (academic-writer) is an alias of academic-research in roles-yaml (single project, --all, --dry-run); --check and --remove stay as they were
+YN="$TMP/yalias"; rm -rf "$YN"; mkdir -p "$YN/bin" "$YN/show"; cp "$YA/bin/orca" "$YN/bin/orca"
+for n in k1 k2 k3 fo tr one; do mkdir -p "$YN/$n"; git -C "$YN/$n" init -q; git -C "$YN/$n" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; done
+ynsingle() { (cd "$YN/$1" && shift && PATH="$YN/bin:$PATH" FAKE_LIST="$YN/list.json" FAKE_SHOW="$YN/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>"$YN/err" || true); }
+ynall() { try env PATH="$YN/bin:$PATH" FAKE_LIST="$YN/list.json" FAKE_SHOW="$YN/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>"$YN/err"; }
+ynold() { sed 's/--mode academic-research/--mode academic-writer/' "$YN/$1/orca.yaml" > "$YN/t.yaml"; cat "$YN/t.yaml" > "$YN/$1/orca.yaml"; }
+ynmode() { sed -n 's/^.*launch\.sh//p' "$YN/$1/orca.yaml" | tr -d ' '; }
+ynhash() { (cd "$YN" && find . -type f -not -path './bin/*' -not -path './show/*' -not -name err -not -name t.yaml -not -name list.json | LC_ALL=C sort | xargs shasum) | shasum; }
+jq -nc --arg d "$YN" '{ok:true,result:{repos:(["k1","k2","k3","fo","tr"] | map({displayName:., path:($d + "/" + .), kind:"git"}))}}' > "$YN/list.json"
+NOTE_AW="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: --mode. Update it to academic-research."
+# single project: --mode academic-writer writes the new id, one note, same result line; --dry-run writes nothing
+OUT1="$(ynsingle one --mode academic-writer)"; E1="$(cat "$YN/err")"
+check "roles-yaml alias: --mode academic-writer writes academic-research and prints one note on stderr; the result line is the one of the new id" "$(printf '%s' "$OUT1" | tail -n 1):$(ynmode one):$(printf '%s\n' "$E1" | grep -c '^Note:'):$([ "$E1" = "$NOTE_AW" ] && echo exact)" "ROLES_YAML_RESULT=created:--modeacademic-research:1:exact"
+rm -f "$YN/one/orca.yaml" "$YN/one/.worktreeinclude"; : > "$YN/one/.git/info/exclude"; H0="$(ynhash)"
+OLDD="$(ynsingle one --mode academic-writer --dry-run)"; NEWD="$(ynsingle one --mode academic-research --dry-run)"
+check "roles-yaml alias: --mode academic-writer --dry-run prints what the new id prints and writes nothing" "$([ "$OLDD" = "$NEWD" ] && echo same):$([ "$(ynhash)" = "$H0" ] && echo unchanged):$(ls -A "$YN/one" | tr '\n' ' ')" "same:unchanged:.git "
+# --all: kit orca.yaml files with the old id are renamed (dry run: announced only); the repair path, a tracked file and someone else's file
+for n in k1 k2 k3; do ynsingle "$n" --mode academic-research >/dev/null; ynold "$n"; done
+rm -f "$YN/k2/.worktreeinclude"; printf 'scripts:\n  setup: echo academic-writer\n' > "$YN/fo/orca.yaml"
+ynsingle tr --mode academic-research >/dev/null; ynold tr; git -C "$YN/tr" add -f orca.yaml; git -C "$YN/tr" -c user.name=t -c user.email=t@t commit -q -m yaml
+printf '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$YN/show/k3"
+H1="$(ynhash)"; ynall --all --dry-run; DR="$RC:$(printf '%s\n' "$OUT" | grep -c '^k[123] (.*): would update (mode renamed to academic-research)$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -c '^Note:' "$YN/err" || true):$([ "$(ynhash)" = "$H1" ] && echo unchanged || echo CHANGED)"
+ynall --all; AL="$RC:$(printf '%s\n' "$OUT" | grep -c '^k[12] (.*): updated (mode renamed to academic-research)$'):$(printf '%s\n' "$OUT" | grep -c '^k3 (.*): skipped: local-only-policy$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(ynmode k1)/$(ynmode k2)/$(ynmode k3):$(grep -cx orca.yaml "$YN/k2/.worktreeinclude"):$(ynmode tr):$(tr -d ' \n' < "$YN/fo/orca.yaml")"
+check "roles-yaml alias: --all --dry-run announces the rename of the kit's old lines and writes nothing; --all renames them (repairing k2) and reports a child that skips (local-only policy) as skipped; a tracked kit file and someone else's file are not touched" "$DR|$AL" "0:3:Summary: 0 created, 3 updated, 0 unchanged, 2 skipped, 0 errors:0:unchanged|0:2:1:Summary: 0 created, 2 updated, 0 unchanged, 3 skipped, 0 errors:--modeacademic-research/--modeacademic-research/--modeacademic-writer:1:--modeacademic-writer:scripts:setup:echoacademic-writer"
+# --all --mode academic-writer: one note, every project gets the new id; --check and --remove print what they printed and need no mode
+ynold k1; ynold k2; H2="$(ynhash)"; ynall --all --mode academic-writer --dry-run; D2="$RC:$(grep -c '^Note:' "$YN/err" || true):$(printf '%s\n' "$OUT" | grep -c 'would update to mode academic-research'):$([ "$(ynhash)" = "$H2" ] && echo unchanged || echo CHANGED)"
+ynall --all --mode academic-writer; A2="$RC:$(grep -c '^Note:' "$YN/err" || true):$(printf '%s\n' "$OUT" | grep -c ': updated to mode academic-research$'):$(ynmode k1)/$(ynmode k2)"
+check "roles-yaml alias: --all --mode academic-writer (also --dry-run) prints the note once and writes the new id in every project" "$D2|$A2" "0:1:2:unchanged|0:1:2:--modeacademic-research/--modeacademic-research"
+ynold k1; CK1="$(ynsingle k1 --check)"; CKE="$(cat "$YN/err")"; ynsingle k1 --mode academic-research >/dev/null; CK2="$(ynsingle k1 --check)"; ynsingle k1 --remove >/dev/null; RME="$(cat "$YN/err")"
+check "roles-yaml alias: --check prints the same with the old line as with the new one and no note, --remove no note and removes the file" "$([ "$CK1" = "$CK2" ] && echo same):$CKE:$RME:$([ -e "$YN/k1/orca.yaml" ] && echo left)" "same:::"
 }
 
 sec_launch_overrides() {
@@ -1431,12 +1461,12 @@ MC="$PK/config.json"
 # mode ids: exact match, availability
 check "mode_error: known and available" "$(KIT="$PK" mode_error programmer)" ""
 check "mode_error: pr-reviewer available with its planner prompt" "$(KIT="$PK" mode_error pr-reviewer)" ""
-check "mode_error: known but not available" "$(KIT="$PK" mode_error academic-writer)" "mode 'academic-writer' is not available yet"
+check "mode_error: known but not available" "$(KIT="$PK" mode_error academic-research)" "mode 'academic-research' is not available yet"
 for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr-reviewer/../programmer" program pr programmer2 pr-reviewer-x; do
-  check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-writer)"
+  check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-research)"
 done
 check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
-check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-writer") | not)) | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
 check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "planner researcher dev tester auditor e2e-tester deployer "
 
 # roles and prompts per mode (library level)
@@ -1509,12 +1539,12 @@ rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
 
 # rejections: nothing opened, nothing saved
 ml --reset >/dev/null; B="$(mstate)"; N="$(mcreates)"
-for bad in Programmer ../x '' programmer/ "a b" foo academic-writer; do
+for bad in Programmer ../x '' programmer/ "a b" foo academic-research; do
   try ml --mode "$bad"
   check "launch --mode '$bad' fails before anything opens or is saved" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
 done
-try ml --mode Programmer; case "$OUT" in *"unknown mode 'Programmer' (modes: programmer, pr-reviewer, academic-writer)"*) echo "ok   launch: unknown mode message";; *) echo "FAIL unknown mode message: $OUT"; FAIL=1;; esac
-try ml --mode academic-writer; case "$OUT" in *"mode 'academic-writer' is not available yet"*) echo "ok   launch: unavailable mode message";; *) echo "FAIL unavailable message: $OUT"; FAIL=1;; esac
+try ml --mode Programmer; case "$OUT" in *"unknown mode 'Programmer' (modes: programmer, pr-reviewer, academic-research)"*) echo "ok   launch: unknown mode message";; *) echo "FAIL unknown mode message: $OUT"; FAIL=1;; esac
+try ml --mode academic-research; case "$OUT" in *"mode 'academic-research' is not available yet"*) echo "ok   launch: unavailable mode message";; *) echo "FAIL unavailable message: $OUT"; FAIL=1;; esac
 try ml --mode=Programmer; check "launch --mode=<x> form is validated too" "$RC:$(mstate)" "1:$B"
 try ml --set settings.mode=Programmer; check "launch --set settings.mode goes through the same validation" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
 try ml --set settings.mode=../x; check "launch --set settings.mode=../x fails" "$RC:$(mstate)" "1:$B"
@@ -1530,7 +1560,7 @@ for o in --enable --disable --only; do
 done
 try ml --mode pr-reviewer --only rv; check "launch --only with a role of the mode works" "$RC:$(mh)" "0:PLANNER RV "
 B="$(mstate)"; N="$(mcreates)"
-for o in "--mode Foo" "--mode academic-writer" "--only dev,rv" "--enable dev"; do
+for o in "--mode Foo" "--mode academic-research" "--only dev,rv" "--enable dev"; do
   # shellcheck disable=SC2086
   try ml --mode pr-reviewer $o; check "launch $o with saved exceptions: rejected, saved config and exceptions unchanged" "$RC:$(mcreates):$(mstate)" "1:$N:$B"
 done
@@ -1662,12 +1692,12 @@ rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config
 
 # pr-reviewer is available in the shipped kit: the default configuration opens the planner and the auditor only
 PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
-rm -rf "$PRK/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$PRK/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
 ln -sfn "$PRK" "$PRH/.orca-roles"
 jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
 check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
-check "mode_error: academic-writer is still not available" "$(KIT="$PRK" mode_error academic-writer)" "mode 'academic-writer' is not available yet"
-check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-writer") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
+check "mode_error: academic-research is still not available" "$(KIT="$PRK" mode_error academic-research)" "mode 'academic-research' is not available yet"
+check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
 PRP="$TMP/prproj"; mkdir -p "$PRP"; git -C "$PRP" init -q; PRG="$PRP/.git"; : > "$MLOG"
 prl() { (cd "$PRP" && HOME="$PRH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PRH/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and AUDITOR only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER AUDITOR "
@@ -1676,29 +1706,29 @@ check "launch pr-reviewer (default config): the planner reads the mode's planner
 rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
 }
 
-sec_aw_defaults() {
-# academic-writer in the default configuration: roles per phase and model, the programmer and pr-reviewer teams untouched, the researcher migration on upgrade
+sec_research_defaults() {
+# academic-research in the default configuration: roles per phase and model, the programmer and pr-reviewer teams untouched, the researcher migration on upgrade
 D="$ROOT/config.default.json"
-check "aw-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
-check "aw-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style"
-check "aw-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-writer|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-writer|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-writer|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-writer|writing|claude-opus-5-5|true evidence=title,enabled,modes,phases,model|academic-writer|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-writer|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-writer|writing|claude-sonnet-5-5|true "
-check "aw-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-writer"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
+check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
+check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style"
+check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
+check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '.roles[$r].model // "-"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
-check "aw-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's" "$(awt "$D")" "$(awt "$TMP/awd-old.json")"
-check "aw-defaults: the programmer team is the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "7:programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
+check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's" "$(awt "$D")" "$(awt "$TMP/awd-old.json")"
+check "research-defaults: the programmer team is the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "7:programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
 pk_setup
-mkdir -p "$PK/prompts/academic-writer"; echo "# planner" > "$PK/prompts/academic-writer/planner.md"; echo "# cw" > "$PK/prompts/academic-writer/common-workers.md"
-check "aw-defaults: academic-writer team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-writer" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher sota methodology tech-verifier |planner researcher writer evidence rigor style |"
-rm -rf "$PK/prompts/academic-writer"
+mkdir -p "$PK/prompts/academic-research"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
+check "research-defaults: academic-research team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-research" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher sota methodology tech-verifier |planner researcher writer evidence rigor style |"
+rm -rf "$PK/prompts/academic-research"
 awu() { echo "$1" > "$TMP/awd-user.json"; upgrade_config "$D" "$TMP/awd-user.json"; }
 RM() { jq -c '[.roles.researcher.modes, .roles.researcher.phases]'; }
-check "upgrade_config: researcher modes [programmer] move to the new default, phases added (experiment and writing)" "$(awu '{"roles":{"researcher":{"modes":["programmer"]}}}' | RM)" '[["programmer","academic-writer"],["experiment","writing"]]'
-check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-writer","programmer"]' '"all"' '[]' '["programmer","academic-writer"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-writer","programmer"] "all" [] ["programmer","academic-writer"] '
-check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-writer"],false]:[["programmer","academic-writer"],["experiment","writing"]]'
-check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-writer"],["writing"]]'
+check "upgrade_config: researcher modes [programmer] move to the new default, phases added (experiment and writing)" "$(awu '{"roles":{"researcher":{"modes":["programmer"]}}}' | RM)" '[["programmer","academic-research"],["experiment","writing"]]'
+check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-research","programmer"]' '"all"' '[]' '["programmer","academic-research"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-research","programmer"] "all" [] ["programmer","academic-research"] '
+check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-research"],false]:[["programmer","academic-research"],["experiment","writing"]]'
+check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-research"],["writing"]]'
 check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style","mine",false,"C"]'
-check "upgrade_config: a user's own values on a new role stay" "$(awu '{"roles":{"writer":{"model":"mine","enabled":false}}}' | jq -c '.roles.writer | [.model, .enabled, .phases, .modes]')" '["mine",false,["writing"],["academic-writer"]]'
+check "upgrade_config: a user's own values on a new role stay" "$(awu '{"roles":{"writer":{"model":"mine","enabled":false}}}' | jq -c '.roles.writer | [.model, .enabled, .phases, .modes]')" '["mine",false,["writing"],["academic-research"]]'
 awu '{"roles":{"researcher":{"modes":["programmer"]}}}' > "$TMP/awd-up.json"
 check "upgrade_config: the migrated configuration passes check_config, and its programmer team is the old one" "$(check_config "$TMP/awd-up.json"):$(enabled_roles "$TMP/awd-up.json" | tr '\n' ' ')" ":researcher planner dev tester auditor e2e-tester deployer "
 }
@@ -1727,10 +1757,10 @@ check "modes from-json: file in roles/<mode>/, none for programmer" "$(head -1 "
 check "modes from-json: launched in pr-reviewer, not in programmer" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')|$(KIT="$PK" launchable_roles "$(nr_mode_cfg programmer)" 2>&1 | tr '\n' ' ')" "planner rv |planner dev "
 printf '%s' '{"id":"rv-list","description":"d","modes":["pr-reviewer"],"prompt":"'"$RP"'"}' > "$TMP/nj.json"
 try nrj "$TMP/nj.json"; check "modes from-json: one-element list" "$RC:$(jq -c '.roles["rv-list"].modes' "$NRC")" '0:["pr-reviewer"]'
-printf '%s' '{"id":"al","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "modes from-json: all with an object" "$RC:$(jq -c '.roles.al | [.modes, (.prompt | keys)]' "$NRC")" '0:["all",["academic-writer","pr-reviewer","programmer"]]'
-check "modes from-json: all writes three files" "$(for m in programmer pr-reviewer academic-writer; do head -n1 "$PK/roles/$m/al.md"; done | tr '\n' ' ')" "# p # r # a "
-case "$OUT" in *"mode 'academic-writer' is not available yet"*) echo "ok   modes from-json: notes the unavailable mode";; *) echo "FAIL unavailable note: $OUT"; FAIL=1;; esac
+printf '%s' '{"id":"al","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# a\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: all with an object" "$RC:$(jq -c '.roles.al | [.modes, (.prompt | keys)]' "$NRC")" '0:["all",["academic-research","pr-reviewer","programmer"]]'
+check "modes from-json: all writes three files" "$(for m in programmer pr-reviewer academic-research; do head -n1 "$PK/roles/$m/al.md"; done | tr '\n' ' ')" "# p # r # a "
+case "$OUT" in *"mode 'academic-research' is not available yet"*) echo "ok   modes from-json: notes the unavailable mode";; *) echo "FAIL unavailable note: $OUT"; FAIL=1;; esac
 printf '%s' '{"id":"legacy","description":"d","prompt":"# p\n## Report\n"}' > "$TMP/nj.json"
 try nrj "$TMP/nj.json"; check "modes from-json: no modes + string prompt = programmer" "$RC:$(jq -c '.roles.legacy.modes' "$NRC"):$([ -f "$PK/roles/programmer/legacy.md" ] && echo y)" '0:["programmer"]:y'
 printf '%s' '{"id":"nowarn","description":"d","prompt":"# no report"}' > "$TMP/nj.json"
@@ -1749,35 +1779,35 @@ nr_fail "an object for one mode with another key" '{"id":"f3b","description":"d"
 nr_fail "modes ../x" '{"id":"f4","description":"d","modes":"../x","prompt":"# x"}'
 nr_fail "modes Programmer" '{"id":"f5","description":"d","modes":"Programmer","prompt":"# x"}'
 nr_fail "two modes in a list" '{"id":"f6","description":"d","modes":["programmer","pr-reviewer"],"prompt":{"programmer":"# p","pr-reviewer":"# r"}}'
-nr_fail "a prompt value that is not a string" '{"id":"f7","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":5,"academic-writer":"# a"}}'
+nr_fail "a prompt value that is not a string" '{"id":"f7","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":5,"academic-research":"# a"}}'
 nr_fail "a mode with a trailing newline" '{"id":"f8","description":"d","modes":"programmer\n","prompt":"# x"}'
 nr_fail "an empty modes list" '{"id":"f9","description":"d","modes":[],"prompt":"# x"}'
 nr_fail "modes null" '{"id":"f10","description":"d","modes":null,"prompt":"# x"}'
-nr_fail "a path as a prompt key" '{"id":"f11","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a","../x":"# b"}}'
+nr_fail "a path as a prompt key" '{"id":"f11","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a","../x":"# b"}}'
 nr_fail "an array prompt" '{"id":"f12","description":"d","prompt":["# x"]}'
 nr_fail "a two-mode list with a string prompt" '{"id":"f13","description":"d","modes":["programmer","pr-reviewer"],"prompt":"# x\n## Report\n"}'
 nr_fail "a blank prompt" '{"id":"f14","description":"d","prompt":"   "}'
-nr_fail "the id common-workers (local)" '{"id":"common-workers","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}'
+nr_fail "the id common-workers (local)" '{"id":"common-workers","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}'
 nr_fail "the id planner" '{"id":"planner","description":"d","prompt":"# x"}'
 nr_fail "a path as id" '{"id":"../x","description":"d","prompt":"# x"}'
 
-printf '%s' '{"id":"aw","description":"d","modes":"academic-writer","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "modes from-json: a single not-available mode is accepted with the note" "$RC:$(jq -c '.roles.aw.modes' "$NRC"):$([ -f "$PK/roles/academic-writer/aw.md" ] && echo y)" '0:["academic-writer"]:y'
-case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes from-json: the note for a single unavailable mode";; *) echo "FAIL single unavailable note: $OUT"; FAIL=1;; esac
+printf '%s' '{"id":"aw","description":"d","modes":"academic-research","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "modes from-json: a single not-available mode is accepted with the note" "$RC:$(jq -c '.roles.aw.modes' "$NRC"):$([ -f "$PK/roles/academic-research/aw.md" ] && echo y)" '0:["academic-research"]:y'
+case "$OUT" in *"Note: mode 'academic-research' is not available yet"*) echo "ok   modes from-json: the note for a single unavailable mode";; *) echo "FAIL single unavailable note: $OUT"; FAIL=1;; esac
 
 # overwrite shrinks the modes: no orphans
 touch "$PK/roles/al.md"
 printf '%s' '{"id":"al","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n## Report\n"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "modes overwrite: the modes it no longer has lose their prompts" "$RC:$([ -e "$PK/roles/pr-reviewer/al.md" ] && echo left):$([ -e "$PK/roles/academic-writer/al.md" ] && echo left):$([ -e "$PK/roles/al.md" ] && echo legacy):$(head -1 "$PK/roles/programmer/al.md"):$(jq -c '.roles.al.modes' "$NRC")" '0::::# p2:["programmer"]'
+try nrj "$TMP/nj.json"; check "modes overwrite: the modes it no longer has lose their prompts" "$RC:$([ -e "$PK/roles/pr-reviewer/al.md" ] && echo left):$([ -e "$PK/roles/academic-research/al.md" ] && echo left):$([ -e "$PK/roles/al.md" ] && echo legacy):$(head -1 "$PK/roles/programmer/al.md"):$(jq -c '.roles.al.modes' "$NRC")" '0::::# p2:["programmer"]'
 printf '%s' '{"id":"fresh","description":"d","modes":"pr-reviewer","prompt":"# f\n## Report\n"}' > "$TMP/nj.json"; mkdir -p "$PK/roles/programmer"; echo keep > "$PK/roles/programmer/fresh.md"
 try nrj "$TMP/nj.json"; check "modes: a new role does not delete a stray file of another mode" "$RC:$(cat "$PK/roles/programmer/fresh.md")" "0:keep"
 rm -f "$PK/roles/programmer/fresh.md"
 
 # --remove
-printf '%s' '{"id":"rm-a","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"; nrj "$TMP/nj.json" >/dev/null
+printf '%s' '{"id":"rm-a","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# a\n## Report\n"}}' > "$TMP/nj.json"; nrj "$TMP/nj.json" >/dev/null
 touch "$PK/roles/rm-a.md" "$PK/roles/programmer/rm-b.md" "$TMP/outside.md"
-jq --arg o "$TMP/outside.md" '.roles["rm-a"].prompt["academic-writer"] = $o' "$NRC" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$NRC"
-try nrm rm-a; check "modes remove: per-mode and legacy prompts are deleted" "$RC:$(ls "$PK/roles/programmer/rm-a.md" "$PK/roles/pr-reviewer/rm-a.md" "$PK/roles/academic-writer/rm-a.md" "$PK/roles/rm-a.md" 2>/dev/null | wc -l | tr -d ' '):$(jq -r '.roles | has("rm-a")' "$NRC")" "0:0:false"
+jq --arg o "$TMP/outside.md" '.roles["rm-a"].prompt["academic-research"] = $o' "$NRC" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$NRC"
+try nrm rm-a; check "modes remove: per-mode and legacy prompts are deleted" "$RC:$(ls "$PK/roles/programmer/rm-a.md" "$PK/roles/pr-reviewer/rm-a.md" "$PK/roles/academic-research/rm-a.md" "$PK/roles/rm-a.md" 2>/dev/null | wc -l | tr -d ' '):$(jq -r '.roles | has("rm-a")' "$NRC")" "0:0:false"
 check "modes remove: a prompt outside the kit and other roles' files stay" "$([ -f "$TMP/outside.md" ] && echo y)$([ -f "$PK/roles/programmer/rm-b.md" ] && echo y)" "yy"
 case "$OUT" in *"outside the kit and was left alone: $TMP/outside.md"*) echo "ok   modes remove: says the outside prompt was left alone";; *) echo "FAIL remove outside: $OUT"; FAIL=1;; esac
 try nrm ../x; check "modes remove: an id with a path is refused" "$RC" "1"
@@ -1795,13 +1825,13 @@ printf '%s\n' wz-one "" "wizard one" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 2 "$
 try nrw "$TMP/nw1.in"; check "modes wizard: one mode" "$RC:$(jq -c '.roles["wz-one"] | [.modes, .prompt]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-one.md" && echo same)" "0:[[\"pr-reviewer\"],{\"pr-reviewer\":\"$PH/.orca-roles/roles/pr-reviewer/wz-one.md\"}]:same"
 check "modes wizard: launched in its mode" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')" "planner rv rv-list fresh wz-one "
 printf '%s\n' wz-all "" "wizard all" 1 "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 4 4 y > "$TMP/nw2.in"
-try nrw "$TMP/nw2.in"; check "modes wizard: all, the copy option for the 2nd and 3rd" "$RC:$(jq -c '.roles["wz-all"] | [.modes, (.prompt | keys)]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/programmer/wz-all.md" && cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-all.md" && cmp -s "$SRC" "$PK/roles/academic-writer/wz-all.md" && echo same)" '0:["all",["academic-writer","pr-reviewer","programmer"]]:same'
+try nrw "$TMP/nw2.in"; check "modes wizard: all, the copy option for the 2nd and 3rd" "$RC:$(jq -c '.roles["wz-all"] | [.modes, (.prompt | keys)]' "$NRC"):$(cmp -s "$SRC" "$PK/roles/programmer/wz-all.md" && cmp -s "$SRC" "$PK/roles/pr-reviewer/wz-all.md" && cmp -s "$SRC" "$PK/roles/academic-research/wz-all.md" && echo same)" '0:["all",["academic-research","pr-reviewer","programmer"]]:same'
 case "$OUT" in *"4) Copy the prompt of pr-reviewer"*) echo "ok   modes wizard: offers the copy option";; *) echo "FAIL wizard options: $OUT"; FAIL=1;; esac
-case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes wizard: notes the unavailable mode";; *) echo "FAIL wizard note: $OUT"; FAIL=1;; esac
-case "$OUT" in *"programmer: $PH/.orca-roles/roles/programmer/wz-all.md"*"academic-writer: $PH/.orca-roles/roles/academic-writer/wz-all.md"*) echo "ok   modes wizard: the summary lists each mode's file";; *) echo "FAIL wizard summary: $OUT"; FAIL=1;; esac
+case "$OUT" in *"Note: mode 'academic-research' is not available yet"*) echo "ok   modes wizard: notes the unavailable mode";; *) echo "FAIL wizard note: $OUT"; FAIL=1;; esac
+case "$OUT" in *"programmer: $PH/.orca-roles/roles/programmer/wz-all.md"*"academic-research: $PH/.orca-roles/roles/academic-research/wz-all.md"*) echo "ok   modes wizard: the summary lists each mode's file";; *) echo "FAIL wizard summary: $OUT"; FAIL=1;; esac
 SRC2="$TMP/nw-src2.md"; printf '# Role: W2\n\n## Report\ny\n' > "$SRC2"
 printf '%s\n' wz-chain "" "wizard chain" 1 "" "" "" "" n "" "" "" "" "" "" "" "" 2 "$SRC" 2 "$SRC2" 4 y > "$TMP/nw4.in"
-try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous mode's prompt, not the first" "$RC:$(cmp -s "$SRC" "$PK/roles/programmer/wz-chain.md" && echo p):$(cmp -s "$SRC2" "$PK/roles/pr-reviewer/wz-chain.md" && echo r):$(cmp -s "$SRC2" "$PK/roles/academic-writer/wz-chain.md" && echo a)" "0:p:r:a"
+try nrw "$TMP/nw4.in"; check "modes wizard: the copy option copies the previous mode's prompt, not the first" "$RC:$(cmp -s "$SRC" "$PK/roles/programmer/wz-chain.md" && echo p):$(cmp -s "$SRC2" "$PK/roles/pr-reviewer/wz-chain.md" && echo r):$(cmp -s "$SRC2" "$PK/roles/academic-research/wz-chain.md" && echo a)" "0:p:r:a"
 printf '%s\n' wz-bad "" "x" 2 9 > "$TMP/nw3.in"; S1="$(snap)"
 try nrw "$TMP/nw3.in"; check "modes wizard: an invalid mode is refused, nothing written" "$RC:$([ "$(snap)" = "$S1" ] && echo unchanged)" "1:unchanged"
 
@@ -1822,14 +1852,14 @@ check "wizard option 1: the skeleton's Report line says the body stays complete 
 printf '%s\n' wz-gen-y "" "gen y" 2 2 "" "" "" n "" "" "" "" "" "" "" "" 1 "mission y" "step" "" "lim" "" "rep" "" n y y > "$TMP/nwg.in"
 EDITOR="$TMP/fake-editor.sh" try nrw "$TMP/nwg.in"; check "wizard option 1: answering y opens the editor and the wizard still saves the role" "$RC:$(grep -c 'mission y' "$PK/roles/pr-reviewer/wz-gen-y.md"):$([ -e "$TMP/fake-editor.sh.mark" ] && echo opened)" "0:1:opened"
 
-# phases (academic-writer only): wizard (answers: id, title, description, modes, mode, phase, then the defaults up to the prompt)
+# phases (academic-research only): wizard (answers: id, title, description, modes, mode, phase, then the defaults up to the prompt)
 nrw_ph() {  # nrw_ph <id> <modes answer> <mode pick or -> <phase answer or ->
   local a=("$1" "" "phases $1" "$2"); [ "$3" = - ] || a+=("$3"); [ "$4" = - ] || a+=("$4")
   local t=(2 "$SRC" y); [ "$2" != 1 ] || t=(2 "$SRC" 4 4 y)
   printf '%s\n' "${a[@]}" "" "" "" n "" "" "" "" "" "" "" "" "${t[@]}" > "$TMP/nwp.in"; try nrw "$TMP/nwp.in"
 }
-nrw_ph ph-exp 2 3 1; check "phases wizard: academic-writer, 1 = experiment, phases right after modes" "$RC:$(jq -c '.roles["ph-exp"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["ph-exp"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-writer"],["experiment"]]:modes,phases'
-case "$OUT" in *"Phases (academic-writer)"*"1) experiment"*"2) writing"*"3) both"*) echo "ok   phases wizard: the section lists the three options";; *) echo "FAIL phases section: $OUT"; FAIL=1;; esac
+nrw_ph ph-exp 2 3 1; check "phases wizard: academic-research, 1 = experiment, phases right after modes" "$RC:$(jq -c '.roles["ph-exp"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["ph-exp"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-research"],["experiment"]]:modes,phases'
+case "$OUT" in *"Phases (academic-research)"*"1) experiment"*"2) writing"*"3) both"*) echo "ok   phases wizard: the section lists the three options";; *) echo "FAIL phases section: $OUT"; FAIL=1;; esac
 nrw_ph ph-wri 2 3 2; check "phases wizard: 2 = writing" "$RC:$(jq -c '.roles["ph-wri"].phases' "$NRC")" '0:["writing"]'
 nrw_ph ph-both 2 3 3; R3="$RC:$(jq -c '.roles["ph-both"] | has("phases")' "$NRC")"; nrw_ph ph-def 2 3 ""; check "phases wizard: 3 and the default (empty) write no phases field" "$R3:$RC:$(jq -c '.roles["ph-def"] | has("phases")' "$NRC")" "0:false:0:false"
 nrw_ph ph-all 1 - 2; check "phases wizard: modes all asks it too" "$RC:$(jq -c '.roles["ph-all"] | [.modes, .phases]' "$NRC")" '0:["all",["writing"]]'
@@ -1840,11 +1870,11 @@ S4="$(snap)"; for bad in 4 0 x; do nrw_ph ph-bad 2 3 "$bad"; check "phases wizar
 nr_ph() {  # <id> <modes json fragment> <phases json>
   printf '%s' '{"id":"'"$1"'","description":"d",'"$2"'"phases":'"$3"',"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"; try nrj "$TMP/nj.json"
 }
-nr_ph pj-aw '"modes":"academic-writer",' '["experiment","writing"]'; check "phases from-json: academic-writer with both phases, right after modes" "$RC:$(jq -c '.roles["pj-aw"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["pj-aw"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-writer"],["experiment","writing"]]:modes,phases'
-nr_ph pj-list '"modes":["academic-writer"],' '["writing"]'; check "phases from-json: a one-element modes list" "$RC:$(jq -c '.roles["pj-list"].phases' "$NRC")" '0:["writing"]'
-printf '%s' '{"id":"pj-all","description":"d","modes":"all","phases":["experiment"],"prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# a\n## Report\n"}}' > "$TMP/nj.json"
+nr_ph pj-aw '"modes":"academic-research",' '["experiment","writing"]'; check "phases from-json: academic-research with both phases, right after modes" "$RC:$(jq -c '.roles["pj-aw"] | [.modes, .phases]' "$NRC"):$(jq -r '.roles["pj-aw"] | keys_unsorted | join(",")' "$NRC" | grep -o 'modes,phases')" '0:[["academic-research"],["experiment","writing"]]:modes,phases'
+nr_ph pj-list '"modes":["academic-research"],' '["writing"]'; check "phases from-json: a one-element modes list" "$RC:$(jq -c '.roles["pj-list"].phases' "$NRC")" '0:["writing"]'
+printf '%s' '{"id":"pj-all","description":"d","modes":"all","phases":["experiment"],"prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# a\n## Report\n"}}' > "$TMP/nj.json"
 try nrj "$TMP/nj.json"; check "phases from-json: modes all" "$RC:$(jq -c '.roles["pj-all"].phases' "$NRC")" '0:["experiment"]'
-printf '%s' '{"id":"pj-none","description":"d","modes":"academic-writer","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
+printf '%s' '{"id":"pj-none","description":"d","modes":"academic-research","prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
 try nrj "$TMP/nj.json"; check "phases from-json: no phases, no field" "$RC:$(jq -c '.roles["pj-none"] | has("phases")' "$NRC")" "0:false"
 S5="$(snap)"
 nr_ph_fail() {  # <name> <modes fragment> <phases json>
@@ -1854,37 +1884,37 @@ nr_ph_fail "phases on a programmer role" '"modes":"programmer",' '["experiment"]
 nr_ph_fail "phases on a role without modes" '' '["writing"]'
 nr_ph_fail "phases on another mode" '"modes":["pr-reviewer"],' '["writing"]'
 nr_ph_fail "phases null on a programmer role" '"modes":"programmer",' 'null'
-nr_ph_fail "an empty list" '"modes":"academic-writer",' '[]'
-nr_ph_fail "a string" '"modes":"academic-writer",' '"experiment"'
-nr_ph_fail "an unknown phase" '"modes":"academic-writer",' '["experiment","review"]'
+nr_ph_fail "an empty list" '"modes":"academic-research",' '[]'
+nr_ph_fail "a string" '"modes":"academic-research",' '"experiment"'
+nr_ph_fail "an unknown phase" '"modes":"academic-research",' '["experiment","review"]'
 nr_ph_fail "a non-string phase" '"modes":"all",' '[1]'
-nr_ph_fail "null on academic-writer" '"modes":"academic-writer",' 'null'
+nr_ph_fail "null on academic-research" '"modes":"academic-research",' 'null'
 case "$OUT" in *"Invalid"*|*"phases"*) echo "ok   phases from-json: says why";; *) echo "FAIL phases message: $OUT"; FAIL=1;; esac
-nr_ph pj-bad '"modes":"programmer",' '["writing"]'; case "$OUT" in *"phases is only for mode academic-writer"*) echo "ok   phases from-json: the refusal message";; *) echo "FAIL phases refusal: $OUT"; FAIL=1;; esac
+nr_ph pj-bad '"modes":"programmer",' '["writing"]'; case "$OUT" in *"phases is only for mode academic-research"*) echo "ok   phases from-json: the refusal message";; *) echo "FAIL phases refusal: $OUT"; FAIL=1;; esac
 
 # --repo layout
 NR="$TMP/nrm-repo"; mkdir -p "$NR"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NR/"
-rm -rf "$NR/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$NR/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
 nrr() { (cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" "$@" 2>&1); }
 nrr_w() { (cd "$TMP" && HOME="$PH" NEW_ROLE_TTY="$1" "$PKL/bin/new-role.sh" --repo "$NR" < /dev/null 2>&1); }
 printf '%s' '{"id":"rp","description":"d","modes":"pr-reviewer","prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: prompts/<mode>/<id>.md (folder created), no prompt field" "$RC:$([ -f "$NR/prompts/pr-reviewer/rp.md" ] && echo y):$(jq -c '.roles.rp | [.modes, .prompt]' "$NR/config.default.json")" '0:y:[["pr-reviewer"],null]'
 check "modes --repo: nothing in the installation" "$([ -e "$PK/roles/pr-reviewer/rp.md" ] && echo local)" ""
-printf '%s' '{"id":"rp-all","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: all writes three files" "$RC:$(ls "$NR/prompts/programmer/rp-all.md" "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-writer/rp-all.md" | wc -l | tr -d ' ')" "0:3"
+printf '%s' '{"id":"rp-all","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: all writes three files" "$RC:$(ls "$NR/prompts/programmer/rp-all.md" "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-research/rp-all.md" | wc -l | tr -d ' ')" "0:3"
 # the installed kit's own files are left alone by --repo overwrite/remove (T3), and the clone's availability decides the note (D4)
 mkdir -p "$PK/roles"; echo inst > "$PK/roles/rp-all.md"
 printf '%s' '{"id":"rp-all","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"
-check "modes --repo overwrite: lost modes are listed, not deleted; the installed legacy file stays" "$RC:$(ls "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-writer/rp-all.md" | wc -l | tr -d ' '):$(cat "$PK/roles/rp-all.md")" "0:2:inst"
-case "$OUT" in *"prompts/pr-reviewer/rp-all.md is no longer used by 'rp-all'; remove it with: git -C $NR rm prompts/pr-reviewer/rp-all.md"*"prompts/academic-writer/rp-all.md is no longer used"*) echo "ok   modes --repo overwrite: tells how to remove them with git";; *) echo "FAIL repo overwrite listing: $OUT"; FAIL=1;; esac
-printf '%s' '{"id":"rp-aw","description":"d","modes":"academic-writer","prompt":"# a\n"}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'academic-writer' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
+check "modes --repo overwrite: lost modes are listed, not deleted; the installed legacy file stays" "$RC:$(ls "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-research/rp-all.md" | wc -l | tr -d ' '):$(cat "$PK/roles/rp-all.md")" "0:2:inst"
+case "$OUT" in *"prompts/pr-reviewer/rp-all.md is no longer used by 'rp-all'; remove it with: git -C $NR rm prompts/pr-reviewer/rp-all.md"*"prompts/academic-research/rp-all.md is no longer used"*) echo "ok   modes --repo overwrite: tells how to remove them with git";; *) echo "FAIL repo overwrite listing: $OUT"; FAIL=1;; esac
+printf '%s' '{"id":"rp-aw","description":"d","modes":"academic-research","prompt":"# a\n"}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; case "$OUT" in *"Note: mode 'academic-research' is not available yet"*) echo "ok   modes --repo: availability is checked in the clone, not the installation";; *) echo "FAIL repo availability note: $OUT"; FAIL=1;; esac
 try nrr --remove rp-aw --repo "$NR"
 # D1: kit files cannot be taken over
 echo kit > "$NR/prompts/programmer/common-workers.md"; echo kit > "$NR/prompts/pr-reviewer/common-workers.md"; echo kit > "$NR/prompts/programmer/lone.md"
 R0="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
-printf '%s' '{"id":"common-workers","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+printf '%s' '{"id":"common-workers","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: common-workers is refused, nothing written" "$RC:$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R0" ] && echo unchanged)" "1:unchanged"
 printf '%s' '{"id":"lone","description":"d","prompt":"# l\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: an existing prompts file blocks a new role, nothing written" "$RC:$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R0" ] && echo unchanged)" "1:unchanged"
@@ -1897,10 +1927,10 @@ printf '%s\n' common-workers wz-x "x" 2 1 > "$TMP/nw5.in"; R1="$(cat "$NR/config
 try nrr_w "$TMP/nw5.in"; case "$OUT" in *"'common-workers' is reserved"*) echo "ok   modes wizard: common-workers is reserved";; *) echo "FAIL wizard reserved: $OUT"; FAIL=1;; esac
 printf '%s\n' lone "" "x" 2 1 > "$TMP/nw6.in"; echo kit > "$NR/prompts/programmer/lone.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
 try nrr_w "$TMP/nw6.in"; check "modes wizard --repo: an existing prompts file blocks a new role" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/programmer/lone.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
-echo kit > "$NR/prompts/academic-writer/lone2.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
-printf '%s' '{"id":"lone2","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in a later mode blocks a new role, nothing written" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/academic-writer/lone2.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
-rm -f "$NR/prompts/academic-writer/lone2.md"
+echo kit > "$NR/prompts/academic-research/lone2.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
+printf '%s' '{"id":"lone2","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in a later mode blocks a new role, nothing written" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/academic-research/lone2.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
+rm -f "$NR/prompts/academic-research/lone2.md"
 rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
 try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
 check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:8"
@@ -1909,9 +1939,9 @@ printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":tru
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
 # the git hint quotes a clone path with a space
 NS="$TMP/my clone"; mkdir -p "$NS"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NS/"
-rm -rf "$NS/prompts/academic-writer"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$NS/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
 git -C "$NS" init -q && git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m init
-printf '%s' '{"id":"rp-sp","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-writer":"# a"}}' > "$TMP/nj.json"
+printf '%s' '{"id":"rp-sp","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NS"; git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m rp-sp
 printf '%s' '{"id":"rp-sp","description":"d","modes":"programmer","overwrite":true,"prompt":"# p2\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NS"
@@ -1929,6 +1959,24 @@ try nrm common-workers; check "modes: --remove common-workers without a local ro
 # --help prints the header comment only
 HELP="$(cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --help 2>&1)"; HRC=$?
 check "new-role --help: exit 0, first and last header lines, only comment lines" "$HRC:$(printf '%s\n' "$HELP" | head -1 | grep -c '^# Wizard to create a new role'):$(printf '%s\n' "$HELP" | tail -1 | grep -c '^#     Each mode has its own prompt file'):$(printf '%s\n' "$HELP" | grep -vc '^#')" "0:1:1:0"
+# the old mode id (academic-writer) is an alias of academic-research: same result as the new id plus one note, and nothing is written or deleted under the old name
+AWN="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version."
+mkdir -p "$PK/roles/academic-research"; echo live > "$PK/roles/academic-research/ali-keep.md"; ln -sfn academic-research "$PK/roles/academic-writer"
+printf '%s' '{"id":"ali","description":"d","modes":"academic-writer","phases":["writing"],"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "alias from-json: modes academic-writer (and phases) is saved as academic-research, one note naming the JSON file, prompt only in the new folder" "$RC:$(jq -c '.roles.ali | [.modes, .phases, (.prompt | keys)]' "$NRC"):$(printf '%s\n' "$OUT" | grep -c "^$AWN Found in: $TMP/nj.json. Update it to academic-research.\$"):$(ls "$PK/roles/academic-research/ali.md" 2>/dev/null | wc -l | tr -d ' ')" '0:[["academic-research"],["writing"],["academic-research"]]:1:1'
+printf '%s' '{"id":"ali","description":"d","modes":"academic-writer","overwrite":true,"prompt":"# a2\n## Report\n"}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; check "alias from-json: overwriting a role that stays in academic-research keeps its prompt, though the old folder name is a symlink to the new one" "$RC:$(head -n1 "$PK/roles/academic-research/ali.md"):$(cat "$PK/roles/academic-research/ali-keep.md")" "0:# a2:live"
+rm -f "$PK/roles/academic-writer" "$PK/roles/academic-research/ali-keep.md"
+printf '%s' '{"id":"alp","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# old\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; R1="$RC:$(head -n1 "$PK/roles/academic-research/alp.md"):$(printf '%s\n' "$OUT" | grep -c '^Note: mode .academic-writer.'):$([ -e "$PK/roles/academic-writer" ] && echo oldfolder || true)"
+printf '%s' '{"id":"alq","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# old\n## Report\n","academic-research":"# new\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; R2="$RC:$(head -n1 "$PK/roles/academic-research/alq.md"):$(jq -c '.roles.alq.prompt | keys' "$NRC")"
+printf '%s' '{"id":"aln","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# new\n## Report\n"}}' > "$TMP/nj.json"
+try nrj "$TMP/nj.json"; R3="$RC:$(printf '%s\n' "$OUT" | grep -c 'Note: mode .academic-writer' || true)"
+check "alias from-json: a prompt keyed by the old id is written for academic-research (one note, no old folder); with both keys the new one wins; no old id, no note" "$R1|$R2|$R3" '0:# old:1:|0:# new:["academic-research","pr-reviewer","programmer"]|0:0'
+printf '%s' '{"id":"alb","description":"d","modes":"pr-reviewer","phases":["writing"],"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"; S5="$(snap)"
+try nrj "$TMP/nj.json"; check "alias from-json: phases outside academic-research says academic-research and writes nothing" "$RC:$(printf '%s\n' "$OUT" | grep -c '^phases is only for mode academic-research (the other modes have no phases)$'):$([ "$(snap)" = "$S5" ] && echo unchanged)" "1:1:unchanged"
+nrw_ph al-wiz 2 academic-writer 1; check "alias wizard: typing academic-writer as the mode saves academic-research, prints one note and asks the phases" "$RC:$(jq -c '.roles["al-wiz"] | [.modes, .phases]' "$NRC"):$(printf '%s\n' "$OUT" | grep -c "^$AWN Found in: the mode typed. Update it to academic-research.\$"):$(printf '%s\n' "$OUT" | grep -c 'Phases (academic-research)')" '0:[["academic-research"],["experiment"]]:1:1'
 rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy is shared with other sections
 }
 
@@ -2550,10 +2598,10 @@ ic 'del(.settings.mode)'; irun
 check "install.sh Enabled: no settings.mode is programmer" "$IRC:$IENA" "0:Enabled (programmer): $(iroles)"
 ic '.settings.mode = "pr-reviewer"'; irun
 check "install.sh Enabled: names a set mode and lists its roles" "$IRC:$IENA" "0:Enabled (pr-reviewer): $(iroles)"
-ic '.settings.mode = "academic-writer" | del(.settings.phase)'; irun
-check "install.sh Enabled: academic-writer without phase says experiment" "$IRC:$IENA" "0:Enabled (academic-writer, phase experiment): $(iroles)"
+ic '.settings.mode = "academic-research" | del(.settings.phase)'; irun
+check "install.sh Enabled: academic-research without phase says experiment" "$IRC:$IENA" "0:Enabled (academic-research, phase experiment): $(iroles)"
 ic '.settings.phase = "writing"'; irun
-check "install.sh Enabled: academic-writer names its phase" "$IRC:$IENA" "0:Enabled (academic-writer, phase writing): $(iroles)"
+check "install.sh Enabled: academic-research names its phase" "$IRC:$IENA" "0:Enabled (academic-research, phase writing): $(iroles)"
 # the pinned browser stack: package.json and the lockfile are copied, an installed node_modules and the browsers are kept
 mkdir -p "$IH/.orca-roles/pw/node_modules/x" "$IH/.orca-roles/browsers/b"; echo keep > "$IH/.orca-roles/pw/node_modules/x/f"; echo keep > "$IH/.orca-roles/browsers/b/f"; echo old > "$IH/.orca-roles/pw/package.json"; rm -f "$IH/.orca-roles/pw/package-lock.json"
 irun
@@ -3315,34 +3363,34 @@ OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH=
 check "relaunch: outside a team -> exit 1 with the 'run this from the worktree' message, no Orca call at all" "$RC:$(printf '%s' "$OUT" | grep -c 'not found: run this from the worktree where the roles were opened.'):$(( $(grep -c . "$RLOG") - N0 )):$(find "$RN/.git" -maxdepth 1 -name "orca-roles*" | wc -l | tr -d " ")" "1:1:0:0"
 }
 
-sec_academic_writer() {
-# academic-writer: phases (roles per phase, validation, planner message), the document scaffold, launch's git and phase guards, phase.sh
-# Own test kit (never the clone) with a fake academic-writer mode.
+sec_academic_research() {
+# academic-research: phases (roles per phase, validation, planner message), the document scaffold, launch's git and phase guards, phase.sh
+# Own test kit (never the clone) with a fake academic-research mode.
 pk_setup
-mkdir -p "$PK/prompts/academic-writer"; for f in planner common-workers exp wr both nop; do echo "# $f" > "$PK/prompts/academic-writer/$f.md"; done
+mkdir -p "$PK/prompts/academic-research"; for f in planner common-workers exp wr both nop; do echo "# $f" > "$PK/prompts/academic-research/$f.md"; done
 cat > "$PK/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner", "modes": "all", "phases": ["writing"] },
-             "exp": { "title": "Exp", "modes": ["academic-writer"], "phases": ["experiment"] },
-             "wr": { "title": "Wr", "modes": ["academic-writer"], "phases": ["writing"] },
-             "both": { "title": "Both", "modes": ["academic-writer"], "phases": ["experiment", "writing"] },
-             "nop": { "title": "Nop", "modes": ["academic-writer"] },
+             "exp": { "title": "Exp", "modes": ["academic-research"], "phases": ["experiment"] },
+             "wr": { "title": "Wr", "modes": ["academic-research"], "phases": ["writing"] },
+             "both": { "title": "Both", "modes": ["academic-research"], "phases": ["experiment", "writing"] },
+             "nop": { "title": "Nop", "modes": ["academic-research"] },
              "pe": { "title": "Pe", "modes": ["programmer", "pr-reviewer"], "phases": ["writing"] } } }
 J
 AC="$PK/config.json"
 awe() { jq -c --argjson s "$2" '.settings += $s' "$AC" > "$TMP/aw-c.json"; KIT="$PK" enabled_roles "$TMP/aw-c.json" | tr '\n' ' '; }
 
-# library: the phase filter applies only in academic-writer, the planner stays, a missing phase is experiment
-check "phases: phase_of, and enabled_roles by phase (planner kept despite its phases)" "$(jq -c '.settings.mode="academic-writer"' "$AC" > "$TMP/aw-m.json"; KIT="$PK" phase_of "$TMP/aw-m.json"):$(awe x '{"mode":"academic-writer"}'):$(awe x '{"mode":"academic-writer","phase":"experiment"}'):$(awe x '{"mode":"academic-writer","phase":"writing"}')" "experiment:planner exp both nop :planner exp both nop :planner wr both nop "
+# library: the phase filter applies only in academic-research, the planner stays, a missing phase is experiment
+check "phases: phase_of, and enabled_roles by phase (planner kept despite its phases)" "$(jq -c '.settings.mode="academic-research"' "$AC" > "$TMP/aw-m.json"; KIT="$PK" phase_of "$TMP/aw-m.json"):$(awe x '{"mode":"academic-research"}'):$(awe x '{"mode":"academic-research","phase":"experiment"}'):$(awe x '{"mode":"academic-research","phase":"writing"}')" "experiment:planner exp both nop :planner exp both nop :planner wr both nop "
 check "phases: ignored in programmer and pr-reviewer, even with settings.phase set" "$(awe x '{"mode":"programmer","phase":"experiment"}'):$(awe x '{"mode":"pr-reviewer","phase":"experiment"}'):$(awe x '{"phase":"writing"}')" "planner pe :planner pe :planner pe "
 B="$(for v in '[]' '"writing"' '["x"]' '[1]' '{}' 'null' '["writing","Experiment"]'; do jq -c --argjson v "$v" '.roles.exp.phases=$v' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: role exp: phases must be a non-empty list of "experiment", "writing"'; done | tr '\n' ' ')"
 S="$(for v in '"Writing"' '1' 'null' '""' '[]' '"experiment "'; do jq -c --argjson v "$v" '.settings.phase=$v | .settings.mode="programmer"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: invalid configuration: settings.phase must be "experiment" or "writing"'; done | tr '\n' ' ')"
 check "phases: check_config rejects bad phases and settings.phase (any mode), accepts good ones" "$B:$S:$(KIT="$PK" check_config "$AC"):$(jq -c '.settings.phase="writing"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json")" "1 1 1 1 1 1 1 :1 1 1 1 1 1 ::"
-jq -c '.settings.mode="academic-writer" | .settings.phase="writing"' "$AC" > "$TMP/aw-m.json"
+jq -c '.settings.mode="academic-research" | .settings.phase="writing"' "$AC" > "$TMP/aw-m.json"
 printf 'PLANNER=h-P\nWR=h-W\nBOTH=h-B\nNOP=h-N\nPE=h-E\n' > "$TMP/aw-st.env"
 M1="$(KIT="$PK" planner_msg "$TMP/aw-m.json" "planner wr both nop" "$TMP/aw-st.env" "" "" 0)"; M2="$(KIT="$PK" planner_msg "$AC" "planner pe" "$TMP/aw-st.env" "" "" 0)"
-check "planner_msg: Phase only in academic-writer, right after the mode" "$(printf '%s' "$M1" | grep -c 'Mode: academic-writer\. Phase: writing\. Active roles'):$(printf '%s' "$M2" | grep -c 'Phase:')" "1:0"
+check "planner_msg: Phase only in academic-research, right after the mode" "$(printf '%s' "$M1" | grep -c 'Mode: academic-research\. Phase: writing\. Active roles'):$(printf '%s' "$M2" | grep -c 'Phase:')" "1:0"
 
 # scaffold: fresh repo, then idempotent
 SC="$PK/bin/academic-scaffold.sh"; SD="$TMP/aw-sc1"; mkdir -p "$SD"; git -C "$SD" init -q
@@ -3350,18 +3398,18 @@ DIRS="experimentation/configs experimentation/data experimentation/models experi
 try "$SC" "$SD"; O1="$OUT"; R1="$RC"
 GIK="$(cd "$SD" && find . -name .gitkeep | sort | tr '\n' ' ')"; H0="$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)"; I0="$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')"
 try "$SC" "$SD"
-check "scaffold: fresh repo gets every folder, .gitkeep only in tracked ones, the ignore lines; second run prints nothing and changes nothing" "$R1:$(cd "$SD" && for d in $DIRS; do [ -d "$d" ] || echo "$d"; done | wc -l | tr -d ' '):$GIK:$(printf '%s\n' "$O1" | grep -c '^Created '):$(printf '%s\n' "$O1" | tail -1):$(sed -n 1p "$SD/.gitignore"):$(wc -l < "$SD/.gitignore" | tr -d ' '):$RC:[$OUT]:$([ "$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)" = "$H0" ] && echo same):$(ls -A "$SD" | tr '\n' ' ')" "0:0:./article/images/.gitkeep ./article/literature/.gitkeep ./article/sections/.gitkeep ./article/tables/.gitkeep ./article/template/.gitkeep ./experimentation/configs/.gitkeep ./experimentation/results/.gitkeep ./experimentation/scripts/.gitkeep ./experimentation/src/.gitkeep :24:Updated .gitignore:# orca-roles academic-writer:20:0:[]:same:.git .gitignore article experimentation "
+check "scaffold: fresh repo gets every folder, .gitkeep only in tracked ones, the ignore lines; second run prints nothing and changes nothing" "$R1:$(cd "$SD" && for d in $DIRS; do [ -d "$d" ] || echo "$d"; done | wc -l | tr -d ' '):$GIK:$(printf '%s\n' "$O1" | grep -c '^Created '):$(printf '%s\n' "$O1" | tail -1):$(sed -n 1p "$SD/.gitignore"):$(wc -l < "$SD/.gitignore" | tr -d ' '):$RC:[$OUT]:$([ "$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)" = "$H0" ] && echo same):$(ls -A "$SD" | tr '\n' ' ')" "0:0:./article/images/.gitkeep ./article/literature/.gitkeep ./article/sections/.gitkeep ./article/tables/.gitkeep ./article/template/.gitkeep ./experimentation/configs/.gitkeep ./experimentation/results/.gitkeep ./experimentation/scripts/.gitkeep ./experimentation/src/.gitkeep :24:Updated .gitignore:# orca-roles academic-research:20:0:[]:same:.git .gitignore article experimentation "
 GIL="$(sed -n '2,$p' "$SD/.gitignore" | tr '\n' ' ')"
 check "scaffold: ignore lines are exactly the spec's, in order; git index untouched" "$GIL:$([ "$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')" = "$I0" ] && echo same)" 'experimentation/data/* !experimentation/data/README.md experimentation/models/* !experimentation/models/README.md experimentation/logs/ experimentation/results/raw/ article/literature/pdfs/ article/build/ *.aux *.bbl *.blg *.fdb_latexmk *.fls *.out *.synctex.gz *.toc *.lof *.lot article/**/*.log :same'
 
 # scaffold: an existing project is never overwritten
 SE="$TMP/aw-sc2"; mkdir -p "$SE/experimentation/src" "$SE/article/tables"; printf 'print(1)\n' > "$SE/experimentation/src/mine.py"; printf 'node_modules\n*.aux' > "$SE/.gitignore"
 try "$SC" "$SE"; E1="$OUT"
-EXP="$(printf 'node_modules\n*.aux\n\n# orca-roles academic-writer\n'; sed -n '2,$p' "$SD/.gitignore" | grep -vxF '*.aux')"
+EXP="$(printf 'node_modules\n*.aux\n\n# orca-roles academic-research\n'; sed -n '2,$p' "$SD/.gitignore" | grep -vxF '*.aux')"
 check "scaffold: existing folders keep their content and get no .gitkeep; a .gitignore without final newline keeps its lines, gets header and only the missing lines" "$(ls -A "$SE/experimentation/src"):$(ls -A "$SE/article/tables"):$(cat "$SE/experimentation/src/mine.py"):$([ "$(cat "$SE/.gitignore")" = "$EXP" ] && echo exact):$(printf '%s\n' "$E1" | grep -c 'Created experimentation/src$\|Created article/tables$'):$(printf '%s\n' "$E1" | tail -1)" "mine.py::print(1):exact:0:Updated .gitignore"
 printf 'extra\n' >> "$SE/.gitignore"; try "$SC" "$SE"
-SF="$TMP/aw-sc3"; mkdir -p "$SF"; printf '# orca-roles academic-writer\nmy\n' > "$SF/.gitignore"; try "$SC" "$SF"
-check "scaffold: header not duplicated (existing header, rerun), no-arg and non-directory fail with a message and write nothing" "$RC:$(grep -c '^# orca-roles academic-writer$' "$SE/.gitignore"):$(grep -c '^# orca-roles academic-writer$' "$SF/.gitignore"):$(head -2 "$SF/.gitignore" | tr '\n' ' '):$("$SC" >/dev/null 2>&1; echo $?):$("$SC" "$TMP/aw-nonexistent" >/dev/null 2>&1; echo $?):$([ -e "$TMP/aw-nonexistent" ] && echo created)" "0:1:1:# orca-roles academic-writer my :1:1:"
+SF="$TMP/aw-sc3"; mkdir -p "$SF"; printf '# orca-roles academic-research\nmy\n' > "$SF/.gitignore"; try "$SC" "$SF"
+check "scaffold: header not duplicated (existing header, rerun), no-arg and non-directory fail with a message and write nothing" "$RC:$(grep -c '^# orca-roles academic-research$' "$SE/.gitignore"):$(grep -c '^# orca-roles academic-research$' "$SF/.gitignore"):$(head -2 "$SF/.gitignore" | tr '\n' ' '):$("$SC" >/dev/null 2>&1; echo $?):$("$SC" "$TMP/aw-nonexistent" >/dev/null 2>&1; echo $?):$([ -e "$TMP/aw-nonexistent" ] && echo created)" "0:1:1:# orca-roles academic-research my :1:1:"
 
 # launch: git is required, the phase guard, the status line
 AM="$TMP/aw-proj"; mkdir -p "$AM" "$TMP/awbin" "$TMP/awnogit"; git -C "$AM" init -q -b main; AG="$AM/.git"
@@ -3383,9 +3431,9 @@ ap() { (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH
 ah() { cut -d= -f1 "$AG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
 astate() { echo "$(cat "$AG/orca-roles.config.json" "$AG/orca-roles.env" "$AG/orca-roles.overrides.json" 2>/dev/null | cksum)"; }
 acl() { grep -c '^terminal close' "$ALOG" || true; }
-(cd "$TMP/awnogit" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE GIT_CEILING_DIRECTORIES="$TMP" HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" "$PKL/bin/launch.sh" --mode academic-writer > "$TMP/aw-ng.out" 2>&1) && NGRC=0 || NGRC=$?
-check "launch: academic-writer outside a git repository fails with its message, opens and creates nothing" "$NGRC:$(grep -c 'mode academic-writer needs the project to be a git repository' "$TMP/aw-ng.out"):$(grep -c '^terminal create' "$ALOG"):$(find "$TMP/awnogit" -mindepth 1 ! -name orca-roles-launch.log | wc -l | tr -d ' ')" "1:1:0:0"
-try al --mode academic-writer
+(cd "$TMP/awnogit" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE GIT_CEILING_DIRECTORIES="$TMP" HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" "$PKL/bin/launch.sh" --mode academic-research > "$TMP/aw-ng.out" 2>&1) && NGRC=0 || NGRC=$?
+check "launch: academic-research outside a git repository fails with its message, opens and creates nothing" "$NGRC:$(grep -c 'mode academic-research needs the project to be a git repository' "$TMP/aw-ng.out"):$(grep -c '^terminal create' "$ALOG"):$(find "$TMP/awnogit" -mindepth 1 ! -name orca-roles-launch.log | wc -l | tr -d ' ')" "1:1:0:0"
+try al --mode academic-research
 SD1="$(ls -A "$AM" | tr '\n' ' ')"
 check "launch: starts in experiment with the experiment roles only, prints Phase, runs the scaffold; --status shows Phase" "$RC:$(ah):$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$SD1:$(jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"):$(al --status | grep -c '^Phase: experiment$')" "0:PLANNER EXP BOTH NOP :1:.git .gitignore article experimentation :unset:1"
 # phase guard
@@ -3403,7 +3451,7 @@ B="$(astate)"; try ap experiment; R5="$RC:$OUT"
 try ap writing; R6="$RC:$(printf '%s' "$OUT" | grep -c 'the repository has uncommitted changes; commit them first' || true):$(astate):$(acl)"; rm -f "$AM/dirty.txt"
 check "phase.sh: bad arguments exit 1, same phase is a no-op, dirty repo refused with nothing closed or changed" "$R1$R2$R3$R4:$R5:$R6" "1111:0:Already in phase experiment.:1:1:$B:0"
 # phase.sh: experiment -> writing -> experiment
-git -C "$AM" status --porcelain | grep -q . && echo "FAIL academic-writer: repo dirty before the switch"
+git -C "$AM" status --porcelain | grep -q . && echo "FAIL academic-research: repo dirty before the switch"
 N="$(grep -c '^terminal create' "$ALOG" || true)"; C0="$(acl)"
 try ap writing
 check "phase.sh writing: closes only the experiment role, opens the writing one, saves the phase, no 'roles would open it again' hint" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(grep -c 'terminal close --terminal h-Exp ' "$ALOG"):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(jq -c '.set' "$AG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'still enabled in the configuration'):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH NOP PLANNER WR :$((C0 + 1)):1:1:writing:[{\"path\":[\"settings\",\"phase\"],\"value\":\"writing\"}]:0:Phase: writing."
@@ -3442,14 +3490,56 @@ check "launch: a phase change is refused when the old-phase role's saved pty is 
 rm -f "$TMP/aw-listjson" "$AG/orca-roles.pty"
 # --reset drops the saved phase
 OSAVED="$(jq -c '[.set[] | select(.path == ["settings","phase"]) | .value]' "$AG/orca-roles.overrides.json")"
-try al --reset --mode academic-writer
+try al --reset --mode academic-research
 check "launch --reset: the phase saved by a switch is forgotten and the team goes back to experiment" "$OSAVED:$RC:$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$(jq -c '[.set[] | select(.path == ["settings","phase"]) | .value]' "$AG/orca-roles.overrides.json"):$(awcfg)" '["writing"]:0:1:[]:unset'
 touch "$TMP/aw-alive"
 # close-role hint
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" "$PKL/bin/close-role.sh" nop 2>&1) > "$TMP/aw-h1.out"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
-check "phase.sh refuses outside academic-writer; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-writer (this worktree: programmer):1:1:0"
-rm -rf "$PK/prompts/academic-writer"   # the other sections reuse this kit and expect the mode unavailable
+check "phase.sh refuses outside academic-research; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-research (this worktree: programmer):1:1:0"
+# the renamed mode keeps its old id as an alias: old ids in persisted state read as the new mode, with a note; the saved state moves to the new id only when a launch succeeds
+LC="$TMP/aw-lc"; mkdir -p "$LC"
+jq -c '.settings.mode="academic-writer" | .roles.exp.modes=["academic-writer"] | .roles.wr.prompt={"academic-writer":"/old/wr.md"} | .roles.both.prompt={"academic-writer":"/old/both.md","academic-research":"/new/both.md"}' "$AC" > "$LC/old.json"
+jq -c '.roles.exp.modes=["academic-wirter"]' "$AC" > "$LC/typo.json"
+mkdir -p "$LC/proj"; git -C "$LC/proj" init -q; printf '%s' '{"settings":{"mode":"academic-writer"},"roles":{"both":{"modes":["academic-writer","programmer"],"prompt":{"academic-writer":"/old/both.md","academic-research":"/new/both.md"}},"wr":{"prompt":{"academic-writer":"/old/wr.md"}}}}' > "$LC/proj/.orca-roles.json"
+LM="$(cd "$LC/proj" && KIT="$PK" merged_config . | jq -c '[.settings.mode, .roles.both.modes, .roles.both.prompt, .roles.wr.prompt]')"
+check "legacy id: a config saved under the old mode id reads as academic-research (mode, roles, prompt keys; merged with a project config the new key wins) and the library accepts it; a typo is still rejected" "$(KIT="$PK" mode_of "$LC/old.json"):$(KIT="$PK" enabled_roles "$LC/old.json" | tr '\n' ' '):$(KIT="$PK" prompt_of "$LC/old.json" wr):$(KIT="$PK" prompt_of "$LC/old.json" both):[$(KIT="$PK" check_config "$LC/old.json")]:$(KIT="$PK" check_config "$LC/typo.json" | grep -c 'unknown mode ids'):$(canon_mode academic-writer)|$(canon_mode Academic-Writer)|$(canon_mode academic-research):$LM" "academic-research:planner exp both nop :/old/wr.md:/new/both.md:[]:1:academic-research|Academic-Writer|academic-research:[\"academic-research\",[\"academic-research\",\"programmer\"],{\"academic-research\":\"/new/both.md\"},{\"academic-research\":\"/old/wr.md\"}]"
+LY=""; i=0; for j in '{"settings":{"mode":"academic-writer"}}' '{"roles":{"x":{"modes":["programmer","academic-writer"]}}}' '{"roles":{"x":{"prompt":{"academic-writer":"p"}}}}' '{"mode":"academic-writer"}' '{"set":[{"path":["settings","mode"],"value":"academic-writer"}]}' '{"settings":{"mode":"academic-research"},"roles":{"x":{"modes":["academic-research"],"prompt":{"academic-research":"p"}}},"mode":"pr-reviewer","set":[{"path":["roles","x","model"],"value":"academic-writer"}]}' '{"roles":{"x":{"modes":"all"}}}' garbage; do
+  i=$((i + 1)); printf '%s' "$j" > "$LC/ly$i.json"; if legacy_mode_in "$LC/ly$i.json"; then LY="${LY}y"; else LY="${LY}n"; fi
+done
+if legacy_mode_in "$LC/missing.json"; then LY="${LY}y"; else LY="${LY}n"; fi
+check "legacy id: legacy_mode_in finds the old id in settings.mode, a role's modes, a prompt key, .mode and a settings.mode entry of .set, and nothing else (missing or invalid file: no)" "$LY" "yyyyynnnn"
+printf '%s' '{"only":["a"],"set":[{"path":["settings","mode"],"value":"academic-writer"},{"path":["roles","x","model"],"value":"academic-writer"}],"mode":"academic-writer"}' > "$LC/ov.json"
+check "legacy id: --mode, --mode=, --set settings.mode= and --set=settings.mode= are stored as academic-research; canon_overrides maps .mode and the settings.mode entry of .set only" "$(for a in "--mode academic-writer" "--mode=academic-writer" "--set settings.mode=academic-writer" "--set=settings.mode=academic-writer" "--mode Academic-Writer"; do overrides_from_args $a | jq -r .mode; done | tr '\n' ' ')$(canon_overrides "$LC/ov.json" | jq -c '[.mode, .set[0].value, .set[1].value, .only]')" "academic-research academic-research academic-research academic-research Academic-Writer [\"academic-research\",\"academic-research\",\"academic-writer\",[\"a\"]]"
+# launch under the old id
+LG="$TMP/aw-leg"; mkdir -p "$LG"; git -C "$LG" init -q -b main; LGG="$LG/.git"
+aln() { (cd "$LG" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
+lgh() { cut -d= -f1 "$LGG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
+lgmsg() { (cd "$LG" && KIT="$PK" planner_msg "$LGG/orca-roles.config.json" "planner exp" "$LGG/orca-roles.env" "" "" 0); }
+rm -f "$TMP/aw-alive"; printf '{ "settings": { "mode": "academic-writer" } }' > "$LG/.orca-roles.json"
+try aln --mode academic-writer
+check "legacy id: the old id in .orca-roles.json and --mode launches the academic-research team, prints one note naming both sources, keeps a copy for the Planner, saves only the new id, and the Planner is told to relay it" "$RC:$(lgh):$(printf '%s\n' "$OUT" | grep -c "^Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: .orca-roles.json (.*/.orca-roles.json); the options of this run (--mode or the setup script in orca.yaml). Update it to academic-research.$"):$(printf '%s\n' "$OUT" | grep -c 'academic-writer'):$(printf '%s\n' "$OUT" | grep -c '^Mode: academic-research$'):$([ "$(cat "$LGG/orca-roles.legacy-note")" = "$(printf '%s\n' "$OUT" | grep '^Note: ')" ] && echo same):$(jq -r .mode "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json"):$(lgmsg | grep -c 'Tell the user at startup, in one line: Note: mode .academic-writer. is now called')" "0:PLANNER EXP BOTH NOP :1:1:1:same:academic-research:academic-research:1"
+rm -f "$LG/.orca-roles.json" "$LGG/orca-roles.env"
+try aln --reset --mode academic-research
+check "legacy id: with the new name nothing about the alias shows (no note, no copy for the Planner, nothing in its message)" "$RC:$(lgh):$(printf '%s\n' "$OUT" | grep -c 'academic-writer\|^Note:'):$([ -e "$LGG/orca-roles.legacy-note" ] && echo present):$(lgmsg | grep -c 'Tell the user')" "0:PLANNER EXP BOTH NOP :0::0"
+rm -f "$LGG/orca-roles.env"; printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"
+try aln
+check "legacy id: saved options with the old mode id still select the same team, are rewritten to the new id with the role selection kept, and are named in the note; no normalized copy is left" "$RC:$(lgh):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(printf '%s\n' "$OUT" | grep -c "^Note: .*Found in: this worktree's saved options (.*orca-roles.overrides.json)\. Update it to academic-research\.$"):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' '):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:PLANNER EXP :[\"academic-research\",[\"exp\"]]:1:0:academic-research"
+# a team open under the old id is the same mode
+jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
+printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; touch "$TMP/aw-alive"
+try aln --mode academic-research
+check "legacy id: a team open under the old id is the same mode: no 'Close the team first', no dropped role selection" "$RC:$(printf '%s\n' "$OUT" | grep -c 'Close the team first\|Mode changed'):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:0:[\"academic-research\",[\"exp\"]]:academic-research"
+# a failed launch changes nothing; --status reads the old id
+printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
+LB="$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" | cksum)"
+try aln --only nonexist
+check "legacy id: a launch that fails leaves the saved options, config, handles and note as they were, and no normalized copy" "$RC:$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" | cksum):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' ')" "1:$LB:0"
+check "legacy id: --status reads a worktree configuration saved under the old id as academic-research, with its phase" "$(aln --status | grep '^Mode:\|^Phase:' | tr '\n' ' ')" "Mode: academic-research Phase: experiment "
+SG="$TMP/aw-sc4"; mkdir -p "$SG"; printf '# orca-roles academic-writer\nmy\n' > "$SG/.gitignore"; try "$SC" "$SG"
+check "legacy id: the scaffold treats a .gitignore with the old header as having the block: no second header, old header untouched" "$RC:$(grep -c '^# orca-roles' "$SG/.gitignore"):$(head -2 "$SG/.gitignore" | tr '\n' ' ')" "0:1:# orca-roles academic-writer my "
+rm -f "$TMP/aw-alive"
+rm -rf "$PK/prompts/academic-research"   # the other sections reuse this kit and expect the mode unavailable
 }
 
 sch_setup() {
