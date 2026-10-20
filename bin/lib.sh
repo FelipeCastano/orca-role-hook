@@ -24,7 +24,7 @@ merged_config() {  # $1 = project/worktree folder
   local base="$KIT/config.json" proj
   [ -f "$base" ] || base="$KIT/config.default.json"
   proj="$(project_config "${1:-.}")"
-  if [ -n "$proj" ]; then jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' (.[0] | legacy($l)) * (.[1] | legacy($l))' "$base" "$proj"; else jq --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' legacy($l)' "$base"; fi
+  if [ -n "$proj" ]; then jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" "$LEGACY_JQ"' (.[0] | legacy($l) | legacy_modes($lm)) * (.[1] | legacy($l) | legacy_modes($lm))' "$base" "$proj"; else jq --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" "$LEGACY_JQ"' legacy($l) | legacy_modes($lm)' "$base"; fi
 }
 # Path of the .orca-roles.json that applies to a folder (empty if none).  project_config <folder>
 project_config() {
@@ -52,9 +52,13 @@ model_error_regex() {
 }
 setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
-MODE_IDS="programmer pr-reviewer academic-writer"
-MODES_JSON='["programmer","pr-reviewer","academic-writer"]'
-MODE_LIST="programmer, pr-reviewer, academic-writer"
+MODE_IDS="programmer pr-reviewer academic-research"
+MODES_JSON='["programmer","pr-reviewer","academic-research"]'
+MODE_LIST="programmer, pr-reviewer, academic-research"
+# Modes renamed between versions (old id → new id); the old id is accepted with a note until the version after the next tag.
+LEGACY_MODES='{"academic-writer": "academic-research"}'
+# The current id of a mode (an old id maps to its new one; anything else is unchanged), without a trailing newline.  canon_mode <id>
+canon_mode() { jq -jn --argjson l "$LEGACY_MODES" --arg m "$1" '$l[$m] // $m'; }
 # Why a mode id is unusable (empty output if it is fine): the match is exact against the list, so nothing like ../x or a path reaches a prompt path.
 mode_error() {  # <id>
   local m
@@ -72,20 +76,21 @@ mode_of() {
   m="$(jq -j '(if has("settings") then .settings else {} end) | if type != "object" then error("settings must be an object") else (if has("mode") then .mode else "programmer" end) end | if type == "string" then . else tojson end' "$1" 2>/dev/null; rc=$?; printf x; exit $rc)" \
     || { echo "invalid settings in the configuration: settings must be an object" >&2; return 1; }
   m="${m%x}"   # the sentinel keeps a trailing newline in the id, which then fails the exact match
+  m="$(canon_mode "$m"; printf x)"; m="${m%x}"   # a configuration saved under an old mode id still reads as the new one
   e="$(mode_error "$m")"
   [ -z "$e" ] || { echo "$e" >&2; return 1; }
   printf '%s\n' "$m"
 }
-# The phase of a configuration (settings.phase, "experiment" if unset): academic-writer only.  phase_of <config>
+# The phase of a configuration (settings.phase, "experiment" if unset): academic-research only.  phase_of <config>
 phase_of() { jq -r '(.settings // {}) | .phase // "experiment" | tostring' "$1" 2>/dev/null || echo experiment; }
 # Enabled roles of the configuration's mode, in order; the planner always runs. A role without "modes" belongs to programmer only.
-# In academic-writer a role with "phases" also needs the current phase in it; in the other modes "phases" is ignored.
+# In academic-research a role with "phases" also needs the current phase in it; in the other modes "phases" is ignored.
 enabled_roles() {
   local m p; m="$(mode_of "$1")" || return 1
   p="$(phase_of "$1")"
-  jq -r --arg m "$m" --arg p "$p" '.roles | to_entries[]
-    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then index($m) != null else false end)
-        and ($m != "academic-writer" or (.value | has("phases") | not) or (.value.phases | type == "array" and index($p) != null))))
+  jq -r --arg m "$m" --arg p "$p" --argjson lm "$LEGACY_MODES" '.roles | to_entries[]
+    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (map($lm[.]? // .) | index($m) != null) else false end)
+        and ($m != "academic-research" or (.value | has("phases") | not) or (.value.phases | type == "array" and index($p) != null))))
     | .key' "$1"
 }
 # The enabled roles that can start: a worker whose prompt file for the mode is missing is skipped with a warning.  launchable_roles <config>
@@ -106,21 +111,38 @@ prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$
 # A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~), or the mode's prompts/<mode>/<role>.md
 prompt_of() {
   local m p; m="$(mode_of "$1" 2>/dev/null)" || return 1
-  p="$(jq -r --arg r "$2" --arg m "$m" '.roles[$r].prompt as $p
+  p="$(jq -r --arg r "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '.roles[$r].prompt as $p
     | if ($p | type) == "string" then (if $m == "programmer" then $p else empty end)
-      elif ($p | type) == "object" then ($p[$m] // empty | strings) else empty end' "$1")"
+      elif ($p | type) == "object" then (($p[$m] // ([$p | to_entries[] | select(($lm[.key] // .key) == $m) | .value] | first)) // empty | strings) else empty end' "$1")"
   p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$m/$2.md}"
 }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
+# Renamed modes (LEGACY_MODES) are mapped in the same places by legacy_modes, defined below with legacy.
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
-LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
+LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;
+def legacy_modes($lm): (if (.settings? | type) == "object" and (.settings.mode | type) == "string" then .settings.mode |= ($lm[.] // .) else . end)
+  | (if (.roles? | type) == "object" then .roles |= with_entries(if (.value | type) == "object" then
+      (if (.value.modes | type) == "array" then .value.modes |= map(if type == "string" then ($lm[.] // .) else . end) else . end)
+      | (if (.value.prompt | type) == "object" then .value.prompt |= ((to_entries | map(select($lm[.key]) | .key = $lm[.key]) | from_entries) + with_entries(select($lm[.key] | not))) else . end)
+    else . end) else . end);
+def mv_path($kp): . as $p | if type != "string" then . else
+    ([$kp[] | select(. as $k | $p | startswith($k + "roles/academic-writer/") or startswith($k + "prompts/academic-writer/"))] | first) as $k
+    | if $k == null then $p else $k + ($p[($k | length):] | sub("^(?<a>roles|prompts)/academic-writer/"; "\(.a)/academic-research/")) end end;
+def legacy_paths($kp): if (.roles? | type) == "object" then .roles |= with_entries(if (.value | type) == "object" and (.value.prompt | type) != "null" then
+      .value.prompt |= (if type == "string" then mv_path($kp) elif type == "object" then map_values(mv_path($kp)) else . end)
+    else . end) else . end;
+def kit_prefixes($kit; $home): ["{kit}/"] + (if $kit == "" then [] else [$kit + "/"] + (if $home != "" and ($kit | startswith($home + "/")) then ($kit[($home | length + 1):]) as $r | ["~/" + $r + "/", "{home}/" + $r + "/"] else [] end) end);'
 # The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
-# ["programmer"] was the default of researcher's modes before academic-writer joined it: a user still on it moves to the new default.
-upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json → stdout
-  jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l)) as $u | ($d * $u) as $m
+# ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
+# Old mode id in the user's settings.mode, role modes, prompt keys, or prompt paths inside the kit?  config_has_old_mode <config.json>
+config_has_old_mode() {
+  jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
+}
+upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, default $KIT] → stdout
+  jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "${3:-${KIT:-}}" --arg home "$HOME" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l) | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
@@ -143,10 +165,10 @@ overrides_from_args() {
     shift
     k="${opt#--}"
     if [ "$k" = mode ]; then
-      o="$(jq -c --arg v "$val" '.mode = $v' <<<"$o")"; explicit=1
+      o="$(jq -c --arg v "$val" --argjson lm "$LEGACY_MODES" '.mode = ($lm[$v] // $v)' <<<"$o")"; explicit=1
     elif [ "$k" = set ] && case "$val" in settings.mode=*) true;; *) false;; esac; then
       # --set settings.mode=x is the same request as --mode x (and --mode wins if both are given)
-      [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" '.mode = $v' <<<"$o")"
+      [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" --argjson lm "$LEGACY_MODES" '.mode = ($lm[$v] // $v)' <<<"$o")"
     elif [ "$k" = set ]; then
       case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
       case "${val%%=*}" in settings|roles) echo "ERROR: --set replaces one value, not a whole object: use --set settings.<key>=value (or roles.<role>.<key>=value)" >&2; return 1;; esac
@@ -156,6 +178,17 @@ overrides_from_args() {
     fi
   done
   printf '%s\n' "$o"
+}
+# The exceptions of a file with the old mode ids mapped to the new ones (.mode and the value of a settings.mode entry of .set).  canon_overrides <overrides file> → stdout
+canon_overrides() {
+  jq -c --argjson lm "$LEGACY_MODES" '(if (.mode | type) == "string" then .mode |= ($lm[.] // .) else . end)
+    | (if (.set | type) == "array" then .set |= map(if ((.path? // null) == ["settings","mode"]) and (.value | type) == "string" then .value |= ($lm[.] // .) else . end) else . end)' "$1"
+}
+# Exit 0 if a configuration or exceptions file uses an old mode id (settings.mode, a role's modes or prompt keys, .mode, a settings.mode entry of .set); 1 if not, or the file is missing or invalid.  legacy_mode_in <json file>
+legacy_mode_in() {
+  [ -f "$1" ] || return 1
+  [ "$(jq -r --argjson lm "$LEGACY_MODES" 'try ([(.settings.mode?), (.roles[]?.modes? | arrays | .[]), (.roles[]?.prompt? | objects | keys[]), (.mode?), (.set[]? | select((.path? // null) == ["settings","mode"]) | .value)]
+    | any(.[]; type == "string" and ($lm[.] != null))) catch false' "$1" 2>/dev/null)" = true ]
 }
 # Combines a worktree's saved exceptions with the ones of the current run: the new ones add to the saved ones.  merge_overrides <saved> <new> [<previous effective mode>] → stdout
 # only: the new list if it has any, else the saved one. enable/disable: both lists, a role named in the new one leaves the other saved one.
@@ -182,11 +215,11 @@ check_overrides() {
 # --only/--enable/--disable are part of the mode. One "ERROR: ..." line per problem, nothing if it is fine.  check_config <applied config> [<overrides>]
 check_config() {
   local m out
-  out="$(jq -r --argjson ms "$MODES_JSON" --arg ml "$MODE_LIST" '.roles | to_entries[] | .key as $r | .value as $v
+  out="$(jq -r --argjson ms "$MODES_JSON" --arg ml "$MODE_LIST" --argjson lm "$LEGACY_MODES" '.roles | to_entries[] | .key as $r | .value as $v
     | (if ($v | has("modes")) then
         ($v.modes | if . == "all" then empty
           elif type == "array" and length > 0 then
-            (map(select(type != "string" or (. as $x | $ms | index($x) | not))) | if length > 0 then "ERROR: role \($r): modes has unknown mode ids (\(map(tostring) | join(", "))); modes: \($ml)" else empty end)
+            (map(select(type != "string" or (($lm[.] // .) as $x | $ms | index($x) | not))) | if length > 0 then "ERROR: role \($r): modes has unknown mode ids (\(map(tostring) | join(", "))); modes: \($ml)" else empty end)
           else "ERROR: role \($r): modes must be \"all\" or a non-empty list of mode ids (modes: \($ml))" end)
       else empty end),
       (if ($v | has("phases")) then
@@ -196,7 +229,7 @@ check_config() {
       (if ($v | has("prompt")) then
         ($v.prompt | if . == null or type == "string" then empty
           elif type == "object" then
-            (to_entries | map(select((.key as $k | $ms | index($k) | not) or (.value | type) != "string")) | if length > 0 then "ERROR: role \($r): prompt must map mode ids to file paths (invalid: \(map(.key) | join(", ")); modes: \($ml))" else empty end)
+            (to_entries | map(select((($lm[.key] // .key) as $k | $ms | index($k) | not) or (.value | type) != "string")) | if length > 0 then "ERROR: role \($r): prompt must map mode ids to file paths (invalid: \(map(.key) | join(", ")); modes: \($ml))" else empty end)
           else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
       else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
@@ -220,10 +253,10 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
-  out="$(jq -r --slurpfile o "$2" --arg m "$m" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
+  out="$(jq -r --slurpfile o "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
     | select(. != "planner" and $R[.] != null)
     | . as $r | ($R[$r].modes // ["programmer"]) as $rm
-    | select($rm | if . == "all" then false elif type == "array" then index($m) == null else false end)
+    | select($rm | if . == "all" then false elif type == "array" then (map($lm[.]? // .) | index($m) == null) else false end)
     | "ERROR: role \($r) is not part of mode \($m) (its modes: \($rm | if type == "array" then join(", ") else tostring end))"' "$1")" || { echo "ERROR: could not check the exceptions against the mode"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
 }
@@ -301,7 +334,7 @@ preexisting_agents() {
 }
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -313,7 +346,9 @@ planner_msg() {
     '[.roles | to_entries[] | select(.key != "planner" and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
   msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of "$cfg")."
-  [ "$(mode_of "$cfg")" = academic-writer ] && msg="$msg Phase: $(phase_of "$cfg")."
+  [ "$(mode_of "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."
+  legacy_note="$(git rev-parse --git-dir 2>/dev/null)" && legacy_note="$legacy_note/orca-roles.legacy-note"
+  [ -n "$legacy_note" ] && [ -s "$legacy_note" ] && msg="$msg Tell the user at startup, in one line: $(cat "$legacy_note")"
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."

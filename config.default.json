@@ -42,7 +42,7 @@
     "researcher": {
       "title": "Researcher",
       "enabled": true,
-      "modes": ["programmer", "academic-writer"],
+      "modes": ["programmer", "academic-research"],
       "phases": ["experiment", "writing"],
       "model": "claude-opus-5-5",
       "mcp": ["context7"]
@@ -93,49 +93,49 @@
     "sota": {
       "title": "State-of-the-Art",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["experiment"],
       "model": "claude-haiku-5-5"
     },
     "methodology": {
       "title": "Methodology",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["experiment"],
       "model": "claude-opus-5-5"
     },
     "tech-verifier": {
       "title": "Tech-Verifier",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["experiment"],
       "model": "claude-opus-5-5"
     },
     "writer": {
       "title": "Writer",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-opus-5-5"
     },
     "evidence": {
       "title": "Evidence",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-sonnet-5-5"
     },
     "rigor": {
       "title": "Rigor",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-opus-5-5"
     },
     "style": {
       "title": "Style",
       "enabled": true,
-      "modes": ["academic-writer"],
+      "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-sonnet-5-5"
     }

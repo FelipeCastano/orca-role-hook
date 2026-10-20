@@ -54,7 +54,7 @@ They all start in **auto mode**. The workers know that all their work comes from
 
 Every role also follows the written-report rules (`## Written reports` in `prompts/<mode>/common-workers.md`) whenever the user asks for a report in any format: descriptive titles, an outline the user approves before writing, an aggregated level of detail, a formal tone and no names of people. Worker messages, commit messages, pull requests and Jira keep their own formats.
 
-This is the programmer team; see [pr-reviewer mode](#pr-reviewer-mode) and [academic-writer mode](#academic-writer-mode) for the other teams.
+This is the programmer team; see [pr-reviewer mode](#pr-reviewer-mode) and [academic-research mode](#academic-research-mode) for the other teams.
 
 ### Prompt structure
 
@@ -99,7 +99,7 @@ Clone the repo and run the installer from the clone:
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings. Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
+It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings, and the mode `academic-writer` becomes `academic-research` (see the [note on the rename](#academic-research-mode)). Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
 
 ```bash
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
@@ -257,7 +257,7 @@ new-role --repo ~/path/orca-role-hook  # saves it in your clone of the repo, to 
 The wizard asks everything it needs and updates the configuration:
 
 - **Identity:** id, tab title and a **description** for the Planner (what it does and when to use it). The Planner receives that description at startup and fits the role into the flow.
-- **Modes:** whether the role belongs to all [modes](#modes) or to one (`1` all, `2` one, then the mode). For a role in academic-writer (alone or in all modes) it also asks its phase: experiment, writing or both (the default); the other modes have no phases.
+- **Modes:** whether the role belongs to all [modes](#modes) or to one (`1` all, `2` one, then the mode). For a role in academic-research (alone or in all modes) it also asks its phase: experiment, writing or both (the default); the other modes have no phases.
 - **Agent:** `claude`, `codex` or `custom` (with its command), exact model and permission mode. For a `custom` agent it also asks for its `modelError` pattern and its `models` (`list`, `parse`, `probe`); empty answers leave them out.
 - **MCP and tools** (with `claude`): which servers it loads, with the option to define new servers; allowed tools and extra folders.
 - **Other:** extra arguments, environment variables, role parameters, tab position and whether it is enabled.
@@ -274,7 +274,7 @@ Every worker also receives its mode's common rules (`prompts/<mode>/common-worke
 
 **Removing a role:** `new-role --remove <id>` removes a role you created (its entry and the prompt it has for every mode, plus the old `roles/<id>.md` of earlier versions; previous configuration in `.bak`). Only those exact kit paths are deleted: a prompt your configuration points to elsewhere is left alone and reported. Overwriting a role (same id) that now has fewer modes deletes the prompts of the modes it lost in your installation; with `--repo` it only lists them with the `git rm` command, since they are versioned files. The ids `planner` and `common-workers` are reserved, and with `--repo` a new role cannot take over an existing `prompts/<mode>/<id>.md`. Default roles are not removed, because the next update would bring them back: disable them with `"enabled": false`. To close a role's tab in the current workspace, run `~/.orca-roles/bin/close-role.sh <role>` from the worktree (the Planner does it for you when you ask it to remove a role).
 
-**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration (including `modelError` and `models`, which are validated: an invalid one stops it with nothing written), plus `after` (position) and `overwrite: true` to replace an existing one, and `phases` (academic-writer only, a non-empty list of `experiment`/`writing`; refused for a role of another mode). `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
+**Without questions:** `new-role --from-json <file>` creates the role from a JSON file with `id`, `description` and `prompt` required, and the same optional fields as a role in the configuration (including `modelError` and `models`, which are validated: an invalid one stops it with nothing written), plus `after` (position) and `overwrite: true` to replace an existing one, and `phases` (academic-research only, a non-empty list of `experiment`/`writing`; refused for a role of another mode). `modes` is `"all"` or one mode id (a string or a one-element list; missing = `"programmer"`). `prompt` is Markdown text for a role with one mode, or an object `{"<mode>": "<Markdown>"}` that covers exactly the role's modes (all three for `"all"`); anything else is rejected and nothing is written. Example: `{"id": "rv", "description": "...", "modes": "pr-reviewer", "prompt": "# Role: RV\n..."}` writes `roles/pr-reviewer/rv.md`. It is what the Planner uses with its skill.
 
 ## The Planner's skill
 
@@ -336,7 +336,7 @@ All the configuration lives in `~/.orca-roles/config.json`. It is read every tim
 
 ### Modes
 
-The kit has three fixed modes (not configurable): `programmer`, `pr-reviewer` and `academic-writer`. The mode decides which team a worktree launches and which prompts it reads (`prompts/<mode>/`). All three exist; a mode is available when `prompts/<mode>/planner.md` exists (a mode whose folder lacks it fails with `mode '<x>' is not available yet`). Without any setting the mode is `programmer` and everything works as before.
+The kit has three fixed modes (not configurable): `programmer`, `pr-reviewer` and `academic-research`. The mode decides which team a worktree launches and which prompts it reads (`prompts/<mode>/`). All three exist; a mode is available when `prompts/<mode>/planner.md` exists (a mode whose folder lacks it fails with `mode '<x>' is not available yet`). Without any setting the mode is `programmer` and everything works as before.
 
 Choose it, from lowest to highest priority:
 
@@ -349,7 +349,7 @@ The id must be exactly one of the three (no uppercase, spaces, slashes or `..`);
 
 **Open team rule:** the mode of a worktree cannot change while its team is open. If the requested mode differs from the one the worktree was launched with and any tab of the saved team still exists (also one Orca restored after a restart with a new handle), `launch.sh` stops with an error and changes nothing. Close the team first (`close-role.sh` on each worker, or close the tabs) and run `roles` again.
 
-Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]`, the `researcher` is `["programmer", "academic-writer"]`, the other four programmer workers are `["programmer"]` and the seven academic-writer roles are `["academic-writer"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
+Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]`, the `researcher` is `["programmer", "academic-research"]`, the other four programmer workers are `["programmer"]` and the seven academic-research roles are `["academic-research"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
 
 `prompt` is a path (legacy form, it applies to `programmer` only) or an object per mode:
 
@@ -377,7 +377,9 @@ The mode's Planner reads that skill to review pull requests. `settings.prReviewe
 
 **Read-only team.** Nobody edits the worktree, commits or pushes. The Planner never approves, requests changes or merges, and posts to the PR only after you approve that exact text.
 
-#### academic-writer mode
+#### academic-research mode
+
+This mode was called `academic-writer`. The old name still works until the next version: wherever it is read, the team opens as academic-research and `roles` prints one line saying where the old name was found (the Planner relays it at startup). It is accepted in `settings.mode` (`config.json` and `.orca-roles.json`), `roles --mode`, the worktree's saved options, `roles-yaml --mode` and `new-role`. Updating the kit (`install.sh`) migrates `~/.orca-roles/config.json`, moves `~/.orca-roles/roles/academic-writer/` (if you have it) to `roles/academic-research/` (a file that already exists there is kept and named in a warning) and leaves it as a link to the new folder, and `prompts/academic-writer` is always left as a link to the new folder, so open teams and old paths keep working. `roles-yaml --all` updates the uncommitted orca.yaml files it generated. `.orca-roles.json` files in projects and orca.yaml files not generated by the kit are never changed: update them by hand.
 
 A team that takes a scientific paper from the state of the art to the final text, in your git repository. The paper is always in English, LaTeX and BibTeX.
 
@@ -396,7 +398,7 @@ A team that takes a scientific paper from the state of the art to the final text
 
 Plus the Planner (both phases). There is no Auditor in this mode.
 
-**Starting it.** `roles --mode academic-writer` in a worktree of the paper's repository (git is required: the launch stops otherwise). Each launch creates the folders below where missing and adds the lines that keep large or copyrighted files out of git to `.gitignore`; it never overwrites anything.
+**Starting it.** `roles --mode academic-research` in a worktree of the paper's repository (git is required: the launch stops otherwise). Each launch creates the folders below where missing and adds the lines that keep large or copyrighted files out of git to `.gitignore`; it never overwrites anything.
 
 **Repository layout.**
 
@@ -467,7 +469,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `description` | What the role does and when to use it. The Planner receives it at startup; essential in roles you create. |
 | `prompt` | The role's instructions file (by default `prompts/<mode>/<role>.md`). A path (programmer only) or `{ "<mode>": "<path>" }`. Accepts `~`. See [Modes](#modes). |
 | `modes` | `"all"` or a list of the modes the role belongs to (default `["programmer"]`). See [Modes](#modes). |
-| `phases` | academic-writer only: the phases the role opens in, `["experiment"]`, `["writing"]` or both (missing = both). The other modes have no phases. See [academic-writer mode](#academic-writer-mode). |
+| `phases` | academic-research only: the phases the role opens in, `["experiment"]`, `["writing"]` or both (missing = both). The other modes have no phases. See [academic-research mode](#academic-research-mode). |
 | `agent` | Which CLI is launched: `claude`, `codex` or `custom`. |
 | `model` | Exact model passed to the agent. |
 | `modelError` | Only with `agent: "custom"`: an ERE (`grep -E`) the agent prints when its model does not exist; `{model}` stands for the escaped model id. Without it, a missing model is not detected for that role. |
@@ -610,7 +612,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `--enable a,b` | Enables roles disabled in the configuration. |
 | `--disable a,b` | Disables roles. The `planner` cannot be disabled. |
 | `--set path=value` | Changes any configuration key. The path uses dots and the value is read as JSON if it is JSON (`true`, `10`, `["x"]`) and as text otherwise. |
-| `--mode <mode>` | The team's mode (`programmer`, `pr-reviewer`, `academic-writer`); beats `settings.mode` and `.orca-roles.json`. Rejected if the worktree's team is open in another mode. See [Modes](#modes). |
+| `--mode <mode>` | The team's mode (`programmer`, `pr-reviewer`, `academic-research`); beats `settings.mode` and `.orca-roles.json`. Rejected if the worktree's team is open in another mode. See [Modes](#modes). |
 | `--reset` | Forgets the worktree's saved exceptions first, so only the options of this run apply (only with `roles`). |
 | `--status` | Shows the team and exits; it changes nothing in the worktree or Orca and opens nothing. First line `Mode: <mode>`, then one tab-separated line per role: `<Title>`, handle, state (`alive`, `no tab`, `agent gone`, `orphaned`), configured model (`-` if none) and model in use from `orca-roles.models` (`FAILED:<model>` as recorded, `-` if not recorded). Without a launched team: `No team launched in this worktree.` |
 
@@ -631,8 +633,8 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `closeComposerAgent` | Close the extra session Orca's composer opens when you create a worktree (often a Claude tab soon renamed by Claude Code, e.g. "done"). Only in a new worktree, and only an agent tab outside the team that already existed before the team when Orca's setup script started the kit on a worktree created moments ago (whatever its title, e.g. "✳ Claude Code"), or whose **first** title was exactly the branch name or started with the Jira key (`DEVGD-220`, `DEVGD-220: summary`), or whose screen showed the key. A `roles` run by hand never closes a tab that existed before. It is closed with `orca terminal close`. If there is none, nothing is touched and it is noted in the log. |
 | `composerAgentWindowSeconds` | How long that extra session is watched for after the worktree is created. |
 | `cleanWorkersAfterStep` | Whether the Planner proposes cleaning the workers' context when closing each step. With `false` it only does it when you ask. |
-| `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-writer`. See [Modes](#modes). |
-| `phase` | academic-writer only: the phase (`experiment` by default or `writing`). Changed by the Planner with `phase.sh`, not by hand. |
+| `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-research`. See [Modes](#modes). |
+| `phase` | academic-research only: the phase (`experiment` by default or `writing`). Changed by the Planner with `phase.sh`, not by hand. |
 | `language` | The language the Planner replies to you in. `"auto"` (default): the language you write in. Any other value (`"Spanish"`, `"English"`...): always that one. The prompts are in English either way. The workers always write in English (their repo artifacts follow the repo's language): for Claude workers the kit passes `--settings '{"language":"english"}'`, overriding Claude Code's own `language` setting, and every worker also gets the rule in its role anchor (the only channel for Codex and custom agents, whose own language settings are not overridden). A `--settings` in a role's `extraArgs` replaces the kit's one (claude does not merge them), so include `"language":"english"` in it. |
 
 ## Files
@@ -651,7 +653,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── relaunch-role.sh         # relaunches one role with another model
 │   ├── models.sh                # lists a role's candidate models and tests them
 │   ├── review-skill.sh          # installs and locates the pr-reviewer mode's review skill
-│   ├── phase.sh                 # switches an academic-writer team's phase
+│   ├── phase.sh                 # switches an academic-research team's phase
 │   ├── academic-scaffold.sh     # creates the paper repository's folders and .gitignore lines
 │   ├── scholar.sh               # scholarly search, BibTeX, verification and open-access PDFs
 │   ├── scholar-arxiv.awk        # scholar.sh parser (arXiv)
@@ -671,7 +673,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 ├── prompts/
 │   ├── programmer/
 │   ├── pr-reviewer/
-│   └── academic-writer/         # each mode's folder holds:
+│   └── academic-research/       # each mode's folder holds:
 │       ├── common-workers.md    # rules common to the mode's workers
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── tests/
@@ -686,7 +688,7 @@ Inside each worktree:
 - `research/`, `qa-evidence/` and `qa-e2e/`: the Researcher's work, the E2E-Tester's evidence (screenshots, `report.json`, `result.json`) and its flows (`qa-e2e/<flow>/`). They are ignored locally in `.git/info/exclude`, without touching your `.gitignore`; never committed.
 - `refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>`: the Planner's per-round snapshots of the tree (commits kept out of every branch, made without touching HEAD, the index or the files); `checkpoint.sh --list` shows them and `--clear <step>` deletes a step's and `--clear-all` every one of the worktree's (after the set's last commit). Each checkpoint's message records a creation sequence number, which the diff hints use to find the previous step's last checkpoint. Files marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree, and `checkpoint.sh` warns about them. Renaming a worktree's folder, or moving the main checkout (its git dir moves with it), changes its id, so checkpoints taken before no longer show in `--list` or `--clear`; remove them with `git update-ref -d <ref>` (`git for-each-ref refs/orca-roles/checkpoints` lists them). Moving a linked worktree to another parent folder with `git worktree move` keeps them.
 - `DEPLOYMENT.md`: the Deployer's guide. It is not committed unless you ask.
-- In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.pty` (each role's terminal identity, to recognize the tabs Orca restores after a restart), `orca-roles.lock` (a directory while a launch runs, holding its pid), `orca-roles.kicked` (the handle each role had when it got its role message), `orca-roles.kickoff.d/` (one file per running kickoff, named by its pid, with the roles it will kick; removed when it ends), `orca-roles.wtid` (the worktree id of the last launch), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json`, `orca-roles.composer-seen.json` and `orca-roles.setup-context` (tabs seen when the worktree was created, and whether Orca's setup script started the kit, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
+- In the worktree's git dir (`git rev-parse --git-dir`): `orca-roles.config.json` (effective configuration used), `orca-roles.overrides.json` (setup script exceptions, if any), `orca-roles.pty` (each role's terminal identity, to recognize the tabs Orca restores after a restart), `orca-roles.lock` (a directory while a launch runs, holding its pid), `orca-roles.kicked` (the handle each role had when it got its role message), `orca-roles.kickoff.d/` (one file per running kickoff, named by its pid, with the roles it will kick; removed when it ends), `orca-roles.wtid` (the worktree id of the last launch), `orca-roles.legacy-note` (the old-mode note of the last launch, which the Planner relays; absent when there is none), `orca-roles.notes/<role>.md` (a role's instructions for this worktree only), `orca-roles-mcp-<role>.json` (MCP servers each role received), `orca-roles.env` (handles), `orca-roles.preexisting.json`, `orca-roles.composer-seen.json` and `orca-roles.setup-context` (tabs seen when the worktree was created, and whether Orca's setup script started the kit, to recognize the composer's session), `orca-roles-launch.log` and `orca-roles-kickoff.log` (startup), `orca-<service>.log` and `orca-<service>.pid` (the Deployer's local services).
 - Outside the worktree: `~/.orca-roles/browser/<project>/<identity>.json`, the browser sessions for the E2E-Tester and its flows; `~/.orca-roles/pw/` and `~/.orca-roles/browsers/`, the pinned E2E stack and its Chromium.
 - Outside the worktree too: each role's scratch folder, `~/.orca-roles/tmp/<project>-<hash of the git dir>/<role>/`, one per worktree and role, fixed (the same path every time). Agents put their temporary copies there (the Tester's mutation copy, the Auditor's experiments, the Researcher's earlier versions) and reuse it; they never delete anything in it, so Claude Code does not ask for permission on every `rm`, and the kit never empties it either. `copy/` (the copy of the current tree) stays current because every use runs `rsync -a --delete` into it; earlier versions go in `rev-<full commit hash>/` (one per commit, reused if it exists) and the Researcher's temporaries have fixed names per task, so those accumulate slowly. When a worktree is removed, its folder stays orphaned in `~/.orca-roles/tmp/`; remove it by hand when you want the space back, for example `rm -rf ~/.orca-roles/tmp/<project>-<hash>`. The role receives its path as the `scratchDir` parameter in its startup message, and Claude and Codex agents get it with `--add-dir` (`custom` agents through `{scratch}`/`ORCA_ROLES_SCRATCH` and `addDirFlag`). It is outside the worktree because jest, vitest and eslint collect copies of the project that live inside it, and none of them honors `.gitignore` or `.git/info/exclude`.
 - On Windows (WSL): `~/.orca-roles/shim/orca`, the Orca CLI wrapper (see [Windows with WSL2](#windows-with-wsl2)).

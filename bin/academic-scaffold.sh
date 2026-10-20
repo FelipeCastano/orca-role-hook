@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Creates the academic-writer document structure (experimentation/ and article/) in a repository where it is missing.
+# Creates the academic-research document structure (experimentation/ and article/) in a repository where it is missing.
 # Usage: academic-scaffold.sh <repo top-level>
 # Idempotent: it never overwrites or deletes anything and runs no git command that changes anything. It prints one line per folder or
 # file it creates or changes, and nothing when there is nothing to do. A folder it creates gets an empty .gitkeep if git tracks its
 # content (not data, models, logs, raw results or the literature PDFs); .gitignore gets the lines of the structure that it lacks.
-# launch.sh runs it in academic-writer mode.
+# launch.sh runs it in academic-research mode.
 set -uo pipefail
 TOP="${1:-}"
 [ -d "$TOP" ] || { echo "academic-scaffold.sh: usage: academic-scaffold.sh <repo top-level> (a directory)" >&2; exit 1; }
@@ -36,13 +36,13 @@ for d in $DIRS; do
   case " $UNTRACKED " in *" $d "*) continue;; esac
   : > "$TOP/$d/.gitkeep" && echo "Created $d/.gitkeep"
 done
-GI="$TOP/.gitignore"; HEADER="# orca-roles academic-writer"; CHANGED=0
+GI="$TOP/.gitignore"; HEADER="# orca-roles academic-research"; OLDHEADER="# orca-roles academic-writer"; CHANGED=0
 [ -f "$GI" ] || { : > "$GI" || exit 1; echo "Created .gitignore"; }
 while IFS= read -r line; do
   grep -qxF -- "$line" "$GI" && continue
   if [ "$CHANGED" = 0 ]; then
     [ -z "$(tail -c1 "$GI")" ] || echo >> "$GI"
-    if ! grep -qxF -- "$HEADER" "$GI"; then
+    if ! grep -qxF -- "$HEADER" "$GI" && ! grep -qxF -- "$OLDHEADER" "$GI"; then
       [ -s "$GI" ] && [ -n "$(tail -n1 "$GI")" ] && echo >> "$GI"
       echo "$HEADER" >> "$GI"
     fi

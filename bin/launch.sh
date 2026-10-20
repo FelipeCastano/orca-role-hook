@@ -5,9 +5,9 @@
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
-#   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-writer); beats .orca-roles.json and settings.mode;
+#   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-research); beats .orca-roles.json and settings.mode;
 #                    saved, and kept when later options omit it
-#   (academic-writer: the phase, settings.phase, is changed with phase.sh, not by hand)
+#   (academic-research: the phase, settings.phase, is changed with phase.sh, not by hand)
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
@@ -73,9 +73,9 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
     if [ -f "$OVR" ] && apply_overrides "$SCFG" "$OVR" > "$SCFG.x" 2>/dev/null; then mv "$SCFG.x" "$SCFG"; fi
   fi
   CFG="$SCFG"
-  SMODE="$(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"
+  SMODE="$(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"; SMODE="$(canon_mode "$SMODE")"
   echo "Mode: $SMODE"
-  [ "$SMODE" = academic-writer ] && echo "Phase: $(phase_of "$SCFG")"
+  [ "$SMODE" = academic-research ] && echo "Phase: $(phase_of "$SCFG")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     var="${line%%=*}"; handle="${line#*=}"; role="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
@@ -116,7 +116,7 @@ while :; do
   if [ -n "$lp" ] && [ "$announced" = 0 ]; then echo "Another roles is running in this worktree (pid $lp); waiting..."; announced=1; fi
   sleep 1; waited=$((waited + 1))
 done
-trap lock_release EXIT
+trap 'lock_release; rm -f "$OVR.canon"' EXIT
 exec > >(tee -a "$LOG") 2>&1
 echo "== $(date '+%F %T') launch.sh in $WT"
 
@@ -125,26 +125,38 @@ NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
 fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; echo "$1"; exit 1; }
 merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
 PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
+[ -z "$PREV_MODE" ] || PREV_MODE="$(canon_mode "$PREV_MODE")"   # a team open under an old mode id is the same mode
+# The saved exceptions used in this run; one that still names an old mode id is used through a normalized copy ($OVR.canon),
+# so the saved file only changes (to the new id) once the launch succeeds
+OVRUSE=""; OVR_LEGACY=0
+if [ -f "$OVR" ] && [ "$RESET" != 1 ]; then
+  OVRUSE="$OVR"
+  if legacy_mode_in "$OVR"; then
+    OVR_LEGACY=1; canon_overrides "$OVR" > "$OVR.canon" || fail "ERROR: could not read the saved exceptions ($OVR)"
+    OVRUSE="$OVR.canon"
+  fi
+fi
 if [ ${#FLAGS[@]} -gt 0 ]; then
   overrides_from_args "${FLAGS[@]}" > "$NEWOVR" || { rm -f "$NEWCFG" "$NEWOVR"; exit 1; }
   ERR="$(check_overrides "$NEWCFG" "$NEWOVR")"
   [ -z "$ERR" ] || fail "$ERR"
   # the options add to the saved ones (the same option replaces its saved value; --reset forgets them first)
-  if [ "$RESET" != 1 ] && [ -f "$OVR" ]; then
+  if [ -n "$OVRUSE" ]; then
     # role selections belong to a mode: compare the new mode with the one the saved options gave this worktree
-    PREV_EFF_MODE="$(apply_overrides "$NEWCFG" "$OVR" > "$NEWCFG.prev" 2>/dev/null && mode_of "$NEWCFG.prev" 2>/dev/null)" || PREV_EFF_MODE=""
+    PREV_EFF_MODE="$(apply_overrides "$NEWCFG" "$OVRUSE" > "$NEWCFG.prev" 2>/dev/null && mode_of "$NEWCFG.prev" 2>/dev/null)" || PREV_EFF_MODE=""
     rm -f "$NEWCFG.prev"; [ -n "$PREV_EFF_MODE" ] || PREV_EFF_MODE="programmer"
-    if jq -e --slurpfile n "$NEWOVR" --arg p "$PREV_EFF_MODE" '($n[0].mode // null) as $m | $m != null and $m != $p and ((.only // []) + (.enable // []) + (.disable // []) | length) > 0' "$OVR" >/dev/null 2>&1; then
+    if jq -e --slurpfile n "$NEWOVR" --arg p "$PREV_EFF_MODE" '($n[0].mode // null) as $m | $m != null and $m != $p and ((.only // []) + (.enable // []) + (.disable // []) | length) > 0' "$OVRUSE" >/dev/null 2>&1; then
       echo "Mode changed to $(jq -r .mode "$NEWOVR"): this worktree's saved role selections (--only/--enable/--disable) were dropped."
     fi
-    merge_overrides "$OVR" "$NEWOVR" "$PREV_EFF_MODE" > "$NEWOVR.x" && mv "$NEWOVR.x" "$NEWOVR" || fail "ERROR: could not combine the options with the saved exceptions ($OVR)"
+    merge_overrides "$OVRUSE" "$NEWOVR" "$PREV_EFF_MODE" > "$NEWOVR.x" && mv "$NEWOVR.x" "$NEWOVR" || fail "ERROR: could not combine the options with the saved exceptions ($OVR)"
     ERR="$(check_overrides "$NEWCFG" "$NEWOVR")"
     [ -z "$ERR" ] || fail "$ERR"
   fi
   OVRSRC="$NEWOVR"
-elif [ -f "$OVR" ] && [ "$RESET" != 1 ]; then
+elif [ -n "$OVRUSE" ]; then
   echo "Applying this worktree's saved exceptions ($OVR)."
   OVRSRC="$OVR"
+  if [ "$OVR_LEGACY" = 1 ]; then cp "$OVRUSE" "$NEWOVR" && OVRSRC="$NEWOVR" || fail "ERROR: could not read the saved exceptions ($OVR)"; fi
 fi
 if [ -n "$OVRSRC" ]; then
   apply_overrides "$NEWCFG" "$OVRSRC" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG" || fail "ERROR: could not apply the exceptions in $OVRSRC"
@@ -152,8 +164,34 @@ fi
 ERR="$(check_config "$NEWCFG" "$OVRSRC")"
 [ -z "$ERR" ] || fail "$ERR"
 NEWMODE="$(mode_of "$NEWCFG")"
-if [ "$NEWMODE" = academic-writer ] && ! git rev-parse --show-toplevel >/dev/null 2>&1; then
-  fail "ERROR: mode academic-writer needs the project to be a git repository (git init, then run roles again). Nothing was changed."
+if [ "$NEWMODE" = academic-research ] && ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  fail "ERROR: mode academic-research needs the project to be a git repository (git init, then run roles again). Nothing was changed."
+fi
+# A mode renamed between versions still works under its old id: say where the old id is still used
+LEGACY_SRC=""
+legacy_src_add() { LEGACY_SRC="${LEGACY_SRC:+$LEGACY_SRC; }$1"; }
+# shellcheck disable=SC2088
+[ -f "$KIT/config.json" ] && legacy_mode_in "$KIT/config.json" && legacy_src_add '~/.orca-roles/config.json'
+PROJ_CFG="$(project_config .)"
+[ -n "$PROJ_CFG" ] && legacy_mode_in "$PROJ_CFG" && legacy_src_add ".orca-roles.json ($PROJ_CFG)"
+[ "$OVR_LEGACY" = 1 ] && legacy_src_add "this worktree's saved options ($OVR)"
+fx=0; fv=""
+while [ "$fx" -lt ${#FLAGS[@]} ]; do
+  fv=""
+  case "${FLAGS[$fx]}" in
+    --mode=*) fv="${FLAGS[$fx]#--mode=}";;
+    --set=settings.mode=*) fv="${FLAGS[$fx]#--set=settings.mode=}";;
+    --mode) fv="${FLAGS[$((fx + 1))]:-}"; fx=$((fx + 1));;
+    --set) case "${FLAGS[$((fx + 1))]:-}" in settings.mode=*) fv="${FLAGS[$((fx + 1))]#settings.mode=}";; esac; fx=$((fx + 1));;
+    --only|--enable|--disable) fx=$((fx + 1));;
+  esac
+  [ "$(canon_mode "$fv")" != "$fv" ] && { legacy_src_add "the options of this run (--mode or the setup script in orca.yaml)"; break; }
+  fx=$((fx + 1))
+done
+LEGACY_NOTE=""
+if [ -n "$LEGACY_SRC" ]; then
+  LEGACY_NOTE="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: $LEGACY_SRC. Update it to academic-research."
+  echo "$LEGACY_NOTE"
 fi
 
 FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
@@ -198,7 +236,7 @@ if [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ] && [ -s "$STATE" ]; the
   done
 fi
 # The phase cannot change under an open team either: a role of the old phase that the new one does not have must be closed first (phase.sh does it).
-if [ "$PREV_MODE" = academic-writer ] && [ "$NEWMODE" = academic-writer ] && [ -s "$STATE" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
+if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ -s "$STATE" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
   OLDPHASE="$(phase_of "$CFG")"; NEWPHASE="$(phase_of "$NEWCFG")"
   [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether this worktree's team (phase '$OLDPHASE') is still open: 'orca terminal list' failed. Phase '$NEWPHASE' was requested; nothing was changed. Try again once Orca is ready."
   NEWENABLED="$(enabled_roles "$NEWCFG")"
@@ -219,6 +257,7 @@ fi
 # Everything checked: the new configuration and exceptions become the saved ones
 jq --arg m "$NEWMODE" '.settings.mode = $m' "$NEWCFG" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG"   # the effective mode, explicit for the other scripts
 mv "$NEWCFG" "$CFG"
+if [ -n "$LEGACY_NOTE" ]; then printf '%s\n' "$LEGACY_NOTE" > "$GITDIR/orca-roles.legacy-note"; else rm -f "$GITDIR/orca-roles.legacy-note"; fi
 if [ "$RESET" = 1 ]; then rm -f "$OVR"; echo "This worktree's exceptions were forgotten."; fi
 [ "$OVRSRC" = "$NEWOVR" ] && mv "$NEWOVR" "$OVR"
 if [ -f "$OVR" ]; then
@@ -232,9 +271,9 @@ case "$WT" in
     printf '%s\n' "$WT" > "$GITDIR/orca-roles.wtid";;
 esac
 echo "Mode: $NEWMODE"
-if [ "$NEWMODE" = academic-writer ]; then
+if [ "$NEWMODE" = academic-research ]; then
   echo "Phase: $(phase_of "$CFG")"
-  "$KIT/bin/academic-scaffold.sh" "$(git rev-parse --show-toplevel)" || echo "Warning: could not create the academic-writer folders."
+  "$KIT/bin/academic-scaffold.sh" "$(git rev-parse --show-toplevel)" || echo "Warning: could not create the academic-research folders."
 fi
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
