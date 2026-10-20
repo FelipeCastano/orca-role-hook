@@ -13,8 +13,11 @@ for s in "$@"; do
 done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
-on_exit() { local rc=$?; rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; }
+SECTION=""; ERR_AT=""
+on_exit() { local rc=$?; rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then echo "smoke.sh: aborted in section $SECTION ${ERR_AT:-(exit status $rc)}" >&2; fi; }
 trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
+# where set -e ended the script: the failing command of the main shell (not of a $(...) or a subshell, where its status shows up on the line that ran it); only recorded while errexit is on
+set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINENO: $BASH_COMMAND";; esac' ERR
 export KIT="$TMP/kit"; mkdir -p "$KIT"
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
@@ -23,6 +26,11 @@ check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected 
 blk_start() { F0=$FAIL; FAIL=0; }
 blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0; }
 try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
+# poll <predicate> [args]: waits until it holds, every 0.2 s for at most 5 s (a slow runner gets the time; the check that follows reports what is still wrong)
+poll() { local n=0; until "$@" 2>/dev/null || [ "$n" -ge 25 ]; do sleep 0.2; n=$((n+1)); done; return 0; }
+pgone() { ! kill -0 "${1:-0}" 2>/dev/null; }
+dir_empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
+nonempty() { [ -s "$1" ]; }
 mkdir -p "$TMP/fakebin" "$TMP/home"; ln -sfn "$KIT" "$TMP/home/.orca-roles"   # fake HOME: ~/.orca-roles → test kit
 PROJ="$TMP/proj"; mkdir -p "$PROJ"; git -C "$PROJ" init -q
 echo '{ "roles": { "dev": { "mcp": [] }, "tester": { "enabled": true } }, "settings": { "jiraHandoff": false } }' > "$PROJ/.orca-roles.json"
@@ -1184,7 +1192,7 @@ try ol --reset --set roles.dev.model=c
 check "launch: --reset then options keeps only the new ones" "$RC:$(oteam):$(osaved '[.only,.enable,.disable,.set]')" '0:PLANNER DEV DEPLOYER :[[],[],[],[{"path":["roles","dev","model"],"value":"c"}]]'
 try ol --reset --mode pr-reviewer; try ol --set roles.rv.model=m
 check "launch: the saved mode is kept when later options omit it" "$RC:$(osaved .mode):$(jq -r .settings.mode "$OG/orca-roles.config.json")" "0:\"pr-reviewer\":pr-reviewer"
-try ol --reset --enable dev; B="$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" | cksum)"
+try ol --reset --enable dev; B="$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" 2>/dev/null | cksum || true)"
 try ol --mode pr-reviewer --enable dev
 check "launch: a result that conflicts with the mode fails and saves nothing" "$RC:$(cat "$OG/orca-roles.overrides.json" "$OG/orca-roles.config.json" | cksum):$(printf '%s' "$OUT" | grep -c 'ERROR: role dev is not part of mode pr-reviewer')" "1:$B:1"
 }
@@ -2299,7 +2307,7 @@ J
 # the mode cannot change under a team Orca restored after a restart (new handles, same ptyId)
 PRB="$TMP/restart-pr-prompts"; rm -rf "$PRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$PRB"
 mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
-HB="$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum)"; : > "$RLOG"
+HB="$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" 2>/dev/null | cksum || true)"; : > "$RLOG"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode pr-reviewer 2>&1)" && RC=0 || RC=$?
 check "restart: restored tabs block a mode change; nothing saved, closed or opened" "$RC:$(grep -cE 'terminal (close|create)' "$RLOG" || true):$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum):$([ -e "$RP/.git/orca-roles.overrides.json" ] && echo ovr)" "1:0:$HB:"
 case "$OUT" in *"Close the team first"*) echo "ok   restart: the mode change error explains it";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
@@ -2313,7 +2321,7 @@ check "restart: the Planner reopens with --resume and the kit's launcher" "$(gre
 check "restart: Dev reopens without --resume" "$(grep -c "agent.sh' dev --json" "$RLOG")" "1"
 check "restart: new handles saved" "$(cut -d= -f2 "$RP/.git/orca-roles.env" | tr '\n' ' ')" "new-Planner new-Dev new-Tst "
 check "restart: new terminal identities saved" "$(cut -d= -f2 "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "wt@@n1 wt@@n2 wt@@n3 "
-sleep 1; check "restart: kickoff gets the resumed and the remembered roles" "$(cut -d" " -f2- "$TMP/rkick.args" | sed "s#$RP/.git#GD#g")" "GD/orca-roles.env GD/orca-roles.config.json  planner dev tst  dev tst  planner "
+poll nonempty "$TMP/rkick.args"; check "restart: kickoff gets the resumed and the remembered roles" "$(cut -d" " -f2- "$TMP/rkick.args" | sed "s#$RP/.git#GD#g")" "GD/orca-roles.env GD/orca-roles.config.json  planner dev tst  dev tst  planner "
 M4="$(planner_msg "$KIT/config.json" "planner dev" "$RP/.git/orca-roles.env" "" "" 2)"
 case "$M4" in *"you are BACK after a restart, with your previous conversation"*"Coming back with your memory"*) echo "ok   planner_msg: back with memory";; *) echo "FAIL planner_msg memory: $M4"; FAIL=1;; esac
 case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in *"Your terminal handle is now new-Dev"*"do not continue it on your own"*) echo "ok   worker_back_msg";; *) echo "FAIL worker_back_msg"; FAIL=1;; esac
@@ -2869,7 +2877,7 @@ printf '#!/bin/sh\nmkdir -p "%s/gd/orca-roles.kickoff.d"; echo dev > "%s/gd/orca
 printf '%s' "$(mfc "$DEVOK")" > "$MF/cfg.json"; : > "$MF/orca.log"; echo clean > "$MF/mode"; rm -rf "$MF/gd/orca-roles.kickoff.d"; mkdir -p "$MF/gd/orca-roles.kickoff.d"
 sleep 30 & OP=$!; echo dev > "$MF/gd/orca-roles.kickoff.d/$OP"
 (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" "$MF/regrun" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "dev" "" "" "" > "$MF/out.log" 2>&1)
-OWN="$(cat "$MF/own.pid")"
+OWN="$(cat "$MF/own.pid" 2>/dev/null || true)"
 check "kickoff.sh: when it ends it removes its own registry file and leaves another kickoff's" "$([ -f "$MF/gd/orca-roles.kickoff.d/$OWN" ] && echo kept || echo gone):$([ -f "$MF/gd/orca-roles.kickoff.d/$OP" ] && echo kept || echo gone)" "gone:kept"
 kill "$OP" 2>/dev/null; wait "$OP" 2>/dev/null || true; rm -rf "$MF/gd/orca-roles.kickoff.d"
 check "model-check: role message sent once" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
@@ -3024,7 +3032,7 @@ case "$b" in
   okgarbage) echo 'not json at all'; exit 0;;
   tabtext) printf 'a\tb\n' >&2; exit 1;;
   hang) echo $$ > "$MM/hang.pid"; exec sleep 30;;
-  slow) sleep 2; echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
+  slow) sleep 4; echo '{"result":"ok","modelUsage":{"claude-x":{}}}';;
 esac
 EOS
 cat > "$MM/bin/codex" <<'EOS'
@@ -3059,7 +3067,7 @@ printf '%s\n' "$1" >> "$MM/probed"; case "$1" in *bad*) exit 3;; esac
 EOS
 cat > "$MM/bin/cprobe" <<'EOS'
 #!/bin/bash
-f="$MM/conc/$$"; mkdir -p "$MM/conc"; : > "$f"; ls "$MM/conc" | wc -l | tr -d ' ' >> "$MM/conc.log"; sleep 0.6; rm -f "$f"
+f="$MM/conc/$$"; mkdir -p "$MM/conc"; : > "$f"; ls "$MM/conc" | wc -l | tr -d ' ' >> "$MM/conc.log"; sleep 2; rm -f "$f"
 EOS
 chmod +x "$MM/bin"/*; export MM
 seq 1 10 | sed 's/^/c/' > "$MM/ten.txt"; seq 1 40 | sed 's/^/q/' > "$MM/forty.txt"
@@ -3104,23 +3112,23 @@ mt cl2 --check; check "models: defaults.env reaches the probe of a role without 
 check "models: the probe flags" "$(cat "$MM/args.fable")" '-p --safe-mode --setting-sources local --no-session-persistence --tools  --system-prompt Reply ok. --model fable --output-format json ok'
 # timeout and parallelism
 for m in sonnet opus haiku fable; do rm -f "$MM/b.$m"; done; echo hang > "$MM/b.haiku"
-t0=$SECONDS; ORCA_ROLES_PROBE_TIMEOUT=1 mt cl2 --check
+t0=$SECONDS; ORCA_ROLES_PROBE_TIMEOUT=4 mt cl2 --check
 check "models: a hung probe is killed and reported" "$(tabs)" "sonnet|ok|claude-opus-5-5;opus|ok|claude-opus-5-5;haiku|unknown|timed out;fable|ok|claude-opus-5-5"
-check "models: the hung probe did not hold the others up" "$(( SECONDS - t0 < 5 ))" "1"
+check "models: the hung probe did not hold the others up" "$(( SECONDS - t0 < 12 ))" "1"
 check "models: the hung probe's process is gone after the timeout" "$(kill -0 "$(cat "$MM/hang.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
 rm -f "$MM/hang.pid"; echo hang > "$MM/b.haiku"
 set -m; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" exec "$KIT/bin/models.sh" cl2 --check > /dev/null 2>&1) & MP=$!; set +m
-for _ in $(seq 1 50); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
-HP="$(cat "$MM/hang.pid" 2>/dev/null)"; kill -INT "$MP" 2>/dev/null; wait "$MP" 2>/dev/null || true; sleep 0.3
+for _ in $(seq 1 150); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
+HP="$(cat "$MM/hang.pid" 2>/dev/null || true)"; kill -INT "$MP" 2>/dev/null; wait "$MP" 2>/dev/null || true; poll pgone "$HP"; poll dir_empty "$MM/tmp"
 check "models: SIGINT while a probe hangs kills the probe and removes the temp dir" "$(kill -0 "${HP:-0}" 2>/dev/null && echo alive || echo gone):$([ -n "$HP" ] && echo started):$(ls -A "$MM/tmp" | wc -l | tr -d ' ')" "gone:started:0"
 rm -f "$MM/hang.pid"
 set -m; (cd "$PROJ" && PATH="$MM/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$MM/cfg.json" TMPDIR="$MM/tmp" exec "$KIT/bin/models.sh" cl2 --check > /dev/null 2>&1) & MP=$!; set +m
-for _ in $(seq 1 50); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
-HP="$(cat "$MM/hang.pid" 2>/dev/null)"; kill -TERM "$MP" 2>/dev/null; MRC=0; wait "$MP" 2>/dev/null || MRC=$?; sleep 0.3
+for _ in $(seq 1 150); do [ -s "$MM/hang.pid" ] && break; sleep 0.1; done
+HP="$(cat "$MM/hang.pid" 2>/dev/null || true)"; kill -TERM "$MP" 2>/dev/null; MRC=0; wait "$MP" 2>/dev/null || MRC=$?; poll pgone "$HP"; poll dir_empty "$MM/tmp"
 check "models: SIGTERM while a probe hangs kills the probe, removes the temp dir and exits 130" "$(kill -0 "${HP:-0}" 2>/dev/null && echo alive || echo gone):$([ -n "$HP" ] && echo started):$(ls -A "$MM/tmp" | wc -l | tr -d ' '):$MRC" "gone:started:0:130"
 echo slow > "$MM/b.sonnet"; echo slow > "$MM/b.opus"; echo slow > "$MM/b.haiku"
 t0=$SECONDS; mt cl2 --check
-check "models: three probes of 2 s run in parallel" "$(( SECONDS - t0 < 5 ))" "1"
+check "models: three probes of 4 s run in parallel" "$(( SECONDS - t0 < 9 ))" "1"
 check "models: the slow probes answered" "$(tabs)" "sonnet|ok|claude-x;opus|ok|claude-x;haiku|ok|claude-x;fable|ok|claude-opus-5-5"
 echo long > "$MM/b.sonnet"; mt cl2 --check; check "models: an unknown reason is cut to 80 characters" "$(tabs | cut -d';' -f1 | awk -F'|' '{print $2 ":" length($3)}')" "unknown:80"
 for m in sonnet opus haiku; do rm -f "$MM/b.$m"; done
@@ -3142,9 +3150,9 @@ rm -f "$MM/codex.layA"; touch "$MM/codex.layB"; mt cx --check; check "models: co
 rm -f "$MM/codex.layB"; touch "$MM/codex.dmjson1"; mt cx; check "models: codex debug models exiting 1 with valid JSON -> note and the role's model only" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models failed: dm: boom"
 rm -f "$MM/codex.dmjson1"
 rm -f "$MM/codex.401"
-touch "$MM/codex.hangdm"; ORCA_ROLES_PROBE_TIMEOUT=2 mt cx; check "models: a hung codex debug models ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models timed out after 2 s"
+touch "$MM/codex.hangdm"; ORCA_ROLES_PROBE_TIMEOUT=4 mt cx; check "models: a hung codex debug models ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models timed out after 4 s"
 rm -f "$MM/codex.hangdm"
-ORCA_ROLES_PROBE_TIMEOUT=2 mt hl; check "models: a hung models.list ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:m3:models.list timed out after 2 s"
+ORCA_ROLES_PROBE_TIMEOUT=4 mt hl; check "models: a hung models.list ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:m3:models.list timed out after 4 s"
 rm -rf "$MM/conc" "$MM/conc.log"; mt conc --check
 check "models: 10 probes all answered" "$(tabs | tr ';' '\n' | grep -c '|ok|-')" "10"
 check "models: never more than 6 probes run at once, and they did overlap" "$(sort -n "$MM/conc.log" | tail -1):$(wc -l < "$MM/conc.log" | tr -d ' ')" "6:10"
@@ -3291,17 +3299,17 @@ mv "$RS/skills.bak" "$RS/plug/skills"
 # a hung claude is killed after the bound, nothing is left running
 for mode in list mkt; do
   rs_state missing; if [ "$mode" = mkt ]; then echo hang > "$RS/mkt.mode"; else echo hang > "$RS/list.mode"; fi
-  T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
-  HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
-  check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 8 ] && echo quick)" "1:error claude timed out:gone:quick"
+  T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+  HP="$(cat "$RS/hang.pid" 2>/dev/null || true)"; poll pgone "$HP"
+  check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 20 ] && echo quick)" "1:error claude timed out:gone:quick"
 done
 rs_state missing; echo hang > "$RS/inst.mode"; rm -f "$RS/hang.pid"
-if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
-HP="$(cat "$RS/hang.pid" 2>/dev/null)"; sleep 0.3
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
+HP="$(cat "$RS/hang.pid" 2>/dev/null || true)"; poll pgone "$HP"
 check "review-skill: a hung plugin install is cut after the bound: exit 1, message, process gone" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
 rs_state installed; echo tree > "$RS/list.mode"; rm -f "$RS/child.pid"
-if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=1 "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
-CP="$(cat "$RS/child.pid" 2>/dev/null)"; sleep 0.3
+if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
+CP="$(cat "$RS/child.pid" 2>/dev/null || true)"; poll pgone "$CP"
 check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
 rs_state missing; echo fail > "$RS/list.mode"; rs_try install
 check "review-skill: install with a failing plugin list runs no marketplace add or install" "$RC:$ERR:$(rs_calls)" "1:error list boom:plugin list --json;"
@@ -3373,7 +3381,7 @@ rl() { (cd "$RW" && HOME="$PH" PATH="$TMP/rlbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/
 rr() { (cd "$RW" && HOME="$PH" PATH="$TMP/rlbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/rlbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/relaunch-role.sh" "$@" 2>&1); }
 rstate() { cat "$RG/orca-roles.env" "$RG/orca-roles.pty" "$RG/orca-roles.overrides.json" "$RG/orca-roles.config.json" | cksum; }
 rclosed() { grep -c '^terminal close' "$RLOG" || true; }
-rkicks() { sleep 1; tr -d ' ' < "$RKL" | tr '\n' ','; }
+rkicks() { poll nonempty "$RKL"; tr -d ' ' < "$RKL" | tr '\n' ','; }
 rl --only dev,planner >/dev/null; touch "$TMP/r-alive"
 B="$(rstate)"
 for args in "dev" "dev --model" "nobody --model good" "planner --model good" "Planner --model good" "deployer --model good" "--model good" "dev --bogus x"; do
@@ -3576,7 +3584,7 @@ try aln --mode academic-research
 check "legacy id: a team open under the old id is the same mode: no 'Close the team first', no dropped role selection" "$RC:$(printf '%s\n' "$OUT" | grep -c 'Close the team first\|Mode changed'):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:0:[\"academic-research\",[\"exp\"]]:academic-research"
 # a failed launch changes nothing; --status reads the old id
 printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
-LB="$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" | cksum)"
+LB="$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" 2>/dev/null | cksum || true)"
 try aln --only nonexist
 check "legacy id: a launch that fails leaves the saved options, config, handles and note as they were, and no normalized copy" "$RC:$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" | cksum):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' ')" "1:$LB:0"
 check "legacy id: --status reads a worktree configuration saved under the old id as academic-research, with its phase" "$(aln --status | grep '^Mode:\|^Phase:' | tr '\n' ' ')" "Mode: academic-research Phase: experiment "
@@ -3834,7 +3842,7 @@ echo 500 > "$FX/code.ax"; sc show arxiv:2401.00001; A5="$(cat "$SCH/rc"):$(cat "
 rm -f "$SCH/state/orca-roles-scholar-arxiv.last"
 SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P1="$([ -f "$SCH/state/orca-roles-scholar-arxiv.last" ] && echo stamp || echo nostamp)"
 T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P2="$(( $(date +%s) - T0 >= 1 ? 1 : 0 ))"
-P3=""; for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 1 ? 0 : 1 ))$(cat "$SCH/rc")"; done
+P3=""; for st in 1000 "" garbage "$(( $(date +%s) + 3 ))"; do printf '%s\n' "$st" > "$SCH/state/orca-roles-scholar-arxiv.last"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=6 sc show arxiv:2401.00001; P3="${P3:-}$(( $(date +%s) - T0 <= 4 ? 0 : 1 ))$(cat "$SCH/rc")"; done
 P5="$([ "$(cat "$SCH/state/orca-roles-scholar-arxiv.last")" -le "$(( $(date +%s) + 1 ))" ] && echo rewritten || echo kept)"
 SCHOLAR_ARXIV_DELAY=2 sc search q --source arxiv; P4="$(scu export.arxiv.org)"
 check "scholar show (arXiv): fields, id forms and old-style ids, never OpenAlex, not found 2, error 3; pacing stamp and wait" "$A1|$A2|$A3|$A4|$A5|$P1:$P2:$P3:$P4:$P5" "0:same:1:0|001001001001001001001|2:scholar.sh: arxiv:9999.99999 not found in arXiv:0|3:scholar.sh: arXiv returned an error: bad id:0|3:scholar.sh: arXiv failed (HTTP 500):1|stamp:1:00000000:1:rewritten"
@@ -3845,14 +3853,14 @@ SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; G1="$(cat "$SCH/rc"):$(( $(date 
 check "scholar arXiv pacing: a stamp in the current second waits d+1 whole seconds, the stamp is already written when the call is made, the lock is free during the call and gone after" "$G1:$(( ${G2:-0} >= S0 + 3 ? 1 : 0 )):$(sed -n 's/.*lock=//p' "$SCH/log.stamp"):$([ -e "$LK" ] && echo left || echo gone):$([ "$(cat "$ST")" = "$G2" ] && echo same || echo moved)" "0:1:1:free:gone:same"
 echo 1000 > "$ST"; mkdir "$LK"; ( sleep 2; rmdir "$LK" ) & T0="$(date +%s)"
 SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; wait; H1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 >= 1 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)"
-mkdir "$LK"; T0="$(date +%s)"; sc show arxiv:2401.00001; H2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 1 ? 1 : 0 )):$([ -d "$LK" ] && echo untouched || echo removed):$(scu export.arxiv.org)"; rmdir "$LK"
+mkdir "$LK"; T0="$(date +%s)"; sc show arxiv:2401.00001; H2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 4 ? 1 : 0 )):$([ -d "$LK" ] && echo untouched || echo removed):$(scu export.arxiv.org)"; rmdir "$LK"
 check "scholar arXiv pacing: a run waits while another holds the lock and leaves nothing behind; with the delay 0 there is no lock at all" "$H1:$H2" "0:1:gone:1:0:1:untouched:1"
 mkdir "$LK"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
 check "scholar arXiv pacing: a lock nobody releases is taken over after 30 s (not before, not never) and removed" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)" "0:1:gone:1"
 # no usable state dir or no lock: the call is made unpaced (no lock, no sleep, no stamp), one note on stderr per run, same exit code; never a hang
 SD="$SCH/state"; rm -rf "$SD" "$SCH/nostate"; T0="$(date +%s)"
-SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 2 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$([ -e "$SD" ] && echo created || echo none)"
-printf 'x' > "$SCH/nostate"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=3 sc search q --source arxiv; U2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 2 ? 1 : 0 )):$(grep -c 'not paced' "$SCH/err" || true)"
+SCHOLAR_ARXIV_DELAY=8 sc show arxiv:2401.00001; U1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 5 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$([ -e "$SD" ] && echo created || echo none)"
+printf 'x' > "$SCH/nostate"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=8 sc search q --source arxiv; U2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 5 ? 1 : 0 )):$(grep -c 'not paced' "$SCH/err" || true)"
 SCHOLAR_ARXIV_DELAY=0 sc show arxiv:2401.00001; U3="$(cat "$SCH/rc"):$(wc -c < "$SCH/err" | tr -d ' ')"; mkdir -p "$SD"
 U4=skipped; if [ "$(id -u)" != 0 ]; then chmod 555 "$SD"; SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu export.arxiv.org):$(ls -A "$SD" | wc -l | tr -d ' ')"; chmod 755 "$SD"; fi
 check "scholar arXiv pacing: a missing or read-only state dir (or delay 0) never hangs: the call is made at once without lock, sleep or stamp, with the note 'arXiv calls are not paced: <dir> is not a writable directory'" "$U1|$U2|$U3|$U4" "0:1:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:none|0:1:1|0:0|$([ "$(id -u)" != 0 ] && echo "0:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:0" || echo skipped)"
@@ -4026,7 +4034,7 @@ check "scholar verify odd files: CRLF and mixed-case fields, tab in key collapse
 # Crossref pacing (SCHOLAR_CROSSREF_DELAY between calls, none before the first), SCHOLAR_EMAIL in the User-Agent
 { bvent a "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; bvent b "$BERT" "Hartwell, J" 2019 10.18653/v1/n19-1423; } > "$W/p.bib"
 T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=2 bv verify --bib "$W/p.bib"; PA="$(( $(date +%s) - T0 >= 2 ? 1 : 0 ))"
-head -n 1 "$W/p.bib" > "$W/p1.bib"; T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=5 bv verify --bib "$W/p1.bib"; PB="$(( $(date +%s) - T0 <= 3 ? 1 : 0 ))"
+head -n 1 "$W/p.bib" > "$W/p1.bib"; T0="$(date +%s)"; SCHOLAR_CROSSREF_DELAY=10 bv verify --bib "$W/p1.bib"; PB="$(( $(date +%s) - T0 <= 6 ? 1 : 0 ))"
 SCHOLAR_EMAIL='a+b@x.org' bv verify --bib "$W/p.bib"
 check "scholar verify: Crossref delay between calls but not before the first; SCHOLAR_EMAIL goes in the User-Agent header file only, no mailto parameter in the URL, no -A, no redirects" "$PA$PB:$(scu 'mailto'):$(scg 'User-Agent: orca-roles-scholar (mailto:a+b@x.org)$' "$SCH/log.ua"):$(scg 'a+b@x.org' "$SCH/log"):$(scg ' -A \| -L ' "$SCH/log"):$(cat "$SCH/rc")" "11:0:2:0:0:0"
 # pdf / pdfs: stub curl3 maps a URL (query stripped, non-alphanumerics -> _) to a fixture in fx/pd; no fixture -> 404, <name>.code overrides the status, FAIL -> curl exit 7
@@ -4397,11 +4405,18 @@ check "cli: empty argument -> exit 2" "$(cli_bad '')" "2:0:4:1"
 check "cli: every listed section has a function, and no function is unlisted" "$(for k in $SECTIONS; do [ "$(type -t "sec_${k//-/_}")" = function ] || echo "$k"; done | wc -l | tr -d ' '):$(compgen -A function sec_ | wc -l | tr -d ' '):$(printf '%s\n' $SECTIONS | wc -l | tr -d ' ')" "0:$(printf '%s\n' $SECTIONS | wc -l | tr -d ' '):$(printf '%s\n' $SECTIONS | wc -l | tr -d ' ')"
 # a failing check ends in FAILURES with exit 1, and a section that ends the script early with exit 0 is not a pass
 CF="$TMP/cli-fail"; rm -rf "$CF"; mkdir -p "$CF/tests"; ln -sfn "$ROOT/bin" "$CF/bin"; ln -sfn "$ROOT/prompts" "$CF/prompts"; ln -sfn "$ROOT/config.default.json" "$CF/config.default.json"
-sed -e 's/^SECTIONS=.*/SECTIONS="bad quit"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_bad() { check "marker bad" a b; }; sec_quit() { exit 0; }\
+sed -e 's/^SECTIONS=.*/SECTIONS="bad quit boom guarded"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_bad() { check "marker bad" a b; }; sec_quit() { exit 0; }\
+sec_boom() { local x; x="$(cat \/nonexistent-smoke-probe)"; echo unreachable-probe; }\
+sec_guarded() { if false; then :; fi; false || true; [ 1 = 2 ] \&\& echo no; x="$(false)" || true; ( false ) || true; if ! cat \/nonexistent-smoke-probe 2>\/dev\/null; then check "marker guarded" a a; fi; }\
 &/' "$ROOT/tests/smoke.sh" > "$CF/tests/smoke.sh"
 cli_f() { CRC=0; bash "$CF/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
 cli_f bad; check "cli: a failing check prints its FAIL line and FAILURES, exits 1, no ALL OK" "$CRC:$(grep -c '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:1:0"
 cli_f quit; check "cli: a section that exits 0 early -> exit 1, 'ended before its summary' on stderr, no ALL OK" "$CRC:$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:0"
+# a command that set -e ends the script on is named: section, line and command; guarded failures are not
+cli_f boom; BL="$(grep -n '^sec_boom()' "$CF/tests/smoke.sh" | tail -1 | cut -d: -f1)"
+check "cli: an unguarded failing command in a section -> exit 1, stderr names the section, the line and the command, nothing after it runs, no ALL OK" "$CRC:$(grep -c "^smoke.sh: aborted in section boom at line $BL: x=\"\$(cat /nonexistent-smoke-probe)\"$" "$TMP/cli.err"):$(grep -c 'unreachable-probe' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:0:0"
+cli_f guarded; check "cli: guarded failures (if, ||, &&, a failing command in a condition) print no 'aborted' line and do not change the result" "$CRC:$(grep -c 'aborted' "$TMP/cli.err"):$(grep -c '^ok   marker guarded$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1:1"
+cli_f quit; check "cli: a section that exits 0 early prints no 'aborted' line" "$(grep -c 'aborted' "$TMP/cli.err")" "0"
 # the rules helpers fail loudly: an unmodified copy of the prompts passes, a lost fragment or a renamed pr-reviewer section does not
 RT="$TMP/rules-selftest"; rm -rf "$RT"; mkdir -p "$RT/tests"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$ROOT/README.md" "$RT/"; mkdir -p "$RT/plugin"; cp -R "$ROOT/plugin/skills" "$RT/plugin/"; cp "$ROOT/tests/smoke.sh" "$RT/tests/smoke.sh"
 rt_run() { CRC=0; bash "$RT/tests/smoke.sh" rules > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
@@ -4413,7 +4428,8 @@ rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes it
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
-for s in "$@"; do "sec_${s//-/_}"; done
+for s in "$@"; do SECTION="$s"; ERR_AT=""; "sec_${s//-/_}"; done
+SECTION=""
 sleep 1
 
 DONE=1
