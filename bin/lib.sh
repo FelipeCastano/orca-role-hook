@@ -340,9 +340,30 @@ preexisting_agents() {
   [ -s "$1" ] || return 0
   jq -r --argjson ours "$2" '.[] | select(.handle as $h | $ours | index($h) | not) | select((.agentIdentity // "") != "") | .handle' "$1"
 }
+# settings.flow: optional per-worktree tuning of the flow that the prompts describe in prose.  Unset = the prompts' own values and
+# the messages are byte-identical to a config without the key; an invalid value is ignored with a warning on stderr.
+#   roundCap: positive integer (rejected rounds of a step before the Planner checks with the user; the prompt says 3). programmer mode only
+#   workerReportBody: "full" (default) or "short" (worker_done body of a few lines, the detail in a file in scratchDir)
+# flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.
+flow_round_cap() {
+  local r; r="$(jq -r '(.settings.flow? | objects | .roundCap?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    "ok "*) printf '%s' "${r#ok }";;
+    "bad "*) echo "orca-roles: settings.flow.roundCap must be a positive integer (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
+flow_report_body() {
+  local r; r="$(jq -r '(.settings.flow? | objects | .workerReportBody?) // empty | if . == "full" then "" elif . == "short" then "short" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    short) printf 'short';;
+    "bad "*) echo "orca-roles: settings.flow.workerReportBody must be \"full\" or \"short\" (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note cap
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -364,6 +385,9 @@ planner_msg() {
   [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
   if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
+  cap=""; [ "$(mode_of "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
+  [ -n "$cap" ] && msg="$msg Flow override: stop and check with the user when a step piles up $cap rejected rounds (this replaces the 3 in your prompt)."
+  [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   if [ "$resume" = 1 ]; then
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
@@ -421,7 +445,7 @@ worker_back_msg() {
 # The role's "common" field (a path; accepts ~, {kit} and {home}) replaces the mode's common-workers.md, e.g. with the compact common-peon.md
 # for small models; if that file does not exist, the standard one is used and a warning goes to stderr.
 worker_msg() {
-  local p n notes="" fg="" cm; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
+  local p n notes="" fg="" cm short=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
   cm="$(rstr "$1" "$2" common)"
@@ -430,7 +454,8 @@ worker_msg() {
     [ -f "$cm" ] || { echo "orca-roles: the common file of role '$2' does not exist ($cm); using common-workers.md" >&2; cm=""; }
   fi
   [ -n "$cm" ] || cm="$(prompts_dir_of "$1")/common-workers.md"
-  printf '%s' "Read $cm and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
+  [ "$(flow_report_body "$1")" = short ] && short=" Flow override, for the body of your worker_done only (this replaces the \"complete, self-contained, never point to scratchDir\" rule of your common prompt): keep the body to at most ~8 lines with the outcome, the files changed, how you verified it and its result, and the open issues; write the full detail to a file in your scratchDir and name its absolute path in the body. Your ask and escalation messages stay full sentences."
+  printf '%s' "Read $cm and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$short$notes"
 }
 # A path with ~, {kit} or {home} expanded
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }

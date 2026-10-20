@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -541,6 +541,42 @@ case "$M3" in (*"Handles: Dev=t2."*"conversation was cleared"*"After your conver
 jq '.settings.language = "Spanish"' "$KIT/config.json" > "$TMP/lang.json"
 case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in *"Always reply to the user in Spanish, whatever language they write in."*) echo "ok   planner_msg: settings.language";; *) echo "FAIL planner_msg language"; FAIL=1;; esac
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
+}
+
+sec_flow() {
+# settings.flow: roundCap and workerReportBody; unset or "full" leaves planner_msg and worker_msg byte-identical
+clean_fixture
+printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/state.env"
+PM() { planner_msg "$1" "planner dev" "$TMP/state.env" "" "" 0; }
+WM() { (cd "$TMP" && worker_msg "$1" dev); }
+BASEP="$(PM "$C" 2>&1)"; BASEW="$(WM "$C" 2>&1)"
+jq '.settings.flow = {}' "$C" > "$TMP/f0.json"
+check "flow {}: planner_msg unchanged" "$(PM "$TMP/f0.json" 2>&1)" "$BASEP"
+check "flow {}: worker_msg unchanged" "$(WM "$TMP/f0.json" 2>&1)" "$BASEW"
+jq '.settings.flow = {roundCap: 5}' "$C" > "$TMP/f1.json"
+case "$(PM "$TMP/f1.json" 2>&1)" in *"Flow override: stop and check with the user when a step piles up 5 rejected rounds (this replaces the 3 in your prompt)."*) echo "ok   flow roundCap 5: planner sentence";; *) echo "FAIL flow roundCap 5"; FAIL=1;; esac
+check "flow roundCap 5: worker_msg unchanged" "$(WM "$TMP/f1.json" 2>&1)" "$BASEW"
+jq '.settings.mode = "pr-reviewer"' "$C" > "$TMP/fpr.json"; jq '.settings.flow = {roundCap: 5} | .settings.mode = "pr-reviewer"' "$C" > "$TMP/fpr5.json"
+check "flow roundCap 5 in pr-reviewer (no rounds in its flow): planner_msg unchanged" "$(PM "$TMP/fpr5.json" 2>&1)" "$(PM "$TMP/fpr.json" 2>&1)"
+for v in 0 -1 '"x"' 2.5 true; do
+  jq --argjson v "$v" '.settings.flow = {roundCap: $v}' "$C" > "$TMP/f2.json"
+  check "flow roundCap $v: message unchanged" "$(PM "$TMP/f2.json" 2>/dev/null)" "$BASEP"
+  case "$(PM "$TMP/f2.json" 2>&1 >/dev/null)" in *"settings.flow.roundCap must be a positive integer"*) echo "ok   flow roundCap $v: warning";; *) echo "FAIL flow roundCap $v: no warning"; FAIL=1;; esac
+done
+jq '.settings.flow = {workerReportBody: "short"}' "$C" > "$TMP/f3.json"
+SW="$(WM "$TMP/f3.json" 2>&1)"
+case "$SW" in *"replaces the"*"at most ~8 lines"*"your scratchDir"*"Your ask and escalation messages stay full sentences."*) echo "ok   flow short: worker sentence";; *) echo "FAIL flow short worker: $SW"; FAIL=1;; esac
+case "$(PM "$TMP/f3.json" 2>&1)" in *"worker_done reports are short"*"file whose absolute path the body names"*) echo "ok   flow short: planner sentence";; *) echo "FAIL flow short planner"; FAIL=1;; esac
+jq '.settings.flow = {workerReportBody: "full"}' "$C" > "$TMP/f4.json"
+check "flow full: planner_msg unchanged" "$(PM "$TMP/f4.json" 2>&1)" "$BASEP"
+check "flow full: worker_msg unchanged" "$(WM "$TMP/f4.json" 2>&1)" "$BASEW"
+jq '.settings.flow = {workerReportBody: "medium"}' "$C" > "$TMP/f5.json"
+check "flow medium: planner_msg unchanged" "$(PM "$TMP/f5.json" 2>/dev/null)" "$BASEP"
+check "flow medium: worker_msg unchanged" "$(WM "$TMP/f5.json" 2>/dev/null)" "$BASEW"
+case "$(WM "$TMP/f5.json" 2>&1 >/dev/null)$(PM "$TMP/f5.json" 2>&1 >/dev/null)" in *"settings.flow.workerReportBody must be"*) echo "ok   flow medium: warning";; *) echo "FAIL flow medium: no warning"; FAIL=1;; esac
+check "clean.sh --msg of a worker carries the short-body sentence" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" "$(cd "$TMP" && KIT="$TMP/home/.orca-roles" worker_msg "$TMP/f3.json" dev)"
+case "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" in *"at most ~8 lines"*) echo "ok   clean.sh --msg: short-body sentence";; *) echo "FAIL clean.sh --msg: no short-body sentence"; FAIL=1;; esac
+rm -rf "$KIT/tmp"
 }
 
 sec_clean() {
