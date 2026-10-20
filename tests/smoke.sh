@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -700,6 +700,113 @@ case "$OM" in "${BASEP%Start with the startup.}"*"Start with the startup.") echo
 jq '.settings.mode = "pr-reviewer"' "$C" > "$OR/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.oracle = {enabled: true}' "$C" > "$OR/p1.json"
 check "oracle enabled in pr-reviewer: planner_msg unchanged" "$(PM "$OR/p1.json")" "$(PM "$OR/p0.json")"
 rm -rf "$OR"
+}
+
+sec_loop() {
+# bin/loop.sh + bin/oracle/loop.py: one read-only coordinator cycle, against a fake 'orca' that answers fixed JSON and logs every call
+LP="$TMP/lp"; rm -rf "$LP"; mkdir -p "$LP/bin" "$LP/fx" "$LP/out"
+cat > "$LP/bin/orca" <<'FAKE'
+#!/bin/bash
+# fake orca: read-only answers from $LP_FX; every call is logged
+echo "$*" >> "$LP_FX/calls.log"
+case "$1 $2" in
+  "orchestration run-list") cat "$LP_FX/run-list.json";;
+  "orchestration task-list") cat "$LP_FX/task-list.json";;
+  "orchestration worker-list") cat "$LP_FX/worker-list.json";;
+  "orchestration inbox") cat "$LP_FX/inbox.json";;
+  "terminal show") cat "$LP_FX/terminal.json";;
+  *) echo "fake orca: unexpected call: $*" >&2; exit 9;;
+esac
+FAKE
+chmod +x "$LP/bin/orca"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+loop_repo() {   # <name> <test.sh body>: a git repo with a base commit on main, then branch feat
+  local p="$LP/$1"; mkdir -p "$p"
+  git -C "$p" init -q; git -C "$p" checkout -q -b main 2>/dev/null || true
+  git -C "$p" config user.email t@t; git -C "$p" config user.name t
+  printf '%s\n' "$2" > "$p/test.sh"; git -C "$p" add -A; git -C "$p" commit -q -m base; git -C "$p" checkout -q -b feat
+  printf '%s' "$p"
+}
+loop_fx() {   # <worktree path|-> <worker mode: ws|term|none> <inbox json array>: writes the fixtures; the task completed now, its spec runs `bash test.sh`
+  local wt="$1" mode="$2" spec
+  spec="$(printf '## Target\nx\n## Change\ny\n## Constraints\nz\n## Ownership\nsrc/**\n## Acceptance command\n`bash test.sh`\n')"
+  echo "{\"ok\":true,\"result\":{\"runs\":[{\"id\":\"run1\",\"updated_at\":\"$NOW\"}]}}" > "$LP/fx/run-list.json"
+  if [ "$wt" = - ]; then echo '{"ok":true,"result":{"tasks":[]}}' > "$LP/fx/task-list.json"
+  else jq -n --arg now "$NOW" --arg spec "$spec" '{ok: true, result: {tasks: [{id: "tk1", status: "completed", result: "{\"outcome\":\"succeeded\"}", completed_at: $now, spec: $spec}]}}' > "$LP/fx/task-list.json"; fi
+  case "$mode" in
+    ws) jq -n --arg wt "$wt" '{ok: true, result: {workers: [{taskId: "tk1", dispatchId: "d1", terminalState: "reclaimable", projection: {workspace: {id: ("repo::" + $wt)}}}]}}' > "$LP/fx/worker-list.json";;
+    term) jq -n '{ok: true, result: {workers: [{taskId: "tk1", dispatchId: "d1", terminalState: "reclaimable", agentTerminalHandle: "h1"}]}}' > "$LP/fx/worker-list.json"
+          jq -n --arg wt "$wt" '{ok: true, result: {terminal: {worktreeId: ("repo::" + $wt + "@@x")}}}' > "$LP/fx/terminal.json";;
+    *) echo '{"ok":true,"result":{"workers":[]}}' > "$LP/fx/worker-list.json";;
+  esac
+  jq -n --argjson m "$3" '{ok: true, result: {messages: $m}}' > "$LP/fx/inbox.json"
+}
+loop_run() {   # [loop.sh args]: stdout in $OUT, exit code in $RC, stderr in $LP_ERR
+  try bash -c 'cd "$1" && shift && LP_FX="$LP_FX" ORCA_ROLES_ORACLE_OUT="$LP_OUT" ORCA_ROLES_CONFIG="$LP_CFG" KIT="$LP_KIT" HOME="$LP_HOME" PATH="$LP_BIN:$PATH" exec "$LP_KIT/bin/loop.sh" "$@" 2>"$LP_ERR"' x "$TMP" "$@"
+}
+export LP_FX="$LP/fx" LP_OUT="$LP/out" LP_CFG="$LP/cfg.json" LP_KIT="$KIT" LP_HOME="$TMP/home" LP_BIN="$LP/bin" LP_ERR="$LP/err"
+echo '{ "settings": { "oracle": { "enabled": true, "waitMax": 0 } } }' > "$LP_CFG"
+QMSG='[{"id":"m1","run_id":"run1","type":"question","read":0,"subject":"which db?"},{"id":"m2","run_id":"run1","type":"status","read":0}]'
+# no python: exit 3 with a clear message
+try bash -c 'ORCA_ROLES_PYTHON=no-such-python-xyz exec "$LP_KIT/bin/loop.sh" 2>"$LP_ERR"'
+check "loop.sh without python3 >= 3.8: exit 3" "$RC" "3"
+case "$(cat "$LP_ERR")" in *"needs python3 >= 3.8"*) echo "ok   loop.sh without python3: clear message";; *) echo "FAIL loop.sh without python3: $(cat "$LP_ERR")"; FAIL=1;; esac
+PYB="${ORCA_ROLES_PYTHON:-python3}"
+if ! command -v "$PYB" >/dev/null 2>&1 || ! "$PYB" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+  echo "ok   loop: skipped (no python3 >= 3.8)"
+else
+  check "loop: loop.py parses as python 3.8" "$("$PYB" -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1], feature_version=(3, 8)); print("parsed")' "$ROOT/bin/oracle/loop.py" 2>&1)" "parsed"
+  st() { jq -r "$1" <<<"$OUT"; }
+  loop_run -h; check "loop.sh -h: usage on stdout, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c 'Usage:  loop.sh')" "0:1"
+  loop_run --bogus; check "loop.sh: unknown option -> exit 2" "$RC" "2"
+  loop_run --run; check "loop.sh: --run without a value -> exit 2" "$RC" "2"
+  # messages: an unread question wakes, a read one does not, other types never
+  loop_fx - none "$QMSG"; loop_run
+  check "loop: an unread question wakes with a reason" "$RC:$(st .wake):$(st '.reasons[0]'):$(st '.dry_run')" "0:true:unread question message: m1:true"
+  check "loop: only the question is listed (the unread status message is not)" "$(st '.runs[0].messages | length'):$(st '.runs[0].messages[0].id')" "1:m1"
+  loop_fx - none '[{"id":"m1","run_id":"run1","type":"question","read":1}]'; loop_run
+  check "loop: a read question does not wake" "$RC:$(st .wake):$(st '.reasons | length')" "0:false:0"
+  # a succeeded task with a passing spec: verified, quiet, the worker-release is only listed
+  P="$(loop_repo pass 'touch "'"$LP"'/marker"; exit 0')"; rm -f "$LP/marker"; loop_fx "$P" ws '[]'; loop_run
+  check "loop: passing spec -> status pass, no wake" "$RC:$(st .wake):$(st '.runs[0].verified[0].status')" "0:false:pass"
+  check "loop: the acceptance command ran" "$([ -e "$LP/marker" ] && echo ran || echo not)" "ran"
+  check "loop: a reclaimable worker -> would_do lists the worker-release" "$(st '.runs[0].would_do | join("|")')" "worker-release --dispatch d1"
+  # a cached verify.json is reused; --force runs again
+  rm -f "$LP/marker"; loop_run
+  check "loop: a cached verify.json is reused (cached, command not run)" "$(st '.runs[0].verified[0].cached'):$(st .wake):$([ -e "$LP/marker" ] && echo ran || echo not)" "true:false:not"
+  loop_run --force
+  check "loop --force: verifies again (not cached, command ran)" "$(st '.runs[0].verified[0].cached'):$(st '.runs[0].verified[0].status'):$([ -e "$LP/marker" ] && echo ran || echo not)" "null:pass:ran"
+  # a failing spec wakes
+  rm -rf "$LP/out"/*; P="$(loop_repo fail 'exit 1')"; loop_fx "$P" ws '[]'; loop_run
+  check "loop: failing spec -> wake with the status" "$(st .wake):$(st '.runs[0].verified[0].status'):$(st '.reasons[0]')" "true:fail:tk1: verification fail"
+  check "loop: a failed task does not list the worker-release" "$(st '.runs[0].would_do | length')" "0"
+  loop_run
+  check "loop: a cached failed verification still wakes, without running again" "$(st .wake):$(st '.runs[0].verified[0].cached'):$(st '.reasons[0]')" "true:true:tk1: verification fail (cached)"
+  # a worker without a workspace: the worktree comes from its terminal
+  rm -rf "$LP/out"/*; P="$(loop_repo term 'exit 0')"; loop_fx "$P" term '[]'; loop_run
+  check "loop: worker without workspace -> worktree from terminal show, verified pass" "$(st '.runs[0].verified[0].status'):$(st .wake)" "pass:false"
+  # the worktree is gone
+  rm -rf "$LP/out"/*; loop_fx "$LP/does-not-exist" ws '[]'; loop_run
+  check "loop: missing worktree path -> no_worktree wake" "$(st .wake):$(st '.runs[0].verified[0].status')" "true:no_worktree"
+  loop_fx "$LP/does-not-exist" none '[]'; loop_run
+  check "loop: worker not found at all -> no_worktree wake" "$(st .wake):$(st '.runs[0].verified[0].status')" "true:no_worktree"
+  # oracle disabled: the wrapper adds --no-verify, nothing is executed
+  rm -rf "$LP/out"/*; rm -f "$LP/marker"; P="$(loop_repo off 'touch "'"$LP"'/marker"; exit 0')"; loop_fx "$P" ws '[]'
+  echo '{ "settings": { "oracle": { "enabled": false } } }' > "$LP_CFG"; loop_run
+  check "loop with oracle disabled: nothing executed, no wake" "$([ -e "$LP/marker" ] && echo ran || echo not):$(st .wake):$(st '.runs[0].verified | length')" "not:false:0"
+  check "loop with oracle disabled: would_do has the verify line" "$(st '.runs[0].would_do | join("|")')" "verify tk1 in off"
+  rm -f "$LP_CFG"; loop_run
+  check "loop with no config file (the merged defaults are off): nothing executed" "$([ -e "$LP/marker" ] && echo ran || echo not):$(st '.runs[0].would_do | length')" "not:1"
+  echo '{ "settings": { "oracle": { "enabled": true, "waitMax": 0 } } }' > "$LP_CFG"; loop_run --no-verify
+  check "loop --no-verify with the oracle enabled: nothing executed" "$([ -e "$LP/marker" ] && echo ran || echo not):$(st '.runs[0].would_do | join("|")')" "not:verify tk1 in off"
+  # --run skips run-list
+  N="$(wc -l < "$LP_FX/calls.log" | tr -d ' ')"; loop_run --run run1 --since-hours 1
+  check "loop --run: run-list is not called, the run is pinned" "$(tail -n +$((N + 1)) "$LP_FX/calls.log" | grep -c 'run-list'):$(st '.runs | length'):$(st '.runs[0].run')" "0:1:run1"
+  # the fake orca only ever saw read subcommands (the log holds every call of this section)
+  check "loop: every call to orca was a read (run-list, task-list, worker-list, inbox, terminal show)" "$(grep -vcE '^(orchestration (run-list|task-list|worker-list|inbox)|terminal show) ' "$LP_FX/calls.log")" "0"
+  check "loop: never ack, send, worker-release or task-update" "$(grep -cE 'ack|send|release|task-update|task-create|reply' "$LP_FX/calls.log")" "0"
+fi
+rm -rf "$LP"; unset LP_FX LP_OUT LP_CFG LP_KIT LP_HOME LP_BIN LP_ERR
 }
 
 sec_clean() {

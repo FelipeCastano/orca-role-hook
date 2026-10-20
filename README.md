@@ -560,6 +560,24 @@ Off by default. A Tester's verdict is an opinion; the oracle is a command whose 
 - **Requirements.** python3 >= 3.8 and the standard library only (macOS ships 3.9). `ORCA_ROLES_PYTHON` picks another interpreter. `--task` without `--spec-file` reads the spec from the Orca Run.
 - **Enable it.** In `config.json` (or `.orca-roles.json` for one project): `"settings": { "oracle": { "enabled": true } }`. Defaults, all optional: `maxLoad` 0.8, `waitMax` 300 (seconds), `timeout` 600 (seconds per command attempt), `retries` 1. `oracle.sh` looks the settings up in `ORCA_ROLES_CONFIG`, else the worktree's `orca-roles.config.json`, else the merged configuration. `spec_lint.py` (in `bin/oracle/`) lints a spec file: `python3 ~/.orca-roles/bin/oracle/spec_lint.py --file spec.md`.
 
+#### Read-only coordinator check: `loop.sh`
+
+A coordinator that polls Orca wakes the Planner (an expensive model) on every turn even when nothing needs it. `~/.orca-roles/bin/loop.sh` is one read-only cycle that answers "does anything need the Planner?" so the poller wakes it only when `wake` is true.
+
+- **What it reads.** For each recent Run (`--run <id>`, repeatable, or every Run updated in the last `--since-hours`, default 48): `orca orchestration task-list --run`, `worker-list --run --limit 100` and `inbox --limit 500` (the inbox read marks nothing as read), plus `orca terminal show` for a worker that has no workspace. The Orca command is `orca`, or `$ORCA_CLI_COMMAND` when `orca` is not on the PATH.
+- **What it never does.** It does not ack, release a worker, send a message, update a task or write anything to Orca. What a full loop would do next is only listed in `would_do` (`worker-release --dispatch <id>` for a verified task whose worker is `reclaimable` or `retained`; `verify <task> in <worktree>` when nothing was run).
+- **When it wakes.** An unread `question`, `escalation` or `failed` message; a recently completed task with outcome `succeeded` whose oracle status is not `pass` or `pass_flaky` (`fail`, `cheat`, `command_not_allowed`, `env_not_runnable`, `no_acceptance_command`, `verify_error`); or a task with no worktree to verify (`no_worktree`: the path is gone or the worker has no terminal). If Orca does not answer, that is also a reason.
+- **When it runs commands.** Only when `settings.oracle.enabled` is `true`: then, for each completed `succeeded` task that has no `verify.json` yet (or with `--force`), it runs `bin/oracle/verify_task.py --task <id> --run <run>` in the task's worktree, with the same allowlist and the same `timeout`, `maxLoad` and `waitMax` as `oracle.sh`. A cached `verify.json` is not run again, but a cached result other than `pass`/`pass_flaky` still wakes. Otherwise the wrapper adds `--no-verify` by itself and the cycle only reads Orca. `--no-verify` forces that too.
+- **Output.** JSON on stdout: `{ts, dry_run: true, wake, reasons, runs}`; each run has `verified` (task, status, seconds, `cached`), `messages` (the unread ones that woke it), `would_do` and its own `reasons`. Exit 0 on every completed cycle (the decision is `wake`), 2 on bad usage, 3 without python3 >= 3.8 (`ORCA_ROLES_PYTHON` picks the interpreter).
+
+```sh
+# in the coordinator's poll loop: spend a Planner turn only when the check says so
+out="$(~/.orca-roles/bin/loop.sh --since-hours 24)"
+if [ "$(jq -r .wake <<<"$out")" = true ]; then
+  jq -r '.reasons[]' <<<"$out"   # hand these to the Planner as the reason for waking it
+fi
+```
+
 ### Using other agents
 
 ```json
@@ -728,7 +746,8 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── models.sh                # lists a role's candidate models and tests them
 │   ├── metrics.sh               # token usage per role and session (read-only), from Claude Code's session files
 │   ├── oracle.sh                # optional oracle: runs a task spec's acceptance command and checks the tests were not cheated
-│   ├── oracle/                  # its python3 parts (verify_task.py, allow.py, spec_lint.py)
+│   ├── oracle/                  # its python3 parts (verify_task.py, allow.py, spec_lint.py, loop.py)
+│   ├── loop.sh                  # read-only coordinator check: says whether anything needs the Planner (reads Orca, never writes)
 │   ├── review-skill.sh          # installs and locates the pr-reviewer mode's review skill
 │   ├── phase.sh                 # switches an academic-research team's phase
 │   ├── academic-scaffold.sh     # creates the paper repository's folders and .gitignore lines
