@@ -507,8 +507,13 @@ Each role inherits from `defaults` whatever it does not define.
 | `trust` | Only with `agent: "custom"`: how to mark the worktree as trusted so the agent does not stop at a trust dialog: `{"file": "<path>", "jq": "<filter>"}`. `file` accepts `~`, `{kit}` and `{home}`; the `jq` filter receives the worktree's real path as `$dir` and must return the whole (modified) object, exactly one JSON object: anything else (an array, `null`, nothing, several values) is rejected with a warning and the file is left untouched. Before opening the tabs the kit applies it once per distinct file and filter, with the same care as `~/.claude.json` (permissions and symlinks kept, concurrent changes not lost, nothing written if it is already applied or the file does not exist). |
 | `pluginDirs` | Claude Code plugins that role loads (`--plugin-dir`). Accepts `~` and `{kit}`. The planner brings `{kit}/plugin`, with its skill. `claude` only. |
 | `clearCommand` | Command that opens a new conversation in the agent, for context cleanup. By default `/clear` in `claude` and `/new` in `codex`; in `custom` it must be defined or the role is not cleaned. |
+| `common` | Workers only: path of the common rules file the worker reads instead of its mode's `common-workers.md`. Accepts `~`, `{kit}` and `{home}`. If the file does not exist, the worker gets `common-workers.md` and a warning goes to stderr. Unset = today's behaviour. See [Compact rules for small models](#compact-rules-for-small-models). |
 
 The order of the tabs is the order of the roles in the JSON.
+
+#### Compact rules for small models
+
+`prompts/programmer/common-peon.md` is an opt-in condensed version of `common-workers.md` (about 3 KB instead of 8) for small open models run as workers, where a long standing instruction competes with the task. Point a role at it with `"common": "{kit}/prompts/programmer/common-peon.md"`; no role does by default. It keeps the hard rules in the same words (no worktrees or terminals, work only in your worktree, no push, no commit unless asked, nothing written to external systems, no AI attribution, no names of people, `scratchDir` for temporary files, no `bash -c`, stop what you started), the communication contract (one `worker_done`, no heartbeats, ack batches) and English output. It drops the long recipes: the `git archive` extraction of earlier versions is one line, the commit-history matching detail is one line (match `git log -15`), and the comment-density guidance is one line. Whether it helps small models is not measured yet.
 
 ### Models of a role
 

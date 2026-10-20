@@ -166,6 +166,30 @@ rule R5 "$PD/deployer.md" 'You do not modify production code'
 rule R5 "$PD/e2e-tester.md" 'Do not sign in or enter credentials'
 rule R5 "$PD/e2e-tester.md" 'You do not modify anything in the project'
 rule R5 "$PD/researcher.md" 'Do not modify production code'
+# The compact common file for small models keeps the same hard rules (R3, R4, R5, R9, R12, R14, R16) and stays small
+PE="$PD/common-peon.md"
+rule R3 "$PE" 'git log -1 --format=%B' 'never carry attribution to an AI'
+rule R3 "$PE" 'git commit --amend' 'never carry attribution to an AI'
+rule R3 "$PE" 'no `Co-Authored-By` trailer' 'never carry attribution to an AI'
+rule R3 "$PE" '"Generated with' 'never carry attribution to an AI'
+rule R4 "$PE" 'No names of people anywhere you write'
+rule R4 "$PE" 'Handles (`@user`) and email addresses count as names' 'No names of people anywhere you write'
+rule R5 "$PE" 'Never create worktrees or terminals'
+rule R5 "$PE" 'Never `git push`'
+rule R5 "$PE" 'Never run `git checkout`'
+rule R5 "$PE" 'Never write to Jira, GitHub'
+rule R5 "$PE" 'Do not commit unless the task asks for it'
+rule R5 "$PE" 'Work only inside your worktree'
+rule R5 "$PE" 'Temporary files only in `scratchDir`'
+rule R9 "$PE" 'Never wrap commands in `bash -c` or `sh -c`'
+rule R9 "$PE" 'Always write in English' '^- Always write'
+rule R12 "$PE" 'stop the processes you started'
+rule R14 "$PE" 'No heartbeats'
+rule R16 "$PE" 'acknowledge each batch once read with `--ack <delivery_id>`'
+rule R16 "$PE" 'worker_done' 'ONE'
+rule W "$PE" '`reports.md`'
+rule P "$PE" 'come in your startup message'
+check "rules: common-peon.md is at most 3500 bytes" "$([ "$(wc -c < "$PE" | tr -d ' ')" -le 3500 ] && echo y)" "y"
 # R6 install and create only with the user's yes; R7 never approve or merge; R8 credit to lens-review, not copied
 # R5 the pr-reviewer worktree is read-only; R11 its Auditor never experiments in the worktree; R14 no heartbeats; R15 convention check
 prrule R6 planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
@@ -575,6 +599,16 @@ check "bin/ has no empty_scratch left" "$(grep -c 'empty_scratch' "$ROOT"/bin/*.
 
 sec_cleanup_msg() {
 clean_fixture
+# Role field "common": names that file instead of common-workers.md; a missing file falls back with a warning; clean.sh --msg agrees
+mkdir -p "$KIT/prompts/programmer"; echo peon > "$KIT/prompts/programmer/common-peon.md"
+jq '.roles.dev.common = "{kit}/prompts/programmer/common-peon.md"' "$C" > "$TMP/cmn.json"
+check "worker_msg with common: names that file" "$(cd "$TMP" && worker_msg "$TMP/cmn.json" dev 2>&1 | grep -o '^Read [^ ]* and [^ ]*')" "Read $KIT/prompts/programmer/common-peon.md and $KIT/prompts/programmer/dev.md"
+check "worker_msg with common: the rest of the message is unchanged" "$(cd "$TMP" && worker_msg "$TMP/cmn.json" dev | sed 's#common-peon.md#common-workers.md#')" "$(cd "$TMP" && worker_msg "$C" dev)"
+jq '.roles.dev.common = "~/nope/common.md"' "$C" > "$TMP/cmn2.json"
+check "worker_msg with a missing common file: falls back to common-workers.md" "$(cd "$TMP" && worker_msg "$TMP/cmn2.json" dev 2>/dev/null)" "$(cd "$TMP" && worker_msg "$C" dev)"
+case "$(cd "$TMP" && worker_msg "$TMP/cmn2.json" dev 2>&1 >/dev/null)" in *"common file of role 'dev' does not exist"*"using common-workers.md"*) echo "ok   worker_msg with a missing common file: warning on stderr";; *) echo "FAIL worker_msg missing common: no warning"; FAIL=1;; esac
+check "worker_msg with common: other roles are unchanged" "$(cd "$TMP" && worker_msg "$TMP/cmn.json" cx)" "$(cd "$TMP" && worker_msg "$C" cx)"
+check "clean.sh --msg of a worker with common is its role message" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/cmn.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" "$(cd "$TMP" && KIT="$TMP/home/.orca-roles" worker_msg "$TMP/cmn.json" dev)"
 rm -rf "$KIT/tmp"
 rm -f "$TMP/fakebin/orca"
 M3="$(planner_msg "$C" "planner dev" "$TMP/state.env" "" "" 0)"
@@ -2041,7 +2075,7 @@ try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in 
 rm -f "$NR/prompts/academic-research/lone2.md"
 rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
 try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
-check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:9"
+check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:10"
 check "modes --repo: --remove --repo leaves the installed legacy file" "$(cat "$PK/roles/rp-all.md" 2>/dev/null)" "inst"
 printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":true,"prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
@@ -2107,6 +2141,9 @@ jq '. + {overwrite: true, model: "m2"}' "$TMP/role.json" > "$TMP/role2.json"
 try newrole "$TMP/role2.json"; check "from-json: overwrite" "$RC:$(jq -r '.roles["sec-review"].model' "$KIT/config.json")" "0:m2"
 printf '%s' '{"id":"cu-agent","description":"custom","agent":"custom","command":"agy {scratch}","addDirFlag":"--add-dir","trust":{"file":"~/s.json","jq":".t = [$dir]"},"clearCommand":"/new","nice":5,"pluginDirs":["{kit}/p"],"prompt":"# Role: CU\n\n## Report\nx\n"}' > "$TMP/role4.json"
 try newrole "$TMP/role4.json"; check "from-json: custom keeps addDirFlag, trust, clearCommand, nice and pluginDirs" "$RC $(jq -c '.roles["cu-agent"] | [.addDirFlag, .trust, .clearCommand, .nice, .pluginDirs]' "$KIT/config.json")" '0 ["--add-dir",{"file":"~/s.json","jq":".t = [$dir]"},"/new",5,["{kit}/p"]]'
+printf '%s' '{"id":"cm-role","description":"d","common":"{kit}/prompts/programmer/common-peon.md","prompt":"# Role: CM\n\n## Report\nx\n"}' > "$TMP/role5.json"
+try newrole "$TMP/role5.json"; check "from-json: keeps common" "$RC $(jq -r '.roles["cm-role"].common' "$KIT/config.json")" "0 {kit}/prompts/programmer/common-peon.md"
+jq 'del(.roles["cm-role"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cm-role.md"
 jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-agent.md"
 }
 
@@ -2750,7 +2787,7 @@ check "custom trust: filter that turns non-object on the retry -> untouched (as 
 sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
 pk_setup
-check "prompts: every default prompt file in prompts/programmer/, none flat" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "9:0"
+check "prompts: every default prompt file in prompts/programmer/, none flat" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "10:0"
 NROLES="$(jq -r '.roles | length' "$PKC")"
 [ "$NROLES" -ge 7 ] || { echo "FAIL default config has only $NROLES roles"; FAIL=1; }
 # prints "<paths found>:<missing>:<outside programmer/>" for a message
@@ -2807,7 +2844,7 @@ try nr_run --from-json "$TMP/nr-role.json" --repo "$NR"; check "new-role --repo:
 check "new-role --repo: prompt in prompts/programmer/, none flat" "$([ -f "$NR/prompts/programmer/repo-sec.md" ] && echo y)$([ -e "$NR/prompts/repo-sec.md" ] && echo flat)" "y"
 check "new-role --repo: prompt_of resolves to an existing file" "$(p="$(KIT="$NR" prompt_of "$NR/config.default.json" repo-sec)"; [ "$p" = "$NR/prompts/programmer/repo-sec.md" ] && [ -f "$p" ] && echo y)" "y"
 try nr_run --remove repo-sec --repo "$NR"; check "new-role --remove --repo: removes the role" "$RC:$(jq -r '.roles | has("repo-sec")' "$NR/config.default.json")" "0:false"
-check "new-role --remove --repo: only its prompt is deleted, the default prompt files remain" "$([ -e "$NR/prompts/programmer/repo-sec.md" ] && echo left):$(find "$NR/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" ":9"
+check "new-role --remove --repo: only its prompt is deleted, the default prompt files remain" "$([ -e "$NR/prompts/programmer/repo-sec.md" ] && echo left):$(find "$NR/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" ":10"
 # a folder that is not a clone (config.default.json but flat prompts, or no config.default.json) is refused and nothing is written
 NN="$TMP/nr-notclone"; rm -rf "$NN"; mkdir -p "$NN/prompts"; cp "$ROOT/config.default.json" "$NN/"; : > "$NN/prompts/dev.md"; mkdir -p "$TMP/nr-noconf/prompts/programmer"
 H0="$(cd "$NN" && find . -type f | sort | xargs shasum | shasum)"
@@ -2821,7 +2858,7 @@ sec_install_flat() {
 IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
-check "install.sh: no flat prompt left, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:9"
+check "install.sh: no flat prompt left, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:10"
 # the "Enabled" line names the mode of the installed configuration
 ic() { jq "$1" "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; }
 irun() { if IOUT="$(cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null 2>"$IH/err.txt")"; then IRC=0; else IRC=$?; fi; IENA="$(printf '%s\n' "$IOUT" | grep '^Enabled')"; }

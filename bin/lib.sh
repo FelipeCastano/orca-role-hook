@@ -418,11 +418,19 @@ worker_back_msg() {
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
 # Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
 # background subagent task that never finished, so Orca never got its report.
+# The role's "common" field (a path; accepts ~, {kit} and {home}) replaces the mode's common-workers.md, e.g. with the compact common-peon.md
+# for small models; if that file does not exist, the standard one is used and a warning goes to stderr.
 worker_msg() {
-  local p n notes="" fg=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
+  local p n notes="" fg="" cm; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  printf '%s' "Read $(prompts_dir_of "$1")/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
+  cm="$(rstr "$1" "$2" common)"
+  if [ -n "$cm" ]; then
+    cm="$(expand_path "$cm")"
+    [ -f "$cm" ] || { echo "orca-roles: the common file of role '$2' does not exist ($cm); using common-workers.md" >&2; cm=""; }
+  fi
+  [ -n "$cm" ] || cm="$(prompts_dir_of "$1")/common-workers.md"
+  printf '%s' "Read $cm and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
 }
 # A path with ~, {kit} or {home} expanded
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
