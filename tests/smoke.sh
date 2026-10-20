@@ -2268,6 +2268,18 @@ CFGT="$KIT/config.json"   # role_anchor runs with the kit seen from the fake HOM
 check "agent.sh claude: one line in the system prompt that asks for the role after /clear" "$(printf '%s\n' "$OUT" | grep -A1 -x -- --append-system-prompt | tail -1)" "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)"
 case "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)" in (*"after /clear"*"$TMP/home/.orca-roles/bin/clean.sh --msg tester"*) echo "ok   role_anchor: names the role and the command";; (*) echo "FAIL role_anchor"; FAIL=1;; esac
 check "agent.sh leaves pre-seeded scratch content intact" "$([ -f "$SDT/f" ] && [ -f "$SDT/sub/g" ] && [ -f "$SDT/.hidden" ] && echo y)" "y"
+# agent.sh: workers cannot edit the kit (deny rules for the folders --add-dir exposes), the Planner can; the scratch folders stay writable
+KH="$TMP/home/.orca-roles"; KR="${KH#/}"   # the kit as agent.sh sees it, and as the "//" rules write it
+DENY="$(printf '%s\n' "$OUT" | awk '$0 == "--disallowedTools" { on = 1; next } /^--/ { on = 0 } on')"   # tester's argv, one per line
+check "agent.sh worker: deny rules for the kit's prompts, roles, scripts, plugin and configuration" "$(printf '%s\n' "$DENY" | tr '\n' ' ')" "Edit(//$KR/prompts/**) Edit(//$KR/roles/**) Edit(//$KR/bin/**) Edit(//$KR/plugin/**) Edit(//$KR/config.json) Edit(//$KR/config.default.json) "
+BAD=0; while IFS= read -r r; do d="${r#Edit(/}"; d="${d%\)}"; d="${d%/\*\*}"; case "$SDT/" in "$d/"*) BAD=1;; esac; done <<EOF_DENY
+$DENY
+EOF_DENY
+check "agent.sh worker: no deny rule covers the role's scratch folder" "$BAD:$(printf '%s' "$SDT" | grep -c "^$KH/tmp/")" "0:1"
+OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tx)"
+check "agent.sh worker: a role's own --settings does not drop the deny rules" "$(printf '%s\n' "$OUT" | grep -c '^Edit(//')" "6"
+OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner)"
+check "agent.sh: the Planner gets no deny rules (it edits the configuration for the user)" "$(printf '%s\n' "$OUT" | grep -c -e '--disallowedTools' -e '^Edit(')" "0"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 }
 

@@ -393,6 +393,15 @@ scratch_dir() {
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
 }
+# Claude Code deny rules that keep a worker from editing the kit itself: its prompts, scripts, plugin, roles and configuration.
+# --add-dir gives write access in auto mode (additional directories follow the permission mode), and every future worker
+# reads these files.  Not the whole $KIT: scratch folders live in $KIT/tmp and must stay writable (a deny cannot be undone by an allow).
+# "//" anchors the pattern at the filesystem root; Claude Code applies a rule written through a symlinked directory at its real location too.
+kit_deny_rules() {
+  local k="${KIT#/}" d
+  for d in prompts roles bin plugin; do printf 'Edit(//%s/%s/**)\n' "$k" "$d"; done
+  for d in config.json config.default.json; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done
+}
 # A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
   printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."

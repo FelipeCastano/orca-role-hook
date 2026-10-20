@@ -54,6 +54,12 @@ case "$AGENT" in
     fi
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
+    # Workers cannot rewrite the kit through the --add-dir above (deny rules win over every permission mode). The Planner can: it
+    # edits the configuration for the user. As --disallowedTools, not in --settings, which a role's own --settings would replace.
+    if [ "$ROLE" != planner ]; then
+      DENY=(); while IFS= read -r r; do DENY+=("$r"); done < <(kit_deny_rules)
+      ARGS+=(--disallowedTools "${DENY[@]}")
+    fi
     # Claude Code's own `language` setting (user settings) outranks the prompt: workers override it to English. Not the Planner, which
     # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
     # extraArgs replaces this one and should carry its own "language".
