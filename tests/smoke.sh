@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -1377,7 +1377,7 @@ printf 'PLANNER=pty-1\n' > "$G/orca-roles.pty"; printf '{"only":["dev"],"enable"
 ssum() { cat "$G/orca-roles.config.json" "$G/orca-roles.overrides.json" "$G/orca-roles.env" "$G/orca-roles.pty" "$G/orca-roles.models" | cksum; ls "$G" | cksum; }
 S0="$(ssum)"; : > "$SLOG"
 try status --status
-check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-up|alive|-|m-ok/Dev|h-none|no tab|m-dev|-/Deployer|h-gone|agent gone|-|FAILED:m-bad"
+check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-up|alive|-|m-ok|-|-/Dev|h-none|no tab|m-dev|-|-|-/Deployer|h-gone|agent gone|-|FAILED:m-bad|-|-"
 check "status: writes nothing" "$([ "$(ssum)" = "$S0" ] && echo unchanged || echo CHANGED):$([ -e "$G/orca-roles-launch.log" ] && echo log)" "unchanged:"
 check "status: only reads terminals" "$(grep -vc '^terminal show ' "$SLOG")" "0"
 try status -h; case "$OUT" in *"--status "*"changes nothing"*) echo "ok   status: -h prints the --status line";; *) echo "FAIL status -h: $OUT"; FAIL=1;; esac
@@ -1396,12 +1396,12 @@ EOS
 jq '.roles.dev.agent = "custom" | .roles.dev.command = "c" | .settings.mode = "programmer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
 printf 'PLANNER=h-orph\nDEV=h-cust\nGHOST=h-cust\n' > "$G/orca-roles.env"; rm -f "$G/orca-roles.models"; S0="$(ssum 2>/dev/null)"
 try status --status
-check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-orph|orphaned|-|-/Dev|h-cust|alive|m-dev|-/ghost|h-cust|agent gone|-|-"
+check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-orph|orphaned|-|-|-|-/Dev|h-cust|alive|m-dev|-|-|-/ghost|h-cust|agent gone|-|-|-|-"
 mv "$G/orca-roles.config.json" "$G/cfg.saved"
 printf '{"roles":{"dev":{"title":"Developer","model":"m-proj"}},"settings":{"mode":"programmer"}}' > "$S/.orca-roles.json"
 printf 'DEV=h-none\n' > "$G/orca-roles.env"
 try status --status
-check "status: without a saved config uses the merged one" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Developer|h-none|no tab|m-proj|-"
+check "status: without a saved config uses the merged one" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Developer|h-none|no tab|m-proj|-|-|-"
 check "status: no saved config is not created" "$([ -e "$G/orca-roles.config.json" ] && echo created || echo absent):$([ -e "$G/orca-roles-launch.log" ] && echo log || echo nolog)" "absent:nolog"
 # no saved config: the project's mode, a saved --mode, no jq error with an answering tab, nothing written, temp file gone
 mkdir -p "$TMP/stmp"; printf 'DEV=h-cust\n' > "$G/orca-roles.env"
@@ -1421,7 +1421,7 @@ try status --status; check "status: shows the saved mode" "$RC:$(printf '%s' "$O
 jq '.roles["e2e-tester"] = {title: "E2E-Tester"} | .defaults.model = "m-def"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
 printf 'E2E_TESTER=h-up\nPLANNER=h-up\n' > "$G/orca-roles.env"
 printf '#!/bin/sh\necho '"'"'{"result":{"terminal":{"agentIdentity":"claude"}}}'"'"'\n' > "$TMP/sbin/orca"
-try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +3 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-/Planner|h-up|alive|m-def|-"
+try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +3 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-|-|-/Planner|h-up|alive|m-def|-|-|-"
 # the Kit line: from VERSION and .installed, 'unknown' for what is missing; also without a team; nothing is written
 printf '%s\n' 1.2.3 > "$KIT/VERSION"; printf '%s\n' 'local@main abc123' > "$KIT/.installed"; rm -f "$G/orca-roles.env"
 try status --status; check "status: Kit line with VERSION and .installed, before 'No team launched'" "$RC:$(printf '%s' "$OUT" | tr '\n' '/')" "0:Kit: 1.2.3 (local@main abc123)/No team launched in this worktree."
@@ -1430,7 +1430,97 @@ try status --status; check "status: Kit line comes first, then Mode" "$RC:$(prin
 rm -f "$KIT/.installed"; try status --status; check "status: Kit line without .installed" "$(printf '%s' "$OUT" | head -1)" "Kit: 1.2.3 (unknown)"
 printf '%s\n' 'github@v2' > "$KIT/.installed"; rm -f "$KIT/VERSION"; try status --status; check "status: Kit line without VERSION" "$(printf '%s' "$OUT" | head -1)" "Kit: unknown (github@v2)"
 rm -f "$KIT/.installed"
+# provenance columns: from the LAST line of each role; '-' without one
+printf 'PLANNER=h-up\nDEV=h-none\n' > "$G/orca-roles.env"
+{ echo '{"ts":"t1","role":"dev","agent":"claude","cliVersion":"1.0.0 (Claude Code)","promptSha":"aaaaaaaffff"}'
+  echo '{"ts":"t2","role":"planner","agent":"codex","cliVersion":null,"promptSha":"1234567890"}'
+  echo '{"ts":"t3","role":"dev","agent":"custom","cliVersion":null,"promptSha":null}'
+  echo '{"ts":"t4","role":"dev","agent":"claude","cliVersion":"9.9.9 (Claude Code)","promptSha":"bbbbbbbcccc"}'; } > "$G/orca-roles.provenance.jsonl"
+S0="$(ssum 2>/dev/null)"
+try status --status; check "status: provenance columns come from the last line of each role" "$RC:$(printf '%s' "$OUT" | tail -n +3 | tr '\t\n' '|/')" "0:Planner|h-up|alive|m-def|-|codex@-|1234567/Dev|h-none|alive|m-dev|-|claude@9.9.9 (Claude Code)|bbbbbbb"
+check "status: provenance leaves the git dir as it was" "$([ "$(ssum 2>/dev/null)" = "$S0" ] && echo unchanged || echo CHANGED)" "unchanged"
+printf 'not json\n' > "$G/orca-roles.provenance.jsonl"; try status --status
+check "status: an unreadable provenance file shows '-'" "$RC:$(printf '%s' "$OUT" | tail -n +3 | tr '\t\n' '|/')" "0:Planner|h-up|alive|m-def|-|-|-/Dev|h-none|alive|m-dev|-|-|-"
+rm -f "$G/orca-roles.provenance.jsonl"
 try status -h; check "status: -h prints the whole header, ending at the lock and not-ready lines" "$(printf '%s\n' "$OUT" | grep -c '^# The mode of a worktree cannot change'):$(printf '%s\n' "$OUT" | tail -2 | head -1 | cut -c1-40):$(printf '%s\n' "$OUT" | tail -1 | cut -c1-30)" '1:# Only one launch runs per worktree at a:# ("Orca is not ready"), it st'
+}
+
+sec_metrics() {
+# agent.sh provenance (one JSON line per start, in the git dir) and metrics.sh (tokens per role and session from Claude Code's session files)
+MP="$TMP/mtproj"; MB="$TMP/mtbin"; rm -rf "$MP" "$MB" "$TMP/mtnogit" "$TMP/mtcc"; mkdir -p "$MP" "$MB" "$TMP/mtnogit"; git -C "$MP" init -q; MG="$MP/.git"
+MCFG="$TMP/mt-config.json"
+cat > "$MCFG" <<'J'
+{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {},
+  "roles": { "planner": {}, "dev": { "model": "m-dev" }, "cu": { "agent": "custom", "command": "true" }, "oc": { "agent": "custom", "command": "  opencode run {model}" } } }
+J
+printf '#!/bin/sh\ncase "$1" in --version) echo "9.9.9 (Claude Code)"; echo second line;; *) echo "$@";; esac\n' > "$MB/claude"; chmod +x "$MB/claude"
+agent_run() { (cd "$1" && HOME="$TMP/home" PATH="$MB:$PATH" ORCA_ROLES_CONFIG="$MCFG" "$TMP/home/.orca-roles/bin/agent.sh" "$2" >/dev/null 2>&1) || true; }
+agent_run "$MP" dev
+PF="$MG/orca-roles.provenance.jsonl"
+check "provenance: one line after one start" "$(wc -l < "$PF" | tr -d ' ')" "1"
+check "provenance: role, agent, model, cliVersion (first line only), promptSha" "$(jq -r '[.role, .agent, .model, .cliVersion, .promptSha] | join("|")' "$PF")" "dev|claude|m-dev|9.9.9 (Claude Code)|$(shasum "$KIT/prompts/programmer/dev.md" | cut -d' ' -f1)"
+check "provenance: configSha is the sha1 of the config agent.sh read" "$(jq -r .configSha "$PF")" "$(shasum "$MCFG" | cut -d' ' -f1)"
+check "provenance: UTC timestamp, kit and installed null without VERSION/.installed" "$(jq -r '[(.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")), .kit, .installed] | map(tostring) | join("|")' "$PF")" "true|null|null"
+printf '%s\n' 4.5.6 > "$KIT/VERSION"; printf '%s\n' 'local@main abc' > "$KIT/.installed"
+agent_run "$MP" dev; agent_run "$MP" planner
+check "provenance: every start appends a line" "$(jq -r .role "$PF" | tr '\n' ',')" "dev,dev,planner,"
+check "provenance: kit and installed from VERSION and .installed" "$(tail -1 "$PF" | jq -r '[.kit, .installed] | join("|")')" "4.5.6|local@main abc"
+check "provenance: the planner's model is null when none is configured" "$(tail -1 "$PF" | jq -c '[.model, .role]')" '[null,"planner"]'
+rm -f "$KIT/VERSION" "$KIT/.installed"
+agent_run "$MP" cu
+check "provenance: a custom agent has cliVersion null" "$(tail -1 "$PF" | jq -c '[.agent, .cliVersion]')" '["custom",null]'
+printf '#!/bin/sh\n[ "$1" = --version ] && sleep 30\necho started\n' > "$MB/claude"
+S1="$(date +%s)"; agent_run "$MP" dev; S2="$(date +%s)"
+check "provenance: a claude that hangs on --version does not hang agent.sh, version null" "$([ $((S2 - S1)) -lt 20 ] && echo fast):$(tail -1 "$PF" | jq -r .cliVersion)" "fast:null"
+rm -f "$MB/claude"
+agent_run "$TMP/mtnogit" dev
+check "provenance: outside a git repository nothing is written" "$(find "$TMP/mtnogit" -name 'orca-roles*' | wc -l | tr -d ' ')" "0"
+
+# metrics.sh against a fixture of Claude Code session files
+WTP="$(cd "$MP" && pwd -P)"; CC="$TMP/mtcc"; PD="$CC/projects/$(printf '%s' "$WTP" | tr '/.' '--')"; mkdir -p "$PD"
+asst() { printf '{"type":"assistant","sessionId":"%s","cwd":"%s","version":"2.0.1","timestamp":"%s","message":{"model":"%s","usage":{"input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}}}\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"; }
+{ printf '{"type":"user","sessionId":"s-pl","cwd":"%s","timestamp":"2026-02-01T10:00:00.000Z","message":{"role":"user","content":"Read /k/prompts/programmer/planner.md and adopt that role from now on. Mode: programmer."}}\n' "$WTP"
+  asst s-pl "$WTP" 2026-02-01T10:00:05.000Z m-a 10 20 30 40; } > "$PD/s-pl.jsonl"
+{ printf '{"type":"user","sessionId":"s-dev","cwd":"%s","timestamp":"2026-02-01T11:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}\n' "$WTP"
+  printf '{"type":"user","sessionId":"s-dev","cwd":"%s","timestamp":"2026-02-01T11:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/dev.md and adopt that role from now on. Follow its instructions to the letter. Notes: see other.md"}]}}\n' "$WTP"
+  asst s-dev "$WTP" 2026-02-01T11:00:05.000Z m-a 1 2 3 4; asst s-dev "$WTP" 2026-03-01T11:00:05.000Z m-b 100 200 300 400; } > "$PD/s-dev.jsonl"
+{ printf '{"type":"user","sessionId":"s-other","cwd":"/elsewhere","timestamp":"2026-02-01T12:00:00.000Z","message":{"role":"user","content":"Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/tester.md and adopt that role"}}\n'
+  asst s-other /elsewhere 2026-02-01T12:00:05.000Z m-a 999 999 999 999; } > "$PD/s-other.jsonl"
+{ printf '{"type":"user","sessionId":"s-none","cwd":"%s","timestamp":"2026-02-01T13:00:00.000Z","message":{"role":"user","content":"hello"}}\n' "$WTP"
+  asst s-none "$WTP" 2026-02-01T13:00:05.000Z m-a 5 6 7 8; printf '{"type":"summary","summary":"x"}\n'; } > "$PD/s-none.jsonl"
+mx() { (cd "$MP" && HOME="$TMP/home" PATH="$MB:$PATH" CLAUDE_CONFIG_DIR="$CC" ORCA_ROLES_CONFIG="$MCFG" "$TMP/home/.orca-roles/bin/metrics.sh" "$@" 2>"$TMP/mt.err"); }
+SUMQ='[.turns, .input, .output, .cacheRead, .cacheWrite] | map(tostring) | join(",")'
+try mx
+check "metrics: one line per role and session; the session of another cwd is ignored" "$RC:$(printf '%s\n' "$OUT" | jq -r '[.role, .session] | join(":")' | sort | tr '\n' ' ')" "0:dev:s-dev planner:s-pl unknown:s-none "
+check "metrics: stdout is valid JSONL" "$(printf '%s\n' "$OUT" | jq -c . | cmp -s - <(printf '%s\n' "$OUT") && echo same)" "same"
+check "metrics: the dev session sums its two turns" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | '"$SUMQ")" "2,101,202,303,404"
+check "metrics: the dev line's agent, model (last turn), version, first and last" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | [.agent, .model, .version, .first, .last] | join("|")')" "claude|m-b|2.0.1|2026-02-01T11:00:05.000Z|2026-03-01T11:00:05.000Z"
+check "metrics: the planner and the role-less session" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "planner" or .role == "unknown") | .role + "=" + ('"$SUMQ"')' | sort | tr '\n' ' ')" "planner=1,10,20,30,40 unknown=1,5,6,7,8 "
+check "metrics: no opencode line and no warning without opencode" "$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0"
+check "metrics: without --save nothing is written" "$([ -e "$MG/orca-roles.runs.jsonl" ] && echo written || echo none)" "none"
+try mx --since 2026-02-15
+check "metrics: --since keeps only later turns (the dev session loses its first one; the others are gone)" "$(printf '%s\n' "$OUT" | jq -r '.role + "=" + ('"$SUMQ"')' | tr '\n' ' ')" "dev=1,100,200,300,400 "
+try mx --save
+check "metrics: --save prints and appends the same lines" "$(cmp -s "$MG/orca-roles.runs.jsonl" <(printf '%s\n' "$OUT") && echo same):$(wc -l < "$MG/orca-roles.runs.jsonl" | tr -d ' ')" "same:3"
+try mx --save; check "metrics: --save appends again" "$(wc -l < "$MG/orca-roles.runs.jsonl" | tr -d ' ')" "6"
+try mx -h; check "metrics: -h prints the header" "$RC:$(printf '%s' "$OUT" | grep -c -e '^# Usage' -e '^#   --since' -e '^#   --save')" "0:3"
+try mx --bogus; check "metrics: an unknown option fails" "$RC" "1"
+# OpenCode: only with the binary on the PATH and a role that runs it
+printf '#!/bin/sh\n[ "$1" = stats ] && { echo "{\\"sessions\\": 3, \\"args\\": \\"$*\\"}"; exit 0; }\nexit 1\n' > "$MB/opencode"; chmod +x "$MB/opencode"
+try mx
+check "metrics: one opencode line with its raw stats (not split per role)" "$(printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | [.role, .raw.sessions, .raw.args] | map(tostring) | join("|")'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "null|3|stats --json --cost --project .:4"
+jq 'del(.roles.oc)' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
+try mx; check "metrics: no opencode line when no role runs opencode" "$(printf '%s\n' "$OUT" | grep -c opencode)" "0"
+jq '.roles.oc = {agent: "opencode"}' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
+try mx; check "metrics: agent opencode counts too" "$(printf '%s\n' "$OUT" | grep -c opencode)" "1"
+printf '#!/bin/sh\necho oops >&2; exit 1\n' > "$MB/opencode"
+try mx; check "metrics: a failing opencode gives a warning on stderr and no line, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(grep -c 'warning' "$TMP/mt.err")" "0:0:1"
+printf '#!/bin/sh\nsleep 30\n' > "$MB/opencode"
+S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3:$PATH" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>/dev/null' _ "$MP" "$TMP/home" "$MB" "$CC" "$MCFG"; S2="$(date +%s)"
+check "metrics: a hanging opencode is cut off" "$RC:$([ $((S2 - S1)) -lt 20 ] && echo fast):$(printf '%s\n' "$OUT" | grep -c opencode)" "0:fast:0"
+rm -f "$MB/opencode"
+try mx; check "metrics: the stub removed, no opencode line and no error" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0:0"
+check "metrics: outside a git repository it fails with a message" "$(cd "$TMP/mtnogit" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/metrics.sh" 2>&1 >/dev/null | head -1 | cut -c1-30)" "metrics.sh: run it from the wo"
 }
 
 sec_modes() {

@@ -90,7 +90,7 @@ Options on the `launch.sh` line of the project's setup script (or with `roles` i
 | `--set path=value` | Any key; the value is read as JSON if it is JSON. E.g.: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `roles.tester.params.maxNewTests=5`. |
 | `--mode <mode>` | The team's mode (see Modes below). |
 | `--reset` | Forgets the worktree's saved exceptions (only with `roles`). |
-| `--status` | Read-only: shows the kit version (`Kit: <VERSION> (<source>@<ref>)`), the mode and, per role, its tab state and model (same as `roles --status`); changes and opens nothing. |
+| `--status` | Read-only: shows the kit version (`Kit: <VERSION> (<source>@<ref>)`), the mode and, per role, its tab state, model, `<agent>@<CLI version>` and the prompt's sha1 prefix (same as `roles --status`); changes and opens nothing. |
 
 They are saved per worktree and `roles` without options reapplies them; new options are added to the saved ones (the same option replaces its saved value) and `--reset` forgets them first. An unknown role makes the startup fail with the list of valid roles. They only decide which tabs open: disabling an open role does not close its tab.
 
@@ -191,7 +191,8 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | A role does not appear even though it is `enabled` | `orca-roles.overrides.json` (saved exceptions); `roles --reset` forgets them |
 | A role does not answer its first message | `orca-roles-kickoff.log` and `orca-roles.models` in the git dir: the kickoff detects a model that does not exist (Claude, Codex, or a custom agent with `modelError`), records `ROLE=FAILED:<model>` and escalates; nothing is switched. Ask the user to fix `roles.<id>.model` themselves or to let you do it with `relaunch-role.sh <id> --model <m>` (see the planner prompt). A very small pane can hide the error: look at the role's first answer |
 | Remove the trust the kit gave a worktree in `~/.claude.json` | `~/.orca-roles/bin/forget-trust.sh` from the worktree; `--stale` for every recorded folder that no longer exists (it only touches folders listed in `~/.orca-roles/trusted.list`); `--dry-run` shows without writing. Custom agents' `trust` files are not cleaned |
-| Which roles are up and on which model | `roles --status`: mode, then per role its tab state, configured model and model in use (read-only) |
+| Which roles are up and on which model | `roles --status`: mode, then per role its tab state, configured model, model in use, `<agent>@<CLI version>` and the prompt's sha1 prefix (read-only) |
+| How many tokens each role spent | `~/.orca-roles/bin/metrics.sh [--since <date>] [--save]` from the worktree: one JSON line per role and session (read-only; `--save` appends to `orca-roles.runs.jsonl`). What each role ran: `orca-roles.provenance.jsonl` in the git dir |
 | Which models a role can use | `~/.orca-roles/bin/models.sh <role> --check`: lists the role's candidates (Claude's aliases, `codex debug models`, or `models.list`) and tests each one with a minimal probe (`ok`, `unavailable`, `unknown`) |
 | A role starts with another model or MCP | `orca-roles.config.json`: the effective configuration used |
 | "Orca CLI not found" or `orca: command not found` | Commands must be run from an Orca terminal (on WSL the CLI is called `$ORCA_CLI_COMMAND`, e.g. `orca-ide`; the installer adds an `orca` alias for it, active after `source ~/.bashrc`). Never suggest apt's `orca` package: it is a screen reader |

@@ -30,6 +30,25 @@ if [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
   export ORCA_ROLES_MCP="$MCPFILE"
 fi
 
+# What this role is about to run, one JSON line in the worktree's git dir (outside a repo: nothing). Best-effort: it never stops the agent.
+# cliVersion is the first line of `<binary> --version` (claude/codex), killed after ~3 s; null for a custom command.
+record_provenance() {  # $1 binary to ask for its version, "" for none
+  local gd ver="" out pid i sha_c sha_p kv ki
+  gd="$(git rev-parse --git-dir 2>/dev/null)" && gd="$(cd "$gd" && pwd)" || return 0
+  if [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
+    out="$(mktemp)"; "$1" --version > "$out" 2>/dev/null < /dev/null & pid=$!
+    for i in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; ver="$(head -1 "$out")"; rm -f "$out"
+  fi
+  sha_c="$(shasum "$CFG" 2>/dev/null | cut -d' ' -f1)"; sha_p=""; [ -f "$PROMPT" ] && sha_p="$(shasum "$PROMPT" 2>/dev/null | cut -d' ' -f1)"
+  kv="$(head -1 "$KIT/VERSION" 2>/dev/null)"; ki="$(head -1 "$KIT/.installed" 2>/dev/null)"
+  jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg role "$ROLE" --arg agent "$AGENT" --arg model "$MODEL" --arg cli "$ver" \
+    --arg cfg "$sha_c" --arg pr "$sha_p" --arg kit "$kv" --arg inst "$ki" \
+    '{ts:$ts, role:$role, agent:$agent, model:(if $model == "" then null else $model end), cliVersion:(if $cli == "" then null else $cli end),
+      configSha:(if $cfg == "" then null else $cfg end), promptSha:(if $pr == "" then null else $pr end),
+      kit:(if $kit == "" then null else $kit end), installed:(if $inst == "" then null else $inst end)}' >> "$gd/orca-roles.provenance.jsonl"
+}
+
 ARGS=()
 add_list() {  # $1 field (array), $2 optional flag per element, $3 = path to expand ~, {kit} and {home}
   while IFS= read -r x; do [ -n "$x" ] || continue; [ "${3:-}" = path ] && x="$(expand_path "$x")"
@@ -66,6 +85,7 @@ case "$AGENT" in
     [ "$ROLE" != planner ] && ARGS+=(--settings '{"language":"english"}')
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
+    record_provenance claude || true
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"
     ;;
   codex)
@@ -84,6 +104,7 @@ case "$AGENT" in
     # The same anchor as claude's, as developer instructions, which /new keeps (they replace those of ~/.codex/config.toml)
     ARGS+=(-c "developer_instructions=$(role_anchor "$CFG" "$ROLE" | jq -Rs .)")
     add_list extraArgs
+    record_provenance codex || true
     exec "${RUN[@]+"${RUN[@]}"}" codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
     ;;
   custom)
@@ -111,6 +132,7 @@ case "$AGENT" in
     fi
     add_list extraArgs
     for a in "${ARGS[@]+"${ARGS[@]}"}"; do CMD="$CMD $(printf '%q' "$a")"; done
+    record_provenance "" || true
     exec "${RUN[@]+"${RUN[@]}"}" bash -lc "$CMD"
     ;;
   *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;;

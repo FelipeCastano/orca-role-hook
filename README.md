@@ -532,6 +532,16 @@ For a `custom` role, describe how to list and test models in `models`:
 
 `parse` is `lines` (default: each non-empty line), `json:<jq filter>` (for example `json:.data[].id`) or `regex:<ERE with one group>` (the group of each matching line). Without `list` the role's `model` is the only candidate; without `probe`, `--check` answers `unknown`.
 
+### Metrics and provenance
+
+The goal is to measure before changing anything. Two things are recorded, both in the worktree's git dir and never sent anywhere:
+
+- **Provenance.** Each time `agent.sh` starts a role, right before it runs the agent, it appends one JSON line to `orca-roles.provenance.jsonl`: `ts` (UTC), `role`, `agent`, `model` (the configured one), `cliVersion` (first line of `claude --version` / `codex --version`, with a short time limit; `null` for `custom`), `configSha` (sha1 of the effective configuration it read), `promptSha` (sha1 of the role's prompt file), `kit` (`VERSION`) and `installed` (`.installed`); `null` for what is not known. Writing is best-effort and never stops the agent; outside a git repository nothing is written. `roles --status` shows the last line of each role as its last two columns (`<agent>@<cliVersion>`, first 7 characters of `promptSha`). `orca-roles.models` (the model in use) is unchanged.
+- **Metrics.** `~/.orca-roles/bin/metrics.sh [--since <ISO date>] [--save]`, from the worktree, prints one JSON line per role and session (read-only; `--save` also appends them to `orca-roles.runs.jsonl`). Tokens only, no prices. For Claude it reads `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<dir>/<sessionId>.jsonl`, where `<dir>` is the worktree's physical path with every `/` and `.` replaced by `-`, and keeps the lines whose `cwd` is that worktree. Line: `{"agent","role","session","model","version","first","last","turns","input","output","cacheRead","cacheWrite"}`. A `/clear` starts a new session, so a role can have several lines.
+  - **Which role a session is.** The first `user` line whose text contains the kit's role message (`Read <...>/<role>.md and adopt that role`, with `common-*.md` ignored); no match gives `unknown`. Limits: it reads the message, not the prompt's content, so a role whose prompt file is named differently from its id is reported under the file's name; a session whose first message was not sent by the kit (a role started by hand, or a Claude Code version that stores the message differently) is `unknown`; and a conversation resumed with `--resume` keeps the role of its first message.
+  - **What it relies on** in Claude Code's session files (an internal format, not a contract): per line `type`, `sessionId`, `cwd`, `version`, `timestamp`; on assistant lines `message.model` and `message.usage.{input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens}`; on user lines `message.content` as a string or a list of `{type:"text",text}`. If a version changes these names, the numbers will be zero or missing, not wrong.
+  - **OpenCode** is added only when `opencode` is on the PATH and some role runs it (`agent: opencode`, or a `custom` command starting with `opencode`): one line `{"agent":"opencode","role":null,"raw":<opencode stats --json --cost --project .>}`, with a time limit (`ORCA_ROLES_METRICS_TIMEOUT`, 30 s). It cannot be split per role (the statistics are per project, not per session of a role), so do not read it as one. If the command fails, a warning goes to stderr. Codex is not measured yet.
+
 ### Using other agents
 
 ```json
@@ -634,7 +644,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `--set path=value` | Changes any configuration key. The path uses dots and the value is read as JSON if it is JSON (`true`, `10`, `["x"]`) and as text otherwise. |
 | `--mode <mode>` | The team's mode (`programmer`, `pr-reviewer`, `academic-research`); beats `settings.mode` and `.orca-roles.json`. Rejected if the worktree's team is open in another mode. See [Modes](#modes). |
 | `--reset` | Forgets the worktree's saved exceptions first, so only the options of this run apply (only with `roles`). |
-| `--status` | Shows the team and exits; it changes nothing in the worktree or Orca and opens nothing. First line `Mode: <mode>`, then one tab-separated line per role: `<Title>`, handle, state (`alive`, `no tab`, `agent gone`, `orphaned`), configured model (`-` if none) and model in use from `orca-roles.models` (`FAILED:<model>` as recorded, `-` if not recorded). Without a launched team: `No team launched in this worktree.` |
+| `--status` | Shows the team and exits; it changes nothing in the worktree or Orca and opens nothing. First line `Mode: <mode>`, then one tab-separated line per role: `<Title>`, handle, state (`alive`, `no tab`, `agent gone`, `orphaned`), configured model (`-` if none) and model in use from `orca-roles.models` (`FAILED:<model>` as recorded, `-` if not recorded), then `<agent>@<CLI version>` and the first 7 characters of the prompt's sha1, from the role's last [provenance](#metrics-and-provenance) line (`-` and `-` if none). Without a launched team: `No team launched in this worktree.` |
 
 `--set` examples: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `settings.language=Spanish`, `roles.tester.params.maxNewTests=5`, `roles.dev.mcp='["context7"]'`.
 
@@ -675,6 +685,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── relaunch-role.sh         # relaunches one role with another model
 │   ├── forget-trust.sh          # removes the trust the kit gave to worktrees in ~/.claude.json
 │   ├── models.sh                # lists a role's candidate models and tests them
+│   ├── metrics.sh               # token usage per role and session (read-only), from Claude Code's session files
 │   ├── review-skill.sh          # installs and locates the pr-reviewer mode's review skill
 │   ├── phase.sh                 # switches an academic-research team's phase
 │   ├── academic-scaffold.sh     # creates the paper repository's folders and .gitignore lines

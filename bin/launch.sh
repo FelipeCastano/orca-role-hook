@@ -85,7 +85,9 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
     role_alive "$role" "$handle"; rc=$?
     case $rc in 0) st="alive";; 1) st="no tab";; 2) st="agent gone";; 4) st="unknown ($ROLE_ALIVE_CODE)";; *) st="orphaned";; esac
     used="$(grep "^$var=" "$GITDIR/orca-roles.models" 2>/dev/null | head -1 | cut -d= -f2-)"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$title" "$handle" "$st" "${cm:--}" "${used:--}"
+    # what the role last ran (agent@CLI version) and its prompt's sha1 prefix, from the last provenance line written by agent.sh
+    prov="$(jq -r --arg r "$role" 'select(.role == $r) | "\(.agent // "-")@\(.cliVersion // "-")\t\((.promptSha // "-")[0:7])"' "$GITDIR/orca-roles.provenance.jsonl" 2>/dev/null | tail -1)"; [ -n "$prov" ] || prov="-$(printf '\t')-"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$title" "$handle" "$st" "${cm:--}" "${used:--}" "$prov"
   done < "$STATE"
   exit 0
 fi
