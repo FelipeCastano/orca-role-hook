@@ -120,9 +120,9 @@ sec_rules() {
 blk_start
 PD="$ROOT/prompts/programmer"; PRD="$ROOT/prompts/pr-reviewer"
 # rule <R> <file> <fragment> [<line pattern>]: the file (or, with a pattern, the line it matches) holds the fragment
-rule() { local r="$1" f="$2" frag="$3" lp="${4:-}"; if [ -n "$lp" ]; then grep -E -- "$lp" "$f" | grep -qF -- "$frag"; else grep -qF -- "$frag" "$f"; fi || { echo "FAIL rules $r: ${f#$ROOT/} lost '$frag'"; FAIL=1; }; }
+rule() { local r="$1" f="$2" frag="$3" lp="${4:-}"; if [ -n "$lp" ]; then grep -qF -- "$frag" <<<"$(grep -E -- "$lp" "$f")"; else grep -qF -- "$frag" "$f"; fi || { echo "FAIL rules $r: ${f#$ROOT/} lost '$frag'"; FAIL=1; }; }
 prsec() { awk -v t="## $2" '$0 == t {f=1; next} /^## /{f=0} f' "$PRD/$1.md"; }   # prsec <file> <section title>
-prrule() { local r="$1" f="$2" sec="$3" pat="$4"; prsec "$f" "$sec" | grep -qE -- "$pat" || { echo "FAIL rules $r: pr-reviewer $f.md, section '$sec', lost '$pat'"; FAIL=1; }; }
+prrule() { local r="$1" f="$2" sec="$3" pat="$4"; grep -qE -- "$pat" <<<"$(prsec "$f" "$sec")" || { echo "FAIL rules $r: pr-reviewer $f.md, section '$sec', lost '$pat'"; FAIL=1; }; }
 # R1 nothing leaves the worktree without the user's explicit yes
 rule R1 "$PD/planner.md" "Nothing leaves the worktree without the user's explicit yes"
 rule R1 "$PD/planner.md" 'Approving the plan, a step or a commit is not approving a push or a Jira update'
@@ -191,7 +191,7 @@ rule R8 "$ROOT/README.md" 'does not include or copy it' 'https://github.com/rome
 rule R8 "$ROOT/plugin/skills/team/SKILL.md" 'https://github.com/romerox3/lens-review'
 # R9 workers write in English; never wrap commands in bash -c / sh -c
 OUTSEC="$(awk '/^## Output$/{f=1;next} /^## /{f=0} f' "$PD/common-workers.md")"
-printf '%s' "$OUTSEC" | grep -qF 'Always write in English' || { echo "FAIL rules R9: common-workers.md Output section lost 'Always write in English'"; FAIL=1; }
+grep -qF 'Always write in English' <<<"$OUTSEC" || { echo "FAIL rules R9: common-workers.md Output section lost 'Always write in English'"; FAIL=1; }
 rule R9 "$PD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`'
 # R10 workflow: one code task in flight, Dev -> Tester per step, audit once per set, no commit per step (one per set), the Planner writes no production code
 rule R10 "$PD/planner.md" 'Only one code task is in flight at any moment' '^- \*\*One step at a time\.\*\*'
@@ -217,12 +217,12 @@ rule R10 "$PD/auditor.md" 'It is read-only: no mutants' '^3\. Work out which kin
 t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
 a27="$(grep '^2\. \*\*Baseline' "$PD/auditor.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)"
 for k in 'in place in the worktree' 'mv <f>.orca-bak <f>' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'equal the baseline'; do
-  printf '%s' "$t" | grep -qF -- "$k" || { echo "FAIL rules R11: tester.md mutation step lost '$k'"; FAIL=1; }
-  printf '%s' "$a27" | grep -qF -- "$k" || { echo "FAIL rules R11: auditor.md mutation passes lost '$k'"; FAIL=1; }
+  grep -qF -- "$k" <<<"$t" || { echo "FAIL rules R11: tester.md mutation step lost '$k'"; FAIL=1; }
+  grep -qF -- "$k" <<<"$a27" || { echo "FAIL rules R11: auditor.md mutation passes lost '$k'"; FAIL=1; }
 done
-printf '%s' "$t$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)" | grep -qF '&& mv' && { echo "FAIL rules R11: the restore mv is chained with && in the mutation text"; FAIL=1; }
+grep -qF '&& mv' <<<"$t$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)" && { echo "FAIL rules R11: the restore mv is chained with && in the mutation text"; FAIL=1; }
 for p in tester auditor; do
-  grep -F 'git checkout' "$PD/$p.md" | grep -vqE 'Never (use|run) .git checkout.' && { echo "FAIL rules R11: $p.md mentions git checkout without forbidding it"; FAIL=1; }
+  GCO="$(grep -F 'git checkout' "$PD/$p.md" || true)"; [ -n "$GCO" ] && grep -vqE 'Never (use|run) .git checkout.' <<<"$GCO" && { echo "FAIL rules R11: $p.md mentions git checkout without forbidding it"; FAIL=1; }
 done
 rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
 check "rules R11: common-workers.md earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$PD/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$PD/common-workers.md")$(grep -c -- '--short' "$PD/common-workers.md" || true)$(grep -c 'copy-rev/' "$PD/common-workers.md")" "1101"
@@ -245,7 +245,7 @@ for m in programmer pr-reviewer academic-research; do
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'acknowledges each batch once read, with `--ack <delivery_id>`' '^- A worker that reads its messages'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'is not a heartbeat' '^- A worker that reads its messages'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'do not send them' '^- \*\*No heartbeats'
-  grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" | grep -vq -- '--wait' && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
+  GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
@@ -391,7 +391,7 @@ for m in programmer pr-reviewer academic-research; do
   for p in common-workers planner; do
     wf="$ROOT/prompts/$m/$p.md"
     ws="$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$wf")"
-    wrule() { printf '%s' "$ws" | grep -qE -- "$2" || { echo "FAIL rules W$1: $m/$p.md Written reports lost '$2'"; FAIL=1; }; }
+    wrule() { grep -qE -- "$2" <<<"$ws" || { echo "FAIL rules W$1: $m/$p.md Written reports lost '$2'"; FAIL=1; }; }
     [ -n "$ws" ] || { echo "FAIL rules W: $m/$p.md has no '## Written reports' section"; FAIL=1; }
     wrule 1 '^These rules apply to every report the user asks for, in any format'
     wrule 1 'do not apply to worker_done messages, commit messages, pull requests or Jira'
@@ -409,7 +409,7 @@ for m in programmer pr-reviewer academic-research; do
       wrule 7 'nor to the paper and its companion files \(the article, supplementary material, cover letter, rebuttal letter\), which follow writer\.md and the paper rules'
     fi
   done
-  grep -F "a worker's outline (rule 3) reaches you with \`ask\`: show it to the user, and reply with their answer or their changes" "$ROOT/prompts/$m/planner.md" | grep -q '^When the user asks you' || { echo "FAIL rules W3: $m/planner.md lost the outline relay sentence"; FAIL=1; }
+  grep -q '^When the user asks you' <<<"$(grep -F "a worker's outline (rule 3) reaches you with \`ask\`: show it to the user, and reply with their answer or their changes" "$ROOT/prompts/$m/planner.md")" || { echo "FAIL rules W3: $m/planner.md lost the outline relay sentence"; FAIL=1; }
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/planner.md")" = 1 ] || { echo "FAIL rules W: $m/planner.md must hold one Written reports section"; FAIL=1; }
 done
 blk_end "rules: the safety and permission rules are in the prompts"
@@ -419,8 +419,8 @@ blk_end "rules: the safety and permission rules are in the prompts"
 sec_output_rules() {
 # Anchor: workers get the English rule, the Planner does not
 . "$ROOT/bin/lib.sh"
-printf '%s' "$(role_anchor "$KIT/config.default.json" dev)" | grep -qF 'Always write in English' || { echo "FAIL role_anchor: workers lack the English rule"; FAIL=1; }
-printf '%s' "$(role_anchor "$KIT/config.default.json" planner)" | grep -qF 'Always write in English' && { echo "FAIL role_anchor: the Planner got the English rule"; FAIL=1; }
+grep -qF 'Always write in English' <<<"$(role_anchor "$KIT/config.default.json" dev)" || { echo "FAIL role_anchor: workers lack the English rule"; FAIL=1; }
+grep -qF 'Always write in English' <<<"$(role_anchor "$KIT/config.default.json" planner)" && { echo "FAIL role_anchor: the Planner got the English rule"; FAIL=1; }
 echo "ok   output rules: role anchor (workers get the English rule, the Planner does not)"
 }
 
@@ -1926,10 +1926,10 @@ try nrr_w "$TMP/nw4.in"; check "modes wizard --repo: modes, no prompt field, fil
 printf '%s\n' common-workers wz-x "x" 2 1 > "$TMP/nw5.in"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
 try nrr_w "$TMP/nw5.in"; case "$OUT" in *"'common-workers' is reserved"*) echo "ok   modes wizard: common-workers is reserved";; *) echo "FAIL wizard reserved: $OUT"; FAIL=1;; esac
 printf '%s\n' lone "" "x" 2 1 > "$TMP/nw6.in"; echo kit > "$NR/prompts/programmer/lone.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
-try nrr_w "$TMP/nw6.in"; check "modes wizard --repo: an existing prompts file blocks a new role" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/programmer/lone.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
+try nrr_w "$TMP/nw6.in"; check "modes wizard --repo: an existing prompts file blocks a new role" "$RC:$(grep -q "prompts/programmer/lone.md already exists" <<<"$OUT" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
 echo kit > "$NR/prompts/academic-research/lone2.md"; R1="$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)"
 printf '%s' '{"id":"lone2","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in a later mode blocks a new role, nothing written" "$RC:$(printf '%s' "$OUT" | grep -q "prompts/academic-research/lone2.md already exists" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in a later mode blocks a new role, nothing written" "$RC:$(grep -q "prompts/academic-research/lone2.md already exists" <<<"$OUT" && echo msg):$([ "$(cat "$NR/config.default.json" "$NR"/prompts/*/*.md | cksum)" = "$R1" ] && echo unchanged)" "1:msg:unchanged"
 rm -f "$NR/prompts/academic-research/lone2.md"
 rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
 try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
@@ -3495,7 +3495,7 @@ B="$(astate)"; try ap experiment; R5="$RC:$OUT"
 try ap writing; R6="$RC:$(printf '%s' "$OUT" | grep -c 'the repository has uncommitted changes; commit them first' || true):$(astate):$(acl)"; rm -f "$AM/dirty.txt"
 check "phase.sh: bad arguments exit 1, same phase is a no-op, dirty repo refused with nothing closed or changed" "$R1$R2$R3$R4:$R5:$R6" "1111:0:Already in phase experiment.:1:1:$B:0"
 # phase.sh: experiment -> writing -> experiment
-git -C "$AM" status --porcelain | grep -q . && echo "FAIL academic-research: repo dirty before the switch"
+grep -q . <<<"$(git -C "$AM" status --porcelain)" && echo "FAIL academic-research: repo dirty before the switch"
 N="$(grep -c '^terminal create' "$ALOG" || true)"; C0="$(acl)"
 try ap writing
 check "phase.sh writing: closes only the experiment role, opens the writing one, saves the phase, no 'roles would open it again' hint" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(grep -c 'terminal close --terminal h-Exp ' "$ALOG"):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(jq -c '.set' "$AG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'still enabled in the configuration'):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH NOP PLANNER WR :$((C0 + 1)):1:1:writing:[{\"path\":[\"settings\",\"phase\"],\"value\":\"writing\"}]:0:Phase: writing."
@@ -3649,7 +3649,7 @@ stub_args() {
     case "$a" in
       -o) j=$((i+1)); out="${!j}";;
       -D) j=$((i+1)); df="${!j}";;
-      -H) j=$((i+1)); case "${!j}" in @*) f="${!j#@}"; if head -1 "$f" | grep -q '^User-Agent:'; then lf="$SCH_LOG.ua"; else lf="$SCH_LOG.hdr"; fi
+      -H) j=$((i+1)); case "${!j}" in @*) f="${!j#@}"; if grep -q '^User-Agent:' <<<"$(head -1 "$f")"; then lf="$SCH_LOG.ua"; else lf="$SCH_LOG.hdr"; fi
           { echo "${@: -1}"; cat "$f"; echo "MODE $(ls -l "$f" | cut -c1-10)"; } >> "$lf";; esac;;
     esac
     i=$((i+1))
