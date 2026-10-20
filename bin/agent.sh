@@ -33,7 +33,7 @@ fi
 # What this role is about to run, one JSON line in the worktree's git dir (outside a repo: nothing). Best-effort: it never stops the agent.
 # cliVersion is the first line of `<binary> --version` (claude/codex), killed after ~3 s; null for a custom command.
 record_provenance() {  # $1 binary to ask for its version, "" for none
-  local gd ver="" out pid i sha_c sha_p kv ki
+  local gd ver="" out pid sha_c sha_p kv ki
   gd="$(git rev-parse --git-dir 2>/dev/null)" && gd="$(cd "$gd" && pwd)" || return 0
   if [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
     out="$(mktemp)"; "$1" --version > "$out" 2>/dev/null < /dev/null & pid=$!
