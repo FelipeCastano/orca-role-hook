@@ -9,7 +9,7 @@
 #                    saved, and kept when later options omit it
 #   (academic-research: the phase, settings.phase, is changed with phase.sh, not by hand)
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
-#   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
+#   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -65,6 +65,8 @@ role_alive() {  # role_alive <role> <handle>
   return 2
 }
 if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launch log
+  kv="$(head -1 "$KIT/VERSION" 2>/dev/null)"; ki="$(head -1 "$KIT/.installed" 2>/dev/null)"   # what the installer recorded
+  echo "Kit: ${kv:-unknown} (${ki:-unknown})"
   if [ ! -s "$STATE" ]; then echo "No team launched in this worktree."; exit 0; fi
   SCFG="$CFG"
   if [ ! -f "$CFG" ]; then   # no saved copy: the effective configuration, built aside and removed on exit

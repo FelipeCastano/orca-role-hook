@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration install e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -98,6 +98,7 @@ sec_syntax() {
 # Syntax and JSON
 for f in "$ROOT"/install.sh "$ROOT"/bin/*.sh "$ROOT"/tests/*.sh; do bash -n "$f"; done; echo "ok   bash syntax"
 jq empty "$ROOT/config.default.json"; echo "ok   config.default.json is JSON"
+check "VERSION equals the version in plugin.json" "$(cat "$ROOT/VERSION")" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")"
 }
 
 sec_prompts() {
@@ -1366,8 +1367,8 @@ exit 0
 EOS
 chmod +x "$TMP/sbin/orca"
 status() { (cd "$S" && HOME="$TMP/home" PATH="$TMP/sbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-try status --status; check "status: no state" "$RC:$OUT" "0:No team launched in this worktree."
-: > "$G/orca-roles.env"; try status --status; check "status: empty state" "$RC:$OUT" "0:No team launched in this worktree."
+try status --status; check "status: no state" "$RC:$(printf '%s' "$OUT" | tr '\n' '/')" "0:Kit: unknown (unknown)/No team launched in this worktree."
+: > "$G/orca-roles.env"; try status --status; check "status: empty state" "$RC:$(printf '%s' "$OUT" | tr '\n' '/')" "0:Kit: unknown (unknown)/No team launched in this worktree."
 jq '.settings.mode = "programmer"' "$KIT/config.json" > "$G/orca-roles.config.json"
 jq '.roles.dev.model = "m-dev"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
 printf 'PLANNER=h-up\nDEV=h-none\nDEPLOYER=h-gone\n' > "$G/orca-roles.env"
@@ -1376,7 +1377,7 @@ printf 'PLANNER=pty-1\n' > "$G/orca-roles.pty"; printf '{"only":["dev"],"enable"
 ssum() { cat "$G/orca-roles.config.json" "$G/orca-roles.overrides.json" "$G/orca-roles.env" "$G/orca-roles.pty" "$G/orca-roles.models" | cksum; ls "$G" | cksum; }
 S0="$(ssum)"; : > "$SLOG"
 try status --status
-check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Planner|h-up|alive|-|m-ok/Dev|h-none|no tab|m-dev|-/Deployer|h-gone|agent gone|-|FAILED:m-bad"
+check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-up|alive|-|m-ok/Dev|h-none|no tab|m-dev|-/Deployer|h-gone|agent gone|-|FAILED:m-bad"
 check "status: writes nothing" "$([ "$(ssum)" = "$S0" ] && echo unchanged || echo CHANGED):$([ -e "$G/orca-roles-launch.log" ] && echo log)" "unchanged:"
 check "status: only reads terminals" "$(grep -vc '^terminal show ' "$SLOG")" "0"
 try status -h; case "$OUT" in *"--status "*"changes nothing"*) echo "ok   status: -h prints the --status line";; *) echo "FAIL status -h: $OUT"; FAIL=1;; esac
@@ -1395,32 +1396,40 @@ EOS
 jq '.roles.dev.agent = "custom" | .roles.dev.command = "c" | .settings.mode = "programmer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
 printf 'PLANNER=h-orph\nDEV=h-cust\nGHOST=h-cust\n' > "$G/orca-roles.env"; rm -f "$G/orca-roles.models"; S0="$(ssum 2>/dev/null)"
 try status --status
-check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Planner|h-orph|orphaned|-|-/Dev|h-cust|alive|m-dev|-/ghost|h-cust|agent gone|-|-"
+check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-orph|orphaned|-|-/Dev|h-cust|alive|m-dev|-/ghost|h-cust|agent gone|-|-"
 mv "$G/orca-roles.config.json" "$G/cfg.saved"
 printf '{"roles":{"dev":{"title":"Developer","model":"m-proj"}},"settings":{"mode":"programmer"}}' > "$S/.orca-roles.json"
 printf 'DEV=h-none\n' > "$G/orca-roles.env"
 try status --status
-check "status: without a saved config uses the merged one" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Mode: programmer/Developer|h-none|no tab|m-proj|-"
+check "status: without a saved config uses the merged one" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Developer|h-none|no tab|m-proj|-"
 check "status: no saved config is not created" "$([ -e "$G/orca-roles.config.json" ] && echo created || echo absent):$([ -e "$G/orca-roles-launch.log" ] && echo log || echo nolog)" "absent:nolog"
 # no saved config: the project's mode, a saved --mode, no jq error with an answering tab, nothing written, temp file gone
 mkdir -p "$TMP/stmp"; printf 'DEV=h-cust\n' > "$G/orca-roles.env"
 printf '{"settings":{"mode":"pr-reviewer"}}' > "$S/.orca-roles.json"; S0="$(ssum 2>/dev/null)"
 OUT="$(cd "$S" && HOME="$TMP/home" PATH="$TMP/sbin:$PATH" TMPDIR="$TMP/stmp" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" --status 2>"$TMP/status.err")"
-check "status: no saved config, the project's mode" "$(printf '%s' "$OUT" | head -1)" "Mode: pr-reviewer"
+check "status: no saved config, the project's mode" "$(printf '%s' "$OUT" | sed -n 2p)" "Mode: pr-reviewer"
 check "status: no saved config, an answering tab prints no jq error" "$(grep -c 'jq: error' "$TMP/status.err")" "0"
 check "status: no saved config writes nothing and removes its temp file" "$([ "$(ssum 2>/dev/null)" = "$S0" ] && echo unchanged || echo CHANGED):$(ls "$TMP/stmp" | wc -l | tr -d ' ')" "unchanged:0"
 rm -f "$S/.orca-roles.json"
 printf '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}' > "$G/orca-roles.overrides.json"
-try status --status; check "status: no saved config, a saved --mode" "$RC:$(printf '%s' "$OUT" | head -1)" "0:Mode: pr-reviewer"
+try status --status; check "status: no saved config, a saved --mode" "$RC:$(printf '%s' "$OUT" | sed -n 2p)" "0:Mode: pr-reviewer"
 rm -f "$G/orca-roles.overrides.json"
 rm -f "$S/.orca-roles.json"; mv "$G/cfg.saved" "$G/orca-roles.config.json"
 jq '.settings.mode = "pr-reviewer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
-try status --status; check "status: shows the saved mode" "$RC:$(printf '%s' "$OUT" | head -1)" "0:Mode: pr-reviewer"
+try status --status; check "status: shows the saved mode" "$RC:$(printf '%s' "$OUT" | sed -n 2p)" "0:Mode: pr-reviewer"
 # a hyphenated role (E2E_TESTER) and the model inherited from defaults
 jq '.roles["e2e-tester"] = {title: "E2E-Tester"} | .defaults.model = "m-def"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
 printf 'E2E_TESTER=h-up\nPLANNER=h-up\n' > "$G/orca-roles.env"
 printf '#!/bin/sh\necho '"'"'{"result":{"terminal":{"agentIdentity":"claude"}}}'"'"'\n' > "$TMP/sbin/orca"
-try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +2 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-/Planner|h-up|alive|m-def|-"
+try status --status; check "status: hyphenated role and defaults.model" "$RC:$(printf '%s' "$OUT" | tail -n +3 | tr '\t\n' '|/')" "0:E2E-Tester|h-up|alive|m-def|-/Planner|h-up|alive|m-def|-"
+# the Kit line: from VERSION and .installed, 'unknown' for what is missing; also without a team; nothing is written
+printf '%s\n' 1.2.3 > "$KIT/VERSION"; printf '%s\n' 'local@main abc123' > "$KIT/.installed"; rm -f "$G/orca-roles.env"
+try status --status; check "status: Kit line with VERSION and .installed, before 'No team launched'" "$RC:$(printf '%s' "$OUT" | tr '\n' '/')" "0:Kit: 1.2.3 (local@main abc123)/No team launched in this worktree."
+printf 'PLANNER=h-up\n' > "$G/orca-roles.env"
+try status --status; check "status: Kit line comes first, then Mode" "$RC:$(printf '%s' "$OUT" | head -2 | tr '\n' '/')" "0:Kit: 1.2.3 (local@main abc123)/Mode: pr-reviewer/"
+rm -f "$KIT/.installed"; try status --status; check "status: Kit line without .installed" "$(printf '%s' "$OUT" | head -1)" "Kit: 1.2.3 (unknown)"
+printf '%s\n' 'github@v2' > "$KIT/.installed"; rm -f "$KIT/VERSION"; try status --status; check "status: Kit line without VERSION" "$(printf '%s' "$OUT" | head -1)" "Kit: unknown (github@v2)"
+rm -f "$KIT/.installed"
 try status -h; check "status: -h prints the whole header, ending at the lock and not-ready lines" "$(printf '%s\n' "$OUT" | grep -c '^# The mode of a worktree cannot change'):$(printf '%s\n' "$OUT" | tail -2 | head -1 | cut -c1-40):$(printf '%s\n' "$OUT" | tail -1 | cut -c1-30)" '1:# Only one launch runs per worktree at a:# ("Orca is not ready"), it st'
 }
 
@@ -2668,6 +2677,57 @@ rm -rf "$MK/roles"; cat > "$MK/config.json" <<J
 J
 mrun; B1="$(shasum < "$MK/config.json")"; mrun
 check "install migration: without the old mode nothing is printed, no roles folder or link appears, config stable" "$MRC:$MREN:$MMOV:$MWARN:$([ -e "$MK/roles/academic-writer" ] || [ -L "$MK/roles/academic-writer" ] || [ -e "$MK/roles/academic-research" ] && echo present || echo none):$([ "$(shasum < "$MK/config.json")" = "$B1" ] && echo same):$(jq -r '.roles.foo.prompt, .roles.k.prompt' "$MK/config.json" | tr '\n' ' ')" "0:0:0:0:none:same:{kit}/roles/foo.md ~/notes/roles/academic-writer/x.md "
+}
+
+sec_install() {
+# install.sh records what it installed (VERSION, .installed, .manifest) and saves local edits before replacing them
+VH="$TMP/ver-home"; VK="$VH/.orca-roles"; rm -rf "$VH"; mkdir -p "$VH"
+vrun() { if VOUT="$(cd "$TMP" && HOME="$VH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then VRC=0; else VRC=$?; fi; }
+vwarn() { printf '%s\n' "$VOUT" | grep -c '^WARNING: these files' || true; }
+vrun
+check "install: exit 0, VERSION copied, .installed starts with local@, .manifest written" "$VRC:$(cat "$VK/VERSION"):$(head -c 6 "$VK/.installed"):$([ -s "$VK/.manifest" ] && echo manifest)" "0:$(cat "$ROOT/VERSION"):local@:manifest"
+check "install: the manifest lists the kit's files with relative sorted paths" "$(grep -c '  bin/launch.sh$' "$VK/.manifest"):$(grep -c '  prompts/programmer/planner.md$' "$VK/.manifest"):$(grep -c ' /' "$VK/.manifest" || true):$(sed 's/^[0-9a-f]*  //' "$VK/.manifest" | LC_ALL=C sort -c && echo sorted)" "1:1:0:sorted"
+if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
+  check "install: a local clone records the commit (and -dirty when the tree has changes)" "$(sed 's/^[^ ]* //' "$VK/.installed" | sed 's/-dirty$//')" "$(git -C "$ROOT" rev-parse HEAD)"
+fi
+vrun
+check "install: a second install with no edits prints no WARNING and creates no backup" "$VRC:$(vwarn):$([ -e "$VK/backup" ] && echo backup || echo none)" "0:0:none"
+# edit a prompt, add a file under bin/, delete another: edited and added are saved and warned; the deleted one is ignored
+echo "# my edit" >> "$VK/prompts/programmer/dev.md"; echo "echo mine" > "$VK/bin/mine.sh"; rm -f "$VK/prompts/programmer/tester.md"
+vrun; BKD="$(find "$VK/backup" -mindepth 1 -maxdepth 1 -type d | head -1)"
+check "install: edits and additions are named in one WARNING with the backup folder" "$VRC:$(vwarn):$(printf '%s\n' "$VOUT" | grep -c '^  prompts/programmer/dev.md$'):$(printf '%s\n' "$VOUT" | grep -c '^  bin/mine.sh$'):$(printf '%s\n' "$VOUT" | grep -c '^  prompts/programmer/tester.md$' || true):$(printf '%s\n' "$VOUT" | grep -c "Your copies are in $BKD")" "0:1:1:1:0:1"
+check "install: the backup keeps both files at their relative path with the edited content" "$(basename "$BKD" | grep -c '^[0-9]\{8\}T[0-9]\{6\}Z$'):$(tail -1 "$BKD/prompts/programmer/dev.md"):$(cat "$BKD/bin/mine.sh")" "1:# my edit:echo mine"
+check "install: the kit is restored to the repo version (edit gone, added file gone, deleted file back)" "$(cmp -s "$ROOT/prompts/programmer/dev.md" "$VK/prompts/programmer/dev.md" && echo same):$([ -e "$VK/bin/mine.sh" ] && echo present || echo gone):$([ -f "$VK/prompts/programmer/tester.md" ] && echo back)" "same:gone:back"
+vrun
+check "install: after the restore the next install is quiet again" "$(vwarn)" "0"
+# no manifest (first install or an older kit): no comparison, no warning, no backup
+rm -rf "$VK/backup" "$VK/.manifest"; echo "# edit" >> "$VK/prompts/programmer/dev.md"; vrun
+check "install: without a manifest nothing is compared" "$VRC:$(vwarn):$([ -e "$VK/backup" ] && echo backup || echo none):$([ -s "$VK/.manifest" ] && echo manifest)" "0:0:none:manifest"
+# curl | bash: a fake curl logs its URL and serves a tarball of a copy of the repo; the script comes from stdin
+DL="$TMP/dl"; rm -rf "$DL"; mkdir -p "$DL/bin" "$DL/pkg/orca-role-hook-copy" "$DL/cwd"
+cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/plugin" "$ROOT/pw" "$ROOT/README.md" "$ROOT/config.default.json" "$ROOT/VERSION" "$DL/pkg/orca-role-hook-copy/"
+cat > "$DL/bin/curl" <<EOS
+#!/bin/sh
+echo "\$*" >> "$DL/curl.log"
+exec tar -czf - -C "$DL/pkg" orca-role-hook-copy
+EOS
+chmod +x "$DL/bin/curl"
+drun() {  # drun [VAR=value]...: installs from stdin into a fresh HOME; the last curl URL and .installed are kept
+  rm -rf "$DL/home" "$DL/curl.log"; mkdir -p "$DL/home"
+  if DOUT="$(cd "$DL/cwd" && env HOME="$DL/home" PATH="$DL/bin:$PATH" "$@" bash < "$ROOT/install.sh" 2>&1)"; then DRC=0; else DRC=$?; fi
+  DURL="$(tail -1 "$DL/curl.log" 2>/dev/null | grep -o 'https://[^ ]*')"; DINS="$(cat "$DL/home/.orca-roles/.installed" 2>/dev/null)"
+}
+drun ORCA_ROLES_REF=v9.9.9 ORCA_ROLES_BRANCH=other
+check "install download: ORCA_ROLES_REF wins over ORCA_ROLES_BRANCH, URL has no refs/heads, .installed names source@ref" "$DRC:$DURL:$DINS:$(cat "$DL/home/.orca-roles/VERSION")" "0:https://codeload.github.com/FelipeCastano/orca-role-hook/tar.gz/v9.9.9:FelipeCastano/orca-role-hook@v9.9.9:$(cat "$ROOT/VERSION")"
+drun ORCA_ROLES_BRANCH=dev-x
+check "install download: ORCA_ROLES_BRANCH still works" "$DRC:$DURL:$DINS" "0:https://codeload.github.com/FelipeCastano/orca-role-hook/tar.gz/dev-x:FelipeCastano/orca-role-hook@dev-x"
+drun ORCA_ROLES_REPO=acme/kit
+check "install download: no ref falls back to main, ORCA_ROLES_REPO is the source" "$DRC:$DURL:$DINS" "0:https://codeload.github.com/acme/kit/tar.gz/main:acme/kit@main"
+SHA40="0123456789abcdef0123456789abcdef01234567"
+drun ORCA_ROLES_REF=$SHA40
+check "install download: a 40-hex ref records the sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@$SHA40 $SHA40"
+drun ORCA_ROLES_REF=0123456
+check "install download: a short hex ref is not taken for a full sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@0123456"
 }
 
 sec_guard() {

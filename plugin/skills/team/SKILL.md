@@ -90,7 +90,7 @@ Options on the `launch.sh` line of the project's setup script (or with `roles` i
 | `--set path=value` | Any key; the value is read as JSON if it is JSON. E.g.: `roles.dev.model=claude-opus-5-5`, `settings.jiraHandoff=false`, `roles.tester.params.maxNewTests=5`. |
 | `--mode <mode>` | The team's mode (see Modes below). |
 | `--reset` | Forgets the worktree's saved exceptions (only with `roles`). |
-| `--status` | Read-only: shows the mode and, per role, its tab state and model (same as `roles --status`); changes and opens nothing. |
+| `--status` | Read-only: shows the kit version (`Kit: <VERSION> (<source>@<ref>)`), the mode and, per role, its tab state and model (same as `roles --status`); changes and opens nothing. |
 
 They are saved per worktree and `roles` without options reapplies them; new options are added to the saved ones (the same option replaces its saved value) and `--reset` forgets them first. An unknown role makes the startup fail with the list of valid roles. They only decide which tabs open: disabling an open role does not close its tab.
 
