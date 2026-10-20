@@ -389,11 +389,12 @@ rule R5 "$PD/planner.md" 'before you dispatch the execution' '^   c\. Review tha
 rule R5 "$PD/planner.md" 'confirm that nothing under `<e2eDir>/` or `<evidenceDir>/` is staged or part of any commit' '\*\*Set audit\.\*\*'
 # W written reports (every mode, workers and Planner; W6 the report language is stated by the Planner and used by the worker, W7 the academic-research paper is out of scope): outline approved by the user before writing and relayed by the Planner, descriptive titles, no names of people, scope excludes worker_done, commits, PRs and Jira
 for m in programmer pr-reviewer academic-research; do
-  for p in common-workers planner; do
+  for p in reports planner; do
     wf="$ROOT/prompts/$m/$p.md"
-    ws="$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$wf")"
+    if [ "$p" = reports ]; then ws="$(awk '$0 == "# Written reports" {f=1; next} /^#+ /{f=0} f' "$wf")"   # the workers' rules live in their own file
+    else ws="$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$wf")"; fi
     wrule() { printf '%s' "$ws" | grep -qE -- "$2" || { echo "FAIL rules W$1: $m/$p.md Written reports lost '$2'"; FAIL=1; }; }
-    [ -n "$ws" ] || { echo "FAIL rules W: $m/$p.md has no '## Written reports' section"; FAIL=1; }
+    [ -n "$ws" ] || { echo "FAIL rules W: $m/$p.md has no Written reports section"; FAIL=1; }
     wrule 1 '^These rules apply to every report the user asks for, in any format'
     wrule 1 'do not apply to worker_done messages, commit messages, pull requests or Jira'
     wrule 2 '^1\. \*\*Titles\.\*\*.*No value claims.*questions or hooks'
@@ -401,7 +402,7 @@ for m in programmer pr-reviewer academic-research; do
     wrule 3 '^3\. \*\*Sections\.\*\* Before writing, propose the outline .*wait for the user.s approval; a worker sends it to the Planner with `ask`, and the Planner asks the user'
     wrule 4 '^10\. \*\*No names of people\*\*: refer to roles'
     wrule 5 '^11\. \*\*Before delivering\*\*, check the report against rules 1-10'
-    if [ "$p" = common-workers ]; then
+    if [ "$p" = reports ]; then
       wrule 6 '^9\. \*\*Language\.\*\*.*A worker uses the language the task states; if the task states none, ask the Planner with `ask` before writing'
     else
       wrule 6 'When you hand a report to a worker, state in the task the report.s language .* and its audience'
@@ -410,6 +411,14 @@ for m in programmer pr-reviewer academic-research; do
       wrule 7 'nor to the paper and its companion files \(the article, supplementary material, cover letter, rebuttal letter\), which follow writer\.md and the paper rules'
     fi
   done
+  # The workers' common prompt only points to reports.md (read on demand, so every worker starts lighter); none of the rules is copied back into it
+  cw="$ROOT/prompts/$m/common-workers.md"
+  [ "$(grep -c '^1\. \*\*Titles\.\*\*' "$ROOT/prompts/$m/reports.md")" = 1 ] || { echo "FAIL rules W: $m/reports.md lost rule 1"; FAIL=1; }
+  [ "$(grep -cE '^[0-9]+\. \*\*' "$ROOT/prompts/$m/reports.md")" = 11 ] || { echo "FAIL rules W: $m/reports.md must hold exactly 11 numbered rules"; FAIL=1; }
+  [ "$(head -1 "$ROOT/prompts/$m/reports.md")" = "# Written reports" ] || { echo "FAIL rules W: $m/reports.md must start with '# Written reports'"; FAIL=1; }
+  [ "$(grep -c '^## Written reports$' "$cw")" = 1 ] || { echo "FAIL rules W: $m/common-workers.md must hold one Written reports heading"; FAIL=1; }
+  awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$cw" | grep -qF '`reports.md`' || { echo "FAIL rules W: $m/common-workers.md Written reports must name reports.md"; FAIL=1; }
+  ! grep -qE '^1\. \*\*Titles\.\*\*|^11\. \*\*Before delivering\*\*|^These rules apply to every report the user asks for' "$cw" || { echo "FAIL rules W: $m/common-workers.md still carries the report rules"; FAIL=1; }
   grep -F "a worker's outline (rule 3) reaches you with \`ask\`: show it to the user, and reply with their answer or their changes" "$ROOT/prompts/$m/planner.md" | grep -q '^When the user asks you' || { echo "FAIL rules W3: $m/planner.md lost the outline relay sentence"; FAIL=1; }
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/planner.md")" = 1 ] || { echo "FAIL rules W: $m/planner.md must hold one Written reports section"; FAIL=1; }
 done
@@ -2032,7 +2041,7 @@ try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: a file in 
 rm -f "$NR/prompts/academic-research/lone2.md"
 rm -f "$NR/prompts/programmer/lone.md"; try nrr --remove wz-repo --repo "$NR"
 try nrr --remove rp --repo "$NR"; try nrr --remove rp-all --repo "$NR"
-check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:8"
+check "modes --repo: --remove deletes every mode's prompt" "$(ls "$NR"/prompts/*/rp.md "$NR"/prompts/*/rp-all.md 2>/dev/null | wc -l | tr -d ' '):$(find "$NR/prompts/programmer" -name '*.md' | wc -l | tr -d ' ')" "0:9"
 check "modes --repo: --remove --repo leaves the installed legacy file" "$(cat "$PK/roles/rp-all.md" 2>/dev/null)" "inst"
 printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":true,"prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
@@ -2741,7 +2750,7 @@ check "custom trust: filter that turns non-object on the retry -> untouched (as 
 sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
 pk_setup
-check "prompts: 8 files in prompts/programmer/, none flat" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "8:0"
+check "prompts: every default prompt file in prompts/programmer/, none flat" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "9:0"
 NROLES="$(jq -r '.roles | length' "$PKC")"
 [ "$NROLES" -ge 7 ] || { echo "FAIL default config has only $NROLES roles"; FAIL=1; }
 # prints "<paths found>:<missing>:<outside programmer/>" for a message
@@ -2798,7 +2807,7 @@ try nr_run --from-json "$TMP/nr-role.json" --repo "$NR"; check "new-role --repo:
 check "new-role --repo: prompt in prompts/programmer/, none flat" "$([ -f "$NR/prompts/programmer/repo-sec.md" ] && echo y)$([ -e "$NR/prompts/repo-sec.md" ] && echo flat)" "y"
 check "new-role --repo: prompt_of resolves to an existing file" "$(p="$(KIT="$NR" prompt_of "$NR/config.default.json" repo-sec)"; [ "$p" = "$NR/prompts/programmer/repo-sec.md" ] && [ -f "$p" ] && echo y)" "y"
 try nr_run --remove repo-sec --repo "$NR"; check "new-role --remove --repo: removes the role" "$RC:$(jq -r '.roles | has("repo-sec")' "$NR/config.default.json")" "0:false"
-check "new-role --remove --repo: only its prompt is deleted, the 8 defaults remain" "$([ -e "$NR/prompts/programmer/repo-sec.md" ] && echo left):$(find "$NR/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" ":8"
+check "new-role --remove --repo: only its prompt is deleted, the default prompt files remain" "$([ -e "$NR/prompts/programmer/repo-sec.md" ] && echo left):$(find "$NR/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" ":9"
 # a folder that is not a clone (config.default.json but flat prompts, or no config.default.json) is refused and nothing is written
 NN="$TMP/nr-notclone"; rm -rf "$NN"; mkdir -p "$NN/prompts"; cp "$ROOT/config.default.json" "$NN/"; : > "$NN/prompts/dev.md"; mkdir -p "$TMP/nr-noconf/prompts/programmer"
 H0="$(cd "$NN" && find . -type f | sort | xargs shasum | shasum)"
@@ -2812,7 +2821,7 @@ sec_install_flat() {
 IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
-check "install.sh: no flat prompt left, 8 in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:8"
+check "install.sh: no flat prompt left, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:9"
 # the "Enabled" line names the mode of the installed configuration
 ic() { jq "$1" "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; }
 irun() { if IOUT="$(cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null 2>"$IH/err.txt")"; then IRC=0; else IRC=$?; fi; IENA="$(printf '%s\n' "$IOUT" | grep '^Enabled')"; }

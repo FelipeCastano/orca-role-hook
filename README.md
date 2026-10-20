@@ -52,7 +52,7 @@ By default:
 
 They all start in **auto mode**. The workers know that all their work comes from the Planner and share common rules (`prompts/programmer/common-workers.md`): do not create worktrees or terminals, do not touch git outside their worktree, do not push and clean up whatever they start.
 
-Every role also follows the written-report rules (`## Written reports` in `prompts/<mode>/common-workers.md`) whenever the user asks for a report in any format: descriptive titles, an outline the user approves before writing, an aggregated level of detail, a formal tone and no names of people. Worker messages, commit messages, pull requests and Jira keep their own formats.
+Every role also follows the written-report rules (`prompts/<mode>/reports.md`, which a worker reads only when a task asks for a report, so the common prompt stays short; the Planner keeps its own copy in `planner.md`) whenever the user asks for a report in any format: descriptive titles, an outline the user approves before writing, an aggregated level of detail, a formal tone and no names of people. Worker messages, commit messages, pull requests and Jira keep their own formats.
 
 This is the programmer team; see [pr-reviewer mode](#pr-reviewer-mode) and [academic-research mode](#academic-research-mode) for the other teams.
 
@@ -709,6 +709,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── pr-reviewer/
 │   └── academic-research/       # each mode's folder holds:
 │       ├── common-workers.md    # rules common to the mode's workers
+│       ├── reports.md           # written-report rules, read by a worker only when a task asks for a report
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── tests/
 │   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
