@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -87,7 +87,7 @@ tf_setup() {
 TF="$TMP/tf"; mkdir -p "$TF/wt"
 TFD="$(cd "$TF/wt" && pwd -P)"
 tf_run() { # <home> [hook]: runs trust_folder in the worktree with that fake HOME; stdout -> $TF/out, stderr -> $TF/err, rc -> $TF/rc
-  (cd "$TF/wt" && HOME="$1" ORCA_ROLES_TRUST_HOOK="${2:-}" trust_folder >"$TF/out" 2>"$TF/err"; echo $? >"$TF/rc") || true
+  (cd "$TF/wt" && KIT="$TF/kit" HOME="$1" ORCA_ROLES_TRUST_HOOK="${2:-}" trust_folder >"$TF/out" 2>"$TF/err"; echo $? >"$TF/rc") || true
 }
 tf_trusted() { jq -r --arg d "$TFD" '.projects[$d].hasTrustDialogAccepted // false' "$1" 2>/dev/null; }
 tf_left() { find "$1" -name '.claude.json.orca-roles.*' 2>/dev/null | wc -l | tr -d ' '; }
@@ -2427,6 +2427,118 @@ tf_run "$H" "[ -d '$H/.claude.json.lock' ] && echo link-lock >> '$H/seen'; [ -e 
 check "trust_folder: lock taken at the link's path, not the target's, and removed" "$(cat "$H/seen") $(tf_trusted "$H/real/c.json") $(ls -A "$H" | tr '\n' ' ') $(ls -A "$H/real" | tr '\n' ' ')" "link-lock true .claude.json real seen  c.json "
 H="$TF/h-lq"; mkdir -p "$H/real" "$H/.claude.json.lock"; echo "$TFJ" > "$H/real/c.json"; ln -s real/c.json "$H/.claude.json"; tf_run "$H"
 check "trust_folder: foreign lock at the link's path kept (link target)" "$(tf_trusted "$H/real/c.json") $([ -d "$H/.claude.json.lock" ] && echo kept) $([ -e "$H/real/c.json.lock" ] && echo target-lock)" "true kept "
+
+# settings.trust: trust_of picks "worktree" or "never" (default by mode); an invalid value warns and counts as "never"
+TO="$TF/to.json"
+tof() { printf '%s' "$1" > "$TO"; trust_of "$TO" 2>&1 | tr '\n' '|'; }
+check "trust_of: no setting, programmer or no mode -> worktree" "$(tof '{"settings":{"mode":"programmer"}}')$(tof '{}')" "worktree|worktree|"
+check "trust_of: no setting, academic-research -> worktree; pr-reviewer -> never" "$(tof '{"settings":{"mode":"academic-research"}}')$(tof '{"settings":{"mode":"pr-reviewer"}}')" "worktree|never|"
+check "trust_of: an explicit value beats the mode" "$(tof '{"settings":{"mode":"pr-reviewer","trust":"worktree"}}')$(tof '{"settings":{"trust":"never"}}')" "worktree|never|"
+check "trust_of: invalid value (string, number, list) -> warning and never" "$(tof '{"settings":{"trust":"always"}}' | grep -c '^Warning.*never') $(tof '{"settings":{"trust":3}}' | grep -c Warning) $(tof '{"settings":{"trust":["worktree"]}}' | grep -c Warning)" "1 1 1"
+check "trust_of: null counts as unset" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}')" "never|"
+# trust_folder records the folder it marked once, and only when it changed ~/.claude.json
+H="$TF/h-rec"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; rm -f "$TF/kit/trusted.list"; tf_run "$H"; tf_run "$H"
+check "trust_folder: the marked folder is recorded once in trusted.list" "$(cat "$TF/kit/trusted.list" 2>/dev/null)" "$TFD"
+H="$TF/h-rec2"; mkdir -p "$H"; echo "{\"projects\":{\"$TFD\":{\"hasTrustDialogAccepted\":true}}}" > "$H/.claude.json"; rm -f "$TF/kit/trusted.list"; tf_run "$H"
+check "trust_folder: already trusted by the user -> not recorded" "$([ -e "$TF/kit/trusted.list" ] && echo recorded || echo none)" "none"
+H="$TF/h-rec3"; mkdir -p "$H"; rm -f "$TF/kit/trusted.list"; tf_run "$H"
+check "trust_folder: no ~/.claude.json -> nothing recorded" "$([ -e "$TF/kit/trusted.list" ] && echo recorded || echo none)" "none"
+
+# launch.sh end to end with a fake orca: who gets marked
+pk_setup
+mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
+cat > "$PK/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner", "modes": "all" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester", "enabled": false },
+             "deployer": { "title": "Deployer", "enabled": false }, "rv": { "title": "Rv", "modes": ["pr-reviewer"] } } }
+J
+TW="$TMP/tproj"; mkdir -p "$TW" "$TMP/tbin"; git -C "$TW" init -q; TWP="$(cd "$TW" && pwd -P)"
+cat > "$TMP/tbin/orca" <<'EOS'
+#!/bin/sh
+case "$1 $2" in
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/tbin/orca"; printf '#!/bin/sh\nexit 0\n' > "$TMP/tbin/kickoff"; chmod +x "$TMP/tbin/kickoff"
+tl() { rm -f "$TW/.git/orca-roles.env"; echo "$TFJ" > "$PH/.claude.json"; rm -f "$PK/trusted.list"
+  (cd "$TW" && HOME="$PH" PATH="$TMP/tbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/tbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" --reset "$@" 2>&1); }
+tlmarked() { jq -r --arg d "$TWP" '.projects[$d].hasTrustDialogAccepted // false' "$PH/.claude.json"; }
+tllist() { cat "$PK/trusted.list" 2>/dev/null | tr '\n' ' '; }
+INFO='will ask you to trust it'
+try tl; check "trust launch: programmer by default -> marked and recorded" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:true:$TWP :0"
+try tl --mode pr-reviewer; check "trust launch: pr-reviewer without settings.trust -> not marked, not recorded, one info line" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO"):$(jq -c '.projects|keys' "$PH/.claude.json")" '0:false::1:["/other"]'
+try tl --mode pr-reviewer --set settings.trust=worktree; check "trust launch: pr-reviewer with trust worktree -> marked and recorded" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:true:$TWP :0"
+try tl --set settings.trust=never; check "trust launch: programmer with trust never -> not marked" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:false::1"
+try tl --set settings.trust=sometimes; check "trust launch: invalid trust -> warning, not marked" "$RC:$(tlmarked):$(printf '%s' "$OUT" | grep -c '^Warning: settings.trust must be')" "0:false:1"
+
+# codex: the trust override is left out with "never"
+FB3="$TMP/fb3"; mkdir -p "$FB3"; printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\0" "$a"; done > "%s/argv"\n' "$FB3" > "$FB3/codex"; chmod +x "$FB3/codex"
+WT3="$TMP/tw3"; mkdir -p "$WT3"
+cxtrust() { printf '{"settings":%s,"defaults":{},"mcpServers":{},"roles":{"cx":{"agent":"codex","permissionMode":"auto"}}}' "$1" > "$TMP/cfg3.json"
+  (cd "$WT3" && HOME="$TMP/home" PATH="$FB3:$PATH" ORCA_ROLES_CONFIG="$TMP/cfg3.json" "$TMP/home/.orca-roles/bin/agent.sh" cx >/dev/null 2>&1); tr '\0' '\n' < "$FB3/argv" | grep -c '^projects=' || true; }
+check "codex trust: never -> no projects override; worktree -> kept; pr-reviewer default -> none; programmer default -> kept" "$(cxtrust '{"trust":"never"}') $(cxtrust '{"trust":"worktree"}') $(cxtrust '{"mode":"pr-reviewer"}') $(cxtrust '{}')" "0 1 0 1"
+
+# kickoff.sh with trust "never": waits for the user, never presses Enter, never types the role into the dialog
+TK="$TMP/tk"; mkdir -p "$TK/gd" "$TK/bin" "$TK/wt"; git -C "$TK/wt" init -q
+cat > "$TK/bin/orca" <<'EOS'
+#!/bin/sh
+D="$TK"
+case "$1 $2" in
+  "terminal read") n=$(cat "$D/reads" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$D/reads"
+    if [ -f "$D/clear_after" ] && [ "$n" -gt "$(cat "$D/clear_after")" ]; then s="ready"; else s="$(cat "$D/screen")"; fi
+    jq -nc --arg s "$s" '{text: $s}';;
+  "terminal send") echo "SEND $*" >> "$D/orca.log";;
+esac
+exit 0
+EOS
+chmod +x "$TK/bin/orca"
+tk() {  # <extra settings json fragment> <reads before the dialog clears, or none>
+  printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false%s }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" } } }' "$1" > "$TK/cfg.json"
+  rm -f "$TK/orca.log" "$TK/reads" "$TK/clear_after" "$TK/gd/orca-roles.kicked"; : > "$TK/orca.log"; echo "Do you trust the files in this folder?" > "$TK/screen"
+  [ "$2" = none ] || echo "$2" > "$TK/clear_after"
+  printf 'PLANNER=hp\nDEV=hd\n' > "$TK/gd/orca-roles.env"
+  (cd "$TK/wt" && TK="$TK" HOME="$TMP/home" PATH="$TK/bin:$PATH" ORCA_ROLES_KICK_SETTLE=0 ORCA_ROLES_TRUST_POLL=0.1 "$TMP/home/.orca-roles/bin/kickoff.sh" "$TK/wt" "$TK/gd/orca-roles.env" "$TK/cfg.json" "dev" "" "" "" > "$TK/out.log" 2>&1)
+}
+tkenter() { grep -c -- '^SEND terminal send --terminal [^ ]* --enter --json$' "$TK/orca.log" || true; }
+tkrole() { grep -c -- '--text' "$TK/orca.log" || true; }
+tk ', "trust": "never"' 3
+check "kickoff trust never: dialog clears -> no Enter, waiting line once, role sent and marked kicked" "$(tkenter) $(grep -c 'Dev: waiting for you to answer the trust dialog in its tab' "$TK/out.log") $(tkrole) $(tr '\n' ' ' < "$TK/gd/orca-roles.kicked" 2>/dev/null)" "0 1 1 DEV=hd "
+tk ', "trust": "never"' none
+check "kickoff trust never: dialog never clears -> no Enter, role NOT sent, not marked, resend hint" "$(tkenter) $(tkrole) [$(cat "$TK/gd/orca-roles.kicked" 2>/dev/null)] $(grep -c 'role was NOT sent.*run roles again' "$TK/out.log") $(grep -c 'waiting for you to answer' "$TK/out.log")" "0 0 [] 1 1"
+tk ', "mode": "pr-reviewer"' none
+check "kickoff trust: pr-reviewer without settings.trust behaves as never" "$(tkenter) $(tkrole)" "0 0"
+tk ', "trust": "worktree"' 1
+check "kickoff trust worktree: the dialog is still accepted with Enter, role sent" "$(tkenter) $(tkrole) $(grep -c 'Trust dialog accepted' "$TK/out.log")" "1 1 1"
+}
+
+sec_forget_trust() {
+# forget-trust.sh: removes only the kit's entries from ~/.claude.json (fake HOME, own copy of the kit)
+FT="$TMP/ft"; rm -rf "$FT"; mkdir -p "$FT/home" "$FT/kit" "$FT/a" "$FT/b"; cp -R "$ROOT/bin" "$FT/kit/"
+FA="$(cd "$FT/a" && pwd -P)"; FB="$(cd "$FT/b" && pwd -P)"; FC="$FT/gone-c"; FD="$FT/gone-d"
+ftj() { printf '{"oauthAccount":{"email":"a@b"},"numStartups":3,"projects":{"%s":{"hasTrustDialogAccepted":true,"x":1},"%s":{"hasTrustDialogAccepted":true},"%s":{"hasTrustDialogAccepted":true},"%s":{"hasTrustDialogAccepted":true}}}' "$FA" "$FB" "$FC" "$FD" > "$FT/home/.claude.json"; printf '%s\n%s\n%s\n' "$FA" "$FB" "$FC" > "$FT/kit/trusted.list"; }
+ft() { (cd "$FT/a" && env -i HOME="$FT/home" KIT="$FT/kit" PATH="$PATH" /bin/bash "$FT/kit/bin/forget-trust.sh" "$@" 2>&1); }
+ftkeys() { jq -r '.projects | keys[] | split("/") | last' "$FT/home/.claude.json" | tr '\n' ' '; }
+ftwithout() { jq -S -c --arg d "$1" 'del(.projects[$d])' "$FT/orig.json" | cmp -s - <(jq -S -c . "$FT/home/.claude.json") && echo same || echo DIFF; }
+ftj; cp "$FT/home/.claude.json" "$FT/orig.json"; cp "$FT/kit/trusted.list" "$FT/orig.list"
+OUT="$(ft --dry-run)"
+check "forget-trust --dry-run: prints what it would remove, writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig.json" && echo same) $(cmp -s "$FT/kit/trusted.list" "$FT/orig.list" && echo same) $(printf '%s' "$OUT" | grep -c "^Would remove projects\[$FA\]") $(printf '%s' "$OUT" | grep -c "^Would remove $FA from")" "same same 1 1"
+OUT="$(ft)"
+check "forget-trust: removes only this worktree's entry; the other keys are equal under jq -S; the list loses that line" "$(ftkeys)| $(ftwithout "$FA") $(tr '\n' ' ' < "$FT/kit/trusted.list")" "b gone-c gone-d | same $FB $FC "
+ftj
+OUT="$(ft --stale --dry-run)"
+check "forget-trust --stale --dry-run: names the recorded missing folder only, writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig.json" && echo same) $(cmp -s "$FT/kit/trusted.list" "$FT/orig.list" && echo same) $(printf '%s' "$OUT" | grep -c "$FC") $(printf '%s' "$OUT" | grep -c "$FD")" "same same 2 0"
+OUT="$(ft --stale)"
+check "forget-trust --stale: removes only recorded missing folders; unrecorded, existing and other keys stay" "$(ftkeys)| $(ftwithout "$FC") $(tr '\n' ' ' < "$FT/kit/trusted.list")" "a b gone-d | same $FA $FB "
+OUT="$(ft --stale)"
+check "forget-trust --stale: a second run has nothing to do" "$OUT" "No recorded folder is missing."
+ftj; printf '{ not json' > "$FT/home/.claude.json"; cp "$FT/home/.claude.json" "$FT/bad.json"; OUT="$(ft; echo "rc=$?")"
+check "forget-trust: invalid ~/.claude.json -> warning, untouched, rc 0, still listed" "$(printf '%s' "$OUT" | grep -c '^Warning') $(cmp -s "$FT/home/.claude.json" "$FT/bad.json" && echo same) $(printf '%s' "$OUT" | grep -c 'rc=0') $(grep -c . "$FT/kit/trusted.list")" "1 same 1 3"
+ftj; rm -f "$FT/home/.claude.json"; OUT="$(ft; echo "rc=$?")"
+check "forget-trust: missing ~/.claude.json -> not created, rc 0" "$([ -e "$FT/home/.claude.json" ] && echo created || echo none) $(printf '%s' "$OUT" | grep -c 'rc=0')" "none 1"
+check "forget-trust: unknown option -> usage, rc 2" "$(ft --nope >/dev/null; echo $?)" "2"
 }
 
 sec_codex_custom() {

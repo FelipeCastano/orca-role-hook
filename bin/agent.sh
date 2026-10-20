@@ -77,7 +77,8 @@ case "$AGENT" in
     add_list extraDirs --add-dir path
     # Trust answered with a configuration override instead of the "Do you trust this folder?" dialog; nothing is written.
     # It must be one inline table: the dotted form (projects."<path>".trust_level) is not read.
-    ARGS+=(-c "$(jq -nr --arg p "$(pwd -P)" '"projects={\($p | @json) = {trust_level = \"trusted\"}}"')")
+    # With settings.trust "never" it is left out and codex asks.
+    [ "$(trust_of "$CFG")" = never ] || ARGS+=(-c "$(jq -nr --arg p "$(pwd -P)" '"projects={\($p | @json) = {trust_level = \"trusted\"}}"')")
     # MCP servers as configuration overrides (-c mcp_servers.<name>.<field>=...), without touching ~/.codex/config.toml
     if [ -n "$MCPFILE" ]; then while IFS= read -r o; do [ -n "$o" ] && ARGS+=(-c "$o"); done < <(codex_mcp_overrides "$MCPFILE"); fi
     # The same anchor as claude's, as developer instructions, which /new keeps (they replace those of ~/.codex/config.toml)

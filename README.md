@@ -373,6 +373,14 @@ A mode without an entry uses `prompts/<mode>/<role>.md`. A role of the mode whos
 
 > Update needed if you set a custom `prompt` pointing to the old flat `~/.orca-roles/prompts/<role>.md`: that file no longer exists, the prompts moved to `prompts/programmer/<role>.md`.
 
+#### Trust of the folder
+
+Claude Code warns about a repository's hooks, MCP servers and settings the first time it starts in a folder ("Do you trust the files in this folder?"). With `settings.trust: "worktree"` the kit skips that warning: before the tabs open it marks the worktree in `~/.claude.json` (`projects[<path>].hasTrustDialogAccepted`), Codex gets a trust override, and the kickoff presses Enter if the dialog still shows. That is fine for your own code. With `settings.trust: "never"` the kit marks nothing: `roles` prints one line saying so, and each agent shows the dialog.
+
+The default depends on the mode: `pr-reviewer` reviews other people's branches, so it is `"never"` there, and the kickoff waits for you instead of answering: it prints `<title>: waiting for you to answer the trust dialog in its tab`, polls the screen until the dialog is gone (up to `kickoffTimeoutSeconds`), and then sends the role. If the time runs out it does not type anything into the dialog (that would accept it): the role stays unsent, and the next `roles` run sends it to the tabs that never got it. To restore the old behaviour in `pr-reviewer`, set `settings.trust` to `"worktree"` (`roles --set settings.trust=worktree`, or in `config.json`).
+
+**Cleaning up.** Every folder the kit marks is recorded in `~/.orca-roles/trusted.list` (only when the kit changed `~/.claude.json`; an entry you made yourself is not recorded). `~/.orca-roles/bin/forget-trust.sh`, from a worktree, removes that worktree's entry from `~/.claude.json` and from the list; `forget-trust.sh --stale` does the same for every recorded folder that no longer exists, and never touches anything the kit did not record. `--dry-run` with either prints what would be removed and writes nothing. A missing or invalid `~/.claude.json` is a warning, never an error. The trust of custom agents (role field `trust`) is not cleaned: its filter is opaque to the kit.
+
 #### pr-reviewer mode
 
 The pr-reviewer mode follows lens-review (https://github.com/romerox3/lens-review), a Claude Code plugin skill for multi-agent code review. orca-roles does not include or copy it: on the first start of the mode the Planner installs the plugin from its own repository, with your yes, and reads it at run time to set up the reviewer roles and run each review. The review method and its lenses belong to that project, and every report credits it.
@@ -545,7 +553,7 @@ Codex (`agent: "codex"`):
 
 - `permissionMode: "auto"` runs it with `--sandbox workspace-write --ask-for-approval on-request`. The role's scratch folder and each `extraDirs` entry are always passed as `--add-dir` (they are writable only with `workspace-write`).
 - Every codex role needs codex >= 0.48 (`--add-dir` is passed in every mode).
-- The trust dialog is answered with a single `-c 'projects={"<worktree>" = {trust_level = "trusted"}}'` override: nothing is written to `~/.codex/config.toml`.
+- With `settings.trust` `"never"` this override is left out and Codex asks. Otherwise the trust dialog is answered with a single `-c 'projects={"<worktree>" = {trust_level = "trusted"}}'` override: nothing is written to `~/.codex/config.toml`.
 - Checked with Codex 0.162 without a session that uses a model: it rejects `--full-auto`, accepts the flags above, and with the `-c projects` override it opens without the trust dialog and writes nothing to its `config.toml`. Whether the `--add-dir` folders are writable in a real session was not measured.
 
 Antigravity (`agy`) has no trust flag and no sandbox that lets it write only in some folders. Example:
@@ -645,6 +653,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `closeComposerAgent` | Close the extra session Orca's composer opens when you create a worktree (often a Claude tab soon renamed by Claude Code, e.g. "done"). Only in a new worktree, and only an agent tab outside the team that already existed before the team when Orca's setup script started the kit on a worktree created moments ago (whatever its title, e.g. "✳ Claude Code"), or whose **first** title was exactly the branch name or started with the Jira key (`DEVGD-220`, `DEVGD-220: summary`), or whose screen showed the key. A `roles` run by hand never closes a tab that existed before. It is closed with `orca terminal close`. If there is none, nothing is touched and it is noted in the log. |
 | `composerAgentWindowSeconds` | How long that extra session is watched for after the worktree is created. |
 | `cleanWorkersAfterStep` | Whether the Planner proposes cleaning the workers' context when closing each step. With `false` it only does it when you ask. |
+| `trust` | Whether the kit marks the worktree as trusted for the agents: `"worktree"` (marks it in `~/.claude.json`, passes Codex its trust override, and accepts Claude Code's trust dialog itself) or `"never"` (the agents show the dialog and each tab waits for you; see [Trust of the folder](#trust-of-the-folder)). Unset: `"never"` in `pr-reviewer`, `"worktree"` in the other modes. Any other value warns and counts as `"never"`. |
 | `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-research`. See [Modes](#modes). |
 | `phase` | academic-research only: the phase (`experiment` by default or `writing`). Changed by the Planner with `phase.sh`, not by hand. |
 | `language` | The language the Planner replies to you in. `"auto"` (default): the language you write in. Any other value (`"Spanish"`, `"English"`...): always that one. The prompts are in English either way. The workers always write in English (their repo artifacts follow the repo's language): for Claude workers the kit passes `--settings '{"language":"english"}'`, overriding Claude Code's own `language` setting, and every worker also gets the rule in its role anchor (the only channel for Codex and custom agents, whose own language settings are not overridden). A `--settings` in a role's `extraArgs` replaces the kit's one (claude does not merge them), so include `"language":"english"` in it. |
@@ -664,6 +673,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── checkpoint.sh            # records the tree under refs/orca-roles/checkpoints/ (the Planner's briefs diff rounds against it)
 │   ├── close-role.sh            # closes a role's tab in the current workspace
 │   ├── relaunch-role.sh         # relaunches one role with another model
+│   ├── forget-trust.sh          # removes the trust the kit gave to worktrees in ~/.claude.json
 │   ├── models.sh                # lists a role's candidate models and tests them
 │   ├── review-skill.sh          # installs and locates the pr-reviewer mode's review skill
 │   ├── phase.sh                 # switches an academic-research team's phase
@@ -766,7 +776,7 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | The Planner is not notified when workers finish | A message batch it read but did not acknowledge: Orca types no notice while one is open. `orca orchestration check --peek --json` from the Planner's tab shows the unread messages; ask the Planner to read and acknowledge its messages (`check --ack <delivery_id> --json` until `count` is 0) |
 | The Planner replies in another language | `settings.language` (or a `--set settings.language=...` in the setup script); with `"auto"` it replies in the language you write in |
 | An agent asks for permissions | That it is in auto mode (`Shift+Tab` shows the current mode) |
-| A tab stays on Claude Code's "Do you trust the files in this folder?" dialog and never gets its role | The kit marks the worktree as trusted in `~/.claude.json` before starting the agents (`orca-roles-launch.log` says "Marked ... as trusted") and presses Enter if the dialog still shows. If a tab is stuck anyway, answer the dialog once and run `roles`; and tell us the exact text it showed |
+| A tab stays on Claude Code's "Do you trust the files in this folder?" dialog and never gets its role | The kit marks the worktree as trusted in `~/.claude.json` before starting the agents (`orca-roles-launch.log` says "Marked ... as trusted") and presses Enter if the dialog still shows (with `settings.trust: "never"`, the default in pr-reviewer, it does neither: answer the dialog yourself, or run `roles` afterwards to send the role). If a tab is stuck anyway, answer the dialog once and run `roles`; and tell us the exact text it showed |
 | `roles` says "Orca is not ready (<code>)" | It could not tell whether this worktree's tabs are still open (Orca's window or runtime was not ready, or `orca terminal list` failed after a restart), and stopped without closing or opening anything. Run `roles` again once Orca is ready |
 | `roles` says "another roles is still running" | Another `roles` held `orca-roles.lock` (git dir) for more than 60 seconds. Wait for it to finish and run `roles` again; a lock left by a process that died is taken over on its own |
 | `roles` warns "this folder was launched before as worktree <old> and now as <new>" | Orca knows the same folder under two worktree ids (`orca-roles.wtid` in the git dir holds the last one), so its tabs may be duplicated. Close the extra tabs and launch from one id |

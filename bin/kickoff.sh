@@ -55,11 +55,29 @@ kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds
   local f tmp v; f="$(dirname "$STATE")/orca-roles.kicked"; tmp="$f.tmp.$$"; v="$(var_of "$1")"; [ -f "$f" ] || : > "$f"
   awk -v k="$v" -v h="$2" 'index($0, k "=") == 1 { if (!d) print k "=" h; d = 1; next } { print } END { if (!d) print k "=" h }' "$f" > "$tmp" && mv "$tmp" "$f"
 }
+TRUST="$(trust_of "$CFG")"
+TRUST_RX='trust the files|trust this folder|do you trust|safety check|confías|confiar'   # confías/confiar: the Spanish-localized dialog
+# With settings.trust "never" the user answers the dialog: wait (up to kickoffTimeoutSeconds) until it is gone. 1 if it never was.  wait_trust <handle> <title>
+wait_trust() {
+  local end; end=$(( $(date +%s) + (TIMEOUT_MS + 999) / 1000 + 1 ))   # whole seconds, so at least the full timeout
+  echo "$2: waiting for you to answer the trust dialog in its tab"
+  while { screen_of "$1" || true; } | grep -qiE "$TRUST_RX"; do
+    [ "$(date +%s)" -lt "$end" ] || return 1
+    sleep "${ORCA_ROLES_TRUST_POLL:-2}"
+  done
+}
 kick() {  # $1 handle, $2 role, $3 message
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-    if { screen_of "$1" || true; } | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
-      press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
+    if { screen_of "$1" || true; } | grep -qiE "$TRUST_RX"; then
+      if [ "$TRUST" = never ]; then
+        # Never press Enter or type the role here: it would accept the dialog. The role stays unmarked in orca-roles.kicked, so the next `roles` sends it.
+        wait_trust "$1" "$(title_of "$CFG" "$2")" || {
+          echo "$(title_of "$CFG" "$2"): the trust dialog was still open after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the dialog, then run roles again: it sends the role to tabs that never got it."
+          return 0; }
+      else
+        press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
+      fi
     else break; fi
   done
   local before rx; rx="$(model_error_regex "$CFG" "$2" "$(rstr "$CFG" "$2" model)")"

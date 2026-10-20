@@ -309,8 +309,12 @@ fi
 [ -f "$STATE" ] && . "$STATE"
 ROLES="$(launchable_roles "$CFG" | tr '\n' ' ')"
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
-for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
-trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
+if [ "$(trust_of "$CFG")" = never ]; then
+  echo "The folder is not marked as trusted (settings.trust is \"never\"): the agents will ask you to trust it; answer in each tab."
+else
+  for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
+  trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
+fi
 state_set() {  # state_set <file> <VAR> <value>: replaces that line (or adds it), keeps the others, atomically
   local tmp="$1.tmp.$$"; [ -f "$1" ] || : > "$1"
   awk -v k="$2" -v v="$3" 'index($0, k "=") == 1 { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$1" > "$tmp" && mv "$tmp" "$1"

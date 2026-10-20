@@ -587,6 +587,27 @@ safe_json_edit() (
   fi
   exit "$status"
 )
+# Whether the kit marks the worktree as trusted: "worktree" (it does) or "never" (the agents ask the user). settings.trust if set; without it,
+# "never" in pr-reviewer (other people's branches: their hooks, MCP servers and settings must not run unseen) and "worktree" otherwise.
+# An invalid value is a warning on stderr and counts as "never".  trust_of <config>
+trust_of() {
+  local t m
+  t="$(jq -r '(.settings // {}) | (.trust // "") | if type == "string" then . else tojson end' "$1" 2>/dev/null)" || t=""
+  case "$t" in
+    worktree|never) printf '%s\n' "$t";;
+    "") m="$(mode_of "$1" 2>/dev/null)" || m=pr-reviewer   # an unreadable mode: the safe side
+        if [ "$m" = pr-reviewer ]; then echo never; else echo worktree; fi;;
+    *) echo "Warning: settings.trust must be \"worktree\" or \"never\" (got '$t'); using \"never\"." >&2; echo never;;
+  esac
+}
+# The folders the kit marked as trusted in ~/.claude.json, one physical path per line (forget-trust.sh removes them).
+trusted_list() { echo "$KIT/trusted.list"; }
+trust_record() {  # trust_record <dir>: adds it once; never fatal
+  local f; f="$(trusted_list)"
+  { mkdir -p "$(dirname "$f")" && { grep -qxF -- "$1" "$f" 2>/dev/null || printf '%s\n' "$1" >> "$f"; }; } 2>/dev/null \
+    || echo "Warning: could not record $1 in $f; forget-trust.sh will not find it." >&2
+  return 0
+}
 # Claude Code asks "Do you trust the files in this folder?" the first time it starts in a folder, and a tab stuck in that dialog never
 # gets its role. Registering the kit in the project is that answer, so the worktree is marked as trusted before the agents start.
 # Never fatal: on a failure ~/.claude.json is left as it was and a warning is printed.
@@ -594,7 +615,7 @@ trust_folder() {
   local link="$HOME/.claude.json" d rc=0; d="$(pwd -P)"
   safe_json_edit "$link" '.projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true})' "$d" "$link.lock" || rc=$?
   case "$rc" in
-    0) echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents.";;
+    0) trust_record "$d"; echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents.";;
     1|2) echo "Warning: could not mark $d as trusted for Claude Code ($([ "$rc" = 2 ] && echo 'the file kept changing' || echo 'it could not be read or written')); $link was left untouched and the agent will show the trust dialog." >&2;;
   esac
   return 0
