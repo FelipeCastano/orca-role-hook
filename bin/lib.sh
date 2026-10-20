@@ -48,14 +48,15 @@ project_config() {
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 # The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
-# claude: Claude Code's own texts; codex: the API error naming the model; custom: the role's modelError with {model} as the escaped model id.
+# claude: Claude Code's own texts; codex: the API error naming the model; custom and opencode: the role's modelError with {model} as the
+# escaped model id (opencode has no built-in text yet: it is unknown until a real run).
 model_error_regex() {
   local agent esc; [ -n "$3" ] || return 0
   agent="$(rstr "$1" "$2" agent)"; esc="$(regex_escape "$3")"
   case "${agent:-claude}" in
     claude) printf '%s\n' "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]";;
     codex) printf '%s\n' "(unexpected status|ERROR:)[^E]{0,200}${esc}[^E]{0,200}(does not exist|not supported|model_not_found)";;
-    custom) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
+    custom|opencode) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
   esac
 }
 setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
@@ -116,13 +117,13 @@ title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # The kit's prompts folder for the configuration's mode
 prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
-# A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~), or the mode's prompts/<mode>/<role>.md
+# A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~, {kit} and {home}), or the mode's prompts/<mode>/<role>.md
 prompt_of() {
   local m p; m="$(mode_of "$1" 2>/dev/null)" || return 1
   p="$(jq -r --arg r "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '.roles[$r].prompt as $p
     | if ($p | type) == "string" then (if $m == "programmer" then $p else empty end)
       elif ($p | type) == "object" then (($p[$m] // ([$p | to_entries[] | select(($lm[.key] // .key) == $m) | .value] | first)) // empty | strings) else empty end' "$1")"
-  p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$m/$2.md}"
+  p="$(expand_path "$p")"; echo "${p:-$KIT/prompts/$m/$2.md}"   # accepts ~, {kit} and {home}
 }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
@@ -343,8 +344,9 @@ preexisting_agents() {
 # settings.flow: optional per-worktree tuning of the flow that the prompts describe in prose.  Unset = the prompts' own values and
 # the messages are byte-identical to a config without the key; an invalid value is ignored with a warning on stderr.
 #   roundCap: positive integer (rejected rounds of a step before the Planner checks with the user; the prompt says 3). programmer mode only
+#   maxStepsPerWorker: positive integer, the default `steps` of an OpenCode role (roles.<r>.opencode.steps wins). OpenCode roles only
 #   workerReportBody: "full" (default) or "short" (worker_done body of a few lines, the detail in a file in scratchDir)
-# flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.
+# flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.   flow_max_steps <config> → stdout: the number, or nothing.
 flow_round_cap() {
   local r; r="$(jq -r '(.settings.flow? | objects | .roundCap?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
   case "$r" in
@@ -358,6 +360,14 @@ flow_report_body() {
   case "$r" in
     short) printf 'short';;
     "bad "*) echo "orca-roles: settings.flow.workerReportBody must be \"full\" or \"short\" (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
+flow_max_steps() {
+  local r; r="$(jq -r '(.settings.flow? | objects | .maxStepsPerWorker?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    "ok "*) printf '%s' "${r#ok }";;
+    "bad "*) echo "orca-roles: settings.flow.maxStepsPerWorker must be a positive integer (got ${r#bad }); ignoring it" >&2;;
   esac
   return 0
 }
@@ -438,6 +448,16 @@ kit_deny_rules() {
 worker_back_msg() {
   printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
 }
+# A role's common-rules file: its "common" field (accepts ~, {kit}, {home}) if the file exists (else a warning), else the mode's common-workers.md
+common_of() {
+  local cm; cm="$(rstr "$1" "$2" common)"
+  if [ -n "$cm" ]; then
+    cm="$(expand_path "$cm")"
+    [ -f "$cm" ] || { echo "orca-roles: the common file of role '$2' does not exist ($cm); using common-workers.md" >&2; cm=""; }
+  fi
+  [ -n "$cm" ] || cm="$(prompts_dir_of "$1")/common-workers.md"
+  printf '%s' "$cm"
+}
 # A worker's startup message.  worker_msg <config> <role>
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
 # Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
@@ -448,13 +468,12 @@ worker_msg() {
   local p n notes="" fg="" cm short=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  cm="$(rstr "$1" "$2" common)"
-  if [ -n "$cm" ]; then
-    cm="$(expand_path "$cm")"
-    [ -f "$cm" ] || { echo "orca-roles: the common file of role '$2' does not exist ($cm); using common-workers.md" >&2; cm=""; }
-  fi
-  [ -n "$cm" ] || cm="$(prompts_dir_of "$1")/common-workers.md"
+  cm="$(common_of "$1" "$2")"
   [ "$(flow_report_body "$1")" = short ] && short=" Flow override, for the body of your worker_done only (this replaces the \"complete, self-contained, never point to scratchDir\" rule of your common prompt): keep the body to at most ~8 lines with the outcome, the files changed, how you verified it and its result, and the open issues; write the full detail to a file in your scratchDir and name its absolute path in the body. Your ask and escalation messages stay full sentences."
+  if [ "$(rstr "$1" "$2" agent)" = opencode ]; then   # the role and the common rules are the agent's system prompt (opencode-prepare.sh)
+    printf '%s' "Your role ($(title_of "$1" "$2")) and its rules are in your system prompt (agent orca-$2); follow them to the letter.${p:+ Configuration parameters: $p.}$fg$short$notes"
+    return
+  fi
   printf '%s' "Read $cm and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$short$notes"
 }
 # A path with ~, {kit} or {home} expanded
@@ -463,7 +482,7 @@ expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "$
 clear_command() {
   local c; c="$(rstr "$1" "$2" clearCommand)"
   if [ -n "$c" ]; then echo "$c"; return; fi
-  case "$(rstr "$1" "$2" agent)" in claude|"") echo "/clear";; codex) echo "/new";; *) ;; esac
+  case "$(rstr "$1" "$2" agent)" in claude|"") echo "/clear";; codex|opencode) echo "/new";; *) ;; esac
 }
 # A role's MCP servers as a {"mcpServers": {...}} file (the format of Claude Code, Cursor and Gemini CLI).  mcp_file <config> <role>
 # The placeholders {worktree}, {project}, {evidenceDir}, {browserState}, {kit} and {home} are expanded in the servers' args, env and url

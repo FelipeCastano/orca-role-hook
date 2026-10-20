@@ -138,6 +138,18 @@
       "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-sonnet-5-5"
+    },
+    "dev-opencode": {
+      "title": "Dev (OpenCode)",
+      "description": "Dev's job (implements the step's code, writes no tests) run by an OpenCode model; give it Dev's tasks when the user asks for it",
+      "enabled": false,
+      "modes": ["programmer"],
+      "agent": "opencode",
+      "model": "",
+      "common": "{kit}/prompts/programmer/common-peon.md",
+      "prompt": { "programmer": "{kit}/prompts/programmer/dev.md" },
+      "mcp": [],
+      "opencode": { "steps": 120, "permissions": [] }
     }
   }
 }

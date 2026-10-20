@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -111,7 +111,9 @@ for m in $MODES; do
 done
 for r in $(jq -r '.roles | keys[]' "$KIT/config.default.json"); do
   for m in $(jq -r --arg r "$r" --arg all "$MODES" '.roles[$r].modes // ["programmer"] | if . == "all" then ($all | split("\n") | .[]) else .[] end' "$KIT/config.default.json"); do
-    [ -f "$KIT/prompts/$m/$r.md" ] || { echo "FAIL role $r without a prompt for mode $m"; FAIL=1; }
+    pf="$(jq -r --arg r "$r" --arg m "$m" '.roles[$r].prompt | objects | .[$m] // empty' "$KIT/config.default.json")"   # an explicit prompt path ({kit} = the kit)
+    [ -n "$pf" ] || pf="$KIT/prompts/$m/$r.md"
+    [ -f "${pf//\{kit\}/$KIT}" ] || { echo "FAIL role $r without a prompt for mode $m"; FAIL=1; }
   done
 done; echo "ok   prompts of the default roles"
 }
@@ -1888,7 +1890,7 @@ sec_research_defaults() {
 # academic-research in the default configuration: roles per phase and model, the programmer and pr-reviewer teams untouched, the researcher migration on upgrade
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
-check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style"
+check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode"
 check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
 check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
@@ -1905,7 +1907,7 @@ check "upgrade_config: researcher modes [programmer] move to the new default, ph
 check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-research","programmer"]' '"all"' '[]' '["programmer","academic-research"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-research","programmer"] "all" [] ["programmer","academic-research"] '
 check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-research"],false]:[["programmer","academic-research"],["experiment","writing"]]'
 check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-research"],["writing"]]'
-check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style","mine",false,"C"]'
+check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style,dev-opencode","mine",false,"C"]'
 check "upgrade_config: a user's own values on a new role stay" "$(awu '{"roles":{"writer":{"model":"mine","enabled":false}}}' | jq -c '.roles.writer | [.model, .enabled, .phases, .modes]')" '["mine",false,["writing"],["academic-research"]]'
 awu '{"roles":{"researcher":{"modes":["programmer"]}}}' > "$TMP/awd-up.json"
 check "upgrade_config: the migrated configuration passes check_config, and its programmer team is the old one" "$(check_config "$TMP/awd-up.json"):$(enabled_roles "$TMP/awd-up.json" | tr '\n' ' ')" ":researcher planner dev tester auditor e2e-tester deployer "
@@ -2820,6 +2822,115 @@ tc_run "$H" "$(tcr 'if has("flip") then 1 else .t[$dir] = true end')" a "[ -e '$
 check "custom trust: filter that turns non-object on the retry -> untouched (as the other writer left it), warning, no Marked" "$(jq -c . "$H/cust.json") $(grep -c '^Warning' "$TF/err") $(grep -c '^Marked' "$TF/out") $(cat "$TF/rc") $(find "$H" -name '*orca-roles*' | wc -l | tr -d ' ')" '{"keep":1,"flip":1} 1 0 0 0'
 }
 
+sec_opencode() {
+# agent: "opencode": opencode-prepare.sh writes the agent file, agent.sh runs `opencode mini --agent orca-<role>`; stub opencode only
+OC="$TMP/oc"; rm -rf "$OC"; mkdir -p "$OC/bin" "$OC/real/wt"; ln -sfn "$OC/real" "$OC/link"
+cat > "$OC/bin/opencode" <<'EOS'
+#!/bin/bash
+case "$1" in
+  --version) echo "opencode 9.9.9"; exit 0;;
+  models) echo "p/m"; echo "p/other"; exit 0;;
+esac
+{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; } > "$OC_OUT"
+EOS
+chmod +x "$OC/bin/opencode"
+git -C "$OC/real/wt" init -q; OCW="$OC/link/wt"; OCWP="$(cd "$OC/real/wt" && pwd -P)"; KITP="$(cd "$KIT" && pwd -P)"
+cat > "$OC/cfg.json" <<'J'
+{ "settings": { "flow": { "maxStepsPerWorker": 77 } }, "defaults": {}, "mcpServers": { "pw": { "command": "x" } },
+  "roles": {
+    "dev": { "title": "Dev", "agent": "opencode", "model": "p/m", "mcp": "all", "common": "{kit}/prompts/programmer/common-peon.md",
+             "extraArgs": ["--x", "y z"],
+             "opencode": { "steps": 5, "permissions": [ {"action": "shell", "resource": "rm *", "effect": "ask"}, {"action": "shell", "effect": "deny"}, {"action": "edit", "resource": "/x", "effect": "maybe"} ] } },
+    "tester": { "title": "Tester", "agent": "opencode", "mcp": ["pw"] },
+    "e2e-tester": { "title": "E2E", "agent": "opencode", "opencode": { "steps": 0 } },
+    "cx": { "title": "Codex", "agent": "codex" }, "cl": { "title": "Claude" } } }
+J
+ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
+FILE="$OCW/.opencode/agents/orca-dev.md"
+try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
+check "opencode: argv is mini --agent orca-dev --model p/m + extraArgs; PWD is the physical path" "$(cat "$OC/out")" "mini
+--agent
+orca-dev
+--model
+p/m
+--x
+y z
+PWD=$OCWP"
+check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,4p "$OC/out" | tr '\n' ' ')" "mini --agent orca-tester PWD=$OCWP "
+check "opencode: the agent file is written in the worktree" "$([ -f "$FILE" ] && echo yes)" "yes"
+FM="$(awk 'NR==1 && $0=="---"{f=1;next} f&&$0=="---"{exit} f' "$FILE")"
+EXPECT_FM="description: \"orca-roles Dev role\"
+mode: \"primary\"
+model: \"p/m\"
+steps: 5
+permissions:
+  - {\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
+  - {\"action\":\"question\",\"resource\":\"*\",\"effect\":\"deny\"}
+  - {\"action\":\"shell\",\"resource\":\"git push*\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/roles/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
+  - {\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}"
+check "opencode: frontmatter is exactly the expected text (allow first, the denies, then the role's valid item)" "$FM" "$EXPECT_FM"
+if python3 -c 'import yaml' 2>/dev/null; then
+  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 10"
+else echo "ok   opencode: PyYAML not installed, the frontmatter was checked as exact text only"; fi
+check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
+BODY="$(awk 'NR==1{next} f{print;next} $0=="---"{f=1}' "$FILE")"
+ANC="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$OC/cfg.json" dev)"
+check "opencode: body = anchor, blank, the role's common file, blank, the role's prompt" "$BODY" "$ANC
+
+$(cat "$KIT/prompts/programmer/common-peon.md")
+
+$(cat "$KIT/prompts/programmer/dev.md")"
+OCT="$OCW/.opencode/agents/orca-tester.md"
+check "opencode: without role common the body uses common-workers.md" "$(grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")" "$OCT"):$(grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" "$OCT" || true)" "1:0"
+# steps: role value, settings.flow default, invalid role value (left out with a warning), nothing
+check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(grep '^steps:' "$OCT")" "steps: 77"
+try ocrun opencode-prepare.sh e2e-tester; check "opencode: an invalid role steps is reported and left out" "$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(grep -c '^steps:' "$OCW/.opencode/agents/orca-e2e-tester.md" || true)" "0:1:0"
+jq 'del(.settings.flow)' "$OC/cfg.json" > "$OC/cfg-nf.json"; OCCFG="$OC/cfg-nf.json" ocrun opencode-prepare.sh tester >/dev/null
+check "opencode: no steps anywhere, no steps line" "$(grep -c '^steps:' "$OCT" || true)" "0"
+jq '.settings.flow.maxStepsPerWorker = "x"' "$OC/cfg.json" > "$OC/cfg-bf.json"; OCCFG="$OC/cfg-bf.json"; try ocrun opencode-prepare.sh tester
+check "opencode: an invalid flow default is reported and left out" "$RC:$(grep -c 'maxStepsPerWorker must be a positive integer' <<<"$OUT"):$(grep -c '^steps:' "$OCT" || true)" "0:1:0"
+OCCFG=""
+# the exclude pattern goes in once, in info/exclude; no .gitignore is created
+ocrun opencode-prepare.sh dev >/dev/null; ocrun opencode-prepare.sh dev >/dev/null
+check "opencode: the exclude pattern is added once and no .gitignore is touched" "$(grep -cxF '/.opencode/agents/orca-*.md' "$OC/real/wt/.git/info/exclude"):$(ls "$OC/real/wt/.gitignore" 2>/dev/null | wc -l | tr -d ' '):$(git -C "$OC/real/wt" status --short | wc -l | tr -d ' ')" "1:0:0"
+check "opencode: no temp file left in the agents folder" "$(ls -A "$OCW/.opencode/agents" | grep -vc '^orca-')" "0"
+# the MCP servers are not passed: a role with an mcp list gets one warning and no file
+try ocrun agent.sh tester; check "opencode: a role with an mcp list gets the MCP warning, no MCP file" "$RC:$(grep -c 'does not get the kit.s MCP servers' <<<"$OUT"):$(ls "$OC/real/wt/.git" | grep -c 'orca-roles-mcp' || true)" "0:1:0"
+try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning" "$(grep -c 'MCP servers' <<<"$OUT")" "0"
+check "opencode: provenance records the opencode version" "$(tail -1 "$OC/real/wt/.git/orca-roles.provenance.jsonl" | jq -r '[.agent, .cliVersion] | join(" ")')" "opencode opencode 9.9.9"
+# failures: outside a repo, and agent.sh stops when the preparation fails
+mkdir -p "$OC/norepo"; OCW="$OC/norepo"; try ocrun opencode-prepare.sh dev; check "opencode: outside a git repo prepare exits 1 with a message" "$RC:$(grep -c 'not inside a git repository' <<<"$OUT")" "1:1"
+rm -f "$OC/out"; try ocrun agent.sh dev; check "opencode: agent.sh exits 1 and never starts opencode when prepare fails" "$RC:$([ -e "$OC/out" ] && echo started):$(grep -c 'could not prepare' <<<"$OUT")" "1::1"
+OCW="$OC/link/wt"
+# messages: the opencode worker message points at the system prompt; the others are the usual "Read <common> and <prompt>" one
+WM="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" worker_msg "$OC/cfg.json" dev)"
+check "opencode: worker_msg names the system prompt and the agent, with the parameters" "$(printf '%s' "$WM" | sed 's/scratchDir=[^ ]*\. /scratchDir=X. /')" "Your role (Dev) and its rules are in your system prompt (agent orca-dev); follow them to the letter. Configuration parameters: scratchDir=X. Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report."
+for r in cx cl; do
+  WM="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" worker_msg "$OC/cfg.json" $r)"
+  check "opencode: worker_msg of $r keeps the Read-the-prompt form" "$([[ "$WM" == "Read $TMP/home/.orca-roles/prompts/programmer/common-workers.md and $TMP/home/.orca-roles/prompts/programmer/"*" and adopt that role from now on. Follow its instructions to the letter."* ]] && echo ok)" "ok"
+done
+check "opencode: clear_command is /new, a clearCommand wins, claude and codex unchanged" "$(clear_command "$OC/cfg.json" dev) $(jq '.roles.dev.clearCommand = "/reset"' "$OC/cfg.json" > "$OC/cfg-cc.json"; clear_command "$OC/cfg-cc.json" dev) $(clear_command "$OC/cfg.json" cl) $(clear_command "$OC/cfg.json" cx)" "/new /reset /clear /new"
+jq '.roles.dev.modelError = "bad model {model}"' "$OC/cfg.json" > "$OC/cfg-me.json"
+check "opencode: model_error_regex is the role's modelError (none built in)" "$(model_error_regex "$OC/cfg-me.json" dev p/m):$(model_error_regex "$OC/cfg.json" dev p/m)" "bad model p/m:"
+# models.sh: `opencode models` by default; the probe is membership in that list
+ocm() { (cd "$PROJ" && PATH="$OC/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$OC/cfg.json" "$KIT/bin/models.sh" "$@" 2>&1 | tr '\t\n' '|;'); }
+check "opencode: models.sh lists the role's model first, then opencode models, deduplicated" "$(ocm dev)" "p/m;p/other;"
+check "opencode: models.sh --check: in the list ok, not in it unavailable" "$(ocm dev --check --model p/other);$(ocm dev --check --model q/zzz)" "p/other|ok|-;;q/zzz|unavailable;"
+# new-role.sh accepts the agent and the opencode field; an unknown agent is refused
+printf '%s' '{"id":"oc-role","description":"x","agent":"opencode","model":"p/m","opencode":{"steps":9,"permissions":[]},"prompt":"# x\n## Report\n"}' > "$OC/role.json"
+try newrole "$OC/role.json"; check "from-json: accepts agent opencode and keeps its opencode object" "$RC $(jq -c '.roles["oc-role"] | [.agent, .opencode]' "$KIT/config.json")" '0 ["opencode",{"steps":9,"permissions":[]}]'
+printf '%s' '{"id":"oc-bad","description":"x","agent":"opencod","prompt":"# x\n## Report\n"}' > "$OC/role.json"
+try newrole "$OC/role.json"; check "from-json: an unknown agent is refused naming opencode" "$RC:$(grep -c 'claude, codex, opencode or custom' <<<"$OUT")" "1:1"
+# the shipped example is disabled
+check "config.default.json: dev-opencode is a disabled opencode example" "$(jq -c '.roles["dev-opencode"] | [.agent, .enabled, .opencode.steps]' "$ROOT/config.default.json")" '["opencode",false,120]'
+}
+
 sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
 pk_setup
@@ -2839,6 +2950,7 @@ msg_paths() {
 printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/pkstate.env"
 for r in $(jq -r '.roles | to_entries[] | select((.value.modes // ["programmer"]) | . == "all" or index("programmer")) | .key' "$PKC"); do
   [ "$r" = planner ] && continue
+  [ "$(rstr "$PKC" "$r" agent)" = opencode ] && continue   # its message points at the system prompt: section opencode
   M="$(cd "$TMP" && KIT="$PK" worker_msg "$PKC" "$r")"
   check "worker_msg $r: 2 prompt paths, all exist, all in programmer/" "$(msg_paths "$M")" "2:0:0"
   case "$M" in *"Read $PK/prompts/programmer/common-workers.md and $PK/prompts/programmer/$r.md "*) ;; *) echo "FAIL worker_msg $r: wrong prompt paths: $M"; FAIL=1;; esac

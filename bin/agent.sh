@@ -21,7 +21,7 @@ while IFS=$'\t' read -r k v; do [ -n "$k" ] && export "$k=$v"; done < <(jq -r --
 
 # The role's MCP servers, in a file in mcpServers format. With mcp="all" none is generated: the agent uses its own configuration.
 MCPFILE=""
-if [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
+if [ "$AGENT" != opencode ] && [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
   role_context "$CFG" "$ROLE" .          # placeholders {worktree}, {project}, {evidenceDir}, {browserState}...
   ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"
   # In the worktree's git dir, one per role, rewritten on every start (outside a repo, a temporary file)
@@ -107,6 +107,20 @@ case "$AGENT" in
     record_provenance codex || true
     exec "${RUN[@]+"${RUN[@]}"}" codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
     ;;
+  opencode)
+    # OpenCode 2.x: `opencode mini` takes --agent and --model (the main TUI takes neither). The role's system prompt is a project agent
+    # file that opencode-prepare.sh writes in the worktree. It takes its working directory from $PWD, so PWD is the physical path.
+    if [ "$(rcfg "$CFG" "$ROLE" mcp | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      echo "agent.sh: $ROLE (opencode) does not get the kit's MCP servers; configure them in OpenCode itself." >&2
+    fi
+    ORCA_ROLES_CONFIG="$CFG" "$KIT/bin/opencode-prepare.sh" "$ROLE" || { echo "agent.sh: could not prepare the OpenCode agent for $ROLE" >&2; exit 1; }
+    cd "$(pwd -P)"; PWD="$(pwd -P)"; export PWD
+    ARGS+=(mini --agent "orca-$ROLE")
+    [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
+    add_list extraArgs
+    record_provenance opencode || true
+    exec "${RUN[@]+"${RUN[@]}"}" opencode "${ARGS[@]}"
+    ;;
   custom)
     # The command runs in a login shell (your profile's PATH). Placeholders:
     #   {model} → model field;  {prompts} → the kit's prompts folder;  {prompt} → the role's prompt file
@@ -135,5 +149,5 @@ case "$AGENT" in
     record_provenance "" || true
     exec "${RUN[@]+"${RUN[@]}"}" bash -lc "$CMD"
     ;;
-  *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;;
+  *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex, opencode or custom)" >&2; exit 1;;
 esac

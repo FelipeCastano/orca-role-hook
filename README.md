@@ -490,7 +490,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `prompt` | The role's instructions file (by default `prompts/<mode>/<role>.md`). A path (programmer only) or `{ "<mode>": "<path>" }`. Accepts `~`. See [Modes](#modes). |
 | `modes` | `"all"` or a list of the modes the role belongs to (default `["programmer"]`). See [Modes](#modes). |
 | `phases` | academic-research only: the phases the role opens in, `["experiment"]`, `["writing"]` or both (missing = both). The other modes have no phases. See [academic-research mode](#academic-research-mode). |
-| `agent` | Which CLI is launched: `claude`, `codex` or `custom`. |
+| `agent` | Which CLI is launched: `claude`, `codex`, `opencode` or `custom`. |
 | `model` | Exact model passed to the agent. |
 | `modelError` | Only with `agent: "custom"`: an ERE (`grep -E`) the agent prints when its model does not exist; `{model}` stands for the escaped model id. Without it, a missing model is not detected for that role. |
 | `models` | `{ "list", "parse", "probe" }`, for `models.sh` (see [Models of a role](#models-of-a-role)): `list` is a command that prints the models, `parse` how to read it (`lines`, `json:<jq filter>` or `regex:<ERE with one group>`), `probe` a command that exits 0 only if the model works (`{model}` is replaced, quoted). Custom agents only (claude and codex roles have built-in listing and probes); in `defaults` or in a role. Unknown keys are rejected. |
@@ -506,7 +506,8 @@ Each role inherits from `defaults` whatever it does not define.
 | `addDirFlag` | Only with `agent: "custom"`: the agent's flag to give it access to a folder (e.g. `"--add-dir"`). If set, `<flag> <scratch folder>` and `<flag> <dir>` for each `extraDirs` entry are appended to the command, quoted. Without it, `extraDirs` does not apply to `custom`. |
 | `trust` | Only with `agent: "custom"`: how to mark the worktree as trusted so the agent does not stop at a trust dialog: `{"file": "<path>", "jq": "<filter>"}`. `file` accepts `~`, `{kit}` and `{home}`; the `jq` filter receives the worktree's real path as `$dir` and must return the whole (modified) object, exactly one JSON object: anything else (an array, `null`, nothing, several values) is rejected with a warning and the file is left untouched. Before opening the tabs the kit applies it once per distinct file and filter, with the same care as `~/.claude.json` (permissions and symlinks kept, concurrent changes not lost, nothing written if it is already applied or the file does not exist). |
 | `pluginDirs` | Claude Code plugins that role loads (`--plugin-dir`). Accepts `~` and `{kit}`. The planner brings `{kit}/plugin`, with its skill. `claude` only. |
-| `clearCommand` | Command that opens a new conversation in the agent, for context cleanup. By default `/clear` in `claude` and `/new` in `codex`; in `custom` it must be defined or the role is not cleaned. |
+| `clearCommand` | Command that opens a new conversation in the agent, for context cleanup. By default `/clear` in `claude` and `/new` in `codex` and `opencode`; in `custom` it must be defined or the role is not cleaned. |
+| `opencode` | Only with `agent: "opencode"`: `{"steps": <positive integer>, "permissions": [{"action": ..., "resource": ..., "effect": "allow"\|"ask"\|"deny"}, ...]}`. `steps` caps the agent's steps (default: `settings.flow.maxStepsPerWorker`, else no cap); `permissions` are appended after the kit's own rules. See [OpenCode roles](#opencode-roles). |
 | `common` | Workers only: path of the common rules file the worker reads instead of its mode's `common-workers.md`. Accepts `~`, `{kit}` and `{home}`. If the file does not exist, the worker gets `common-workers.md` and a warning goes to stderr. Unset = today's behaviour. See [Compact rules for small models](#compact-rules-for-small-models). |
 
 The order of the tabs is the order of the roles in the JSON.
@@ -524,6 +525,7 @@ The order of the tabs is the order of the roles in the JSON.
 - Without `--check` it only prints the candidates, one per line, the role's own model first. Nothing is run against a model and nothing is spent.
   - `claude`: Claude Code cannot list the models of your login, so these are its aliases (`sonnet`, `opus`, `haiku`, `fable`).
   - `codex`: the models `codex debug models` marks as listed.
+  - `opencode`: the output of `opencode models` (one `provider/model` per line); `--check` only tests that the model is in that list, so it costs nothing. A role's `models.list` / `models.probe` replace these.
   - `custom`: the output of the role's `models.list` command, read as `models.parse` says.
 - With `--check` it runs one minimal probe per candidate, in parallel (at most 6 probes at a time, each bounded to 90 seconds), and prints `<model>`, `ok` with the resolved id, `unavailable` (the model does not exist or you have no access) or `unknown` with the reason (not logged in, offline, timed out...). Only `ok` and `unavailable` are answers.
 - Cost of `--check`: a Claude probe for a model that does not exist costs nothing; for one that works, at most about 0.012 USD the first time (it answers "ok" with no tools). Codex probes use your Codex login. The probes use the role's `env`, write nothing outside a temporary folder except the agents' own logs (Codex keeps its logs even for ephemeral runs) and never change a setting. The list commands are bounded to 90 seconds as well.
@@ -531,8 +533,8 @@ The order of the tabs is the order of the roles in the JSON.
 For a `custom` role, describe how to list and test models in `models`:
 
 ```json
-"tester": { "agent": "custom", "command": "opencode --model {model}", "model": "m1",
-  "models": { "list": "opencode models", "parse": "lines", "probe": "opencode run --model {model} ok" } }
+"tester": { "agent": "custom", "command": "my-agent --model {model}", "model": "m1",
+  "models": { "list": "my-agent models", "parse": "lines", "probe": "my-agent ping --model {model}" } }
 ```
 
 `parse` is `lines` (default: each non-empty line), `json:<jq filter>` (for example `json:.data[].id`) or `regex:<ERE with one group>` (the group of each matching line). Without `list` the role's `model` is the only candidate; without `probe`, `--check` answers `unknown`.
@@ -551,10 +553,12 @@ The goal is to measure before changing anything. Two things are recorded, both i
 
 ```json
 "dev":    { "agent": "codex", "model": "<codex-model>" },
-"tester": { "agent": "custom", "command": "opencode --model {model}", "model": "<model>" }
+"tester": { "agent": "opencode", "model": "<provider/model>" }
 ```
 
 The roles receive their instructions the same way as with Claude (the kit types into their terminal when they are ready), so they work with any agent with a terminal interface that can read files and run `orca orchestration`.
+
+For OpenCode use `agent: "opencode"` (see [OpenCode roles](#opencode-roles)), not a `custom` command: OpenCode 2.x's main interface takes no `--model` or `--agent`.
 
 With `agent: "custom"`:
 
@@ -570,6 +574,23 @@ Codex (`agent: "codex"`):
 - Every codex role needs codex >= 0.48 (`--add-dir` is passed in every mode).
 - With `settings.trust` `"never"` this override is left out and Codex asks. Otherwise the trust dialog is answered with a single `-c 'projects={"<worktree>" = {trust_level = "trusted"}}'` override: nothing is written to `~/.codex/config.toml`.
 - Checked with Codex 0.162 without a session that uses a model: it rejects `--full-auto`, accepts the flags above, and with the `-c projects` override it opens without the trust dialog and writes nothing to its `config.toml`. Whether the `--add-dir` folders are writable in a real session was not measured.
+
+#### OpenCode roles
+
+`agent: "opencode"` runs `opencode mini --agent orca-<role> [--model <model>]` (the main `opencode` interface has neither flag; `mini` has no `--auto`). `extraArgs` are appended. Before it starts, `bin/opencode-prepare.sh` writes `<worktree>/.opencode/agents/orca-<role>.md`, rewritten on every start, and adds `/.opencode/agents/orca-*.md` once to the repo's `info/exclude` (never a tracked `.gitignore`). A worktree outside git is refused. OpenCode takes its directory from `$PWD`, so the kit starts it from the physical path.
+
+- **System prompt.** The Markdown body is the role anchor, the role's common rules (`common`, else the mode's `common-workers.md`) and the role's prompt. The startup message therefore only says that the role is in the system prompt; `/new` is the clear command.
+- **Frontmatter.** `description`, `mode: "primary"`, `model` (if the role has one), `steps` and `permissions`, all strings as JSON-quoted YAML.
+- **Permissions.** OpenCode applies the last matching rule, and a call that matches none waits for an answer nobody gives in an unattended tab. So the list starts with `allow * *`, then denies: `question` (workers use `orca orchestration ask`), `shell git push*`, and `edit` on the kit's own folders (`prompts`, `roles`, `bin`, `plugin`, `config.json`, `config.default.json`; the scratch folders under the kit stay writable). Then comes `roles.<id>.opencode.permissions`, as written; an item without string `action`/`resource` or with an `effect` other than `allow`, `ask` or `deny` is skipped with a warning.
+- **Steps.** `roles.<id>.opencode.steps`, else `settings.flow.maxStepsPerWorker` (applies only to OpenCode roles), else no cap. Not a positive integer: warning and left out.
+- **MCP.** The kit's `mcpServers` are not passed: configure MCP servers in OpenCode itself. A role with a non-empty `mcp` list gets one warning at start.
+- **Resume.** `--resume` does not apply yet (the role starts fresh).
+- **Not verified with a real run yet:** how the kickoff detects that `mini` is idle and types into it, which `agentIdentity` Orca reports (until then a live tab counts as alive), the `--session` id format, and the text OpenCode prints for a missing model (set `modelError` yourself for now). `dev-opencode` in `config.default.json` is a disabled example.
+
+```json
+"dev-opencode": { "agent": "opencode", "model": "provider/model", "common": "{kit}/prompts/programmer/common-peon.md",
+                  "opencode": { "steps": 120, "permissions": [{ "action": "shell", "resource": "rm *", "effect": "ask" }] } }
+```
 
 Antigravity (`agy`) has no trust flag and no sandbox that lets it write only in some folders. Example:
 
@@ -669,6 +690,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `composerAgentWindowSeconds` | How long that extra session is watched for after the worktree is created. |
 | `cleanWorkersAfterStep` | Whether the Planner proposes cleaning the workers' context when closing each step. With `false` it only does it when you ask. |
 | `flow.roundCap` | Optional positive integer (programmer mode; the other modes have no review rounds): how many rejected rounds a step may pile up before the Planner stops and checks with you. Unset: the 3 written in the Planner's prompt. When set, the Planner's startup message carries a sentence that replaces that 3. Anything that is not a positive integer is ignored with a warning. |
+| `flow.maxStepsPerWorker` | Optional positive integer: the default `steps` (cap on the agent's steps) of an OpenCode role; `roles.<id>.opencode.steps` wins. It only applies to roles with `agent: "opencode"`. Unset: no cap. Anything that is not a positive integer is ignored with a warning. |
 | `flow.workerReportBody` | `"full"` (default, also when unset) or `"short"`. With `"short"` the body of a worker's `worker_done` is at most about 8 lines (outcome, files changed, how it was verified and the result, open issues) and the full detail goes to a file in the worker's `scratchDir` whose absolute path the body names; the Planner is told so and reads that file when it needs it. Questions and escalations stay full sentences. The worker's startup message carries the override, so it applies to the role message `clean.sh --msg` prints too. Any other value is ignored with a warning. |
 | `trust` | Whether the kit marks the worktree as trusted for the agents: `"worktree"` (marks it in `~/.claude.json`, passes Codex its trust override, and accepts Claude Code's trust dialog itself) or `"never"` (the agents show the dialog and each tab waits for you; see [Trust of the folder](#trust-of-the-folder)). Unset: `"never"` in `pr-reviewer`, `"worktree"` in the other modes. Any other value warns and counts as `"never"`. |
 | `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-research`. See [Modes](#modes). |
