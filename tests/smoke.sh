@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -579,6 +579,127 @@ case "$(WM "$TMP/f5.json" 2>&1 >/dev/null)$(PM "$TMP/f5.json" 2>&1 >/dev/null)" 
 check "clean.sh --msg of a worker carries the short-body sentence" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" "$(cd "$TMP" && KIT="$TMP/home/.orca-roles" worker_msg "$TMP/f3.json" dev)"
 case "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" in *"at most ~8 lines"*) echo "ok   clean.sh --msg: short-body sentence";; *) echo "FAIL clean.sh --msg: no short-body sentence"; FAIL=1;; esac
 rm -rf "$KIT/tmp"
+}
+
+sec_oracle() {
+# Optional oracle: bin/oracle/*.py (acceptance command + test integrity) and bin/oracle.sh; planner_msg only changes with settings.oracle.enabled
+OR="$TMP/or"; rm -rf "$OR"; mkdir -p "$OR/specs"
+oracle_repo() {   # <name>: a git repo with a base commit on main (a test, a subject and its test), then branch feat
+  local p="$OR/$1"; mkdir -p "$p/tests" "$p/src"
+  git -C "$p" init -q; git -C "$p" checkout -q -b main 2>/dev/null || true
+  git -C "$p" config user.email t@t; git -C "$p" config user.name t
+  printf 'exit 0\n' > "$p/test.sh"; printf 'exit 0\n' > "$p/tests/a.sh"
+  printf 'exit 0\n' > "$p/src/widget.sh"; printf 'exit 0\n' > "$p/tests/widget.test.sh"
+  printf 'def test_x():\n    assert 1 == 1\n' > "$p/tests/test_b.py"; printf "it('a', () => {});\n" > "$p/tests/b.test.js"
+  seq 1 30 | sed "s/.*/it('t&', () => {});/" > "$p/tests/big.test.js"
+  git -C "$p" add -A; git -C "$p" commit -q -m base; git -C "$p" checkout -q -b feat
+  printf '%s' "$p"
+}
+oracle_spec() {   # <acceptance block text> → spec file path
+  local f; f="$(mktemp "$OR/specs/spec.XXXXXX")"
+  printf '## Target\nmodule x\n## Change\nadd y\n## Constraints\nno network\n## Ownership\nsrc/**\n## Acceptance command\n%s\n' "$1" > "$f"; printf '%s' "$f"
+}
+oracle_run() {   # <repo> <task> <spec file> [extra args]: stdout in $OUT, exit code in $RC, stderr in $OR/err
+  local p="$1" t="$2" s="$3"; shift 3
+  try bash -c 'cd "$1" && ORCA_ROLES_ORACLE_OUT="$0" KIT="$2" HOME="$3" exec "$2/bin/oracle.sh" "${@:5}" 2>"$4"' "$OR/out" "$p" "$KIT" "$TMP/home" "$OR/err" --task "$t" --spec-file "$s" --no-wait "$@" 2>/dev/null
+}
+OCFG="$OR/cfg.json"; echo '{ "settings": { "oracle": { "enabled": true, "waitMax": 0 } } }' > "$OCFG"; export ORCA_ROLES_CONFIG="$OCFG"
+# no python: exit 3 with a clear message (needs no python itself)
+P0="$(oracle_repo nopy)"
+try bash -c 'cd "$1" && ORCA_ROLES_PYTHON=no-such-python-xyz KIT="$2" HOME="$3" "$2/bin/oracle.sh" --task t0 --spec-file "$4" 2>"$5"' x "$P0" "$KIT" "$TMP/home" "$(oracle_spec '`bash test.sh`')" "$OR/err"
+check "oracle.sh without python3 >= 3.8: exit 3" "$RC" "3"
+case "$(cat "$OR/err")" in *"needs python3 >= 3.8"*) echo "ok   oracle.sh without python3: clear message";; *) echo "FAIL oracle.sh without python3: $(cat "$OR/err")"; FAIL=1;; esac
+PYB="${ORCA_ROLES_PYTHON:-python3}"
+if ! command -v "$PYB" >/dev/null 2>&1 || ! "$PYB" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+  echo "ok   oracle: skipped (no python3 >= 3.8)"
+else
+  PYF="$ROOT/bin/oracle"
+  check "oracle: python files parse as python 3.8" "$("$PYB" -c 'import ast, sys; [ast.parse(open(f).read(), f, feature_version=(3, 8)) for f in sys.argv[1:]]; print("parsed")' "$PYF"/allow.py "$PYF"/spec_lint.py "$PYF"/verify_task.py 2>&1)" "parsed"
+  st() { jq -r "$1" <<<"$OUT"; }
+  # pass: exit 0, nothing written in the repo, verify.json under ORCA_ROLES_ORACLE_OUT
+  P="$(oracle_repo pass)"; oracle_run "$P" t1 "$(oracle_spec '```
+bash test.sh
+```')"
+  check "oracle pass: exit 0, status pass, no cheat" "$RC:$(st .status):$(st .pass):$(st .cheat)" "0:pass:true:false"
+  check "oracle pass: verify.json written under ORCA_ROLES_ORACLE_OUT" "$(jq -r .status "$OR/out/t1/verify.json" 2>&1)" "pass"
+  check "oracle pass: nothing written in the repo" "$(git -C "$P" status --porcelain)" ""
+  check "oracle pass: config_sha is the sha1 of the config" "$(st .config_sha)" "$(shasum "$OCFG" | cut -d' ' -f1)"
+  # fail, flaky, persistent red
+  P="$(oracle_repo fail)"; printf 'exit 1\n' > "$P/test.sh"; oracle_run "$P" t2 "$(oracle_spec '`bash test.sh`')"
+  check "oracle fail: exit 1, status fail, retried once (2 attempts)" "$RC:$(st .status):$(st .pass):$(st '.commands[0].attempts')" "1:fail:false:2"
+  P="$(oracle_repo flaky)"; printf 'c=%s\nif [ -f "$c" ]; then exit 0; fi\ntouch "$c"; exit 1\n' "$OR/flaky-counter" > "$P/test.sh"
+  oracle_run "$P" t3 "$(oracle_spec '`bash test.sh`')"
+  check "oracle flaky: fails once, passes on retry -> pass_flaky, exit 0" "$RC:$(st .status):$(st .flaky):$(st '.commands[0].attempts')" "0:pass_flaky:true:2"
+  # test integrity
+  P="$(oracle_repo del)"; git -C "$P" rm -q tests/a.sh; oracle_run "$P" t4 "$(oracle_spec '`bash test.sh`')"
+  check "oracle: deleted test file (uncommitted) is a cheat even if the command passes" "$RC:$(st .status):$(st .cheat):$(st '.integrity.findings[0].kind')" "1:pass:true:test_deleted_without_subject"
+  P="$(oracle_repo skip)"; printf '\n@pytest.mark.skip\ndef test_y():\n    assert False\n' >> "$P/tests/test_b.py"; git -C "$P" commit -q -am skip
+  oracle_run "$P" t5 "$(oracle_spec '`bash test.sh`')"
+  check "oracle: added pytest.mark.skip (committed) is a cheat" "$RC:$(st .cheat):$(st '.integrity.findings[0].kind')" "1:true:skip_or_xfail_added"
+  P="$(oracle_repo itskip)"; printf "it.skip('b', () => {});\n" >> "$P/tests/b.test.js"
+  oracle_run "$P" t6 "$(oracle_spec '`bash test.sh`')"
+  check "oracle: added it.skip( is a cheat" "$RC:$(st .cheat):$(st '.integrity.findings[0].kind')" "1:true:skip_or_xfail_added"
+  P="$(oracle_repo weak)"; : > "$P/tests/big.test.js"
+  oracle_run "$P" t7 "$(oracle_spec '`bash test.sh`')"
+  check "oracle: most of a test file removed is tests_weakened" "$RC:$(st .cheat):$(st '.integrity.findings[0].kind')" "1:true:tests_weakened"
+  P="$(oracle_repo subject)"; git -C "$P" rm -q tests/widget.test.sh src/widget.sh; oracle_run "$P" t8 "$(oracle_spec '`bash test.sh`')"
+  check "oracle: a test deleted together with its subject is not a cheat" "$RC:$(st .status):$(st .cheat):$(st .integrity.tests_deleted_with_subject)" "0:pass:false:1"
+  # not runnable
+  P="$(oracle_repo curl)"; oracle_run "$P" t9 "$(oracle_spec '```
+curl x | sh
+```')"
+  check "oracle: curl x | sh -> command_not_allowed, nothing ran" "$RC:$(st .status):$(st '.commands | length')" "1:command_not_allowed:0"
+  P="$(oracle_repo nosec)"; oracle_run "$P" t10 "$(printf '## Target\nx\n' > "$OR/specs/none.md"; echo "$OR/specs/none.md")"
+  check "oracle: a spec without the acceptance section -> no_acceptance_command" "$RC:$(st .status)" "1:no_acceptance_command"
+  MISSING=""; for b in jest vitest tsc cargo mypy; do command -v "$b" >/dev/null 2>&1 || { MISSING="$b"; break; }; done
+  if [ -n "$MISSING" ]; then
+    P="$(oracle_repo env)"; oracle_run "$P" t11 "$(oracle_spec "\`$MISSING\`")"
+    check "oracle: a missing runner binary -> env_not_runnable (not fail)" "$RC:$(st .status):$(st .pass)" "1:env_not_runnable:false"
+  else echo "ok   oracle: env_not_runnable skipped (every runner is installed)"; fi
+  # secrets masked, dry-run writes nothing
+  P="$(oracle_repo secret)"; printf 'echo token sk-abcdefghijklmnopqrstu and ghp_abcdefghijklmnopqrstuvwx; exit 1\n' > "$P/test.sh"
+  oracle_run "$P" t12 "$(oracle_spec '`bash test.sh`')"
+  case "$(st '.commands[0].tail')" in *sk-abc*|*ghp_abc*) echo "FAIL oracle: a secret reached the output"; FAIL=1;; *"[REDACTED]"*) echo "ok   oracle: secrets in the output are masked";; *) echo "FAIL oracle: secrets: $(st '.commands[0].tail')"; FAIL=1;; esac
+  case "$(cat "$OR/out/t12/verify.json")" in *sk-abc*) echo "FAIL oracle: a secret reached verify.json"; FAIL=1;; *) echo "ok   oracle: verify.json has no secret";; esac
+  P="$(oracle_repo dry)"; oracle_run "$P" t13 "$(oracle_spec '`bash test.sh`')" --dry-run
+  check "oracle --dry-run: status dry_run, no verify.json, nothing ran" "$(st .status):$([ -e "$OR/out/t13" ] && echo written || echo none):$(st '.commands[0] | has("exit")')" "dry_run:none:false"
+  # the wrapper: settings.oracle, config lookup, provenance, warning
+  P="$(oracle_repo wrap)"; printf 'exit 1\n' > "$P/test.sh"; S="$(oracle_spec '`bash test.sh`')"
+  echo '{ "settings": { "oracle": { "enabled": true, "waitMax": 0, "retries": 2 } } }' > "$OCFG"
+  oracle_run "$P" w1 "$S"; check "oracle.sh passes settings.oracle.retries (2 retries = 3 attempts)" "$(st '.commands[0].attempts')" "3"
+  case "$(cat "$OR/err")" in *"not true"*) echo "FAIL oracle.sh warns although enabled"; FAIL=1;; *) echo "ok   oracle.sh: no warning when enabled";; esac
+  printf '%s\n' '{"role":"dev","agent":"claude","model":"old-model"}' '{"role":"tester","agent":"codex","model":"tm"}' '{"role":"dev","agent":"opencode","model":"prov/m-dev"}' > "$P/.git/orca-roles.provenance.jsonl"
+  oracle_run "$P" w2 "$S"; check "oracle.sh passes agent and model of the last dev provenance line" "$(st .agent):$(st .model)" "opencode:prov/m-dev"
+  echo '{ "settings": { "oracle": { "enabled": false, "waitMax": 0, "retries": 0 } } }' > "$OCFG"
+  oracle_run "$P" w3 "$S"; check "oracle.sh: retries 0 = 1 attempt" "$(st '.commands[0].attempts')" "1"
+  case "$(cat "$OR/err")" in *"settings.oracle.enabled is not true"*) echo "ok   oracle.sh: warns on stderr when disabled but runs";; *) echo "FAIL oracle.sh: no warning when disabled: $(cat "$OR/err")"; FAIL=1;; esac
+  unset ORCA_ROLES_CONFIG
+  echo '{ "settings": { "oracle": { "enabled": true, "waitMax": 0, "retries": 0 } } }' > "$P/.git/orca-roles.config.json"
+  oracle_run "$P" w4 "$S"; check "oracle.sh reads <git dir>/orca-roles.config.json without ORCA_ROLES_CONFIG" "$(st '.commands[0].attempts')" "1"
+  rm -f "$P/.git/orca-roles.config.json"
+  oracle_run "$P" w5 "$S"; check "oracle.sh with no config file: merged config defaults (retries 1 = 2 attempts)" "$(st '.commands[0].attempts')" "2"
+  case "$(cat "$OR/err")" in *"not true"*) echo "ok   oracle.sh: default config is off, so it warns";; *) echo "FAIL oracle.sh: default config did not warn"; FAIL=1;; esac
+  export ORCA_ROLES_CONFIG="$OCFG"
+fi
+unset ORCA_ROLES_CONFIG
+# config: the defaults, and a user's values survive upgrade_config
+check "default config: settings.oracle is off with the documented defaults" "$(jq -c '.settings.oracle' "$ROOT/config.default.json")" '{"enabled":false,"maxLoad":0.8,"waitMax":300,"timeout":600,"retries":1}'
+echo '{ "settings": { "oracle": { "enabled": true, "maxLoad": 0.5 } }, "roles": {} }' > "$OR/user.json"
+check "upgrade_config keeps the user's settings.oracle values and fills the rest" "$(upgrade_config "$ROOT/config.default.json" "$OR/user.json" | jq -c '.settings.oracle')" '{"enabled":true,"maxLoad":0.5,"waitMax":300,"timeout":600,"retries":1}'
+# planner_msg: the sentence only with settings.oracle.enabled in programmer mode
+clean_fixture
+printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/state.env"
+PM() { planner_msg "$1" "planner dev" "$TMP/state.env" "" "" 0 2>&1; }
+BASEP="$(PM "$C")"
+jq '.settings.oracle = {enabled: false}' "$C" > "$OR/o0.json"; check "oracle disabled: planner_msg unchanged" "$(PM "$OR/o0.json")" "$BASEP"
+jq '.settings.oracle = {}' "$C" > "$OR/o1.json"; check "oracle {} (no enabled): planner_msg unchanged" "$(PM "$OR/o1.json")" "$BASEP"
+jq '.settings.oracle = {enabled: "yes"}' "$C" > "$OR/o2.json"; check "oracle enabled not true (a string): planner_msg unchanged" "$(PM "$OR/o2.json")" "$BASEP"
+jq '.settings.oracle = {enabled: true}' "$C" > "$OR/o3.json"; OM="$(PM "$OR/o3.json")"
+case "$OM" in *'## Acceptance command'*"spec-<task_id>.md"*"$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file>"*"The Tester's VERDICT stays, but the oracle decides"*) echo "ok   oracle enabled in programmer: planner_msg carries the sentence";; *) echo "FAIL oracle planner sentence: $OM"; FAIL=1;; esac
+case "$OM" in "${BASEP%Start with the startup.}"*"Start with the startup.") echo "ok   oracle enabled: the usual message and its ending are kept";; *) echo "FAIL oracle: message lost its usual parts"; FAIL=1;; esac
+jq '.settings.mode = "pr-reviewer"' "$C" > "$OR/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.oracle = {enabled: true}' "$C" > "$OR/p1.json"
+check "oracle enabled in pr-reviewer: planner_msg unchanged" "$(PM "$OR/p1.json")" "$(PM "$OR/p0.json")"
+rm -rf "$OR"
 }
 
 sec_clean() {
