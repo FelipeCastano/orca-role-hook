@@ -2929,12 +2929,12 @@ check "model-check: two roles, both lines" "$(sort "$MF/gd/orca-roles.models" | 
 check "model-check: two roles, both escalations" "$(escs | cut -d'|' -f2 | sort | tr '\n' ' ')" "Dev model unavailable Tester model unavailable "
 check "model-check: no leftover partial files" "$([ -e "$MF/gd/orca-roles.models.d" ] && echo 1 || echo 0)" "0"
 MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"} | .roles.auditor = {"title": "Auditor", "model": "claude-opus-5-5"}')"
-echo 1 > "$MF/waitdelay"; t0=$SECONDS
+echo 4 > "$MF/waitdelay"; t0=$SECONDS
 mf "$MF3" bad "dev tester auditor"
-check "model-check: the checks of three roles run in parallel" "$(( SECONDS - t0 < 3 ))" "1"
-echo 2 > "$MF/waitdelay"; t0=$SECONDS
+check "model-check: the checks of three roles run in parallel" "$(( SECONDS - t0 < 9 ))" "1"
+echo 4 > "$MF/waitdelay"; t0=$SECONDS
 mf "$MF3" clean "dev tester auditor"
-check "model-check: three roles are checked in parallel" "$(( SECONDS - t0 < 5 ))" "1"
+check "model-check: three roles are checked in parallel" "$(( SECONDS - t0 < 9 ))" "1"
 echo 0 > "$MF/waitdelay"
 # kept lines, config untouched, bounded waits
 PRE=$'AUDITOR=claude-x\nDEV=FAILED:old\n'
@@ -3148,7 +3148,8 @@ ORCA_ROLES_PROBE_TIMEOUT=2 mt hl; check "models: a hung models.list ends with a 
 rm -rf "$MM/conc" "$MM/conc.log"; mt conc --check
 check "models: 10 probes all answered" "$(tabs | tr ';' '\n' | grep -c '|ok|-')" "10"
 check "models: never more than 6 probes run at once, and they did overlap" "$(sort -n "$MM/conc.log" | tail -1):$(wc -l < "$MM/conc.log" | tr -d ' ')" "6:10"
-ORCA_ROLES_PROBE_TIMEOUT=7357 mt fast --check; sleep 0.3
+ORCA_ROLES_PROBE_TIMEOUT=7357 mt fast --check
+for _ in $(seq 25); do pgrep -f 'sleep 7357' >/dev/null || break; sleep 0.2; done
 check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f 'sleep 7357' | wc -l | tr -d ' ')" "40:0"
 mt lines; check "models: custom lines parser trims, skips empty lines and deduplicates" "$(tabs)" "alpha;beta"
 mt js; check "models: custom json parser" "$(tabs)" "j1;j2"
