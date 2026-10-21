@@ -345,6 +345,7 @@ kickoff_of() {  # kickoff_of <role>: prints the pid of a live kickoff that will 
   done
   return 1
 }
+oc_forget() { [ "$(rstr "$CFG" "$1" agent)" = opencode ] && oc_session_delete "$1" "$GITDIR"; return 0; }   # an OpenCode role replaced without memory: its saved session goes
 NEW=""; REUSED=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
@@ -358,14 +359,19 @@ for id in $ROLES; do
   fi
   if [ "$st" = 3 ]; then
     RESUMED="$RESUMED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one."
+    oc_forget "$id"
     orca terminal close --terminal "${!v}" --json >/dev/null 2>&1 || orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
   elif [ "$st" = 2 ]; then
     RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
+    oc_forget "$id"
     orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
   elif [ -n "${!v:-}" ]; then
     p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p")"
     if [ -n "$rh" ]; then
-      case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_handle "$rh")";; esac
+      case "$(rstr "$CFG" "$id" agent)" in
+        claude|"") sid="$(session_of_handle "$rh")";;
+        opencode) ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] && sid="$(head -1 "$ocf")";;   # the id agent.sh saved: --session continues it
+      esac
       orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || true
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
@@ -374,6 +380,7 @@ for id in $ROLES; do
       fi
     else
       RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
+      oc_forget "$id"
     fi
   fi
   h=""

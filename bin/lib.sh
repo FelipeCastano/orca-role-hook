@@ -26,6 +26,73 @@ orca_shim
 # Kills a process and all its descendants (children first).  kill_tree <pid>
 kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
 
+# OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id in the worktree's git dir; the kit
+# deletes that session when the role is closed or replaced (a closed `mini` tab does not stop the turn: it runs in OpenCode's service).
+# File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
+oc_session_file() {
+  local gd="${2:-}"
+  [ -n "$gd" ] || gd="$(git rev-parse --git-dir 2>/dev/null)" || return 1
+  gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
+  printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
+}
+# Runs `opencode <args>` in the current worktree (OpenCode scopes sessions to the directory), stdin closed, output in <file>, cut after
+# <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
+oc_bounded() {
+  local to="$1" out="$2" pid sl wt stop; shift 2
+  wt="$(git rev-parse --show-toplevel 2>/dev/null)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  stop="$out.stop"; rm -f "$stop" "$out.to"
+  ( cd "$wt" && exec opencode "$@" ) > "$out" 2>&1 < /dev/null & pid=$!
+  ( n=0; while [ ! -e "$stop" ] && [ "$n" -lt $((to * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$stop" ] || { : > "$out.to"; kill_tree "$pid"; } ) > /dev/null 2>&1 & sl=$!
+  OC_RC=0; wait "$pid" 2>/dev/null || OC_RC=$?
+  : > "$stop"; wait "$sl" 2>/dev/null
+  [ -f "$out.to" ] && OC_RC=124
+  rm -f "$stop" "$out.to"
+  return 0
+}
+# Best-effort delete of one OpenCode session of this worktree (it interrupts a running turn).  oc_delete_id <id>
+# Never fails; prints one line when it could not. ORCA_ROLES_OC_DELETE_TIMEOUT: seconds before it is cut (default 20).
+oc_delete_id() {
+  local tmp to="${ORCA_ROLES_OC_DELETE_TIMEOUT:-20}"
+  case "$to" in ''|*[!0-9]*|0*) to=20;; esac
+  [ -n "$1" ] || return 0
+  command -v opencode >/dev/null 2>&1 || { echo "Could not delete OpenCode session $1: opencode is not in the PATH."; return 0; }
+  tmp="$(mktemp)" || return 0
+  oc_bounded "$to" "$tmp" session delete "$1"
+  if [ "$OC_RC" = 124 ]; then echo "Could not delete OpenCode session $1: timed out after $to s."
+  elif [ "$OC_RC" != 0 ]; then echo "Could not delete OpenCode session $1: opencode exited with $OC_RC."; fi
+  rm -f "$tmp"; return 0
+}
+# After /new in an OpenCode tab: saves the newest session of this worktree created since <ms epoch> as the role's session and deletes the
+# old one; with none found it says so and deletes the old one anyway.  oc_retrack <role> <since ms> [<git dir>]
+oc_retrack() {
+  local f old new tmp wt
+  f="$(oc_session_file "$1" "${3:-}")" || return 0
+  [ -f "$f" ] || return 0
+  old="$(head -1 "$f" 2>/dev/null)"; new=""
+  wt="$(git rev-parse --show-toplevel 2>/dev/null)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  if command -v opencode >/dev/null 2>&1 && tmp="$(mktemp)"; then
+    oc_bounded 20 "$tmp" session list --format json
+    [ "$OC_RC" != 0 ] || new="$(jq -r --arg d "$wt" --argjson s "$2" '[.[]? | select(.directory == $d and (.created // 0) >= $s)] | sort_by(.created) | reverse | .[0].id // empty' "$tmp" 2>/dev/null)"
+    rm -f "$tmp"
+  fi
+  if [ -z "$new" ]; then
+    echo "Could not track the new OpenCode session of $1 after /new; its old session is deleted and the role has no tracked session."
+    oc_session_delete "$1" "${3:-}"; return 0
+  fi
+  [ "$new" != "$old" ] || return 0
+  printf '%s\n' "$new" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+  oc_delete_id "$old"; return 0
+}
+# Deletes the session saved for a role and forgets the file.  oc_session_delete <role> [<git dir>]
+oc_session_delete() {
+  local f id
+  f="$(oc_session_file "$1" "${2:-}")" || return 0
+  [ -f "$f" ] || return 0
+  id="$(head -1 "$f" 2>/dev/null)"
+  oc_delete_id "$id"
+  rm -f "$f"; return 0
+}
+
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
 merged_config() {  # $1 = project/worktree folder

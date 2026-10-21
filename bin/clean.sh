@@ -47,11 +47,18 @@ for id in "${TARGETS[@]}"; do
   orca terminal show --terminal "$h" --json >/dev/null 2>&1 || { echo "$t: its tab ($h) does not respond."; RC=1; continue; }
   cmd="$(clear_command "$CFG" "$id")"
   [ -n "$cmd" ] || { echo "$t: its agent has no cleanup command; define 'clearCommand' in its role in config.json."; RC=1; continue; }
+  ocf=""; [ "$(rstr "$CFG" "$id" agent)" = opencode ] && { ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] || ocf=""; }
+  since=$(( $(date +%s) * 1000 ))   # OpenCode: /new makes the tab switch to a session created after this moment
   orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 1
   orca terminal send --terminal "$h" --text "$cmd" --enter --json >/dev/null || { echo "$t: could not send $cmd."; RC=1; continue; }
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
     echo "$t: context cleaned ($cmd) and role resent."
+    # OpenCode: /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
+    if [ -n "$ocf" ]; then
+      orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      oc_retrack "$id" "$since" "$GITDIR"
+    fi
   else
     echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($(kit_env)$KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
   fi

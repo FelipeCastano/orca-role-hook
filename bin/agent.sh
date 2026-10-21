@@ -12,7 +12,7 @@ AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
 NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester and the Auditor run lowered
 RUN=(); if [ -n "$NICE" ] && [ "$NICE" != 0 ] && command -v nice >/dev/null; then RUN=(nice -n "$NICE"); fi
-[ -n "$RESUME" ] && [ "$AGENT" != claude ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
+[ -n "$RESUME" ] && [ "$AGENT" != claude ] && [ "$AGENT" != opencode ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
 PERM="$(rstr "$CFG" "$ROLE" permissionMode)"
 PROMPT="$(prompt_of "$CFG" "$ROLE")"
 
@@ -117,7 +117,20 @@ case "$AGENT" in
     cd "$(pwd -P)"; PWD="$(pwd -P)"; export PWD
     ARGS+=(mini --agent "orca-$ROLE")
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
-    add_list extraArgs
+    N0=${#ARGS[@]}; add_list extraArgs
+    # Own session id, saved in the git dir, so close-role.sh/launch.sh/clean.sh can delete or continue the role's session. A session flag in
+    # extraArgs means the user owns the sessions: nothing is added or saved. --resume <id> (from launch.sh) continues that session.
+    OWN=0; i=$N0
+    while [ "$i" -lt "${#ARGS[@]}" ]; do case "${ARGS[$i]}" in --session|--session=*|-s|--continue|-c|--fork|--fork=*) OWN=1;; esac; i=$((i + 1)); done
+    if [ "$OWN" = 1 ]; then
+      [ -z "$RESUME" ] || echo "agent.sh: --resume ignored; $ROLE (opencode) has a session flag in extraArgs and keeps its own sessions." >&2
+    else
+      OCID="$RESUME"; [ -n "$OCID" ] || OCID="ses_orca_$(printf '%s' "$ROLE" | tr -c 'A-Za-z0-9_-' _)_$(date +%s)$$$RANDOM"
+      if OCF="$(oc_session_file "$ROLE")"; then
+        printf '%s\n' "$OCID" > "$OCF.tmp.$$" && mv "$OCF.tmp.$$" "$OCF" || echo "agent.sh: could not save the OpenCode session id of $ROLE" >&2
+      fi
+      ARGS+=(--session "$OCID")
+    fi
     record_provenance opencode || true
     exec "${RUN[@]+"${RUN[@]}"}" opencode "${ARGS[@]}"
     ;;

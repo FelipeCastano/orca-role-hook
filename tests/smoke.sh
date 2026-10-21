@@ -3074,6 +3074,12 @@ case "$1" in
   --version) echo "opencode 9.9.9"; exit 0;;
   models) echo "p/m"; echo "p/other"; exit 0;;
 esac
+case "$1 $2" in   # OpenCode sessions: list prints the JSON in $OC_LIST; delete logs the id (and the directory it ran in) and can fail or hang
+  "session list") cat "${OC_LIST:-/dev/null}" 2>/dev/null || echo '[]'; exit 0;;
+  "session delete") echo "delete $3 PWD=$PWD" >> "$OC_DELLOG"
+    case "${OC_DELMODE:-}" in fail) exit 3;; hang) echo $$ > "$OC_DELLOG.pid"; exec sleep 30;; esac
+    exit 0;;
+esac
 { for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; } > "$OC_OUT"
 EOS
 chmod +x "$OC/bin/opencode"
@@ -3088,18 +3094,26 @@ cat > "$OC/cfg.json" <<'J'
     "e2e-tester": { "title": "E2E", "agent": "opencode", "opencode": { "steps": 0 } },
     "cx": { "title": "Codex", "agent": "codex" }, "cl": { "title": "Claude" } } }
 J
-ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
+cat > "$OC/bin/orca" <<'EOS'
+#!/bin/sh
+echo "orca $*" >> "${OC_DELLOG:-/dev/null}"
+exit 0
+EOS
+chmod +x "$OC/bin/orca"
+ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
 FILE="$OCW/.opencode/agents/orca-dev.md"
 try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
-check "opencode: argv is mini --agent orca-dev --model p/m + extraArgs; PWD is the physical path" "$(cat "$OC/out")" "mini
+check "opencode: argv is mini --agent orca-dev --model p/m + extraArgs + --session <own id>; PWD is the physical path" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "mini
 --agent
 orca-dev
 --model
 p/m
 --x
 y z
+--session
+ses_orca_dev_N
 PWD=$OCWP"
-check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,4p "$OC/out" | tr '\n' ' ')" "mini --agent orca-tester PWD=$OCWP "
+check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,4p "$OC/out" | tr '\n' ' ')" "mini --agent orca-tester --session "
 check "opencode: the agent file is written in the worktree" "$([ -f "$FILE" ] && echo yes)" "yes"
 FM="$(awk 'NR==1 && $0=="---"{f=1;next} f&&$0=="---"{exit} f' "$FILE")"
 EXPECT_FM="description: \"orca-roles Dev role\"
@@ -3172,6 +3186,89 @@ printf '%s' '{"id":"oc-bad","description":"x","agent":"opencod","prompt":"# x\n#
 try newrole "$OC/role.json"; check "from-json: an unknown agent is refused naming opencode" "$RC:$(grep -c 'claude, codex, opencode or custom' <<<"$OUT")" "1:1"
 # the shipped example is disabled
 check "config.default.json: dev-opencode is a disabled opencode example" "$(jq -c '.roles["dev-opencode"] | [.agent, .enabled, .opencode.steps]' "$ROOT/config.default.json")" '["opencode",false,120]'
+
+# sessions: the role gets its own id, saved in the git dir; --resume continues it; a session flag in extraArgs leaves the sessions to the user
+OCG="$OC/real/wt/.git"; SF="$OCG/orca-roles-opencode-dev.session"
+rm -f "$SF"; ocrun agent.sh dev >/dev/null
+check "opencode session: argv has --session with the saved id; it is ses_orca_dev_<digits>" "$(grep -x -A1 -e '--session' "$OC/out" | tail -1 | cmp -s - "$SF" && echo same):$(grep -Ec '^ses_orca_dev_[0-9]{10,}$' "$SF"):$(wc -l < "$SF" | tr -d ' ')" "same:1:1"
+check "opencode session: no temp file left in the git dir" "$(find "$OCG" -maxdepth 1 -name 'orca-roles-opencode-*.tmp*' | wc -l | tr -d ' ')" "0"
+try ocrun agent.sh dev --resume ses_given_42; check "opencode session: --resume X passes --session X, saves X, prints no note" "$RC:$(grep -x -A1 -e '--session' "$OC/out" | tail -1):$(cat "$SF"):$(grep -c 'only applies' <<<"$OUT")" "0:ses_given_42:ses_given_42:0"
+for fl in --continue -c -s --fork "--session=ses_mine"; do
+  jq --arg f "$fl" '.roles.dev.extraArgs = [$f]' "$OC/cfg.json" > "$OC/cfg-own.json"; rm -f "$SF"; OCCFG="$OC/cfg-own.json" ocrun agent.sh dev >/dev/null
+  check "opencode session: extraArgs $fl: no --session added, no file" "$(grep -c -x -e '--session' "$OC/out" || true):$([ -e "$SF" ] && echo file)" "0:"
+done
+jq '.roles.dev.extraArgs = ["--continue"]' "$OC/cfg.json" > "$OC/cfg-own.json"; OCCFG="$OC/cfg-own.json"; try ocrun agent.sh dev --resume ses_x; OCCFG=""
+check "opencode session: --resume with a session flag in extraArgs is ignored with a note, nothing saved" "$RC:$(grep -c -- 'keeps its own sessions' <<<"$OUT"):$([ -e "$SF" ] && echo file)" "0:1:"
+jq '.roles.cu = {"title":"Cu","agent":"custom","command":"true"}' "$OC/cfg.json" > "$OC/cfg-cu.json"; OCCFG="$OC/cfg-cu.json"
+try ocrun agent.sh cu --resume x; check "agent.sh: --resume still prints the 'only applies to claude' note for custom" "$(grep -c 'only applies to claude; cu (custom) starts fresh' <<<"$OUT")" "1"
+try ocrun agent.sh cx --resume x; check "agent.sh: --resume still prints the 'only applies to claude' note for codex" "$(grep -c 'only applies to claude; cx (codex) starts fresh' <<<"$OUT")" "1"
+OCCFG=""
+# close-role.sh: deletes the saved session BEFORE closing the tab, then forgets the file; a claude role never calls opencode
+OCSTATE="$OC/state.env"; OCLOG="$OC/seq.log"
+oc_close_setup() { printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_saved_1\n' > "$SF"; : > "$OCLOG"; rm -f "$OCLOG.pid"; }
+oc_close_setup; try ocrun close-role.sh dev
+check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT|orca terminal close --terminal h-dev --tab --json|"
+check "opencode close-role: the session file is gone and the role's line left the state" "$([ -e "$SF" ] && echo file):$(cat "$OCSTATE")" ":CL=h-cl"
+oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
+check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
+oc_close_setup; OCDELMODE=hang; OCTO=1; T0=$(date +%s); try ocrun close-role.sh dev; T1=$(date +%s); OCDELMODE=""; OCTO=""
+check "opencode close-role: a hanging delete is cut after the timeout; the tab is still closed and the file removed" "$RC:$(grep -c 'timed out after 1 s' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file):$([ $((T1 - T0)) -lt 15 ] && echo fast)" "0:1:1::fast"
+check "opencode close-role: the hung opencode process was killed" "$(kill -0 "$(cat "$OCLOG.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
+oc_close_setup; try ocrun close-role.sh cl
+check "opencode close-role: a claude role calls no opencode and leaves the file alone" "$RC:$(grep -c '^delete' "$OCLOG" || true):$(cat "$SF")" "0:0:ses_saved_1"
+oc_close_setup; rm -f "$SF"; try ocrun close-role.sh dev
+check "opencode close-role: no saved session (user-owned), no delete" "$RC:$(grep -c '^delete' "$OCLOG" || true)" "0:0"
+# clean.sh: /new, then the newest session of THIS worktree created after /new becomes the role's session; the old one is deleted
+printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_old\n' > "$SF"; : > "$OCLOG"
+cat > "$OC/list.json" <<J
+[{"id":"ses_stale","created":1,"updated":1,"directory":"$OCWP"},
+ {"id":"ses_other_dir","created":9999999999999,"updated":1,"directory":"$OC/elsewhere"},
+ {"id":"ses_new_a","created":9999999999990,"updated":1,"directory":"$OCWP"},
+ {"id":"ses_new_b","created":9999999999995,"updated":1,"directory":"$OCWP"}]
+J
+try ocrun clean.sh dev
+check "opencode clean: role resent, then the newest session of the worktree is saved and the old one deleted" "$RC:$(cat "$SF"):$(grep '^delete' "$OCLOG" | sed "s#PWD=.*##" | tr '\n' '|')" "0:ses_new_b:delete ses_old |"
+check "opencode clean: sends /new first" "$(grep -c '^orca terminal send --terminal h-dev --text /new --enter' "$OCLOG")" "1"
+printf 'ses_old\n' > "$SF"; : > "$OCLOG"; printf '[{"id":"ses_x","created":1,"directory":"%s"},{"id":"ses_y","created":9999999999999,"directory":"/nowhere"}]' "$OCWP" > "$OC/list.json"
+try ocrun clean.sh dev
+check "opencode clean: no new session of this worktree: one line, the old one deleted, no file" "$RC:$(grep -c 'Could not track the new OpenCode session of dev' <<<"$OUT"):$(grep -c '^delete ses_old' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
+rm -f "$SF"; : > "$OCLOG"; printf '[{"id":"ses_z","created":9999999999999,"directory":"%s"}]' "$OCWP" > "$OC/list.json"
+try ocrun clean.sh dev
+check "opencode clean: a role with no saved session (user-owned) is not tracked" "$RC:$(grep -c '^delete' "$OCLOG" || true):$([ -e "$SF" ] && echo file)" "0:0:"
+check "opencode clean: a claude role does not call opencode" "$(printf 'ses_old\n' > "$SF"; : > "$OCLOG"; ocrun clean.sh cl >/dev/null; grep -c '^delete' "$OCLOG" || true):$(cat "$SF")" "0:ses_old"
+OCSTATE=""; OCLOG=""; rm -f "$SF"
+# launch.sh: an OpenCode tab Orca restored is reopened with the saved id (agent.sh --resume); a tab replaced without memory deletes the saved session
+LP="$OC/lproj"; rm -rf "$LP" "$OC/lbin"; mkdir -p "$LP" "$OC/lbin"; git -C "$LP" init -q -b main
+LLOG="$OC/lorca.log"; LSEQ="$OC/ldel.log"
+cat > "$OC/lbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LLOG"
+case "\$1 \$2" in
+  "terminal list") cat "$OC/llist.json";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"new-\$t\"}";;
+  "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *orph-*) echo '{"result":{"terminal":{"agentIdentity":"opencode","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"ptyId":"wt@@n","agentIdentity":"claude"}}}';; esac;;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\nexit 0\n' > "$OC/lbin/kickoff"; chmod +x "$OC/lbin/orca" "$OC/lbin/kickoff"
+[ ! -f "$KIT/config.json" ] || cp "$KIT/config.json" "$OC/kit-config.bak"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "agent": "opencode" } } }
+J
+oc_launch() {  # <env dev handle> <terminal list json>
+  printf 'PLANNER=old-pl\nDEV=%s\n' "$1" > "$LP/.git/orca-roles.env"; printf 'PLANNER=wt@@q1\nDEV=wt@@q2\n' > "$LP/.git/orca-roles.pty"
+  printf 'ses_saved_abc\n' > "$LP/.git/orca-roles-opencode-dev.session"; printf '%s' "$2" > "$OC/llist.json"; : > "$LLOG"; : > "$LSEQ"; rm -f "$LP/.git/orca-roles.config.json"
+  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)" && RC=0 || RC=$?
+}
+oc_launch old-dev '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@q2","title":"y"}]}'
+check "opencode launch: a restored tab is reopened with the saved id; nothing is deleted" "$RC:$(grep -c "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation (ses_saved_abc)" <<<"$OUT"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session")" "0:1:1:0:ses_saved_abc"
+oc_launch old-dev '{"terminals":[]}'
+check "opencode launch: a tab that no longer exists: the saved session is deleted, the role opens without --resume" "$RC:$(grep -c "agent.sh' dev --json" "$LLOG"):$(grep -c '^delete ses_saved_abc' "$LSEQ"):$([ -e "$LP/.git/orca-roles-opencode-dev.session" ] && echo file)" "0:1:1:"
+oc_launch orph-dev '{"terminals":[]}'
+check "opencode launch: a closed tab whose session Orca kept running: the saved session is deleted" "$RC:$(grep -c 'was closed but Orca kept its session running' <<<"$OUT"):$(grep -c '^delete ses_saved_abc' "$LSEQ"):$([ -e "$LP/.git/orca-roles-opencode-dev.session" ] && echo file)" "0:1:1:"
+if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json"; else rm -f "$KIT/config.json"; fi
 }
 
 sec_prompt_paths() {
