@@ -650,7 +650,13 @@ It follows [`prompts/coordinator.md`](prompts/coordinator.md) and Orca's orchest
 3. Per feature, it creates the worktree (`orca worktree create --setup run`, so the kit opens the team) and waits until the Planner has its role. It then gives the Planner the feature as a supervised task with `orca orchestration worker-start --task <id> --terminal <planner> --worktree id:<worktree id>`. It does not use `worker-start --worktree new-*`, which would start a second agent beside the Planner.
 4. Each Planner works as usual with its own team, in its own Run. What it would ask you, it asks the coordinator with `ask`: the plan, doubts, commits, anything that leaves the worktree. It ends with one `worker_done` and a report (the "Working under a coordinator" section of the Planners' prompts). The coordinator answers what it can, asks you the rest, and reports each feature to you.
 
-The project must start the kit in new worktrees (`roles-yaml`). Every worktree opens a whole team, so keep the number of open worktrees to what you need. Without a coordinator nothing changes: a Planner that gets no dispatch talks to you in its tab as before.
+Requirements: Orca must allow nested workers 2 deep (Settings → Orchestration → "Nested worker depth", default 1), because each Planner dispatches to its workers one level below the coordinator. The project must also start the kit in new worktrees (`roles-yaml`). Every worktree opens a whole team, so keep the number of open worktrees to what you need. Without a coordinator nothing changes: a Planner that gets no dispatch talks to you in its tab as before.
+
+Checked end to end with two worktrees of a toy repo, each with Planner and Dev:
+- The kit opened both teams and `worker-start --terminal` gave each Planner its feature.
+- Both Planners asked for plan approval with `ask`.
+- With the nested depth at 1, both stopped with `nested_worker_depth_exceeded` and asked what to do, instead of writing the code. At 2, each dispatched its Dev.
+- Both sent `worker_done` with their report, and `worker-release` left the Planners' tabs open.
 
 ### MCP in other agents
 

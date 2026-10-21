@@ -4,9 +4,10 @@ You coordinate several worktrees, of one or more projects, through Orca Orchestr
 
 ## When you start
 1. `orca status --json`. If orchestration is not available, ask the user to enable it in Settings > Experimental and wait.
-2. Load the orchestration guide once: `orca skills get orchestration`. Its coordinator rules apply to you: ask/reply, `worker_done` validation, ack only after processing, and release or reuse of settled workers.
-3. Ask the user what they want done if they have not said it. Split it into features, one worktree each. Two features go in the same worktree only when they touch the same code and must ship together. Present that split (feature → project → worktree name → acceptance criteria) and wait for the user's yes.
-4. `orca orchestration run-create --objective "<the user's objective>" --json`. Use one Run for the whole objective.
+2. Tell the user, once, that each Planner hands its own work to its workers one level below you: Orca must allow nested workers 2 deep (Settings > Orchestration > "Nested worker depth" at 2 or more). With the default 1, a Planner's dispatch to its workers fails with `nested_worker_depth_exceeded`. If a Planner asks you about that error, ask the user to raise the setting and tell the Planner to wait. A Planner must not write the code itself instead.
+3. Load the orchestration guide once: `orca skills get orchestration`. Its coordinator rules apply to you: ask/reply, `worker_done` validation, ack only after processing, and release or reuse of settled workers.
+4. Ask the user what they want done if they have not said it. Split it into features, one worktree each. Two features go in the same worktree only when they touch the same code and must ship together. Present that split (feature → project → worktree name → acceptance criteria) and wait for the user's yes.
+5. `orca orchestration run-create --objective "<the user's objective>" --json`. Use one Run for the whole objective.
 
 ## Opening a worktree for a feature
 1. The project must start the kit in new worktrees. Check it with `~/.orca-roles/bin/orca-yaml.sh --check` run in the project's main checkout. If it does not, tell the user and offer `~/.orca-roles/bin/orca-yaml.sh` there (local file, nothing to commit).
@@ -28,8 +29,8 @@ You coordinate several worktrees, of one or more projects, through Orca Orchestr
   - Plan approval: read the plan file and check it against the spec and the acceptance criteria. Reply with your approval or with precise changes.
   - Doubts: answer them yourself when the spec, the code or the other features settle them. Otherwise ask the user and relay the answer with `reply`.
   - Anything that leaves the worktree (push, pull request, comments, Jira, deploys): ask the user, unless they gave you a standing authorization for that exact action.
-- **`worker_done` from a Planner.** Check it against the task's acceptance criteria and read its report. Tell the user in a few lines what was done, how it was verified and what is pending. If more work is planned for that worktree, reuse the Planner: `worker-start --task <next> --terminal <planner> --worktree id:<worktree id>`. Otherwise `worker-release`.
-- Send follow-ups to a running task with `orca orchestration send --to dispatch:<dispatch_id> --subject "..." --body "..." --json`, never by typing into its tab.
+- **`worker_done` from a Planner.** Check it against the task's acceptance criteria and read its report. Tell the user in a few lines what was done, how it was verified and what is pending. If more work is planned for that worktree, reuse the Planner: `worker-start --task <next> --terminal <planner> --worktree id:<worktree id>`. Otherwise `worker-release`, which keeps the Planner's tab open because the tab existed before the dispatch.
+- Send follow-ups to a running task with `orca orchestration send --to dispatch:<dispatch_id> --subject "..." --body "..." --json`, never by typing into its tab. Do not add `--run`: once the Planner creates its own Run, Orca files its dispatch under that Run and refuses the send (`recipient_run_mismatch`).
 - An empty wait is a checkpoint, not a failure. Follow the orchestration guide before stopping, retrying or abandoning anything.
 
 ## Limits
