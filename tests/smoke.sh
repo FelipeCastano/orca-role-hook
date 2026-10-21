@@ -2849,10 +2849,10 @@ check "trust_folder: foreign lock at the link's path kept (link target)" "$(tf_t
 TO="$TF/to.json"
 tof() { printf '%s' "$1" > "$TO"; trust_of "$TO" 2>&1 | tr '\n' '|'; }
 check "trust_of: no setting, programmer or no mode -> worktree" "$(tof '{"settings":{"mode":"programmer"}}')$(tof '{}')" "worktree|worktree|"
-check "trust_of: no setting, academic-research -> worktree; pr-reviewer -> never" "$(tof '{"settings":{"mode":"academic-research"}}')$(tof '{"settings":{"mode":"pr-reviewer"}}')" "worktree|never|"
+check "trust_of: no setting, academic-research and pr-reviewer -> worktree too" "$(tof '{"settings":{"mode":"academic-research"}}')$(tof '{"settings":{"mode":"pr-reviewer"}}')" "worktree|worktree|"
 check "trust_of: an explicit value beats the mode" "$(tof '{"settings":{"mode":"pr-reviewer","trust":"worktree"}}')$(tof '{"settings":{"trust":"never"}}')" "worktree|never|"
 check "trust_of: invalid value (string, number, list) -> warning and never" "$(tof '{"settings":{"trust":"always"}}' | grep -c '^Warning.*never') $(tof '{"settings":{"trust":3}}' | grep -c Warning) $(tof '{"settings":{"trust":["worktree"]}}' | grep -c Warning)" "1 1 1"
-check "trust_of: null counts as unset" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}')" "never|"
+check "trust_of: null counts as unset" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}')" "worktree|"
 # trust_folder records the folder it marked once, and only when it changed ~/.claude.json
 H="$TF/h-rec"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; rm -f "$TF/kit/trusted.list"; tf_run "$H"; tf_run "$H"
 check "trust_folder: the marked folder is recorded once in trusted.list" "$(cat "$TF/kit/trusted.list" 2>/dev/null)" "$TFD"
@@ -2886,8 +2886,8 @@ tlmarked() { jq -r --arg d "$TWP" '.projects[$d].hasTrustDialogAccepted // false
 tllist() { cat "$PK/trusted.list" 2>/dev/null | tr '\n' ' '; }
 INFO='will ask you to trust it'
 try tl; check "trust launch: programmer by default -> marked and recorded" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:true:$TWP :0"
-try tl --mode pr-reviewer; check "trust launch: pr-reviewer without settings.trust -> not marked, not recorded, one info line" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO"):$(jq -c '.projects|keys' "$PH/.claude.json")" '0:false::1:["/other"]'
-try tl --mode pr-reviewer --set settings.trust=worktree; check "trust launch: pr-reviewer with trust worktree -> marked and recorded" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:true:$TWP :0"
+try tl --mode pr-reviewer; check "trust launch: pr-reviewer without settings.trust -> marked and recorded like every mode" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:true:$TWP :0"
+try tl --mode pr-reviewer --set settings.trust=never; check "trust launch: pr-reviewer with trust never -> not marked, not recorded, one info line" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO"):$(jq -c '.projects|keys' "$PH/.claude.json")" '0:false::1:["/other"]'
 try tl --set settings.trust=never; check "trust launch: programmer with trust never -> not marked" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:false::1"
 try tl --set settings.trust=sometimes; check "trust launch: invalid trust -> warning, not marked" "$RC:$(tlmarked):$(printf '%s' "$OUT" | grep -c '^Warning: settings.trust must be')" "0:false:1"
 
@@ -2896,7 +2896,7 @@ FB3="$TMP/fb3"; mkdir -p "$FB3"; printf '#!/bin/bash\nfor a in "$@"; do printf "
 WT3="$TMP/tw3"; mkdir -p "$WT3"
 cxtrust() { printf '{"settings":%s,"defaults":{},"mcpServers":{},"roles":{"cx":{"agent":"codex","permissionMode":"auto"}}}' "$1" > "$TMP/cfg3.json"
   (cd "$WT3" && HOME="$TMP/home" PATH="$FB3:$PATH" ORCA_ROLES_CONFIG="$TMP/cfg3.json" "$TMP/home/.orca-roles/bin/agent.sh" cx >/dev/null 2>&1); tr '\0' '\n' < "$FB3/argv" | grep -c '^projects=' || true; }
-check "codex trust: never -> no projects override; worktree -> kept; pr-reviewer default -> none; programmer default -> kept" "$(cxtrust '{"trust":"never"}') $(cxtrust '{"trust":"worktree"}') $(cxtrust '{"mode":"pr-reviewer"}') $(cxtrust '{}')" "0 1 0 1"
+check "codex trust: never -> no projects override; worktree -> kept; pr-reviewer default -> kept; programmer default -> kept" "$(cxtrust '{"trust":"never"}') $(cxtrust '{"trust":"worktree"}') $(cxtrust '{"mode":"pr-reviewer"}') $(cxtrust '{}')" "0 1 1 1"
 
 # kickoff.sh with trust "never": waits for the user, never presses Enter, never types the role into the dialog
 TK="$TMP/tk"; mkdir -p "$TK/gd" "$TK/bin" "$TK/wt"; git -C "$TK/wt" init -q
@@ -2931,8 +2931,8 @@ tk ', "trust": "never"' none
 check "kickoff trust never: the agent never shows up -> no Enter, role NOT sent, not marked, resend hint" "$(tkenter) $(tkrole) [$(cat "$TK/gd/orca-roles.kicked" 2>/dev/null)] $(grep -c 'role was NOT sent.*run roles again' "$TK/out.log") $(grep -c 'waiting for you to answer' "$TK/out.log")" "0 0 [] 1 1"
 TK_IDENT_AFTER=0 tk ', "trust": "never"' none
 check "kickoff trust never: an already trusted agent with old dialog text on screen -> no wait, no Enter, role sent" "$(tkenter) $(grep -c 'waiting for you' "$TK/out.log") $(tkrole)" "0 0 1"
-tk ', "mode": "pr-reviewer"' none
-check "kickoff trust: pr-reviewer without settings.trust behaves as never" "$(tkenter) $(tkrole)" "0 0"
+tk ', "mode": "pr-reviewer"' 1
+check "kickoff trust: pr-reviewer without settings.trust behaves as worktree (dialog accepted, role sent)" "$(tkenter) $(tkrole)" "1 1"
 tk ', "trust": "worktree"' 1
 check "kickoff trust worktree: the dialog is still accepted with Enter, role sent" "$(tkenter) $(tkrole) $(grep -c 'Trust dialog accepted' "$TK/out.log")" "1 1 1"
 }

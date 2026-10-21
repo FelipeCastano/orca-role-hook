@@ -713,15 +713,14 @@ safe_json_edit() (
   exit "$status"
 )
 # Whether the kit marks the worktree as trusted: "worktree" (it does) or "never" (the agents ask the user). settings.trust if set; without it,
-# "never" in pr-reviewer (other people's branches: their hooks, MCP servers and settings must not run unseen) and "worktree" otherwise.
+# "worktree" in every mode, as before settings.trust existed ("never" is opt-in, e.g. for other people's branches in pr-reviewer).
 # An invalid value is a warning on stderr and counts as "never".  trust_of <config>
 trust_of() {
-  local t m
+  local t
   t="$(jq -r '(.settings // {}) | (.trust // "") | if type == "string" then . else tojson end' "$1" 2>/dev/null)" || t=""
   case "$t" in
     worktree|never) printf '%s\n' "$t";;
-    "") m="$(mode_of "$1" 2>/dev/null)" || m=pr-reviewer   # an unreadable mode: the safe side
-        if [ "$m" = pr-reviewer ]; then echo never; else echo worktree; fi;;
+    "") echo worktree;;
     *) echo "Warning: settings.trust must be \"worktree\" or \"never\" (got '$t'); using \"never\"." >&2; echo never;;
   esac
 }
