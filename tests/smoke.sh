@@ -3294,7 +3294,7 @@ if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json";
 sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
 pk_setup
-check "prompts: every default prompt file in prompts/programmer/, none flat" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "10:0"
+check "prompts: every default prompt file in prompts/programmer/, none flat but the mode-independent coordinator.md" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md | wc -l | tr -d ' '):$([ -f "$PK/prompts/coordinator.md" ] && echo coordinator)" "10:0:coordinator"
 NROLES="$(jq -r '.roles | length' "$PKC")"
 [ "$NROLES" -ge 7 ] || { echo "FAIL default config has only $NROLES roles"; FAIL=1; }
 # prints "<paths found>:<missing>:<outside programmer/>" for a message
@@ -3366,7 +3366,7 @@ sec_install_flat() {
 IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
-check "install.sh: no flat prompt left, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" "0:10"
+check "install.sh: no flat prompt left but the mode-independent coordinator.md, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$([ -f "$IH/.orca-roles/prompts/coordinator.md" ] && echo coordinator)" "0:10:coordinator"
 # the "Enabled" line names the mode of the installed configuration
 ic() { jq "$1" "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; }
 irun() { if IOUT="$(cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null 2>"$IH/err.txt")"; then IRC=0; else IRC=$?; fi; IENA="$(printf '%s\n' "$IOUT" | grep '^Enabled')"; }
