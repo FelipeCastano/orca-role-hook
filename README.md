@@ -636,6 +636,21 @@ Antigravity (`agy`) has no trust flag and no sandbox that lets it write only in 
 
 **Warning:** the only way we measured for `agy` to write without asking is `--dangerously-skip-permissions`, which lets it write anywhere, not only in the worktree (`--mode accept-edits` and `permissions.allow` are alternatives we did not measure); `--add-dir` gives it read access only, and `--sandbox` makes everything read-only. Use it only for roles you accept that for.
 
+### Round log
+
+With `settings.flow.recordRounds: true` (programmer mode), the Planner records every Dev round once it has its verdict, before the next dispatch:
+
+```bash
+~/.orca-roles/bin/round.sh dev --step <step> --round <n> --outcome accepted|rejected|oracle-red [--task <task id>]
+```
+
+Each call appends one JSON line to `<gitdir>/orca-roles.rounds.jsonl`:
+- `ts`, `step`, `round`, `role`, `task` and `outcome` (`oracle-red` when the oracle is red, whatever the Tester says).
+- The `agent` and `model` in effect for that role in this worktree. After a `relaunch-role.sh`, that is the new model.
+- `files`, `added` and `removed`: the worktree's uncommitted change against `HEAD`. It accumulates over the set, since nothing is committed per step.
+
+The point is data: which tasks each model gets right on the first round. Read it with `jq -s` (e.g. the acceptance rate per model), alongside the tokens per role that `metrics.sh` reports. The file is local and never leaves the worktree.
+
 ### Coordinator above the worktrees
 
 To run several features at once, each in its own worktree with its own team, start a coordinator in an Orca terminal (for example in the project's main checkout):
@@ -748,6 +763,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `flow.roundCap` | Optional positive integer (programmer mode; the other modes have no review rounds): how many rejected rounds a step may pile up before the Planner stops and checks with you. Unset: the 3 written in the Planner's prompt. When set, the Planner's startup message carries a sentence that replaces that 3. Anything that is not a positive integer is ignored with a warning. |
 | `flow.maxStepsPerWorker` | Optional positive integer: the default `steps` (cap on the agent's steps) of an OpenCode role; `roles.<id>.opencode.steps` wins. It only applies to roles with `agent: "opencode"`. Unset: no cap. Anything that is not a positive integer is ignored with a warning. |
 | `flow.workerReportBody` | `"full"` (default, also when unset) or `"short"`. With `"short"` the body of a worker's `worker_done` is at most about 8 lines (outcome, files changed, how it was verified and the result, open issues) and the full detail goes to a file in the worker's `scratchDir` whose absolute path the body names; the Planner is told so and reads that file when it needs it. Questions and escalations stay full sentences. The worker's startup message carries the override, so it applies to the role message `clean.sh --msg` prints too. Any other value is ignored with a warning. |
+| `flow.recordRounds` | Optional, `true` to turn it on (programmer mode): after each Dev round, once it has the verdict, the Planner runs `bin/round.sh`, which appends one line to `<gitdir>/orca-roles.rounds.jsonl`. See [Round log](#round-log). Unset or anything but `true`: the Planner's startup message is unchanged. |
 | `oracle` | Optional executable oracle for Dev's work (programmer mode): `{"enabled": false, "maxLoad": 0.8, "waitMax": 300, "timeout": 600, "retries": 1}`. Off by default; when `enabled` is `true` the Planner's startup message gets a sentence telling it to require an acceptance command in each Dev spec and to run `bin/oracle.sh` after each Dev report. See [Optional oracle](#optional-oracle). |
 | `trust` | Whether the kit marks the worktree as trusted for the agents: `"worktree"` (marks it in `~/.claude.json`, passes Codex its trust override, and accepts Claude Code's trust dialog itself) or `"never"` (the agents show the dialog and each tab waits for you; see [Trust of the folder](#trust-of-the-folder)). Unset: `"worktree"`. Any other value warns and counts as `"never"`. |
 | `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-research`. See [Modes](#modes). |

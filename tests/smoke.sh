@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -3493,6 +3493,39 @@ for m in programmer pr-reviewer academic-research; do
   pl="$ROOT/prompts/$m/planner.md"
   check "planner $m: one 'Working under a coordinator' section, before Limits, with ask and one worker_done" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`")" "1 before 2"
 done
+}
+
+sec_rounds() {
+# round.sh: one JSON line per worker round in the worktree's git dir (settings.flow.recordRounds), with the model in effect
+RD="$TMP/rounds"; rm -rf "$RD"; mkdir -p "$RD"; git -C "$RD" init -q; RG="$RD/.git"
+printf 'a\nb\n' > "$RD/f.txt"; git -C "$RD" add f.txt; git -C "$RD" -c user.name=t -c user.email=t@t commit -qm base
+printf 'DEV=h-dev\nPLANNER=h-pl\n' > "$RG/orca-roles.env"
+jq -n '{settings: {mode: "programmer"}, defaults: {agent: "claude"}, roles: {planner: {title: "Planner"}, dev: {title: "Dev", model: "m-dev"}, tester: {title: "Tester", agent: "opencode", model: "oc/m"}}}' > "$RG/orca-roles.config.json"
+rd() { (cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" "$@" 2>&1); }
+printf 'a\nB\nc\n' > "$RD/f.txt"; echo new > "$RD/g.txt"
+try rd dev --step 2 --round 1 --outcome rejected --task t-1
+check "rounds: a round is recorded with the model in effect and the uncommitted change against HEAD" "$RC|$OUT|$(jq -c 'del(.ts)' "$RG/orca-roles.rounds.jsonl")" '0|Recorded round 1 of step 2 for Dev (m-dev): rejected.|{"step":"2","round":1,"role":"dev","agent":"claude","model":"m-dev","outcome":"rejected","task":"t-1","files":2,"added":2,"removed":1}'
+check "rounds: the timestamp is UTC ISO-8601" "$(jq -r .ts "$RG/orca-roles.rounds.jsonl" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')" "1"
+try rd Tester --step 2 --round 1 --outcome oracle-red
+check "rounds: a title in any case, another agent, no task; lines are appended" "$RC|$(grep -c . "$RG/orca-roles.rounds.jsonl")|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -c '[.role, .agent, .model, .outcome, .task]')" '0|2|["tester","opencode","oc/m","oracle-red",""]'
+N0="$(grep -c . "$RG/orca-roles.rounds.jsonl")"
+for args in "dev" "dev --step 1 --round 1" "dev --step 1 --round x --outcome accepted" "dev --step 1 --round 1 --outcome maybe" "nobody --step 1 --round 1 --outcome accepted" "dev --step 1 --round 1 --outcome accepted --bogus" "dev tester --step 1 --round 1 --outcome accepted"; do
+  # shellcheck disable=SC2086
+  try rd $args; check "rounds: '$args' -> exit 1, nothing recorded" "$RC:$(grep -c . "$RG/orca-roles.rounds.jsonl")" "1:$N0"
+done
+RN="$TMP/rounds-none"; rm -rf "$RN"; mkdir -p "$RN"; git -C "$RN" init -q
+OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" dev --step 1 --round 1 --outcome accepted 2>&1)" && RC=0 || RC=$?
+check "rounds: outside a team -> exit 1, no log" "$RC:$(printf '%s' "$OUT" | grep -c 'run this from the worktree where the roles were opened'):$(ls "$RN/.git" | grep -c rounds)" "1:1:0"
+# planner_msg: the sentence only with settings.flow.recordRounds true, in programmer mode
+clean_fixture
+printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/state.env"
+PM() { planner_msg "$1" "planner dev" "$TMP/state.env" "" "" 0 2>&1; }
+BASEP="$(PM "$C")"
+for v in false '"yes"' '{}'; do jq --argjson v "$v" '.settings.flow = {recordRounds: $v}' "$C" > "$RD/r0.json"; check "rounds: recordRounds $v -> planner_msg unchanged" "$(PM "$RD/r0.json")" "$BASEP"; done
+jq '.settings.flow = {recordRounds: true}' "$C" > "$RD/r1.json"; RM="$(PM "$RD/r1.json")"
+case "$RM" in "${BASEP%Start with the startup.}"*"Round log: "*"$(kit_env)$KIT/bin/round.sh dev --step <step> --round <n> --outcome accepted|rejected|oracle-red --task <task id>"*"never call it with a dispatch to Dev in flight."*"Start with the startup.") echo "ok   rounds: recordRounds true -> planner_msg keeps its parts and adds the round log sentence";; *) echo "FAIL rounds: planner_msg with recordRounds: $RM"; FAIL=1;; esac
+jq '.settings.mode = "pr-reviewer"' "$C" > "$RD/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.flow = {recordRounds: true}' "$C" > "$RD/p1.json"
+check "rounds: recordRounds in pr-reviewer -> planner_msg unchanged" "$(PM "$RD/p1.json")" "$(PM "$RD/p0.json")"
 }
 
 sec_kit_path() {
