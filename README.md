@@ -636,6 +636,22 @@ Antigravity (`agy`) has no trust flag and no sandbox that lets it write only in 
 
 **Warning:** the only way we measured for `agy` to write without asking is `--dangerously-skip-permissions`, which lets it write anywhere, not only in the worktree (`--mode accept-edits` and `permissions.allow` are alternatives we did not measure); `--add-dir` gives it read access only, and `--sandbox` makes everything read-only. Use it only for roles you accept that for.
 
+### Coordinator above the worktrees
+
+To run several features at once, each in its own worktree with its own team, start a coordinator in an Orca terminal (for example in the project's main checkout):
+
+```bash
+~/.orca-roles/bin/coordinator.sh            # Claude Code with the Planner's model and permission mode; --model <m> to change it
+```
+
+It follows [`prompts/coordinator.md`](prompts/coordinator.md) and Orca's orchestration guide:
+1. It splits what you ask for into features, one worktree each, and waits for your yes.
+2. It creates one Run for the objective.
+3. Per feature, it creates the worktree (`orca worktree create --setup run`, so the kit opens the team) and waits until the Planner has its role. It then gives the Planner the feature as a supervised task with `orca orchestration worker-start --task <id> --terminal <planner> --worktree id:<worktree id>`. It does not use `worker-start --worktree new-*`, which would start a second agent beside the Planner.
+4. Each Planner works as usual with its own team, in its own Run. What it would ask you, it asks the coordinator with `ask`: the plan, doubts, commits, anything that leaves the worktree. It ends with one `worker_done` and a report (the "Working under a coordinator" section of the Planners' prompts). The coordinator answers what it can, asks you the rest, and reports each feature to you.
+
+The project must start the kit in new worktrees (`roles-yaml`). Every worktree opens a whole team, so keep the number of open worktrees to what you need. Without a coordinator nothing changes: a Planner that gets no dispatch talks to you in its tab as before.
+
 ### MCP in other agents
 
 `mcpServers` defines the servers once and `mcp` picks which ones each role loads, whatever its agent. The kit generates a `{"mcpServers": {...}}` file per role with the chosen ones and hands it to each agent the way that agent can receive it:

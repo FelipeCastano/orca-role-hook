@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -3475,6 +3475,21 @@ drun ORCA_ROLES_REF=$SHA40
 check "install download: a 40-hex ref records the sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@$SHA40 $SHA40"
 drun ORCA_ROLES_REF=0123456
 check "install download: a short hex ref is not taken for a full sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@0123456"
+}
+
+sec_coordinator() {
+# The coordinator above the worktrees: its prompt, the Planners' section for working under it, and bin/coordinator.sh (stub claude)
+CO="$TMP/co"; rm -rf "$CO"; mkdir -p "$CO/bin" "$CO/wt"; git -C "$CO/wt" init -q
+printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv"\n' "$CO" > "$CO/bin/claude"; chmod +x "$CO/bin/claude"
+co() { (cd "$CO/wt" && env -i HOME="$TMP/home" PATH="$CO/bin:$PATH" KIT="$KIT" /bin/bash "$KIT/bin/coordinator.sh" "$@" > "$CO/out" 2>&1); }
+co; check "coordinator.sh: claude gets the Planner's model and permission mode, the prompts folder and the role message" "$(sed -n 1,6p "$CO/argv" | tr '\n' '|')$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" "$CO/argv")" "--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--add-dir|$KIT/prompts|1"
+co --model opus; check "coordinator.sh: --model wins" "$(sed -n 2p "$CO/argv")" "opus"
+check "coordinator.sh: unknown option -> exit 1" "$(co --nope; echo $?)" "1"
+check "coordinator prompt: dispatches to the Planner's existing tab, never a second agent, and never talks to workers" "$(grep -c 'worker-start --task <task_id> --terminal <planner> --worktree id:<worktree id>' "$ROOT/prompts/coordinator.md") $(grep -c 'Do not use `worker-start --worktree new-\*`' "$ROOT/prompts/coordinator.md") $(grep -c 'never talk to the workers below a Planner' "$ROOT/prompts/coordinator.md")" "1 1 1"
+for m in programmer pr-reviewer academic-research; do
+  pl="$ROOT/prompts/$m/planner.md"
+  check "planner $m: one 'Working under a coordinator' section, before Limits, with ask and one worker_done" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`")" "1 before 2"
+done
 }
 
 sec_kit_path() {
