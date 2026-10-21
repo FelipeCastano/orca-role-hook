@@ -3841,6 +3841,45 @@ FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: a failed send is reported with the cat hint" "$(grep -c "^Could not tell the Planner the new handles; tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log")" "1"
 # check_config and docs
 cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }
+# opencode: `mini` prints nothing for a missing model, so the kickoff looks it up in `opencode models` (stub: lines in oc.models; oc.mode warm = empty first call, fail = exit 1)
+cat > "$MF/bin/opencode" <<EOS
+#!/bin/sh
+[ "\$1" = models ] || exit 0
+echo "models PWD=\$PWD" >> "$MF/oc.log"
+n=\$(wc -l < "$MF/oc.log" | tr -d ' ')
+case "\$(cat "$MF/oc.mode" 2>/dev/null)" in fail) echo boom >&2; exit 1;; warm) [ "\$n" -gt 1 ] || exit 0;; esac
+cat "$MF/oc.models"
+EOS
+chmod +x "$MF/bin/opencode"
+ocm_run() {  # <role json fields> <models lines> <mode>
+  rm -f "$MF/oc.log"; printf '%s\n' "$2" > "$MF/oc.models"; printf '%s' "$3" > "$MF/oc.mode"
+  ORCA_ROLES_OC_MODELS_RETRY=0 mf "$(mfc "$1")" clean "dev"
+}
+OCD='"title": "Dev", "agent": "opencode", "model": "p/m"'
+OCMSG="ESC hp|Dev model unavailable|Dev did not start: its model p/m is not available (not in opencode models). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles (without options, so this worktree's saved options are kept)."
+ocm_run "$OCD" "p/m
+p/other" ""
+check "opencode model: listed -> recorded, no line, no escalation, one list call run in the worktree" "$(models):$(nesc):$(grep -c 'not available' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' '):$(grep -c "PWD=$(cd "$MF/wt" && pwd -P)\$" "$MF/oc.log")" "DEV=p/m :0:0:1:1"
+ocm_run "$OCD" "p/other" ""
+check "opencode model: absent -> line, FAILED, Planner told once with check_model's wording" "$(models):$(escs):$(grep -c '^dev: model p/m is not available (not in opencode models)$' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' ')" "DEV=FAILED:p/m :$OCMSG:1:2"
+check "opencode model: the role message is still sent" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
+ocm_run "$OCD" "p/m" warm
+check "opencode model: absent on the first call only -> present (retry)" "$(models):$(nesc):$(wc -l < "$MF/oc.log" | tr -d ' ')" "DEV=p/m :0:2"
+ocm_run "$(printf '"title": "Dev", "agent": "opencode", "model": "p/m#high"')" "p/m" ""
+check "opencode model: a #variant is ignored in the comparison" "$(models):$(nesc)" "DEV=p/m#high :0"
+ocm_run "$(printf '"title": "Dev", "agent": "opencode", "model": "p/m#high"')" "p/other" ""
+check "opencode model: absent with a #variant is reported with the configured model" "$(models):$(nesc)" "DEV=FAILED:p/m#high :1"
+ocm_run "$OCD" "p/m" fail
+check "opencode model: listing fails twice -> could not be checked, nothing FAILED, Planner not told" "$(models):$(nesc):$(grep -c '^dev: could not check that model p/m exists' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' ')" ":0:1:2"
+ocm_run '"title": "Dev", "agent": "codex", "model": "p/m"' "p/other" ""
+check "opencode model: a codex role never calls opencode models" "$(test -f "$MF/oc.log" && echo called || echo no)" "no"
+ocm_run '"title": "Dev", "model": "p/m"' "p/other" ""
+check "opencode model: a claude role never calls opencode models" "$(test -f "$MF/oc.log" && echo called || echo no)" "no"
+ocm_run '"title": "Dev", "agent": "opencode"' "p/other" ""
+check "opencode model: an opencode role with no model is not checked" "$(test -f "$MF/oc.log" && echo called || echo no):$(models):$(nesc)" "no::0"
+ocm_run "$OCD, \"modelError\": \"no such {model}\"" "p/m" ""
+check "opencode model: listed model with a modelError of its own, screen check still records" "$(models):$(nesc)" "DEV=p/m :0"
+rm -f "$MF/oc.mode" "$MF/oc.models" "$MF/oc.log"
 # defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
 CUD='"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"'
 ERRTXT="dflt my-model" mf "$(mfc "$CUD" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"

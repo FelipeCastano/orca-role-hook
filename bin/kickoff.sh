@@ -40,15 +40,34 @@ tell_planner() {  # $1 subject, $2 body
   orca orchestration send --to "$PLANNER" --type escalation --subject "$1" --body "$2" --json >/dev/null 2>&1 || echo "Could not tell the Planner: $1"
 }
 # A role whose model does not exist answers its first message with an error (see model_error_regex): the kit only detects it and tells the Planner.
+model_failed() {  # $1 role, $2 model, $3 what showed it (the error text, or why the model is not available)
+  local title; title="$(title_of "$CFG" "$1")"
+  echo "$1: model $2 is not available ($3)"; record_model "$1" "FAILED:$2"
+  [ "$1" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $2 is not available ($3). config.json is unchanged. To fix it yourself: set roles.$1.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $1 and run roles (without options, so this worktree's saved options are kept)."
+}
 check_model() {  # $1 handle, $2 role, $3 model errors on screen before the message was sent, $4 error regex
-  local model title now text
-  model="$(rstr "$CFG" "$2" model)"; title="$(title_of "$CFG" "$2")"
+  local model now text
+  model="$(rstr "$CFG" "$2" model)"
   sleep "$SETTLE"; orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   now="$(err_count "$1" "$4")"
   if [ "$now" -le "$3" ]; then record_model "$2" "$model"; return 0; fi
   text="$(screen_of "$1" | tr -s ' \n\t' ' ' | grep -oE "$4" | tail -n 1 | cut -c1-200 | sed 's/^ *//; s/ *$//')"
-  echo "$2: model $model is not available ($text)"; record_model "$2" "FAILED:$model"
-  [ "$2" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $model is not available ($text). config.json is unchanged. To fix it yourself: set roles.$2.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $2 and run roles (without options, so this worktree's saved options are kept)."
+  model_failed "$2" "$model" "$text"
+}
+# `opencode mini` prints nothing for a model that does not exist, so for OpenCode the model is looked up in `opencode models`, run in
+# the worktree (oc_bounded runs it at the top of the current one; $WT is an Orca selector, not a path). The first call after OpenCode's
+# service starts can omit models while it warms up: one retry after a pause.
+# Prints present, missing or unknown (the list could not be read twice).  oc_model_state <model, with or without #variant>
+oc_model_state() {
+  local m="${1%%#*}" out n rc=1
+  out="$(mktemp)" || { echo unknown; return 0; }
+  for n in 1 2; do
+    oc_bounded "${ORCA_ROLES_OC_MODELS_TIMEOUT:-20}" "$out" models; rc="$OC_RC"
+    if [ "$rc" = 0 ] && grep -qxF -- "$m" "$out"; then rm -f "$out"; echo present; return 0; fi
+    [ "$n" = 1 ] && sleep "${ORCA_ROLES_OC_MODELS_RETRY:-3}"
+  done
+  rm -f "$out"
+  if [ "$rc" = 0 ]; then echo missing; else echo unknown; fi
 }
 
 kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds it), atomically
@@ -80,9 +99,17 @@ kick() {  # $1 handle, $2 role, $3 message
       fi
     else break; fi
   done
-  local before rx; rx="$(model_error_regex "$CFG" "$2" "$(rstr "$CFG" "$2" model)")"
+  local before rx ocm="" model; model="$(rstr "$CFG" "$2" model)"; rx="$(model_error_regex "$CFG" "$2" "$model")"
+  if [ -n "$model" ] && [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then
+    ocm="$(oc_model_state "$model")"
+    [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
+  fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
   orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; kicked_set "$2" "$1"; }
+  case "$ocm" in
+    present) record_model "$2" "$model";;
+    missing) model_failed "$2" "$model" "not in opencode models";;
+  esac
   [ -z "$rx" ] || { check_model "$1" "$2" "$before" "$rx" & CHECK_PIDS="$CHECK_PIDS $!"; }
 }
 is_new() { case " $NEW " in *" $1 "*) return 0;; *) return 1;; esac; }

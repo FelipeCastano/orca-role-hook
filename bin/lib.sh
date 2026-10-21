@@ -116,7 +116,8 @@ rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) //
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 # The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
 # claude: Claude Code's own texts; codex: the API error naming the model; custom and opencode: the role's modelError with {model} as the
-# escaped model id (opencode has no built-in text yet: it is unknown until a real run).
+# escaped model id. For opencode the screen check only runs with the role's own modelError: `mini` prints nothing for a missing model,
+# so the kickoff looks the model up in `opencode models` instead (see oc_model_state in kickoff.sh).
 model_error_regex() {
   local agent esc; [ -n "$3" ] || return 0
   agent="$(rstr "$1" "$2" agent)"; esc="$(regex_escape "$3")"
