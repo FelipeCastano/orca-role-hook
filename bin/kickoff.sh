@@ -85,8 +85,32 @@ wait_trust() {
     sleep "${ORCA_ROLES_TRUST_POLL:-2}"
   done
 }
+# trust "never", Claude Code only. Text typed before the agent is past its trust dialog lands in that dialog and answers it (Claude
+# Code exits), and Orca's screen text does not reliably show the dialog. Orca reports the agent (agentIdentity) only once the folder is
+# trusted, so wait for that and type nothing before. 1 on timeout.  agent_trusted <handle> <title>
+agent_of_tab() { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
+agent_trusted() {
+  local end; end=$(( $(date +%s) + (TIMEOUT_MS + 999) / 1000 + 1 ))
+  [ -n "$(agent_of_tab "$1")" ] && return 0
+  echo "$2: waiting for you to answer the trust dialog in its tab"
+  while [ -z "$(agent_of_tab "$1")" ]; do
+    [ "$(date +%s)" -lt "$end" ] || return 1
+    sleep "${ORCA_ROLES_TRUST_POLL:-2}"
+  done
+}
 kick() {  # $1 handle, $2 role, $3 message
+  local screen_trust=1
+  if [ "$TRUST" = never ]; then
+    case "$(rstr "$CFG" "$2" agent)" in
+      claude|"")
+        agent_trusted "$1" "$(title_of "$CFG" "$2")" || {
+          echo "$(title_of "$CFG" "$2"): its agent was not running in a trusted folder after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the trust dialog, then run roles again: it sends the role to tabs that never got it."
+          return 0; }
+        screen_trust=0;;   # trusted: old dialog text still in the screen history must not be taken for an open dialog
+    esac
+  fi
   for _ in 1 2 3; do
+    [ "$screen_trust" = 1 ] || { orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true; break; }
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
     if { screen_of "$1" || true; } | grep -qiE "$TRUST_RX"; then
       if [ "$TRUST" = never ]; then

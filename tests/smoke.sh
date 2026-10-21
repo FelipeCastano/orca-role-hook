@@ -2907,6 +2907,8 @@ case "$1 $2" in
   "terminal read") n=$(cat "$D/reads" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$D/reads"
     if [ -f "$D/clear_after" ] && [ "$n" -gt "$(cat "$D/clear_after")" ]; then s="ready"; else s="$(cat "$D/screen")"; fi
     jq -nc --arg s "$s" '{text: $s}';;
+  "terminal show") m=$(cat "$D/shows" 2>/dev/null || echo 0); m=$((m + 1)); echo "$m" > "$D/shows"
+    if [ -f "$D/ident_after" ] && [ "$m" -gt "$(cat "$D/ident_after")" ]; then echo "IDENT $m" >> "$D/orca.log"; jq -nc '{result: {terminal: {agentIdentity: "claude"}}}'; fi;;
   "terminal send") echo "SEND $*" >> "$D/orca.log";;
 esac
 exit 0
@@ -2915,16 +2917,20 @@ chmod +x "$TK/bin/orca"
 tk() {  # <extra settings json fragment> <reads before the dialog clears, or none>
   printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false%s }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" } } }' "$1" > "$TK/cfg.json"
   rm -f "$TK/orca.log" "$TK/reads" "$TK/clear_after" "$TK/gd/orca-roles.kicked"; : > "$TK/orca.log"; echo "Do you trust the files in this folder?" > "$TK/screen"
+  rm -f "$TK/shows"; [ -n "${TK_IDENT_AFTER:-}" ] && echo "$TK_IDENT_AFTER" > "$TK/ident_after" || rm -f "$TK/ident_after"
   [ "$2" = none ] || echo "$2" > "$TK/clear_after"
   printf 'PLANNER=hp\nDEV=hd\n' > "$TK/gd/orca-roles.env"
   (cd "$TK/wt" && env TK="$TK" HOME="$TMP/home" PATH="$TK/bin:$PATH" ORCA_ROLES_KICK_SETTLE=0 ORCA_ROLES_TRUST_POLL=0.1 "$TMP/home/.orca-roles/bin/kickoff.sh" "$TK/wt" "$TK/gd/orca-roles.env" "$TK/cfg.json" "dev" "" "" "" > "$TK/out.log" 2>&1)
 }
 tkenter() { grep -c -- '^SEND terminal send --terminal [^ ]* --enter --json$' "$TK/orca.log" || true; }
 tkrole() { grep -c -- '--text' "$TK/orca.log" || true; }
-tk ', "trust": "never"' 3
-check "kickoff trust never: dialog clears -> no Enter, waiting line once, role sent and marked kicked" "$(tkenter) $(grep -c 'Dev: waiting for you to answer the trust dialog in its tab' "$TK/out.log") $(tkrole) $(tr '\n' ' ' < "$TK/gd/orca-roles.kicked" 2>/dev/null)" "0 1 1 DEV=hd "
+# Claude Code with trust "never": the role is typed only once Orca reports the agent (it does so only after the folder is trusted), whatever the screen shows
+TK_IDENT_AFTER=3 tk ', "trust": "never"' none
+check "kickoff trust never: the agent shows up after the user trusts the folder -> no Enter, waiting line once, role sent after it and marked kicked" "$(tkenter) $(grep -c 'Dev: waiting for you to answer the trust dialog in its tab' "$TK/out.log") $(tkrole) $(tr '\n' ' ' < "$TK/gd/orca-roles.kicked" 2>/dev/null) $(grep -n -e '^IDENT' -e '--text' "$TK/orca.log" | head -1 | grep -c IDENT)" "0 1 1 DEV=hd  1"
 tk ', "trust": "never"' none
-check "kickoff trust never: dialog never clears -> no Enter, role NOT sent, not marked, resend hint" "$(tkenter) $(tkrole) [$(cat "$TK/gd/orca-roles.kicked" 2>/dev/null)] $(grep -c 'role was NOT sent.*run roles again' "$TK/out.log") $(grep -c 'waiting for you to answer' "$TK/out.log")" "0 0 [] 1 1"
+check "kickoff trust never: the agent never shows up -> no Enter, role NOT sent, not marked, resend hint" "$(tkenter) $(tkrole) [$(cat "$TK/gd/orca-roles.kicked" 2>/dev/null)] $(grep -c 'role was NOT sent.*run roles again' "$TK/out.log") $(grep -c 'waiting for you to answer' "$TK/out.log")" "0 0 [] 1 1"
+TK_IDENT_AFTER=0 tk ', "trust": "never"' none
+check "kickoff trust never: an already trusted agent with old dialog text on screen -> no wait, no Enter, role sent" "$(tkenter) $(grep -c 'waiting for you' "$TK/out.log") $(tkrole)" "0 0 1"
 tk ', "mode": "pr-reviewer"' none
 check "kickoff trust: pr-reviewer without settings.trust behaves as never" "$(tkenter) $(tkrole)" "0 0"
 tk ', "trust": "worktree"' 1
