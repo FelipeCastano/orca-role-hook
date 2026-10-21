@@ -670,6 +670,8 @@ Things to know:
 - **Every relaunch is a fresh start.** The role reads its prompt again, and the step's context goes with the old tab.
 - **An abandoned step keeps the role escalated.** A step closed without an accepted round leaves the role on `to` until some step is accepted.
 
+Checked with a real team in a toy repo: a rejected round relaunched Dev from Sonnet on Opus, and the accepted round brought it back. Each time the new tab opened in that worktree and its start was recorded in the provenance. Run `round.sh` from the worktree's own terminal, as the Planner does: launched from a terminal of another worktree, the relaunched tab opens in that other worktree.
+
 Why on a failed check and not by guessing the difficulty up front: in published evaluations, a frontier model asked to predict which coding steps are hard flagged few of them. Off-the-shelf routers did no better than a fixed tier. What did work was escalating on verified failure, or a small classifier trained on your own outcomes. The [Round log](#round-log) collects the data for that.
 
 ### Coordinator above the worktrees
