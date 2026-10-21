@@ -3526,6 +3526,49 @@ jq '.settings.flow = {recordRounds: true}' "$C" > "$RD/r1.json"; RM="$(PM "$RD/r
 case "$RM" in "${BASEP%Start with the startup.}"*"Round log: "*"$(kit_env)$KIT/bin/round.sh dev --step <step> --round <n> --outcome accepted|rejected|oracle-red --task <task id>"*"never call it with a dispatch to Dev in flight."*"Start with the startup.") echo "ok   rounds: recordRounds true -> planner_msg keeps its parts and adds the round log sentence";; *) echo "FAIL rounds: planner_msg with recordRounds: $RM"; FAIL=1;; esac
 jq '.settings.mode = "pr-reviewer"' "$C" > "$RD/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.flow = {recordRounds: true}' "$C" > "$RD/p1.json"
 check "rounds: recordRounds in pr-reviewer -> planner_msg unchanged" "$(PM "$RD/p1.json")" "$(PM "$RD/p0.json")"
+# escalation: round.sh relaunches the role on settings.flow.escalation.<role>.to after N rejected rounds of a step, and back on accepted.
+# Own kit copy whose relaunch-role.sh is a stub that logs its arguments and changes the model in the worktree's configuration.
+RK="$TMP/rounds-kit"; rm -rf "$RK"; mkdir -p "$RK"; cp -R "$KIT/bin" "$KIT/prompts" "$RK/"; RLL="$TMP/rounds-relaunch.log"; : > "$RLL"
+cat > "$RK/bin/relaunch-role.sh" <<EOS
+#!/bin/bash
+echo "\$*" >> "$RLL"; [ -f "$TMP/rounds-failrelaunch" ] && exit 1
+jq --arg r "\$1" --arg m "\$3" '.roles[\$r].model = \$m' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
+echo "Relaunched \$1 on \$3"
+EOS
+chmod +x "$RK/bin/relaunch-role.sh"
+re() { (cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$RK" /bin/bash "$RK/bin/round.sh" "$@" 2>&1); }
+esc_cfg() { jq --argjson e "$1" '.settings.flow = {escalation: $e} | .roles.dev.model = "m-dev"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"; rm -f "$RG/orca-roles.escalation"; : > "$RLL"; }
+esc_cfg '{"dev": {"to": "m-big"}}'
+try re dev --step 3 --round 1 --outcome rejected
+check "escalation: the first rejected round relaunches Dev on the escalation model and saves where it came from" "$RC|$(cat "$RLL")|$(tr '\t' ' ' < "$RG/orca-roles.escalation")|$(printf '%s' "$OUT" | grep -c 'Escalated Dev from m-dev to m-big after 1 rejected round(s) of step 3')" "0|dev --model m-big|dev 3 m-dev|1"
+check "escalation: the round is recorded with the model it was played on" "$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -c '[.round, .model, .outcome]')" '[1,"m-dev","rejected"]'
+try re dev --step 3 --round 2 --outcome oracle-red
+check "escalation: another rejected round of the step does not relaunch again, and is recorded on the new model" "$RC|$(grep -c . "$RLL")|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -c '[.round, .model]')" '0|1|[2,"m-big"]'
+try re dev --step 3 --round 3 --outcome accepted
+check "escalation: the accepted round brings Dev back to its model and clears the state" "$RC|$(tail -1 "$RLL")|$(grep -c . "$RG/orca-roles.escalation")|$(jq -r .roles.dev.model "$RG/orca-roles.config.json")|$(printf '%s' "$OUT" | grep -c 'Step accepted: Dev is back on m-dev.')" "0|dev --model m-dev|0|m-dev|1"
+: > "$RLL"; try re dev --step 4 --round 1 --outcome accepted
+check "escalation: an accepted round with nothing escalated relaunches nothing" "$RC:$(grep -c . "$RLL")" "0:0"
+esc_cfg '{"dev": {"to": "m-big", "after": 2}}'
+try re dev --step 5 --round 1 --outcome rejected; R1="$(grep -c . "$RLL" || true)"; try re dev --step 5 --round 2 --outcome rejected
+check "escalation: after 2 -> the first rejected round of the step does not escalate, the second does" "$R1:$(cat "$RLL")" "0:dev --model m-big"
+esc_cfg '{"dev": {"to": "m-dev"}}'; try re dev --step 6 --round 1 --outcome rejected
+check "escalation: a role already on the escalation model is not relaunched" "$RC:$(grep -c . "$RLL")" "0:0"
+esc_cfg '{"dev": {"to": "m-big"}}'; jq '.settings.mode = "pr-reviewer"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
+try re dev --step 7 --round 1 --outcome rejected
+check "escalation: outside programmer mode nothing is relaunched" "$RC:$(grep -c . "$RLL")" "0:0"
+jq '.settings.mode = "programmer"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
+esc_cfg '{"dev": {"to": "m-big"}}'; touch "$TMP/rounds-failrelaunch"; N0="$(grep -c . "$RG/orca-roles.rounds.jsonl")"
+try re dev --step 8 --round 1 --outcome rejected
+check "escalation: a failed relaunch -> exit 4, the round is still recorded, nothing saved as escalated" "$RC|$(( $(grep -c . "$RG/orca-roles.rounds.jsonl") - N0 ))|$([ -s "$RG/orca-roles.escalation" ] && echo saved || echo none)|$(printf '%s' "$OUT" | grep -c 'Could not escalate Dev to m-big; it stays on m-dev.')" "4|1|none|1"
+rm -f "$TMP/rounds-failrelaunch"
+esc_cfg '{"dev": {"to": "m big"}}'; try re dev --step 9 --round 1 --outcome rejected
+check "escalation: an invalid value relaunches nothing, warns and still records" "$RC|$(grep -c . "$RLL")|$(printf '%s' "$OUT" | grep -c 'settings.flow.escalation.dev must be')" "0|0|1"
+# planner_msg: the escalation sentence (with the round log) whenever an active role has a valid escalation, even without recordRounds
+jq '.settings.flow = {escalation: {dev: {to: "m-big", after: 2}}}' "$C" > "$RD/e1.json"; EM="$(PM "$RD/e1.json")"
+case "$EM" in "${BASEP%Start with the startup.}"*"Round log and escalation: "*"round.sh <role> --step <step>"*"It escalates Dev to m-big after 2 rejected round(s) of a step: it relaunches the role"*"does not need the user's confirmation"*"(not as a question)"*"Start with the startup.") echo "ok   escalation: planner_msg carries the escalation sentence";; *) echo "FAIL escalation: planner_msg: $EM"; FAIL=1;; esac
+check "escalation: planner_msg has one round log sentence, not two, with recordRounds too" "$(jq '.settings.flow.recordRounds = true' "$RD/e1.json" > "$RD/e2.json"; PM "$RD/e2.json" | grep -o 'Round log' | wc -l | tr -d ' ')" "1"
+jq '.settings.flow = {escalation: {dev: {to: 3}}}' "$C" > "$RD/e3.json"; check "escalation: an invalid value -> planner_msg unchanged" "$(PM "$RD/e3.json")" "$BASEP"
+jq '.settings.flow = {escalation: {deployer: {to: "m-big"}}}' "$C" > "$RD/e4.json"; check "escalation: a role that is not active -> planner_msg unchanged" "$(PM "$RD/e4.json")" "$BASEP"
 }
 
 sec_kit_path() {

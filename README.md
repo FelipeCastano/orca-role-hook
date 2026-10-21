@@ -651,6 +651,27 @@ Each call appends one JSON line to `<gitdir>/orca-roles.rounds.jsonl`:
 
 The point is data: which tasks each model gets right on the first round. Read it with `jq -s` (e.g. the acceptance rate per model), alongside the tokens per role that `metrics.sh` reports. The file is local and never leaves the worktree.
 
+### Escalation
+
+Start a worker on a cheaper model and move it to a stronger one only when its work fails a check:
+
+```json
+"settings": { "flow": { "escalation": { "dev": { "to": "claude-opus-5-5", "after": 1 } } } }
+```
+
+How it works (programmer mode):
+1. The Planner runs `round.sh` after each round of the role that writes code, as in [Round log](#round-log). The startup message asks for it as soon as an active role has an escalation, with or without `recordRounds`.
+2. When the step reaches `after` rejected or oracle-red rounds, `round.sh` relaunches the role on `to` with `relaunch-role.sh`. That script checks the model first, and the role reopens with a new tab and handle.
+3. On the step's accepted round, `round.sh` relaunches the role back on the model it had. The model in effect before escalating is kept in `<gitdir>/orca-roles.escalation`.
+4. The Planner tells you in one line and uses the new handle. The rejected rounds still count toward the step's limit (`roundCap`, 3 by default).
+
+Things to know:
+- **Same agent only.** `to` must be a model of the role's own agent: for an OpenCode role, a model of `opencode models`. Moving a step from an OpenCode role to a Claude one is not covered.
+- **Every relaunch is a fresh start.** The role reads its prompt again, and the step's context goes with the old tab.
+- **An abandoned step keeps the role escalated.** A step closed without an accepted round leaves the role on `to` until some step is accepted.
+
+Why on a failed check and not by guessing the difficulty up front: in published evaluations, a frontier model asked to predict which coding steps are hard flagged few of them. Off-the-shelf routers did no better than a fixed tier. What did work was escalating on verified failure, or a small classifier trained on your own outcomes. The [Round log](#round-log) collects the data for that.
+
 ### Coordinator above the worktrees
 
 To run several features at once, each in its own worktree with its own team, start a coordinator in an Orca terminal (for example in the project's main checkout):
@@ -764,6 +785,7 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `flow.maxStepsPerWorker` | Optional positive integer: the default `steps` (cap on the agent's steps) of an OpenCode role; `roles.<id>.opencode.steps` wins. It only applies to roles with `agent: "opencode"`. Unset: no cap. Anything that is not a positive integer is ignored with a warning. |
 | `flow.workerReportBody` | `"full"` (default, also when unset) or `"short"`. With `"short"` the body of a worker's `worker_done` is at most about 8 lines (outcome, files changed, how it was verified and the result, open issues) and the full detail goes to a file in the worker's `scratchDir` whose absolute path the body names; the Planner is told so and reads that file when it needs it. Questions and escalations stay full sentences. The worker's startup message carries the override, so it applies to the role message `clean.sh --msg` prints too. Any other value is ignored with a warning. |
 | `flow.recordRounds` | Optional, `true` to turn it on (programmer mode): after each Dev round, once it has the verdict, the Planner runs `bin/round.sh`, which appends one line to `<gitdir>/orca-roles.rounds.jsonl`. See [Round log](#round-log). Unset or anything but `true`: the Planner's startup message is unchanged. |
+| `flow.escalation` | Optional (programmer mode): `{"<role>": {"to": "<model>", "after": N}}`. After N rejected rounds of a step (default 1), `round.sh` relaunches that role on `to`, and brings it back to its own model on the step's accepted round. See [Escalation](#escalation). An invalid value, or one for the Planner, is ignored with a warning. |
 | `oracle` | Optional executable oracle for Dev's work (programmer mode): `{"enabled": false, "maxLoad": 0.8, "waitMax": 300, "timeout": 600, "retries": 1}`. Off by default; when `enabled` is `true` the Planner's startup message gets a sentence telling it to require an acceptance command in each Dev spec and to run `bin/oracle.sh` after each Dev report. See [Optional oracle](#optional-oracle). |
 | `trust` | Whether the kit marks the worktree as trusted for the agents: `"worktree"` (marks it in `~/.claude.json`, passes Codex its trust override, and accepts Claude Code's trust dialog itself) or `"never"` (the agents show the dialog and each tab waits for you; see [Trust of the folder](#trust-of-the-folder)). Unset: `"worktree"`. Any other value warns and counts as `"never"`. |
 | `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-research`. See [Modes](#modes). |
