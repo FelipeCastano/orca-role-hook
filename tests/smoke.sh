@@ -3528,10 +3528,10 @@ done
 git -C "$RD" worktree add -q -b wt-r "$TMP/rounds-wt" 2>/dev/null; RWG="$(git -C "$TMP/rounds-wt" rev-parse --absolute-git-dir)"
 cp "$RG/orca-roles.env" "$RG/orca-roles.config.json" "$RWG/"; N1="$(grep -c . "$RG/orca-roles.rounds.jsonl")"
 OUT="$(cd "$TMP/rounds-wt" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" dev --step 1 --round 1 --outcome accepted 2>&1)" && RC=0 || RC=$?
-check "rounds: a linked worktree appends to the common log with its branch, nothing in its own git dir" "$RC|$(( $(grep -c . "$RG/orca-roles.rounds.jsonl") - N1 ))|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -r .worktree)|$(ls "$RWG" | grep -c rounds)" "0|1|wt-r|0"
+check "rounds: a linked worktree appends to the common log with its branch, nothing in its own git dir" "$RC|$(( $(grep -c . "$RG/orca-roles.rounds.jsonl") - N1 ))|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -r .worktree)|$(find "$RWG" -mindepth 1 -maxdepth 1 -name '*rounds*' | wc -l | tr -d ' ')" "0|1|wt-r|0"
 RN="$TMP/rounds-none"; rm -rf "$RN"; mkdir -p "$RN"; git -C "$RN" init -q
 OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" dev --step 1 --round 1 --outcome accepted 2>&1)" && RC=0 || RC=$?
-check "rounds: outside a team -> exit 1, no log" "$RC:$(printf '%s' "$OUT" | grep -c 'run this from the worktree where the roles were opened'):$(ls "$RN/.git" | grep -c rounds)" "1:1:0"
+check "rounds: outside a team -> exit 1, no log" "$RC:$(printf '%s' "$OUT" | grep -c 'run this from the worktree where the roles were opened'):$(find "$RN/.git" -mindepth 1 -maxdepth 1 -name '*rounds*' | wc -l | tr -d ' ')" "1:1:0"
 # planner_msg: the sentence only with settings.flow.recordRounds true, in programmer mode
 clean_fixture
 printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/state.env"
@@ -4446,7 +4446,7 @@ rm -f "$TMP/rl-failcreate"
 # outside a team: no saved state or configuration in this git dir
 RN="$TMP/rlnone"; rm -rf "$RN"; mkdir -p "$RN"; git -C "$RN" init -q; N0="$(grep -c . "$RLOG")"
 OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/rlbin:$PATH" "$PKL/bin/relaunch-role.sh" dev --model good --no-check 2>&1)" && RC=0 || RC=$?
-check "relaunch: outside a team -> exit 1 with the 'run this from the worktree' message, no Orca call at all" "$RC:$(printf '%s' "$OUT" | grep -c 'not found: run this from the worktree where the roles were opened.'):$(( $(grep -c . "$RLOG") - N0 )):$(find "$RN/.git" -maxdepth 1 -name "orca-roles*" | wc -l | tr -d " ")" "1:1:0:0"
+check "relaunch: outside a team -> exit 1 with the 'run this from the worktree' message, no Orca call at all" "$RC:$(printf '%s' "$OUT" | grep -c 'not found: run this from the worktree where the roles were opened.'):$(( $(grep -c . "$RLOG") - N0 )):$(find "$RN/.git" -mindepth 1 -maxdepth 1 -name "orca-roles*" | wc -l | tr -d " ")" "1:1:0:0"
 }
 
 sec_academic_research() {
