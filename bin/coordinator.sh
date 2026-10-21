@@ -18,8 +18,16 @@ command -v claude >/dev/null || { echo "coordinator.sh: 'claude' is not on the P
 CFG="$(mktemp)"; merged_config . > "$CFG"
 [ -n "$MODEL" ] || MODEL="$(rstr "$CFG" planner model)"
 PERM="$(rstr "$CFG" planner permissionMode)"
-# Same trust as the teams (settings.trust, default "worktree"): with "never" Claude asks, as the user is in this tab anyway.
-[ "$(trust_of "$CFG")" = worktree ] && trust_folder
+# Same trust as the teams (settings.trust, default "worktree"); with "never" Claude asks, as the user is in this tab anyway. A folder
+# Claude Code already knows keeps its entry: only the flag is set and it is not recorded, since forget-trust.sh deletes whole entries.
+if [ "$(trust_of "$CFG")" = worktree ]; then
+  D="$(pwd -P)"; KNOWN="$(jq -r --arg d "$D" '.projects[$d] | if . == null then "no" elif .hasTrustDialogAccepted == true then "trusted" else "yes" end' "$HOME/.claude.json" 2>/dev/null)" || KNOWN=""
+  case "$KNOWN" in
+    no) trust_folder;;
+    yes) safe_json_edit "$HOME/.claude.json" '.projects[$dir].hasTrustDialogAccepted = true' "$D" "$HOME/.claude.json.lock" \
+           && echo "Marked $D as trusted for Claude Code (its existing entry is kept; forget-trust.sh does not remove it).";;
+  esac
+fi
 rm -f "$CFG"
 ARGS=(); [ -n "$MODEL" ] && ARGS+=(--model "$MODEL"); [ -n "$PERM" ] && ARGS+=(--permission-mode "$PERM")
 # The message goes first: --add-dir takes several values and would swallow it as one more folder.
