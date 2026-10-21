@@ -22,4 +22,5 @@ PERM="$(rstr "$CFG" planner permissionMode)"
 [ "$(trust_of "$CFG")" = worktree ] && trust_folder
 rm -f "$CFG"
 ARGS=(); [ -n "$MODEL" ] && ARGS+=(--model "$MODEL"); [ -n "$PERM" ] && ARGS+=(--permission-mode "$PERM")
-exec claude ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts" "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\"."
+# The message goes first: --add-dir takes several values and would swallow it as one more folder.
+exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\"." ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts"

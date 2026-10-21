@@ -3482,9 +3482,9 @@ sec_coordinator() {
 CO="$TMP/co"; rm -rf "$CO"; mkdir -p "$CO/bin" "$CO/wt" "$CO/home"; git -C "$CO/wt" init -q; echo '{"projects":{}}' > "$CO/home/.claude.json"
 printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv"\n' "$CO" > "$CO/bin/claude"; chmod +x "$CO/bin/claude"
 co() { (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" /bin/bash "$KIT/bin/coordinator.sh" "$@" > "$CO/out" 2>&1); }
-co; check "coordinator.sh: claude gets the Planner's model and permission mode, the prompts folder and the role message" "$(sed -n 1,6p "$CO/argv" | tr '\n' '|')$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" "$CO/argv")" "--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--add-dir|$KIT/prompts|1"
+co; check "coordinator.sh: claude gets the role message first (before the variadic --add-dir), then the Planner's model and permission mode and the prompts folder" "$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" <(sed -n 1p "$CO/argv"))|$(sed -n 2,7p "$CO/argv" | tr '\n' '|')" "1|--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--add-dir|$KIT/prompts|"
 check "coordinator.sh: trusts its folder like launch.sh (default trust worktree), recorded for forget-trust.sh" "$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null) $(grep -cxF "$(cd "$CO/wt" && pwd -P)" "$KIT/trusted.list" 2>/dev/null)" "true 1"
-co --model opus; check "coordinator.sh: --model wins" "$(sed -n 2p "$CO/argv")" "opus"
+co --model opus; check "coordinator.sh: --model wins" "$(sed -n 3p "$CO/argv")" "opus"
 check "coordinator.sh: unknown option -> exit 1" "$(co --nope; echo $?)" "1"
 check "coordinator prompt: dispatches to the Planner's existing tab, never a second agent, and never talks to workers" "$(grep -c 'worker-start --task <task_id> --terminal <planner> --worktree id:<worktree id>' "$ROOT/prompts/coordinator.md") $(grep -c 'Do not use `worker-start --worktree new-\*`' "$ROOT/prompts/coordinator.md") $(grep -c 'never talk to the workers below a Planner' "$ROOT/prompts/coordinator.md")" "1 1 1"
 for m in programmer pr-reviewer academic-research; do
