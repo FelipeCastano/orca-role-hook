@@ -3489,6 +3489,8 @@ check "install download: a short hex ref is not taken for a full sha" "$DRC:$DIN
 sec_coordinator() {
 # The coordinator above the worktrees: its prompt, the Planners' section for working under it, and bin/coordinator.sh (stub claude)
 CO="$TMP/co"; rm -rf "$CO"; mkdir -p "$CO/bin" "$CO/wt" "$CO/home"; git -C "$CO/wt" init -q; echo '{"projects":{}}' > "$CO/home/.claude.json"
+# the kit with its default configuration, whatever an earlier section left in config.json (put back at the end)
+if [ -f "$KIT/config.json" ]; then mv "$KIT/config.json" "$CO/kit-config.json"; fi
 printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv"\n' "$CO" > "$CO/bin/claude"; chmod +x "$CO/bin/claude"
 co() { (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" /bin/bash "$KIT/bin/coordinator.sh" "$@" > "$CO/out" 2>&1); }
 co; check "coordinator.sh: claude gets the role message first (before the variadic --add-dir), then the Planner's model and permission mode and the prompts folder" "$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" <(sed -n 1p "$CO/argv"))|$(sed -n 2,7p "$CO/argv" | tr '\n' '|')" "1|--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--add-dir|$KIT/prompts|"
@@ -3504,6 +3506,7 @@ for m in programmer pr-reviewer academic-research; do
   pl="$ROOT/prompts/$m/planner.md"
   check "planner $m: one 'Working under a coordinator' section, before Limits, with ask, one worker_done and the wait for the first dispatch" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`\|no planning and no question dialog before it arrives")" "1 before 3"
 done
+if [ -f "$CO/kit-config.json" ]; then mv "$CO/kit-config.json" "$KIT/config.json"; fi
 }
 
 sec_rounds() {
