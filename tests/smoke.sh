@@ -3504,7 +3504,7 @@ jq -n '{settings: {mode: "programmer"}, defaults: {agent: "claude"}, roles: {pla
 rd() { (cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" "$@" 2>&1); }
 printf 'a\nB\nc\n' > "$RD/f.txt"; echo new > "$RD/g.txt"
 try rd dev --step 2 --round 1 --outcome rejected --task t-1
-check "rounds: a round is recorded with the model in effect and the uncommitted change against HEAD" "$RC|$OUT|$(jq -c 'del(.ts)' "$RG/orca-roles.rounds.jsonl")" '0|Recorded round 1 of step 2 for Dev (m-dev): rejected.|{"step":"2","round":1,"role":"dev","agent":"claude","model":"m-dev","outcome":"rejected","task":"t-1","files":2,"added":2,"removed":1}'
+check "rounds: a round is recorded with the model in effect and the uncommitted change against HEAD" "$RC|$OUT|$(jq -c 'del(.ts)' "$RG/orca-roles.rounds.jsonl")" '0|Recorded round 1 of step 2 for Dev (m-dev): rejected.|{"worktree":"'"$(git -C "$RD" rev-parse --abbrev-ref HEAD)"'","step":"2","round":1,"role":"dev","agent":"claude","model":"m-dev","outcome":"rejected","task":"t-1","files":2,"added":2,"removed":1}'
 check "rounds: the timestamp is UTC ISO-8601" "$(jq -r .ts "$RG/orca-roles.rounds.jsonl" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')" "1"
 try rd Tester --step 2 --round 1 --outcome oracle-red
 check "rounds: a title in any case, another agent, no task; lines are appended" "$RC|$(grep -c . "$RG/orca-roles.rounds.jsonl")|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -c '[.role, .agent, .model, .outcome, .task]')" '0|2|["tester","opencode","oc/m","oracle-red",""]'
@@ -3513,6 +3513,11 @@ for args in "dev" "dev --step 1 --round 1" "dev --step 1 --round x --outcome acc
   # shellcheck disable=SC2086
   try rd $args; check "rounds: '$args' -> exit 1, nothing recorded" "$RC:$(grep -c . "$RG/orca-roles.rounds.jsonl")" "1:$N0"
 done
+# a linked worktree writes to the repository's common git dir (the log outlives the worktree), with its branch
+git -C "$RD" worktree add -q -b wt-r "$TMP/rounds-wt" 2>/dev/null; RWG="$(git -C "$TMP/rounds-wt" rev-parse --absolute-git-dir)"
+cp "$RG/orca-roles.env" "$RG/orca-roles.config.json" "$RWG/"; N1="$(grep -c . "$RG/orca-roles.rounds.jsonl")"
+OUT="$(cd "$TMP/rounds-wt" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" dev --step 1 --round 1 --outcome accepted 2>&1)" && RC=0 || RC=$?
+check "rounds: a linked worktree appends to the common log with its branch, nothing in its own git dir" "$RC|$(( $(grep -c . "$RG/orca-roles.rounds.jsonl") - N1 ))|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -r .worktree)|$(ls "$RWG" | grep -c rounds)" "0|1|wt-r|0"
 RN="$TMP/rounds-none"; rm -rf "$RN"; mkdir -p "$RN"; git -C "$RN" init -q
 OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE KIT="$KIT" /bin/bash "$KIT/bin/round.sh" dev --step 1 --round 1 --outcome accepted 2>&1)" && RC=0 || RC=$?
 check "rounds: outside a team -> exit 1, no log" "$RC:$(printf '%s' "$OUT" | grep -c 'run this from the worktree where the roles were opened'):$(ls "$RN/.git" | grep -c rounds)" "1:1:0"
@@ -3549,8 +3554,9 @@ check "escalation: the accepted round brings Dev back to its model and clears th
 : > "$RLL"; try re dev --step 4 --round 1 --outcome accepted
 check "escalation: an accepted round with nothing escalated relaunches nothing" "$RC:$(grep -c . "$RLL")" "0:0"
 esc_cfg '{"dev": {"to": "m-big", "after": 2}}'
+echo '{"worktree":"another","step":"5","role":"dev","outcome":"rejected"}' >> "$RG/orca-roles.rounds.jsonl"
 try re dev --step 5 --round 1 --outcome rejected; R1="$(grep -c . "$RLL" || true)"; try re dev --step 5 --round 2 --outcome rejected
-check "escalation: after 2 -> the first rejected round of the step does not escalate, the second does" "$R1:$(cat "$RLL")" "0:dev --model m-big"
+check "escalation: after 2 -> the first rejected round of the step does not escalate (another worktree's round of the same step does not count), the second does" "$R1:$(cat "$RLL")" "0:dev --model m-big"
 esc_cfg '{"dev": {"to": "m-dev"}}'; try re dev --step 6 --round 1 --outcome rejected
 check "escalation: a role already on the escalation model is not relaunched" "$RC:$(grep -c . "$RLL")" "0:0"
 esc_cfg '{"dev": {"to": "m-big"}}'; jq '.settings.mode = "pr-reviewer"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
