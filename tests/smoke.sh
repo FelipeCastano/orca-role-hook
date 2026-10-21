@@ -563,6 +563,15 @@ jq '.roles.dev.agent = "opencode"' "$KIT/config.json" > "$TMP/oc-pm.json"
 MO="$(planner_msg "$TMP/oc-pm.json" "planner dev sec" "$TMP/state.env" "" "" 0)"
 check "planner_msg: an opencode worker -> one --inject sentence naming only it" "$(printf '%s' "$MO" | grep -o 'OpenCode workers ([^)]*)' ) $(printf '%s' "$MO" | grep -c 'orca orchestration dispatch --task <task_id> --to <handle> --inject --json')" "OpenCode workers (Dev) 1"
 check "planner_msg: no opencode worker -> no --inject sentence" "$(printf '%s' "$M1" | grep -c 'inject')" "0"
+# A coordinator's marker for this worktree (prompts/coordinator.md): the fresh Planner waits for its dispatch; other worktrees' markers and the resume modes change nothing
+CW="$TMP/cw"; rm -rf "$CW"; mkdir -p "$CW"; git -C "$CW" init -q; mkdir -p "$CW/.git/orca-roles.coordinated"
+cpm() { (cd "$CW" && planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" "$1"); }
+MC0="$(cpm 0)"; touch "$CW/.git/orca-roles.coordinated/other"
+check "planner_msg: another worktree's coordinator marker changes nothing" "$(cpm 0)" "$MC0"
+touch "$CW/.git/orca-roles.coordinated/cw"; MC="$(cpm 0)"
+check "planner_msg: coordinated -> startup, then wait for the dispatch with no phase 1 and no question dialog; the user still comes first" "$(printf '%s' "$MC" | grep -c 'Start with the startup')|$(printf '%s' "$MC" | grep -c 'opened by a coordinator that will send you its task as an Orca dispatch (see your section "Working under a coordinator"). Do the startup and stop there: do not start phase 1, .*open no question dialog, because an open dialog blocks the dispatch. End your turn with one line saying you are waiting for the coordinator.s task. If the user writes in this tab first, the user takes precedence.$')" "0|1"
+check "planner_msg: coordinated changes only the last sentence (without the marker the message is byte-identical)" "${MC%% This worktree was opened by a coordinator*} Start with the startup." "$MC0"
+check "planner_msg: the resume modes ignore the coordinator marker" "$(cpm 1 | grep -c 'opened by a coordinator') $(cpm 2 | grep -c 'opened by a coordinator') $(cpm 3 | grep -c 'opened by a coordinator')" "0 0 0"
 }
 
 sec_flow() {
@@ -3488,10 +3497,12 @@ echo '{"projects":{"'"$(cd "$CO/wt" && pwd -P)"'":{"allowedTools":["Bash(ls)"],"
 check "coordinator.sh: a folder Claude already knows keeps its entry, gets the flag and is not recorded for forget-trust.sh" "$(jq -c --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d]' "$CO/home/.claude.json") $(( $(grep -c . "$KIT/trusted.list" 2>/dev/null || true) - ${n0:-0} ))" '{"allowedTools":["Bash(ls)"],"hasTrustDialogAccepted":true} 0'
 co --model opus; check "coordinator.sh: --model wins" "$(sed -n 3p "$CO/argv")" "opus"
 check "coordinator.sh: unknown option -> exit 1" "$(co --nope; echo $?)" "1"
+check "coordinator prompt: marks the worktree before creating it, checks the Planner's tab beyond tui-idle, and recovers agent_prompt_blocked without cancelling, delegating or leaving the dispatch" "$(grep -c 'orca-roles.coordinated"; mkdir -p "$d" && touch "$d/<name>"' "$ROOT/prompts/coordinator.md") $(grep -c '`tui-idle` alone is not enough' "$ROOT/prompts/coordinator.md") $(grep -c 'fails with `agent_prompt_blocked`.*Never press Esc.*never ask the user to type in a tab for you.*retry `worker-start` once with `--retry-of <dispatch_id>`.*do not poll its tab in place of `check --wait`' "$ROOT/prompts/coordinator.md")" "1 1 1"
+check "coordinator prompt: the task is created before the worktree, the marker before orca worktree create" "$(awk '/task-create --spec/{t=NR} /touch "\$d\/<name>"/{m=NR} /^   Then `orca worktree create/{c=NR} END{print (t && m && c && t < m && m < c) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "ordered"
 check "coordinator prompt: dispatches to the Planner's existing tab, never a second agent, and never talks to workers" "$(grep -c 'worker-start --task <task_id> --terminal <planner> --worktree id:<worktree id>' "$ROOT/prompts/coordinator.md") $(grep -c 'Do not use `worker-start --worktree new-\*`' "$ROOT/prompts/coordinator.md") $(grep -c 'never talk to the workers below a Planner' "$ROOT/prompts/coordinator.md")" "1 1 1"
 for m in programmer pr-reviewer academic-research; do
   pl="$ROOT/prompts/$m/planner.md"
-  check "planner $m: one 'Working under a coordinator' section, before Limits, with ask and one worker_done" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`")" "1 before 2"
+  check "planner $m: one 'Working under a coordinator' section, before Limits, with ask, one worker_done and the wait for the first dispatch" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`\|no planning and no question dialog before it arrives")" "1 before 3"
 done
 }
 
@@ -3840,6 +3851,12 @@ OWN="$(cat "$MF/own.pid" 2>/dev/null || true)"
 check "kickoff.sh: when it ends it removes its own registry file and leaves another kickoff's" "$([ -f "$MF/gd/orca-roles.kickoff.d/$OWN" ] && echo kept || echo gone):$([ -f "$MF/gd/orca-roles.kickoff.d/$OP" ] && echo kept || echo gone)" "gone:kept"
 kill "$OP" 2>/dev/null; wait "$OP" 2>/dev/null || true; rm -rf "$MF/gd/orca-roles.kickoff.d"
 check "model-check: role message sent once" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
+# kickoff.sh: a coordinator's marker covers only the Planner's first start, which removes it
+CM="$MF/wt/.git/orca-roles.coordinated/wt"; mkdir -p "${CM%/*}"; touch "$CM"
+mf "$(mfc "$DEVOK")" clean "dev"; check "kickoff.sh: a start without the Planner keeps the coordinator's marker" "$([ -f "$CM" ] && echo kept || echo gone)" "kept"
+REM="planner" mf "$(mfc "$DEVOK")" clean "planner"; check "kickoff.sh: a Planner coming back with its memory keeps the coordinator's marker" "$([ -f "$CM" ] && echo kept || echo gone)" "kept"
+mf "$(mfc "$DEVOK")" clean "planner"; check "kickoff.sh: the Planner's first start removes the coordinator's marker" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c '^SEND Read' "$MF/orca.log")" "gone|1"
+rm -rf "${CM%/*}"
 mf "$(mfc "$DEVOK")" clean "dev"
 check "model-check: good model recorded, no escalation" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
 for how in new remembered; do

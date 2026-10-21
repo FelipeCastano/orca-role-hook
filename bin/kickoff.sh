@@ -188,6 +188,8 @@ composer_watch & WATCH_PID=$!
 if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
   kick "$PLANNER" planner "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+  # a coordinator's marker covers only this first start: a Planner opened here again later talks to the user as usual
+  if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)"; then rm -f "$CM"; fi
 fi
 OPENED_WORKERS=""
 for id in $ROLES; do
