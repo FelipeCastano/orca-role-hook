@@ -32,14 +32,16 @@ while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}=${kv#*=}"; done < <(
 first_line() { head -1 | tr '\t\r' '  '; }
 
 TO="${ORCA_ROLES_PROBE_TIMEOUT:-90}"
+case "$TO" in ''|*[!0-9]*|0*) echo "models.sh: ORCA_ROLES_PROBE_TIMEOUT must be a whole number of seconds; using 90" >&2; TO=90;; esac
 PROBE="$(mopt probe)"
 # <i> <command...>: runs the probe in the background with stdout/err in $T/<i>.out/.err, kills it after $TO seconds. Sets RC and TIMED.
 bounded() {
   local i="$1" pid sl; shift
+  rm -f "$T/$i.stop" "$T/$i.to"
   "$@" > "$T/$i.out" 2> "$T/$i.err" < /dev/null & pid=$!
-  ( trap 'kill ${sp:-} 2>/dev/null; exit 0' TERM; sleep "$TO" & sp=$!; wait $sp; : > "$T/$i.to"; kill_tree $pid ) > /dev/null 2>&1 & sl=$!
+  ( n=0; while [ ! -e "$T/$i.stop" ] && [ "$n" -lt $((TO * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$T/$i.stop" ] || { : > "$T/$i.to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
   wait $pid 2>/dev/null; RC=$?
-  kill $sl 2>/dev/null; wait $sl 2>/dev/null
+  : > "$T/$i.stop"; wait $sl 2>/dev/null
   TIMED=0; [ -f "$T/$i.to" ] && TIMED=1
   return 0
 }
