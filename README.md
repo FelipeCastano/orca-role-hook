@@ -615,7 +615,8 @@ Codex (`agent: "codex"`):
 - **MCP.** The kit's `mcpServers` are not passed: configure MCP servers in OpenCode itself. A role with a non-empty `mcp` list gets one warning at start.
 - **Resume.** `--resume` does not apply yet (the role starts fresh).
 - **Checked with one real run** (OpenCode 2.0.25, Orca 1.4.218, a local model, one trivial task): `orca terminal wait --for tui-idle` returns once `mini` is ready (about 10 s after the tab opened), and text sent with `orca terminal send --enter` reaches `mini` and runs; Orca accepts it but warns that it cannot confirm delivery for this agent. The status bar showed the generated agent and its model, the agent file stayed out of `git status`, and the worker edited the file and ran the test. Session ids look like `ses_` followed by 26 letters and digits (`opencode session list`, run in the worktree).
-- **Not verified yet:** `agentIdentity` (right after start, before the first message, `orca terminal show` had none for the `mini` tab, although Orca does report `opencode` for other OpenCode tabs; until it is checked after a task, a live tab counts as alive), whether `--session <id>` with an id of your own creates a session, and the text OpenCode prints for a missing model (set `modelError` yourself for now). `dev-opencode` in `config.default.json` is a disabled example.
+- **`agentIdentity`.** Orca reported none for the `mini` tab right after start, before the first message, and `opencode` once the task had run. A role that has not received its first message yet would look dead, so a live tab still counts as alive for OpenCode roles.
+- **Not verified yet:** whether `--session <id>` with an id of your own creates a session, and the text OpenCode prints for a missing model (set `modelError` yourself for now). `dev-opencode` in `config.default.json` is a disabled example.
 
 ```json
 "dev-opencode": { "agent": "opencode", "model": "provider/model", "common": "{kit}/prompts/programmer/common-peon.md",
