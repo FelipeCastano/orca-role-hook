@@ -8,7 +8,7 @@
 set -uo pipefail
 TOP="${1:-}"
 [ -d "$TOP" ] || { echo "academic-scaffold.sh: usage: academic-scaffold.sh <repo top-level> (a directory)" >&2; exit 1; }
-DIRS="experimentation/configs experimentation/data experimentation/models experimentation/src experimentation/scripts experimentation/results experimentation/results/raw experimentation/logs article/sections article/literature article/literature/pdfs article/tables article/images article/template"
+DIRS="experimentation/configs experimentation/data experimentation/models experimentation/src experimentation/scripts experimentation/specs experimentation/tests experimentation/results experimentation/results/raw experimentation/logs article/sections article/literature article/literature/pdfs article/tables article/images article/template"
 UNTRACKED="experimentation/data experimentation/models experimentation/logs experimentation/results/raw article/literature/pdfs"
 IGNORES='experimentation/data/*
 !experimentation/data/README.md

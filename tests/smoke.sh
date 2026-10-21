@@ -308,10 +308,11 @@ rule A7 "$AD/planner.md" 'never scrape publisher sites or try to get past logins
 # A8 HPC job submission only with the user's approval of that job stated in the task
 rule A8 "$AD/planner.md" 'Never submit without that yes' '^4\. \*\*Experiments'
 rule A8 "$AD/planner.md" 'states that the user approved that specific submission' '^4\. \*\*Experiments'
-rule A8 "$AD/researcher.md" 'only when the task states that the user approved that specific submission'
-rule A8 "$AD/researcher.md" 'do not connect to the cluster' 'HPC: prepare the job'
+rule A8 "$AD/planner.md" 'ask the user whether Dev submits it or they do' '^4\. \*\*Experiments'
+rule A8 "$AD/dev.md" 'only when the task states that the user approved that specific submission'
+rule A8 "$AD/dev.md" 'do not connect to the cluster' 'HPC: prepare the job'
 rule A8 "$AD/common-workers.md" 'HPC job submission only when the task states that the user approved that specific submission' '^- HPC job submission'
-rule A8 "$AD/common-workers.md" 'only the Researcher submits' '^- HPC job submission'
+rule A8 "$AD/common-workers.md" 'only Dev submits, and only with that yes' '^- HPC job submission'
 rule A8 "$AD/common-workers.md" '(no push, no submission, no upload, no email)' '^- Never post or send'
 rule A8 "$AD/common-workers.md" 'report it in your `worker_done` and let the Planner ask' '^- Never post or send'
 # A9 the five review roles are read-only
@@ -323,22 +324,36 @@ done
 # A10 each worker writes only in its folders
 rule A10 "$AD/common-workers.md" '**Write only where your role says.**'
 rule A10 "$AD/sota.md" 'Write only in article/literature/ and article/refs.bib'
-rule A10 "$AD/researcher.md" 'Write only in experimentation/ and in the generated article/tables/ and article/images/'
-rule A10 "$AD/researcher.md" 'Never write the paper'"'"'s text' '^- Write only in experimentation/'
+rule A10 "$AD/researcher.md" 'Write only experimentation/PLAN.md, experimentation/specs/, experimentation/data/ (Obtain data) and experimentation/results/<experiment>/summary.md'
+rule A10 "$AD/researcher.md" 'Never write code, configs, scripts, environment files, other result files or anything in article/'
+rule A10 "$AD/researcher.md" 'You write no code and run no experiments' '^- You write no code'
+rule A10 "$AD/researcher.md" 'A dataset behind a login, a registration or a license to accept is not downloaded'
+rule A10 "$AD/dev.md" 'only when the spec'"'"'s Data section says Dev does it'
+rule A10 "$AD/dev.md" 'Never get past a login, a registration or a license to accept'
+rule A10 "$AD/dev.md" 'Never write PLAN.md, the specs, summary.md, make_tables.py or make_figures.py, or anything in article/'
+rule A10 "$AD/dev.md" 'Never change a result by hand and never delete or leave out failed or negative runs'
+rule A10 "$AD/tester.md" 'Never edit Dev'"'"'s code, configs or scripts'
+rule A10 "$AD/tester.md" 'never run a full or training run'
+rule A10 "$AD/tester.md" 'runs it only in the copy under your scratchDir'
+rule A10 "$AD/tester.md" 'Write only in experimentation/tests/'
+rule A10 "$AD/tester.md" 'Never write results, run records, summary.md or anything in article/'
+rule A10 "$AD/dev.md" 'Write only experimentation/src/, experimentation/configs/'
+rule A10 "$AD/writer.md" 'Never write experimentation/results/, the configs or experimentation/src/'
 rule A10 "$AD/writer.md" 'You write only in article/' '^- You write only'
-rule A10 "$AD/writer.md" 'Never write in article/literature/ (except as the Add a citation task says), article/tables/, article/images/' '^- Never write in'
+rule A10 "$AD/writer.md" 'Never write in article/literature/ (except as the Add a citation task says) or in experimentation/ other than make_tables.py and make_figures.py; never type or edit a file in article/tables/ or article/images/ by hand' '^- Never write in'
 rule A10 "$AD/common-workers.md" 'otherwise changes the git state (no `git add`, `restore` or `clean` either)' '^- \*\*Write only'
 rule A10 "$AD/common-workers.md" 'handles (`@user`) and email addresses count as names' '^- No names'
-rule A10 "$AD/researcher.md" 'you change only experimentation/scripts/ and regenerate article/tables/ and article/images/' '^- In the writing phase'
-rule A10 "$AD/researcher.md" 'Never change experimentation/results/, the configs or the code in experimentation/src/' '^Resolve the findings'
-rule A10 "$AD/researcher.md" 'never run experiments in the writing phase' '^Resolve the findings'
+rule A10 "$AD/writer.md" 'never run experiments' '^Resolve the findings'
 rule A10 "$AD/writer.md" 'Then run `scholar.sh pdf <id>`' 'Only when the task states that the user approved it'
 rule A7 "$AD/common-workers.md" 'Never browse or scrape publisher sites and never try to get past a login or a bot challenge' '^- Never browse'
 rule A7 "$AD/common-workers.md" 'papers are read only through `scholar.sh`' '^- Never browse'
 rule A7 "$AD/common-workers.md" 'Technical documentation (libraries, tools, datasets'"'"' own pages and docs) may be read' '^- Never browse'
 rule A7 "$AD/writer.md" 'Exit 2 means no open-access PDF was found' 'Only when the task states that the user approved it'
 rule A7 "$AD/evidence.md" '`scholar.sh` is `~/.orca-roles/bin/scholar.sh`'
-rule A10 "$AD/planner.md" 'those on tables or figures (Evidence'"'"'s and Rigor'"'"'s) go to a Researcher fix task (scripts and regeneration only), the rest to the Writer' '^2\. \*\*Each section'
+rule A11 "$AD/tester.md" 'Mutate only in a copy of the repository under your scratchDir'
+rule A11 "$AD/planner.md" '**One code task at a time.**'
+rule A11 "$AD/evidence.md" 'make_tables.py and make_figures.py in a copy'
+rule A10 "$AD/planner.md" 'those on tables or figures (Evidence'"'"'s and Rigor'"'"'s) go to a Writer "Fix tables or figures" task, the rest to the Writer' '^2\. \*\*Each section'
 rule A10 "$AD/planner.md" 'a finding that needs a new or repeated run means going back to experiment' '^2\. \*\*Each section'
 rule A11 "$AD/planner.md" 'a table or figure finding that needs a new or repeated run' '^- Going back from writing'
 rule A10 "$AD/sota.md" '`--from` and `--to` take YYYY-MM-DD' '^1\. For each query'
@@ -380,7 +395,7 @@ rule R15 "$AD/planner.md" 'checked every time before you propose it' '^- Everyth
 rule R15 "$AD/planner.md" 'git log -15' '^- Everything you draft for outside the repository'
 rule R15 "$AD/planner.md" 'A subject-only commit is not acceptable unless the history does it' '^- Everything you draft for outside the repository'
 rule A8 "$AD/tech-verifier.md" 'Never submit HPC jobs' '^- Never submit'
-rule A10 "$AD/researcher.md" 'Never change a result by hand and never drop runs that do not fit' '^- Never change a result'
+rule A10 "$AD/researcher.md" 'Never change a result and never leave out runs that do not fit' '^- Never change a result'
 # programmer Planner: relaunch-role.sh only with the user's confirmation, nothing edited in the kit without their yes, no task to a role that did not start
 rule R6 "$PD/planner.md" 'the only way to relaunch one with another model is `~/.orca-roles/bin/relaunch-role.sh`, all with the user'"'"'s confirmation' '^- Never create worktrees'
 rule R6 "$PD/planner.md" '(edit nothing in `~/.orca-roles` without it; do not use `roles --set` for this)' 'model unavailable'
@@ -1726,17 +1741,22 @@ sec_research_defaults() {
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style"
-check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
+check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
 check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
+check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '.roles[$r].model // "-"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
 check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's" "$(awt "$D")" "$(awt "$TMP/awd-old.json")"
 check "research-defaults: the programmer team is the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "7:programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
 pk_setup
-mkdir -p "$PK/prompts/academic-research"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
-check "research-defaults: academic-research team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-research" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher sota methodology tech-verifier |planner researcher writer evidence rigor style |"
+mkdir -p "$PK/prompts/academic-research"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; for r in dev tester; do echo "# $r" > "$PK/prompts/academic-research/$r.md"; done; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
+check "research-defaults: academic-research team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-research" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher dev tester sota methodology tech-verifier |planner researcher writer evidence rigor style |"
 rm -rf "$PK/prompts/academic-research"
 awu() { echo "$1" > "$TMP/awd-user.json"; upgrade_config "$D" "$TMP/awd-user.json"; }
+DT() { jq -c '[.roles.dev.modes, .roles.dev.phases, .roles.tester.modes, .roles.tester.phases, .roles.writer.model]'; }
+check "upgrade_config: dev and tester modes [programmer] and writer opus move to the new defaults, phases added" "$(awu '{"roles":{"dev":{"modes":["programmer"]},"tester":{"modes":["programmer"]},"writer":{"model":"claude-opus-5-5"}}}' | DT)" '[["programmer","academic-research"],["experiment"],["programmer","academic-research"],["experiment"],"claude-sonnet-5-5"]'
+check "upgrade_config: a user's own dev and tester modes and writer model stay (other lists, order, all, a string, near-miss model)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-research","programmer"]' '"all"' '[]'; do awu "$(jq -nc --argjson v "$v" '{roles:{dev:{modes:$v},tester:{modes:$v}}}')" | jq -c '[.roles.dev.modes, .roles.tester.modes]'; done | tr '\n' ' ')$(for v in mine claude-opus-5 claude-opus-5-5-x claude-haiku-5-5; do awu "{\"roles\":{\"writer\":{\"model\":\"$v\"}}}" | jq -r '.roles.writer.model'; done | tr '\n' ' ')" '[["programmer","pr-reviewer"],["programmer","pr-reviewer"]] [["pr-reviewer"],["pr-reviewer"]] [["programmer","programmer"],["programmer","programmer"]] [["academic-research","programmer"],["academic-research","programmer"]] ["all","all"] [[],[]] mine claude-opus-5 claude-opus-5-5-x claude-haiku-5-5 '
+check "upgrade_config: dev and tester are migrated independently, own phases stay, absent entries get the defaults" "$(awu '{"roles":{"dev":{"modes":["programmer"],"phases":["writing"]},"tester":{"modes":["pr-reviewer"]}}}' | jq -c '[.roles.dev.modes, .roles.dev.phases, .roles.tester.modes, .roles.tester.phases]'):$(awu '{"roles":{"planner":{"model":"x"}}}' | DT)" '[["programmer","academic-research"],["writing"],["pr-reviewer"],["experiment"]]:[["programmer","academic-research"],["experiment"],["programmer","academic-research"],["experiment"],"claude-sonnet-5-5"]'
 RM() { jq -c '[.roles.researcher.modes, .roles.researcher.phases]'; }
 check "upgrade_config: researcher modes [programmer] move to the new default, phases added (experiment and writing)" "$(awu '{"roles":{"researcher":{"modes":["programmer"]}}}' | RM)" '[["programmer","academic-research"],["experiment","writing"]]'
 check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-research","programmer"]' '"all"' '[]' '["programmer","academic-research"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-research","programmer"] "all" [] ["programmer","academic-research"] '
@@ -3472,11 +3492,11 @@ check "planner_msg: Phase only in academic-research, right after the mode" "$(pr
 
 # scaffold: fresh repo, then idempotent
 SC="$PK/bin/academic-scaffold.sh"; SD="$TMP/aw-sc1"; mkdir -p "$SD"; git -C "$SD" init -q
-DIRS="experimentation/configs experimentation/data experimentation/models experimentation/src experimentation/scripts experimentation/results experimentation/results/raw experimentation/logs article/sections article/literature article/literature/pdfs article/tables article/images article/template"
+DIRS="experimentation/configs experimentation/data experimentation/models experimentation/src experimentation/scripts experimentation/specs experimentation/tests experimentation/results experimentation/results/raw experimentation/logs article/sections article/literature article/literature/pdfs article/tables article/images article/template"
 try "$SC" "$SD"; O1="$OUT"; R1="$RC"
 GIK="$(cd "$SD" && find . -name .gitkeep | sort | tr '\n' ' ')"; H0="$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)"; I0="$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')"
 try "$SC" "$SD"
-check "scaffold: fresh repo gets every folder, .gitkeep only in tracked ones, the ignore lines; second run prints nothing and changes nothing" "$R1:$(cd "$SD" && for d in $DIRS; do [ -d "$d" ] || echo "$d"; done | wc -l | tr -d ' '):$GIK:$(printf '%s\n' "$O1" | grep -c '^Created '):$(printf '%s\n' "$O1" | tail -1):$(sed -n 1p "$SD/.gitignore"):$(wc -l < "$SD/.gitignore" | tr -d ' '):$RC:[$OUT]:$([ "$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)" = "$H0" ] && echo same):$(ls -A "$SD" | tr '\n' ' ')" "0:0:./article/images/.gitkeep ./article/literature/.gitkeep ./article/sections/.gitkeep ./article/tables/.gitkeep ./article/template/.gitkeep ./experimentation/configs/.gitkeep ./experimentation/results/.gitkeep ./experimentation/scripts/.gitkeep ./experimentation/src/.gitkeep :24:Updated .gitignore:# orca-roles academic-research:20:0:[]:same:.git .gitignore article experimentation "
+check "scaffold: fresh repo gets every folder, .gitkeep only in tracked ones, the ignore lines; second run prints nothing and changes nothing" "$R1:$(cd "$SD" && for d in $DIRS; do [ -d "$d" ] || echo "$d"; done | wc -l | tr -d ' '):$GIK:$(printf '%s\n' "$O1" | grep -c '^Created '):$(printf '%s\n' "$O1" | tail -1):$(sed -n 1p "$SD/.gitignore"):$(wc -l < "$SD/.gitignore" | tr -d ' '):$RC:[$OUT]:$([ "$(cd "$SD" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum)" = "$H0" ] && echo same):$(ls -A "$SD" | tr '\n' ' ')" "0:0:./article/images/.gitkeep ./article/literature/.gitkeep ./article/sections/.gitkeep ./article/tables/.gitkeep ./article/template/.gitkeep ./experimentation/configs/.gitkeep ./experimentation/results/.gitkeep ./experimentation/scripts/.gitkeep ./experimentation/specs/.gitkeep ./experimentation/src/.gitkeep ./experimentation/tests/.gitkeep :28:Updated .gitignore:# orca-roles academic-research:20:0:[]:same:.git .gitignore article experimentation "
 GIL="$(sed -n '2,$p' "$SD/.gitignore" | tr '\n' ' ')"
 check "scaffold: ignore lines are exactly the spec's, in order; git index untouched" "$GIL:$([ "$(git -C "$SD" ls-files | wc -l | tr -d ' '):$({ ls "$SD/.git/index" 2>/dev/null || true; } | wc -l | tr -d ' ')" = "$I0" ] && echo same)" 'experimentation/data/* !experimentation/data/README.md experimentation/models/* !experimentation/models/README.md experimentation/logs/ experimentation/results/raw/ article/literature/pdfs/ article/build/ *.aux *.bbl *.blg *.fdb_latexmk *.fls *.out *.synctex.gz *.toc *.lof *.lot article/**/*.log :same'
 

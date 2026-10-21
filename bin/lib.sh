@@ -137,6 +137,8 @@ def kit_prefixes($kit; $home): ["{kit}/"] + (if $kit == "" then [] else [$kit + 
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
+# ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
+# claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
 # Old mode id in the user's settings.mode, role modes, prompt keys, or prompt paths inside the kit?  config_has_old_mode <config.json>
 config_has_old_mode() {
   jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
@@ -148,6 +150,9 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
+    | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
+    | .roles.tester.modes |= (if . == ["programmer"] then $d.roles.tester.modes else . end)
+    | .roles.writer.model |= (if . == "claude-opus-5-5" then $d.roles.writer.model else . end)
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
