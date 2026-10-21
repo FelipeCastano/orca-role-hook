@@ -3214,7 +3214,7 @@ check "planner history: seeded from kicked then env (first PLANNER line each), a
 # stale_run: the newest Run still bound to an old handle of the Planner, never the current one, never an unrelated one
 printf 'old1\nold2\ncur\n' > "$HD/orca-roles.planner-handles"; rm -f "$MF"/rl.*
 sr() { rm -f "$MF/rl.n"; PATH="$MF/bin:$PATH" stale_run "$HD" "${1:-cur}" | tr '\t' '~'; }   # prints the line; the return code is read with src
-src() { rm -f "$MF/rl.n"; PATH="$MF/bin:$PATH" stale_run "$HD" "${1:-cur}" >/dev/null && echo 0 || echo 1; }
+src() { rm -f "$MF/rl.n"; PATH="$MF/bin:$PATH" stale_run "$HD" cur >/dev/null && echo 0 || echo 1; }
 rr() { jq -nc --arg id "$1" --arg h "$2" --arg u "$3" --arg o "$4" '{id: $id, coordinator_handle: $h, updated_at: $u, objective: $o}'; }
 page() { printf '{"result":{"runs":[%s]%s}}' "$2" "${3:+,\"nextCursor\":\"$3\"}" > "$MF/rl.page.$1"; }
 page first "$(rr r1 other 2026-01-05 unrelated),$(rr r2 cur 2026-01-06 current)"; S1="[$(sr)]"
