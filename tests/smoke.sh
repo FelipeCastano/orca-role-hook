@@ -260,6 +260,12 @@ for m in programmer pr-reviewer academic-research; do
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'acknowledges each batch once read, with `--ack <delivery_id>`' '^- A worker that reads its messages'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'is not a heartbeat' '^- A worker that reads its messages'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'do not send them' '^- \*\*No heartbeats'
+  rule R16 "$ROOT/prompts/$m/planner.md" 'compare its `coordinator_handle` with your own handle' '\*\*Check that reports can reach you\.\*\*'
+  rule R17 "$ROOT/prompts/$m/common-workers.md" 'Never use an interactive question tool (AskUserQuestion or the like), plan mode, or any dialog that waits for an answer in your tab' '^- Never use an interactive question tool'
+  rule R17 "$ROOT/prompts/$m/common-workers.md" 'ask the Planner with `orca orchestration ask`' '^- Never use an interactive question tool'
+  rule R18 "$ROOT/prompts/$m/planner.md" 'run `~/.orca-roles/bin/launch.sh --reopen` from the worktree, never with any other option' '\*\*Recovering the team yourself\.\*\*'
+  rule R18 "$ROOT/prompts/$m/planner.md" 'Run `--reopen` at most once per role until the user says otherwise' '\*\*Recovering the team yourself\.\*\*'
+  rule R18 "$ROOT/prompts/$m/planner.md" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done
 # R15 the convention check before proposing a commit, PR or Jira text
