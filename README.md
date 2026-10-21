@@ -349,7 +349,7 @@ The id must be exactly one of the three (no uppercase, spaces, slashes or `..`);
 
 **Open team rule:** the mode of a worktree cannot change while its team is open. If the requested mode differs from the one the worktree was launched with and any tab of the saved team still exists (also one Orca restored after a restart with a new handle), `launch.sh` stops with an error and changes nothing. Close the team first (`close-role.sh` on each worker, or close the tabs) and run `roles` again.
 
-Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]`, the `researcher` is `["programmer", "academic-research"]`, the other four programmer workers are `["programmer"]` and the seven academic-research roles are `["academic-research"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
+Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]`, the `researcher`, `dev` and `tester` are `["programmer", "academic-research"]`, the other two programmer workers (`e2e-tester`, `deployer`) are `["programmer"]` and the seven academic-research roles are `["academic-research"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
 
 `prompt` is a path (legacy form, it applies to `programmer` only) or an object per mode:
 
@@ -383,20 +383,24 @@ This mode was called `academic-writer`. The old name still works until the next 
 
 A team that takes a scientific paper from the state of the art to the final text, in your git repository. The paper is always in English, LaTeX and BibTeX.
 
-**Phases.** Two phases, `experiment` (always first) and `writing`; only the roles of the current phase open (the Researcher is open in both, but in writing it only fixes tables and figures). The Planner switches with `~/.orca-roles/bin/phase.sh <experiment|writing>` after your yes: it refuses with uncommitted changes, closes the roles the new phase does not have and opens its own; going back to experiment needs `STATE.md` committed at the repository root (the writing state to resume from). The phase is saved like the worktree's other exceptions (`roles --reset` forgets it and the team starts again in experiment). A role's `phases` (`["experiment"]`, `["writing"]` or both; missing = both) only matters in this mode.
+**Phases.** Two phases, `experiment` (always first) and `writing`; only the roles of the current phase open (the Researcher is open in both). The Planner switches with `~/.orca-roles/bin/phase.sh <experiment|writing>` after your yes: it refuses with uncommitted changes, closes the roles the new phase does not have and opens its own; going back to experiment needs `STATE.md` committed at the repository root (the writing state to resume from). The phase is saved like the worktree's other exceptions (`roles --reset` forgets it and the team starts again in experiment). A role's `phases` (`["experiment"]`, `["writing"]` or both; missing = both) only matters in this mode.
 
 | Tab | Phase | Model | Role |
 |---|---|---|---|
 | **State-of-the-Art** | experiment | Haiku 5.5 | Literature search with `scholar.sh`, one card per paper, references and PDFs. |
-| **Researcher** | experiment, writing (tables and figures only) | Opus 5.5 | `PLAN.md`, reproducible experiments, tables and figures by script; HPC jobs only with your approval of each. In writing it only fixes tables and figures: it changes their scripts and regenerates them from the existing results. |
+| **Researcher** | experiment, writing | Opus 5.5 | `PLAN.md`, one closed spec per experiment in `experimentation/specs/`, the datasets (Dev only when a spec allows it) and the interpretation of each experiment's results (`summary.md`); in writing, which tables and figures the paper needs. Writes no code and runs no experiments. |
+| **Dev** | experiment | Sonnet 5.5 | Implements and runs each experiment from its spec (code, configs, run scripts, Slurm jobs, pinned environment, models) and writes a run record per run; HPC jobs only with your approval of each. |
+| **Tester** | experiment | Sonnet 5.5 | Tests Dev's experiment code in `experimentation/tests/` (data processing, metrics, seeds, small reproductions); CPU only, its mutants and reproductions run in a copy. |
 | **Methodology** | experiment | Opus 5.5 | Design and statistics review, read-only. |
-| **Tech-Verifier** | experiment | Opus 5.5 | Math and reproducibility review, read-only. |
-| **Writer** | writing | Opus 5.5 | The LaTeX paper, compiled after every change. |
-| **Evidence** | writing | Sonnet 5.5 | Claims, citations and numbers against their sources, read-only. |
+| **Tech-Verifier** | experiment | Opus 5.5 | Reviews each experiment's spec before Dev implements it, then the math and reproducibility, read-only. |
+| **Writer** | writing | Sonnet 5.5 | The LaTeX paper, compiled after every change, and every table and figure, generated by its scripts (`make_tables.py`, `make_figures.py`) from the results. |
+| **Evidence** | writing | Sonnet 5.5 | Claims, citations and numbers against their sources, read-only; re-runs the table and figure scripts in a copy to check they reproduce. |
 | **Rigor** | writing | Opus 5.5 | Conclusions, notation, figures and tables, read-only. |
 | **Style** | writing | Sonnet 5.5 | Structure and language, read-only. |
 
-Plus the Planner (both phases). There is no Auditor in this mode.
+Plus the Planner (both phases). There is no Auditor in this mode. Dev and Tester are the same roles as in programmer, with one entry each in `config.json` (enabled, model and parameters apply in both modes); their `phases: ["experiment"]` keeps them out of the writing phase.
+
+**Updating.** Updating the kit (`install.sh`) moves a `dev` or `tester` whose `modes` is still exactly `["programmer"]` to `["programmer", "academic-research"]`, and a Writer still on `claude-opus-5-5` to `claude-sonnet-5-5`; values you chose yourself are kept. If your own `modes` for Dev or Tester leaves out academic-research, the mode has no one to write or test the experiment code: the Planner tells you how to add them.
 
 **Starting it.** `roles --mode academic-research` in a worktree of the paper's repository (git is required: the launch stops otherwise). Each launch creates the folders below where missing and adds the lines that keep large or copyrighted files out of git to `.gitignore`; it never overwrites anything.
 
@@ -411,8 +415,10 @@ experimentation/
 ├── data/                        # out of git, README.md tracked
 ├── models/                      # out of git, README.md tracked
 ├── src/
-├── scripts/                     # run scripts and Slurm jobs
-├── results/                     # results/raw/ out of git
+├── scripts/                     # run scripts, Slurm jobs, make_tables.py, make_figures.py
+├── specs/                       # one spec per experiment (Researcher)
+├── tests/                       # tests of the experiment code (Tester)
+├── results/                     # per experiment: metrics, runs/, summary.md; results/raw/ out of git
 └── logs/                        # out of git
 article/
 ├── main.tex
@@ -429,9 +435,9 @@ article/
 └── revision/                    # reviews.md, main_correction.tex, rebuttal_letter.tex
 ```
 
-Tables and figures are generated by scripts from `results/`, never by hand.
+Tables and figures are generated by the Writer's scripts from `results/`, never by hand.
 
-**Flow.** Experiment: intake → state of the art (the PDFs that are not open access are listed in `article/literature/missing.md` with the exact file name; download them yourself into `article/literature/pdfs/` and the role picks them up with `scholar.sh pdfs`) → plan agreed with you and reviewed by Methodology before anything runs → experiments → review by Methodology and Tech-Verifier. Writing: skeleton on the venue's template → each section drafted by the Writer, reviewed by Evidence and Rigor, then Style (findings on tables and figures go to the Researcher, scripts and regeneration only; one that needs a new or repeated run means going back to experiment, with your yes) → final pass (including `scholar.sh verify`) → response to reviewers (changes marked in blue by hand in `main_correction.tex`, `rebuttal_letter.tex` answering every numbered comment). The Planner makes every commit, each one on your yes; workers never commit. HPC jobs are prepared by the Researcher and submitted only after your yes to that job (by the Researcher or by you, you decide each time). Nothing leaves the repository (push, submission, upload, email) without your yes. Names of people may appear in the paper itself (its text, author list, `refs.bib`, the literature cards), never in commit messages, PRs or Jira.
+**Flow.** Experiment: intake → state of the art (the PDFs that are not open access are listed in `article/literature/missing.md` with the exact file name; download them yourself into `article/literature/pdfs/` and the role picks them up with `scholar.sh pdfs`) → plan agreed with you and reviewed by Methodology before anything runs → experiments (for each: the Researcher's spec, reviewed by Tech-Verifier; Dev implements and runs it; the Tester tests the code until it accepts it; the Researcher interprets the results) → review by Methodology and Tech-Verifier. Writing: skeleton on the venue's template → each section drafted by the Writer, reviewed by Evidence and Rigor, then Style (findings on tables and figures go to the Writer, scripts and regeneration only; one that needs a new or repeated run means going back to experiment, with your yes) → final pass (including `scholar.sh verify`) → response to reviewers (changes marked in blue by hand in `main_correction.tex`, `rebuttal_letter.tex` answering every numbered comment). The Planner makes every commit, each one on your yes; workers never commit. HPC jobs are prepared by Dev and submitted only after your yes to that job (by Dev or by you, you decide each time). Nothing leaves the repository (push, submission, upload, email) without your yes. Names of people may appear in the paper itself (its text, author list, `refs.bib`, the literature cards), never in commit messages, PRs or Jira.
 
 **scholar.sh.** `~/.orca-roles/bin/scholar.sh` is the team's only way to get references and PDFs (curl, jq and awk; no install).
 
