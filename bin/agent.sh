@@ -54,6 +54,12 @@ case "$AGENT" in
     fi
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
+    # Nobody answers a dialog in a worker's tab (the Planner is the only one that talks to the user): workers cannot open one. In permissionMode
+    # plan the plan tools stay, they are how that mode works. A --disallowedTools in extraArgs adds to this list.
+    if [ "$ROLE" != planner ]; then
+      if [ "$PERM" = plan ]; then ARGS+=(--disallowedTools AskUserQuestion)
+      else ARGS+=(--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode); fi
+    fi
     # Claude Code's own `language` setting (user settings) outranks the prompt: workers override it to English. Not the Planner, which
     # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
     # extraArgs replaces this one and should carry its own "language".

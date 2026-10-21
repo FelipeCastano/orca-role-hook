@@ -368,10 +368,41 @@ planner_msg() {
     msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
+    [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && msg="$msg You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit's settings)."
   else
     msg="$msg Start with the startup."
   fi
   printf '%s' "$msg"
+}
+# Every handle the Planner's tab has had in this worktree: <git dir>/orca-roles.planner-handles, one per line, no duplicates, atomic.
+# If the file does not exist it is first seeded with the PLANNER values of orca-roles.kicked and orca-roles.env.  With an empty handle it only seeds.
+planner_history_add() {  # planner_history_add <git dir> <handle>
+  local f="$1/orca-roles.planner-handles" tmp="$1/orca-roles.planner-handles.tmp.$$"
+  {
+    if [ -f "$f" ]; then cat "$f"
+    else
+      grep '^PLANNER=' "$1/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-
+      grep '^PLANNER=' "$1/orca-roles.env" 2>/dev/null | head -1 | cut -d= -f2-
+    fi
+    printf '%s\n' "$2"
+  } | awk 'NF && !seen[$0]++' > "$tmp" && mv "$tmp" "$f"
+}
+# The Run most recently updated that is still bound to a previous tab of the Planner (a handle in the history other than the current one):
+# prints "<id><TAB><old handle><TAB><objective>" (objective on one line, up to 120 characters), nothing if there is none or no history;
+# 1 if the Runs cannot be listed.  stale_run <git dir> <current planner handle>
+stale_run() {
+  local hist="$1/orca-roles.planner-handles" cursor="" js runs="[]" i=0
+  [ -f "$hist" ] || return 0
+  while [ "$i" -lt 50 ]; do
+    if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --cursor "$cursor" 2>/dev/null)" || return 1
+    else js="$(orca orchestration run-list --json 2>/dev/null)" || return 1; fi
+    runs="$(printf '%s' "$js" | jq -c --argjson acc "$runs" '$acc + [(.result.runs // [])[]]' 2>/dev/null)" || return 1
+    cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)" || return 1
+    i=$((i + 1)); [ -n "$cursor" ] || break
+  done
+  printf '%s' "$runs" | jq -r --argjson hs "$(jq -R . "$hist" | jq -s .)" --arg cur "$2" \
+    '[.[] | select(.coordinator_handle as $h | $h != $cur and ($hs | index($h)))] | max_by(.updated_at) // empty
+     | "\(.id)\t\(.coordinator_handle)\t\((.objective // "") | gsub("[\t\n\r]"; " ") | .[0:120])"' 2>/dev/null || return 1
 }
 # The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt
 # (--append-system-prompt), codex as developer_instructions, custom through {anchor} / $ORCA_ROLES_ANCHOR if its command uses them.

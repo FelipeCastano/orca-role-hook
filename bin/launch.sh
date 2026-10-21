@@ -10,6 +10,7 @@
 #   (academic-research: the phase, settings.phase, is changed with phase.sh, not by hand)
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
+#   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -18,21 +19,27 @@
 # Only one launch runs per worktree at a time (orca-roles.lock in its git dir). If Orca cannot tell which tabs are open
 # ("Orca is not ready"), it stops before closing or opening anything.
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,19p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,20p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
-WT=""; RESET=0; STATUS=0; FLAGS=()
+WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
     --status) STATUS=1;;
+    --reopen) REOPEN=1;;
     --only|--enable|--disable|--set|--mode) FLAGS+=("$1" "${2:-}"); shift;;
     -*) FLAGS+=("$1");;
     *) WT="$1";;
   esac
   shift
 done
+if [ "$REOPEN" = 1 ]; then
+  OTHERS=""; [ ${#FLAGS[@]} -gt 0 ] && OTHERS="${FLAGS[*]}"
+  [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
+  [ -z "$OTHERS" ] || { echo "ERROR: --reopen takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
+fi
 WT="${WT:-${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}}"; WT="${WT:-active}"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 OVR="$GITDIR/orca-roles.overrides.json"  # this worktree's exceptions
@@ -338,9 +345,11 @@ kickoff_of() {  # kickoff_of <role>: prints the pid of a live kickoff that will 
   return 1
 }
 NEW=""; REUSED=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
+SELF_RELAUNCH=0; SELF_HANDLE=""; PLANNER_KEEP_PTY=""; PLANNER_BUSY=0; SELF_NO_SESSION=0   # the Planner's restored tab runs this launch: it is reopened later by its relauncher; its saved ptyId is kept
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
   sv="ST_$v"; st="${!sv}"
+  if [ "$REOPEN" = 1 ] && [ -z "${!v:-}" ]; then echo "$t has no saved tab (closed on purpose or never opened); leaving it closed."; continue; fi
   if [ "$st" = 0 ]; then   # alive: reused as is, but a tab that never got its role message (interrupted launch) is kicked now
     if [ "$(kicked_of "$v")" != "${!v}" ]; then
       if kp="$(kickoff_of "$id")"; then echo "The kickoff of the previous launch is still running (pid $kp): $t gets its role from it."; continue; fi
@@ -357,7 +366,30 @@ for id in $ROLES; do
   elif [ -n "${!v:-}" ]; then
     p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p")"
     if [ -n "$rh" ]; then
+      if [ "$id" = planner ] && [ "$rh" = "${ORCA_TERMINAL_HANDLE:-}" ]; then
+        PLANNER_KEEP_PTY="$p"
+        planner_history_add "$GITDIR" "$ORCA_TERMINAL_HANDLE"   # this tab's handle joins the history: once a later Planner tab is kicked, a Run bound to it is an old one
+        sid=""; case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_handle "$rh")";; esac
+        if [ -n "$sid" ]; then
+          SELF_RELAUNCH=1; SELF_HANDLE="$rh"
+          echo "The Planner runs this launch from its restored tab ($rh): it will be reopened with the kit's settings and its conversation when this turn ends."
+        else   # reopening it would lose a conversation that is intact: the Planner keeps its tab
+          SELF_NO_SESSION=1
+          echo "Cannot start the Planner's relauncher: its conversation could not be read from this tab (agent not claude, or a claude install that hides --resume); the Planner keeps working here without the kit's settings. Run roles from another terminal of this worktree if you want it reopened with them (it may then start without memory)."
+        fi
+        continue
+      fi
       case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_handle "$rh")";; esac
+      if [ "$id" = planner ] && [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && [ -z "$sid" ]; then
+        PLANNER_KEEP_PTY="$p"
+        echo "The Planner's conversation could not be read from its restored tab ($rh): not reopened, to keep it."
+        continue
+      fi
+      if [ "$id" = planner ] && [ -n "$sid" ] && ! orca terminal wait --terminal "$rh" --for tui-idle --timeout-ms 2000 --json >/dev/null 2>&1; then
+        PLANNER_KEEP_PTY="$p"; PLANNER_BUSY=1
+        echo "The Planner's restored tab ($rh) is busy: not reopened now; run roles again when it is idle."
+        continue
+      fi
       orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || true
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
@@ -380,14 +412,41 @@ for id in $ROLES; do
 done
 
 : > "$STATE"; : > "$PTY"
-for id in $ROLES; do v="$(var_of "$id")"; echo "$v=${!v}" >> "$STATE"; echo "$v=$(pty_of_handle "${!v}")" >> "$PTY"; done
+for id in $ROLES; do   # a role with no saved tab (left closed) is not written back as VAR=
+  v="$(var_of "$id")"; [ -n "${!v:-}" ] || continue
+  echo "$v=${!v}" >> "$STATE"
+  if [ "$id" = planner ] && [ -n "$PLANNER_KEEP_PTY" ]; then echo "$v=$PLANNER_KEEP_PTY" >> "$PTY"; else echo "$v=$(pty_of_handle "${!v}")" >> "$PTY"; fi
+done
 "$KIT/bin/orca-yaml.sh" --check || true
 cat "$STATE"
 
-if [ -z "$NEW" ]; then echo "All roles are already open."; exit 0; fi
+# The relauncher reopens the Planner once its turn ends. It is detached from this process and from its terminal (double fork + new session),
+# because Orca kills the process group of a tab when it closes it.
+detached_start() {  # detached_start <log> <command> [args...]
+  local log="$1"; shift
+  if command -v setsid >/dev/null 2>&1; then ( setsid "$@" </dev/null >>"$log" 2>&1 & )
+  elif [ -x /usr/bin/perl ]; then ( /usr/bin/perl -MPOSIX -e 'POSIX::setsid() != -1 or die "setsid: $!"; exec @ARGV' "$@" </dev/null >>"$log" 2>&1 & )
+  else return 1; fi
+}
+start_relauncher() {
+  [ "$SELF_RELAUNCH" = 1 ] || return 0
+  case "$WT" in id:*) ;; *)   # 'active' would be resolved by Orca when the relauncher runs, possibly in another worktree
+    echo "Cannot start the Planner's relauncher: this launch has no worktree id (ORCA_WORKTREE_ID is not set); run roles from another terminal of this worktree to reopen the Planner with the kit's settings and its conversation."
+    return 0;;
+  esac
+  if detached_start "$GITDIR/orca-roles-relaunch.log" "${ORCA_ROLES_RELAUNCHER:-$KIT/bin/relaunch-planner.sh}" "$WT" "$GITDIR" "$SELF_HANDLE" "$(git rev-parse --show-toplevel)"; then
+    echo "The Planner's relauncher is waiting for its turn to end (log: $GITDIR/orca-roles-relaunch.log)."
+  else
+    echo "Cannot start the Planner's relauncher on this system: the Planner keeps working without the kit's settings; run roles from another terminal of this worktree to reopen it with them and its conversation."
+  fi
+}
+if [ -z "$NEW" ]; then echo "All roles are already open."; start_relauncher; exit 0; fi
 [ -n "$REMEMBERED" ] && echo "Resuming workspace:$REMEMBERED keep their conversation from before the restart."
 [ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; the Planner will recover the previous state and give you a summary."
-case " $NEW " in *" planner "*) ;; *) [ "${ORCA_TERMINAL_HANDLE:-}" = "${PLANNER:-}" ] || echo 'The Planner kept its tab: it is told the new handles by a message ("Role handles changed"); if it does not pick them up, ask it to read its messages.';; esac
-nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" > "$GITDIR/orca-roles-kickoff.log" 2>&1 &
+case " $NEW " in *" planner "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${PLANNER:-}" ] || echo 'The Planner kept its tab: it is told the new handles by a message ("Role handles changed"); if it does not pick them up, ask it to read its messages.';; esac
+KLOG="$GITDIR/orca-roles-kickoff.log"
+if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else : > "$KLOG"; fi   # launched by the relauncher: its log is appended to
+ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
 mkdir -p "$KICKOFFS" && printf '%s\n' "${NEW# }" > "$KICKOFFS/$!"
-echo "Role kickoff in progress (log: $GITDIR/orca-roles-kickoff.log)"
+echo "Role kickoff in progress (log: $KLOG)"
+start_relauncher
