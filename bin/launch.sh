@@ -57,7 +57,7 @@ role_alive() {  # role_alive <role> <handle>
     ROLE_ALIVE_CODE="${code:-no-response}"; return 4
   fi
   printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
-  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts for now; Orca's agentIdentity for OpenCode is to be checked with a real run
+  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts; a fresh `mini` tab had no agentIdentity in a real run
   local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
     [ -n "$(agent_in "$2")" ] && return 0
     [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
