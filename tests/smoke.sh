@@ -558,6 +558,11 @@ case "$M3" in (*"Handles: Dev=t2."*"conversation was cleared"*"After your conver
 jq '.settings.language = "Spanish"' "$KIT/config.json" > "$TMP/lang.json"
 case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in *"Always reply to the user in Spanish, whatever language they write in."*) echo "ok   planner_msg: settings.language";; *) echo "FAIL planner_msg language"; FAIL=1;; esac
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
+# OpenCode workers: the Planner is told to dispatch them with --inject (Orca's worker-start --terminal times out on an opencode mini tab)
+jq '.roles.dev.agent = "opencode"' "$KIT/config.json" > "$TMP/oc-pm.json"
+MO="$(planner_msg "$TMP/oc-pm.json" "planner dev sec" "$TMP/state.env" "" "" 0)"
+check "planner_msg: an opencode worker -> one --inject sentence naming only it" "$(printf '%s' "$MO" | grep -o 'OpenCode workers ([^)]*)' ) $(printf '%s' "$MO" | grep -c 'orca orchestration dispatch --task <task_id> --to <handle> --inject --json')" "OpenCode workers (Dev) 1"
+check "planner_msg: no opencode worker -> no --inject sentence" "$(printf '%s' "$M1" | grep -c 'inject')" "0"
 }
 
 sec_flow() {
