@@ -657,6 +657,7 @@ Checked end to end with two worktrees of a toy repo, each with Planner and Dev:
 - Both Planners asked for plan approval with `ask`.
 - With the nested depth at 1, both stopped with `nested_worker_depth_exceeded` and asked what to do, instead of writing the code. At 2, each dispatched its Dev.
 - Both sent `worker_done` with their report, and `worker-release` left the Planners' tabs open.
+- Then `coordinator.sh` itself (Sonnet) ran the same two features from one request: it created the Run and both worktrees, waited for the teams, dispatched each Planner, checked both results in the worktrees and released both dispatches, in about two and a half minutes.
 
 ### MCP in other agents
 

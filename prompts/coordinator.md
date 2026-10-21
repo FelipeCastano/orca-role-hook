@@ -6,7 +6,7 @@ You coordinate several worktrees, of one or more projects, through Orca Orchestr
 1. `orca status --json`. If orchestration is not available, ask the user to enable it in Settings > Experimental and wait.
 2. Tell the user, once, that each Planner hands its own work to its workers one level below you: Orca must allow nested workers 2 deep (Settings > Orchestration > "Nested worker depth" at 2 or more). With the default 1, a Planner's dispatch to its workers fails with `nested_worker_depth_exceeded`. If a Planner asks you about that error, ask the user to raise the setting and tell the Planner to wait. A Planner must not write the code itself instead.
 3. Load the orchestration guide once: `orca skills get orchestration`. Its coordinator rules apply to you: ask/reply, `worker_done` validation, ack only after processing, and release or reuse of settled workers.
-4. Ask the user what they want done if they have not said it. Split it into features, one worktree each. Two features go in the same worktree only when they touch the same code and must ship together. Present that split (feature → project → worktree name → acceptance criteria) and wait for the user's yes.
+4. Ask the user what they want done if they have not said it. Split it into features, one worktree each. Two features go in the same worktree only when they touch the same code and must ship together. Present that split (feature → project → worktree name → acceptance criteria) and wait for the user's yes. If the user already gave all of it, that is the yes: go on.
 5. `orca orchestration run-create --objective "<the user's objective>" --json`. Use one Run for the whole objective.
 
 ## Opening a worktree for a feature
