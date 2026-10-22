@@ -618,7 +618,7 @@ Codex (`agent: "codex"`):
 - **Checked with one real run** (OpenCode 2.0.25, Orca 1.4.218, a local model, one trivial task): `orca terminal wait --for tui-idle` returns once `mini` is ready (about 10 s after the tab opened), and text sent with `orca terminal send --enter` reaches `mini` and runs; Orca accepts it but warns that it cannot confirm delivery for this agent. The status bar showed the generated agent and its model, the agent file stayed out of `git status`, and the worker edited the file and ran the test. Session ids look like `ses_` followed by 26 letters and digits (`opencode session list`, run in the worktree).
 - **`agentIdentity`.** Orca reported none for the `mini` tab right after start, before the first message, and `opencode` once the task had run. A role that has not received its first message yet would look dead, so a live tab still counts as alive for OpenCode roles.
 - **Missing model.** `opencode mini --model <missing>` starts, accepts the message and ends the turn without printing any error (only OpenCode's own log says `Model unavailable`), so no screen pattern can detect it. Before sending the role message the kickoff therefore looks the model (without any `#variant`) up in `opencode models`, run in the worktree. OpenCode's service can omit models on the first call after it starts, so a model not found is looked up once more after about 3 seconds. Still missing: the role message is sent anyway, the line `ROLE=FAILED:<model>` goes to `orca-roles.models` and the Planner gets the same "model unavailable" escalation as for the other agents. If `opencode models` cannot be read (failure or timeout, twice), the kickoff only prints that the model could not be checked and tells nobody. The check costs nothing (it calls no model) and applies only to OpenCode roles with a `model`. A `modelError` of the role still works as for `custom` roles.
-- `dev-opencode` in `config.default.json` is a disabled example.
+- `dev-opencode` in `config.default.json` is a disabled example. `cross-dev` is another disabled OpenCode role (see [Cross-check](#cross-check)).
 
 ```json
 "dev-opencode": { "agent": "opencode", "model": "provider/model", "common": "{kit}/prompts/programmer/common-peon.md",
@@ -673,6 +673,20 @@ Things to know:
 Checked with a real team in a toy repo: a rejected round relaunched Dev from Sonnet on Opus, and the accepted round brought it back. Each time the new tab opened in that worktree and its start was recorded in the provenance. Run `round.sh` from the worktree's own terminal, as the Planner does: launched from a terminal of another worktree, the relaunched tab opens in that other worktree.
 
 Why on a failed check and not by guessing the difficulty up front: in published evaluations, a frontier model asked to predict which coding steps are hard flagged few of them. Off-the-shelf routers did no better than a fixed tier. What did work was escalating on verified failure, or a small classifier trained on your own outcomes. The [Round log](#round-log) collects the data for that.
+
+### Cross-check
+
+The Tester writes its tests while looking at Dev's patch, so a test can end up tied to how Dev wrote the code, and a bug the Tester did not think of stays out of its tests. Cross-Dev (`cross-dev`, disabled by default) writes an independent candidate for each step from the same spec, without seeing Dev's work: a patch and its tests, exported as two diffs from a copy in its scratch folder (`crosscheck.sh tree` of the step's base ref, then `crosscheck.sh export`). It never touches the worktree and its patch never goes into it.
+
+Choose its agent and model in your `config.json` or in the project's `.orca-roles.json`; the kit ships none. A different model family from Dev's makes the candidate more useful, since models of one family tend to make the same mistakes. Any agent works:
+
+```json
+"roles": { "cross-dev": { "enabled": true, "agent": "opencode", "model": "<provider/model>" } }
+"roles": { "cross-dev": { "enabled": true, "agent": "claude", "model": "<another model>", "common": "{kit}/prompts/programmer/common-workers.md" } }
+"roles": { "cross-dev": { "enabled": true, "agent": "codex", "model": "<model>", "common": "{kit}/prompts/programmer/common-workers.md" } }
+```
+
+By default it is an OpenCode role with the compact common prompt (`common-peon.md`) and the Tester's resource limits (`maxNewTests`, `maxWorkers`, `timeoutMinutes`, lowered CPU priority and thread limits). With an empty `model`, OpenCode uses its own default model.
 
 ### Coordinator above the worktrees
 

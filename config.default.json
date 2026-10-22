@@ -151,6 +151,22 @@
       "prompt": { "programmer": "{kit}/prompts/programmer/dev.md" },
       "mcp": [],
       "opencode": { "steps": 120, "permissions": [] }
+    },
+    "cross-dev": {
+      "title": "Cross-Dev",
+      "description": "Writes an independent patch and tests for a step from Dev's spec, without seeing Dev's work, so the Tester can cross-check tests and patches; give it tasks only when your startup message turns the cross-check on",
+      "enabled": false,
+      "modes": ["programmer"],
+      "agent": "opencode",
+      "model": "",
+      "common": "{kit}/prompts/programmer/common-peon.md",
+      "nice": 10,
+      "env": { "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "NUMEXPR_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2",
+               "TOKENIZERS_PARALLELISM": "false", "GOMAXPROCS": "2", "RAYON_NUM_THREADS": "2", "CARGO_BUILD_JOBS": "2", "MAKEFLAGS": "-j2",
+               "UV_THREADPOOL_SIZE": "2", "CUDA_VISIBLE_DEVICES": "" },
+      "params": { "maxNewTests": 10, "maxWorkers": 2, "timeoutMinutes": 10 },
+      "mcp": [],
+      "opencode": { "steps": 120, "permissions": [] }
     }
   }
 }
