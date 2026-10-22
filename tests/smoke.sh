@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -260,6 +260,12 @@ for m in programmer pr-reviewer academic-research; do
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'acknowledges each batch once read, with `--ack <delivery_id>`' '^- A worker that reads its messages'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'is not a heartbeat' '^- A worker that reads its messages'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'do not send them' '^- \*\*No heartbeats'
+  rule R16 "$ROOT/prompts/$m/planner.md" 'compare its `coordinator_handle` with your own handle' '\*\*Check that reports can reach you\.\*\*'
+  rule R17 "$ROOT/prompts/$m/common-workers.md" 'Never use an interactive question tool (AskUserQuestion or the like), plan mode, or any dialog that waits for an answer in your tab' '^- Never use an interactive question tool'
+  rule R17 "$ROOT/prompts/$m/common-workers.md" 'ask the Planner with `orca orchestration ask`' '^- Never use an interactive question tool'
+  rule R18 "$ROOT/prompts/$m/planner.md" 'run `~/.orca-roles/bin/launch.sh --reopen` from the worktree, never with any other option' '\*\*Recovering the team yourself\.\*\*'
+  rule R18 "$ROOT/prompts/$m/planner.md" 'Run `--reopen` at most once per role until the user says otherwise' '\*\*Recovering the team yourself\.\*\*'
+  rule R18 "$ROOT/prompts/$m/planner.md" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done
 # R15 the convention check before proposing a commit, PR or Jira text
@@ -2273,7 +2279,7 @@ check "default config: thread caps and no GPU" "$(jq -r '.roles.auditor.env | [.
 check "default config: auditor maxWorkers" "$(jq -r '.roles.auditor.params.maxWorkers' "$ROOT/config.default.json")" "2"
 # agent.sh: nice -n and --resume
 cat > "$KIT/config.json" <<'J'
-{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "planner": {}, "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] }, "cx": { "agent": "codex" } } }
+{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "planner": {}, "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] }, "cx": { "agent": "codex" }, "pw": { "permissionMode": "plan" }, "aq": { "allowedTools": ["Read", "AskUserQuestion"], "extraArgs": ["--disallowedTools", "Foo"] }, "cu": { "agent": "custom", "command": "echo CUSTOM" } } }
 J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; cp "$TMP/fakebin/claude" "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/claude" "$TMP/fakebin/codex"
 printf '#!/bin/sh\nprintf "nice %%s %%s\\n" "$1" "$2"; shift 2; echo "GOMAXPROCS=$GOMAXPROCS"; exec "$@"\n' > "$TMP/fakebin/nice"; chmod +x "$TMP/fakebin/nice"
@@ -2285,6 +2291,14 @@ OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG
 case "$OUT" in *'--settings {"language":"english"} --settings {"language":"spanish"} '*) echo "ok   agent.sh: a role's own --settings in extraArgs comes after (and wins over) the English one";; *) echo "FAIL agent.sh extraArgs --settings order: $OUT"; FAIL=1;; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
 case "$OUT" in *--settings*|*'Always write in English'*) echo "FAIL agent.sh: the Planner got the English setting or rule: $OUT"; FAIL=1;; *) echo "ok   agent.sh: the Planner gets neither --settings nor the English rule";; esac
+ag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | tr '\n' ' '); }
+DQ='--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --settings {"language":"english"} '
+case "$(ag dev)" in *"$DQ"*) A1=dev-ok;; *) A1=dev-no;; esac
+case "$(ag aq)" in *'--allowedTools Read AskUserQuestion '"$DQ"'--disallowedTools Foo '*) A1="$A1 aq-ok";; *) A1="$A1 aq-no";; esac
+check "agent.sh: a claude worker cannot open dialogs (--disallowedTools after --allowedTools, before --settings), its allowedTools and extraArgs (a second --disallowedTools) are kept" "$A1" "dev-ok aq-ok"
+A2="$(ag pw | grep -c -- '--permission-mode plan --add-dir' || true):$(ag pw | grep -cF -- '--disallowedTools AskUserQuestion --settings {"language":"english"} ' || true):$(ag pw | grep -c 'EnterPlanMode\|ExitPlanMode' || true)"
+A2="$A2:$(ag planner | grep -c 'disallowedTools' || true):$(ag cx | grep -c 'disallowedTools' || true):$(ag cu | grep -c 'disallowedTools' || true):$(ag cu | grep -c 'CUSTOM' || true)"
+check "agent.sh: a worker in permissionMode plan loses only AskUserQuestion (it can still leave plan mode); the Planner, a codex and a custom role get no --disallowedTools" "$A2" "1:1:0:0:0:0:1"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" dev --resume abc-123 | tr '\n' ' ')"
 case "$OUT" in "--add-dir "*"--resume abc-123 "*) echo "ok   agent.sh: --resume passes the session to claude";; *) echo "FAIL agent.sh resume: $OUT"; FAIL=1;; esac
 case "$OUT" in nice*) echo "FAIL agent.sh: nice without the option"; FAIL=1;; *) echo "ok   agent.sh: no nice without the option";; esac
@@ -2357,6 +2371,158 @@ printf 'PLANNER=a\nDEV=b\n' > "$RP/.git/orca-roles.env"; printf 'PLANNER=wt@@a\n
 (cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1)
 check "close-role.sh: drops the identity of the closed role" "$(cat "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "PLANNER=wt@@a "
 rm -f "$KIT/prompts/programmer/tst.md"
+}
+
+sec_reopen() {
+# launch.sh --reopen (only lost tabs with a saved handle), the Planner's restored tab running the launch (kept, reopened later by its relauncher), the busy check before closing it, and relaunch-planner.sh
+OP="$TMP/oproj"; rm -rf "$OP" "$TMP/obin"; mkdir -p "$OP" "$TMP/obin"; git -C "$OP" init -q -b main
+OG="$(cd "$OP/.git" && pwd)"; OLOG="$TMP/oorca.log"; : > "$OLOG"
+cat > "$TMP/obin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$OLOG"
+case "\$1 \$2" in
+  "terminal list") cat "$TMP/olist";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"new-\$t\"}";;
+  "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *) echo '{"result":{"terminal":{"ptyId":"wt@@x","agentIdentity":"claude"}}}';; esac;;
+  "terminal wait") [ -e "$TMP/owaitfail" ] && { echo '{"ok":false}'; exit 1; };;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\ncase "$1" in rs-pl) echo 11111111-2222-3333-4444-555555555555;; esac\n' > "$TMP/obin/session-of"
+printf '#!/bin/sh\necho "$*" > "%s/okick.args"\necho "${ORCA_ROLES_SELF_RELAUNCH:-unset}:${ORCA_ROLES_RELAUNCH:-unset}" > "%s/okick.env"\necho "${ORCA_ROLES_PLANNER_BUSY:-unset}" > "%s/okick.busy"\necho "${ORCA_ROLES_SELF_NO_SESSION:-unset}" > "%s/okick.nosess"\necho KICK\n' "$TMP" "$TMP" "$TMP" "$TMP" > "$TMP/obin/kickoff"
+printf '#!/bin/sh\n' > "$TMP/obin/session-none"   # no readable session
+printf '#!/bin/bash\necho "$# $1|$2|$3|$4" > "%s/orl.args"\necho "pgid=$(ps -o pgid= -p $$ | tr -d " ") pid=$$ stdin=$(readlink /dev/stdin 2>/dev/null; [ -t 0 ] && echo tty)" >> "%s/orl.args"\necho RLSTUB\n' "$TMP" "$TMP" > "$TMP/obin/relauncher"
+chmod +x "$TMP/obin/orca" "$TMP/obin/session-of" "$TMP/obin/session-none" "$TMP/obin/kickoff" "$TMP/obin/relauncher"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" } } }
+J
+: > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
+echo '{"terminals":[]}' > "$TMP/olist"
+ol() {  # ol <args...>; env: OTH (ORCA_TERMINAL_HANDLE), OREL (ORCA_ROLES_RELAUNCH); runs launch.sh in the scratch repo
+  rm -f "$TMP/okick.args" "$TMP/okick.env" "$TMP/okick.busy" "$TMP/okick.nosess" "$TMP/orl.args"; : > "$OLOG"
+  OUT="$(cd "$OP" && HOME="$TMP/home" PATH="$TMP/obin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" ORCA_WORKTREE_ID="${OWT-wt-fix}" ORCA_ROLES_RELAUNCH="${OREL:-}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/obin/${OSES:-session-of}" ORCA_ROLES_KICKOFF="$TMP/obin/kickoff" ORCA_ROLES_RELAUNCHER="$TMP/obin/relauncher" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
+}
+ost() {  # ost <env text> <pty text>: the saved state of the team
+  printf '%s' "$1" > "$OG/orca-roles.env"; printf '%s' "$2" > "$OG/orca-roles.pty"; printf 'PLANNER=old-pl\n' > "$OG/orca-roles.kicked"; rm -f "$OG/orca-roles.planner-handles" "$OG/orca-roles.overrides.json" "$OG/orca-roles.lock" "$OG/orca-roles-relaunch.log"; rmdir "$OG/orca-roles.lock" 2>/dev/null || true
+}
+# 1. --reopen: the lost worker comes back; a role with no saved handle (no line, or an empty one) stays closed and is not written back as VAR=; a live tab is untouched
+ost $'PLANNER=live-pl\nDEV=old-dev\nTST=\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"
+ol --reopen
+check "reopen: the lost tab is reopened, the live one untouched, the role with no saved tab left closed and not written as VAR=" "$RC:$(grep -c 'terminal create' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true):$(grep -c 'terminal close' "$OLOG" || true):$(tr '\n' ' ' < "$OG/orca-roles.env"):$(cut -d= -f1 "$OG/orca-roles.pty" | tr '\n' ' '):$(printf '%s\n' "$OUT" | grep -c 'Tst has no saved tab')" "0:1:1:0:PLANNER=live-pl DEV=new-Dev :PLANNER DEV :1"
+# 2. --reopen takes no other option: refused before anything is changed or opened (any other option, in either order)
+ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
+R2=""; for a in "--mode pr-reviewer" "--reset" "--status" "--only dev" "--set roles.dev.model=x" "--enable tst" "--bogus"; do
+  ol --reopen $a; R2="$R2$RC:$(printf '%s\n' "$OUT" | grep -c -- '--reopen takes no other option (got: .*). Nothing was changed.' || true):$(wc -l < "$OLOG" | tr -d ' '):$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum | cmp -s - <(echo "$HB") && echo same || true):$([ -e "$OG/orca-roles.overrides.json" ] && echo ovr || true) "
+done
+ol $a --reset --reopen; R2="$R2$RC:$(wc -l < "$OLOG" | tr -d ' ')"
+check "reopen: any other option is refused with nothing changed, opened or saved" "$R2" "$(for i in 1 2 3 4 5 6 7; do printf '1:1:0:same: '; done)1:0"
+# 3. the Planner's restored tab runs this launch: kept as it is, workers reopened, the relauncher started detached, the handles message skipped
+printf '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"},{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"}]}\n' > "$TMP/olist"
+ost $'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'
+PB="$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
+OTH=rs-pl ol
+poll nonempty "$TMP/okick.args"; poll nonempty "$TMP/orl.args"; sleep 0.3
+WTX="id:wt-fix"
+check "self-relaunch: the Planner's tab is not closed or replaced, its saved lines are byte for byte, the workers are reopened" "$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep -c 'terminal close --terminal rs-dev' "$OLOG" || true):$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum | cmp -s - <(echo "$PB") && echo same):$(tr '\n' ' ' < "$OG/orca-roles.env"):$(printf '%s\n' "$OUT" | grep -c 'The Planner runs this launch from its restored tab (rs-pl)'):$(printf '%s\n' "$OUT" | grep -c 'The Planner kept its tab')" "0:0:0:1:same:PLANNER=old-pl DEV=new-Dev TST=new-Tst :1:0"
+check "self-relaunch: the Planner is not in kickoff's roles, kickoff skips the handles message, the relauncher gets its arguments, detached (own session) and logging to orca-roles-relaunch.log" "$(tr -s ' ' '\n' < "$TMP/okick.args" | grep -c '^planner$' || true):$(tr -s ' ' '\n' < "$TMP/okick.args" | grep -c '^dev$' | awk '{print ($1 > 0)}'):$(cat "$TMP/okick.env"):$(head -1 "$TMP/orl.args" | sed "s#$OG#GD#; s#$(git -C "$OP" rev-parse --show-toplevel)#TOP#"):$(sed -n 2p "$TMP/orl.args" | sed -n 's/^pgid=\([0-9]*\) pid=\([0-9]*\).*/\1 \2/p' | awk '{print ($1 == $2) ? "leader" : "attached"}'):$(grep -c 'RLSTUB' "$OG/orca-roles-relaunch.log" || true)" "0:1:1:unset:4 $WTX|GD|rs-pl|TOP:leader:1"
+HS3="$(tr '\n' ' ' < "$OG/orca-roles.planner-handles" 2>/dev/null || true)"
+# 4. a busy restored Planner tab is never closed (any launch); an idle one is, and a worker's restored tab is closed without waiting
+ost $'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'
+PB="$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" | cksum)"; : > "$TMP/owaitfail"
+OTH=other-tab ol
+BUSY="$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" | cksum | cmp -s - <(echo "$PB")  && echo same):$(printf '%s\n' "$OUT" | grep -c "The Planner's restored tab (rs-pl) is busy: not reopened now"):$(grep -c 'terminal wait --terminal rs-pl --for tui-idle --timeout-ms 2000' "$OLOG"):$(grep -c 'terminal wait --terminal rs-dev' "$OLOG" || true):$(grep -c 'terminal close --terminal rs-dev' "$OLOG")"
+HSB="$([ -e "$OG/orca-roles.planner-handles" ] && echo exists || echo none)"
+rm -f "$TMP/owaitfail"; ost $'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'
+OTH=other-tab ol
+check "busy and idle Planner: a busy restored tab is not closed or replaced, its saved state is kept, the user is told, it was asked with a 2 s idle wait; with the same state and idle it is closed and the Planner reopened with its conversation" "$BUSY|$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG"):$(grep -c -- '--title Planner' "$OLOG"):$(grep -c 'agent.sh. planner --resume 11111111-2222-3333-4444-555555555555' "$OLOG")" "0:0:0:same:1:1:0:1|0:1:1:1"
+check "planner history: the tab that ran the launch (self-relaunch) is added next to the seeded old handle, once; a busy tab that is not reopened adds nothing" "[$HS3][$HSB]" "[old-pl rs-pl ][none]"
+# 4b. the relauncher needs a worktree id (ORCA_WORKTREE_ID): without one ('active' would be resolved later, maybe in another worktree) it is not started and the user is told; the saved state is kept either way
+ost $'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'; PB="$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
+OWT='' OTH=rs-pl ol; sleep 0.5
+N1="$RC:$([ -e "$TMP/orl.args" ] && echo started || echo none):$(printf '%s\n' "$OUT" | grep -c "Cannot start the Planner's relauncher: this launch has no worktree id (ORCA_WORKTREE_ID is not set)"):$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum | cmp -s - <(echo "$PB") && echo same || true)"
+ost $'PLANNER=old-pl\nDEV=live-dev\nTST=live-tst\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'; printf 'PLANNER=old-pl\nDEV=live-dev\nTST=live-tst\n' > "$OG/orca-roles.kicked"
+OWT='' OTH=rs-pl ol; sleep 0.5
+N1="$N1|$RC:$([ -e "$TMP/orl.args" ] && echo started || echo none):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true):$(printf '%s\n' "$OUT" | grep -c "Cannot start the Planner's relauncher: this launch has no worktree id" || true)"
+rm -f "$TMP/orl.args"; OTH=rs-pl ol; poll nonempty "$TMP/orl.args"
+N1="$N1|$RC:$(head -1 "$TMP/orl.args" | cut -d' ' -f2 | cut -d'|' -f1):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true)"
+check "relauncher needs a worktree id: with none it is not started and the user is told (also when no role is opened); with one it starts with that id" "$N1" "0:none:1:0:same|0:none:1:1|0:$WTX:1"
+# 4c. a busy Planner tab not reopened: no 'kept its tab' line, kickoff is told (ORCA_ROLES_PLANNER_BUSY=1); a plain launch tells it 0
+ost $'PLANNER=old-pl\nDEV=old-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n'; : > "$TMP/owaitfail"
+OTH=other-tab ol; poll nonempty "$TMP/okick.busy"; B1="$(printf '%s\n' "$OUT" | grep -c 'The Planner kept its tab' || true):$(cat "$TMP/okick.busy")"
+rm -f "$TMP/owaitfail"; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"
+OTH=other-tab ol; poll nonempty "$TMP/okick.busy"
+check "busy Planner tab: no 'The Planner kept its tab' line and kickoff gets ORCA_ROLES_PLANNER_BUSY=1; a live Planner and a worker reopened from another tab keeps the line and gets 0" "$B1|$(printf '%s\n' "$OUT" | grep -c 'The Planner kept its tab'):$(cat "$TMP/okick.busy")" "0:1|1:0"
+# 4d. a Planner whose conversation cannot be read is never reopened by the kit (it would lose it): self-launch (claude without session, codex), the relauncher's launch, and the busy check only with a session
+SELFS=$'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n'; SELFP=$'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'
+selfx() {  # prints the facts of a self-launch from the Planner's restored tab
+  poll nonempty "$TMP/okick.args"; sleep 0.4
+  printf '%s:%s:%s:%s:%s:%s:%s:%s:%s' "$RC" "$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true)" "$(grep -c -- '--title Planner' "$OLOG" || true)" "$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum | cmp -s - <(echo "$PB") && echo same || true)" "$([ -e "$TMP/orl.args" ] && echo relauncher || echo none)" "$(printf '%s\n' "$OUT" | grep -c "Cannot start the Planner's relauncher: its conversation could not be read from this tab" || true)" "$(printf '%s\n' "$OUT" | grep -c 'will be reopened with the kit.s settings\|The Planner kept its tab' || true)" "$(cat "$TMP/okick.env"):$(cat "$TMP/okick.nosess")" "$(grep -c 'terminal close --terminal rs-dev' "$OLOG")"
+}
+printf '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"},{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"}]}\n' > "$TMP/olist"
+ost "$SELFS" "$SELFP"; PB="$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
+OSES=session-none OTH=rs-pl ol; X1="$(selfx)"
+check "self-launch with no readable session (claude): the tab and the saved state are kept byte for byte, no relauncher, the 'could not be read' message instead of 'will be reopened', kickoff told (no handles message), the workers still reopened" "$X1" "0:0:0:same:none:1:0:0:unset:1:1"
+jq '.roles.planner.agent = "codex"' "$KIT/config.json" > "$TMP/cfg.codex" && cp "$TMP/cfg.codex" "$KIT/config.json"
+ost "$SELFS" "$SELFP"; OTH=rs-pl ol; X2="$(selfx)"
+jq '.roles.planner |= del(.agent)' "$KIT/config.json" > "$TMP/cfg.back" && cp "$TMP/cfg.back" "$KIT/config.json"
+check "self-launch of a codex Planner (even with a session stub that would answer): no relauncher, tab and state kept, the message" "$X2" "0:0:0:same:none:1:0:0:unset:1:1"
+# the relauncher's launch (no ORCA_TERMINAL_HANDLE, ORCA_ROLES_RELAUNCH=1): the restored Planner tab is not closed without a readable session; with one it is reopened
+ost "$SELFS" "$SELFP"; OSES=session-none OREL=1 ol
+Y1="$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" | cmp -s <(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty") <(printf '%s\n' "$OG/orca-roles.env:PLANNER=old-pl" "$OG/orca-roles.pty:PLANNER=wt@@p1") && echo same || true):$(printf '%s\n' "$OUT" | grep -c "The Planner's conversation could not be read from its restored tab (rs-pl): not reopened, to keep it\." || true)"
+ost "$SELFS" "$SELFP"; OREL=1 ol
+Y1="$Y1|$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true)"
+check "relauncher's launch: without a readable session the restored Planner tab is kept (no close, no new tab, state unchanged, the message); with a session it is closed and the Planner reopened" "$Y1" "0:0:same:1|1:1"
+# the busy check only runs when an agent session was found in the tab: no session and a failing wait -> closed and reopened without memory as before, no wait asked
+ost "$SELFS" "$SELFP"; : > "$TMP/owaitfail"; OSES=session-none OTH=other-tab ol; rm -f "$TMP/owaitfail"
+Z1="$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep -c 'terminal wait --terminal rs-pl' "$OLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'is busy: not reopened now' || true):$(printf '%s\n' "$OUT" | grep -c 'Resuming workspace: planner.*start without memory' || true)"
+check "busy check needs a session: no session and a failing wait -> the restored Planner tab is closed and a new Planner opened (no memory), no wait is asked, not reported busy" "$Z1" "0:1:1:0:0:1"
+# 5. relaunch-planner.sh against a stub launch.sh: idle -> one launch without the tab's handle; wait error -> nothing; not reopened -> a second try, then it gives up
+RH="$TMP/orl-home"; rm -rf "$RH" "$TMP/ebin"; mkdir -p "$RH/.orca-roles/bin" "$TMP/ebin" "$TMP/etop"; cp "$KIT/bin/lib.sh" "$RH/.orca-roles/bin/"
+EG="$TMP/egd"; mkdir -p "$EG"; ELOG="$TMP/elaunch.log"; EWL="$TMP/ewait.log"; ETOP="$(cd "$TMP/etop" && pwd -P)"
+cat > "$TMP/ebin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$EWL"
+n=\$(wc -l < "$EWL" | tr -d ' ')
+[ "\$n" = "\$(cat "$TMP/ewait-fail-at" 2>/dev/null || echo 0)" ] && { echo '{"ok":false,"error":"timeout"}'; exit 1; }
+exit 0
+EOS
+cat > "$RH/.orca-roles/bin/launch.sh" <<EOS
+#!/bin/bash
+echo "CALL cwd=\$(pwd -P) args=\$* handle=\${ORCA_TERMINAL_HANDLE-unset} relaunch=\${ORCA_ROLES_RELAUNCH-unset}" >> "$ELOG"
+[ "\$(wc -l < "$ELOG" | tr -d ' ')" = "\$(cat "$TMP/ereopen-at" 2>/dev/null || echo 0)" ] && printf 'PLANNER=new-pl\n' > "$EG/orca-roles.env"
+exit 0
+EOS
+chmod +x "$TMP/ebin/orca" "$RH/.orca-roles/bin/launch.sh"
+orl() {  # orl <wait fails at call n> <the stub reopens the Planner at launch n>; env: SECS (kickoffTimeoutSeconds)
+  : > "$ELOG"; : > "$EWL"; echo "$1" > "$TMP/ewait-fail-at"; echo "$2" > "$TMP/ereopen-at"; printf 'PLANNER=old-pl\nDEV=d\n' > "$EG/orca-roles.env"
+  if [ -n "${SECS:-}" ]; then echo "{\"settings\":{\"kickoffTimeoutSeconds\":$SECS}}" > "$EG/orca-roles.config.json"; else rm -f "$EG/orca-roles.config.json"; fi
+  OUT="$(cd "$TMP" && HOME="$RH" PATH="$TMP/ebin:$PATH" ORCA_TERMINAL_HANDLE=zzz ORCA_ROLES_RELAUNCH_SETTLE=0 "$KIT/bin/relaunch-planner.sh" active "$EG" rs-pl "$ETOP" 2>&1)" && RC=0 || RC=$?
+}
+orl 0 1
+RA="$RC:$(cat "$ELOG" | sed "s#$ETOP#TOP#")|$(cat "$EWL")"
+SECS=7 orl 0 1
+check "relauncher: an idle tab -> one launch --reopen from the worktree folder without ORCA_TERMINAL_HANDLE and with ORCA_ROLES_RELAUNCH=1, no second try once reopened; the wait uses kickoffTimeoutSeconds (default 180, configured 7)" "$RA|$(cut -d' ' -f7-8 "$EWL")" "0:CALL cwd=TOP args=active --reopen handle=unset relaunch=1|terminal wait --terminal rs-pl --for tui-idle --timeout-ms 180000 --json|--timeout-ms 7000"
+orl 1 1
+RB="$RC:$(wc -l < "$ELOG" | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c "did not become idle .*timeout.*nothing was changed"):$(cat "$EG/orca-roles.env" | tr '\n' ' ')"
+orl 0 0
+RC4="$RC:$(wc -l < "$ELOG" | tr -d ' '):$(grep -c 'CALL' "$ELOG"):$(printf '%s\n' "$OUT" | grep -c 'The Planner was not reopened after two tries (busy, or its conversation could not be read); nothing was closed\. Run roles from another terminal to reopen it\.'):$(wc -l < "$EWL" | tr -d ' ')"
+orl 0 2
+R5="$(wc -l < "$ELOG" | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c 'not reopened after two tries' || true)"
+orl 2 0
+check "relauncher: a wait error or timeout launches nothing and is logged; still not reopened -> exactly two launches then a give-up message; reopened by the second launch -> no give-up; a wait error before the second launch -> one launch" "$RB|$RC4|$R5|$(wc -l < "$ELOG" | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c 'did not become idle')" "0:0:1:PLANNER=old-pl DEV=d |0:2:2:1:2|2:0|1:1"
+# 6. the relauncher's launch appends to orca-roles-relaunch.log; a plain launch truncates the kickoff log; the Planner's BACK message says it was a self-relaunch
+ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo '{"terminals":[]}' > "$TMP/olist"
+echo OLD > "$OG/orca-roles-kickoff.log"; echo OLD > "$OG/orca-roles-relaunch.log"
+OREL=1 ol --reopen; poll grep -q KICK "$OG/orca-roles-relaunch.log"; sleep 0.2
+R6="$(cat "$OG/orca-roles-kickoff.log" | tr '\n' ' '):$(grep -c '^OLD$' "$OG/orca-roles-relaunch.log"):$(grep -c '^KICK$' "$OG/orca-roles-relaunch.log"):$(cat "$TMP/okick.env"):$(printf '%s\n' "$OUT" | grep -c 'log: .*orca-roles-relaunch.log')"
+ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo OLD > "$OG/orca-roles-kickoff.log"
+ol; poll grep -q KICK "$OG/orca-roles-kickoff.log"; sleep 0.2
+check "logs: launched by the relauncher it appends to orca-roles-relaunch.log and leaves the kickoff log alone; a plain launch truncates the kickoff log" "$R6:$(cat "$OG/orca-roles-kickoff.log" | tr '\n' ' '):$(cat "$TMP/okick.env")" "OLD :1:1:0:1:1:KICK :0:unset"
+M6="$(for v in 1 ""; do for r in 2 1 0; do (export ORCA_ROLES_RELAUNCH=$v; planner_msg "$KIT/config.json" "planner dev" "$OG/orca-roles.env" "" "" $r | grep -c 'You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit.s settings)' || true); done; done | tr '\n' ' ')"
+check "planner_msg: the self-relaunch sentence only in the BACK message of a relaunched Planner" "$M6" "1 0 0 0 0 0 "
+rm -f "$KIT/prompts/programmer/tst.md" "$TMP/owaitfail"
 }
 
 sec_trust_folder() {
@@ -2849,10 +3015,21 @@ MF="$TMP/mf"; mkdir -p "$MF/gd" "$MF/bin" "$MF/wt"; git -C "$MF/wt" init -q
 cat > "$MF/bin/orca" <<EOS
 #!/bin/sh
 L="$MF/orca.log"; h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done
+[ "\$1" = orchestration ] && echo "ORCH \$*" >> "$MF/orch.log"
 case "\$1 \$2" in
+  "orchestration run-list")
+    n=\$(cat "$MF/rl.n" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$MF/rl.n"
+    [ -f "$MF/rl.fail" ] && exit 1
+    [ "\$n" = "\$(cat "$MF/rl.failat" 2>/dev/null || echo 0)" ] && exit 1
+    [ -f "$MF/rl.junk" ] && { echo 'not json'; exit 0; }
+    [ -f "$MF/rl.always" ] && { echo '{"result":{"runs":[],"nextCursor":"again"}}'; exit 0; }
+    c=first; pv2=""; for x in "\$@"; do [ "\$pv2" = --cursor ] && c="\$x"; pv2="\$x"; done
+    if [ -f "$MF/rl.page.\$c" ]; then cat "$MF/rl.page.\$c"; else echo '{"result":{"runs":[]}}'; fi;;
   "terminal wait") echo "WAIT \$*" >> "$MF/waits.log"; [ -f "$MF/sent.\$h" ] && sleep "\$(cat "$MF/waitdelay")";;
   "terminal send")
     t=""; while [ \$# -gt 0 ]; do [ "\$1" = --text ] && t="\$2"; shift; done
+    [ -f "$MF/sendfail.\$h" ] && exit 1
+    printf '%s' "\$t" > "$MF/text.\$h"
     echo "SEND \$(printf '%s' "\$t" | head -n 1 | cut -c1-60)" >> "\$L"
     : > "$MF/sent.\$h"
     if [ -f "$MF/paste" ]; then echo "> [Pasted text #1 +3 lines]" >> "$MF/hist.\$h"; else echo "> \$(printf '%s' "\$t" | head -n 1 | cut -c1-40) hello" >> "$MF/hist.\$h"; fi
@@ -2872,7 +3049,8 @@ chmod +x "$MF/bin/orca"
 CLERR="There's an issue with the selected model (x). It may not exist or you may not have access to it."
 echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
 mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE
-  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/waits.log"
+  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/text.* "$MF/rl.n" "$MF/orch.log"; [ -n "${HIST:-}" ] || rm -f "$MF/gd/orca-roles.planner-handles"; [ -z "${HIST:-}" ] || printf '%b' "$HIST" > "$MF/gd/orca-roles.planner-handles"
+  rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
   [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'PLANNER=hp\nDEV=hd\nTESTER=ht\nAUDITOR=ha\n' > "$MF/gd/orca-roles.env"
@@ -3009,7 +3187,13 @@ check "handles: Planner and worker reopened, no message" "$(hnds | wc -l | tr -d
 mf "$(mfc "$DEVOK")" clean ""
 check "handles: nothing reopened, no message" "$(hnds | wc -l | tr -d ' ')" "0"
 OTH=hp mf "$(mfc "$DEVOK")" clean "dev"
-check "handles: the Planner ran it itself, no send, says so" "$(hnds | wc -l | tr -d ' '):$(grep -c '^Not telling the Planner the new handles: it ran this launch itself\.$' "$MF/out.log")" "0:1"
+check "handles: the Planner ran it itself: one 'Roles reopened' status, not 'Role handles changed'; says so" "$(hnds | wc -l | tr -d ' '):$(hnds | grep -c '|Roles reopened|'):$(grep -c '^Told the Planner the roles were reopened\.$' "$MF/out.log")" "1:1:1"
+ORCA_ROLES_SELF_RELAUNCH=1 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: the Planner's restored tab runs the launch (its relauncher is pending): no send, the log says its role message carries the handles" "$(hnds | wc -l | tr -d ' '):$(grep -c '^The Planner will be reopened by its relauncher; its role message carries the handles\.$' "$MF/out.log")" "0:1"
+ORCA_ROLES_SELF_NO_SESSION=1 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: the Planner keeps its restored tab because its conversation could not be read: no send, the log says so (not the 'will be reopened by its relauncher' line)" "$(hnds | wc -l | tr -d ' '):$(grep -c "^The Planner keeps its restored tab (its conversation could not be read, so it was not reopened); run roles from another terminal to give it the handles and the kit's settings\\.\$" "$MF/out.log"):$(grep -c 'will be reopened by its relauncher' "$MF/out.log" || true)" "0:1:0"
+ORCA_ROLES_PLANNER_BUSY=1 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
+check "handles: the Planner's restored tab was busy and not reopened: no send, the log says its role message will carry the handles" "$(hnds | wc -l | tr -d ' '):$(grep -c "^The Planner's restored tab was busy and was not reopened; run roles again when it is idle: its role message will carry the handles\\.\$" "$MF/out.log")" "0:1"
 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: another terminal ran it, the Planner is told" "$(hnds | wc -l | tr -d ' ')" "1"
 REUSED=dev OTH=other mf "$(mfc "$DEVOK")" clean "dev"
@@ -3018,6 +3202,63 @@ REUSED=dev OTH=other mf "$(mfc "$DEVOK")" clean "dev planner"
 check "handles: a reused role next to a reopened Planner: both kicked, both recorded" "$(hnds | wc -l | tr -d ' '):$(grep -c '^SEND ' "$MF/orca.log"):$(sort "$MF/gd/orca-roles.kicked" | tr '\n' ' ')" "0:2:DEV=hd PLANNER=hp "
 FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: a failed send is reported with the cat hint" "$(grep -c "^Could not tell the Planner the new handles; tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log")" "1"
+# the Planner's handle history: seeded from the kicked and env files, no duplicates, no empty lines, never reseeded, atomic
+HD="$TMP/hd"; rm -rf "$HD"; mkdir -p "$HD"; hh() { tr '\n' ' ' < "$HD/orca-roles.planner-handles"; }
+printf 'PLANNER=k1\nDEV=x\n' > "$HD/orca-roles.kicked"; printf 'DEV=y\nPLANNER=e1\nPLANNER=zz\n' > "$HD/orca-roles.env"
+planner_history_add "$HD" ""; H1="[$(hh)]"
+planner_history_add "$HD" k1; planner_history_add "$HD" n1; planner_history_add "$HD" n1; planner_history_add "$HD" ""; H1="${H1}[$(hh)]"
+printf 'PLANNER=other\n' > "$HD/orca-roles.kicked"; planner_history_add "$HD" n2; H1="${H1}[$(hh)]"
+rm -f "$HD/orca-roles.planner-handles"; printf 'PLANNER=same\n' > "$HD/orca-roles.kicked"; printf 'PLANNER=same\n' > "$HD/orca-roles.env"; planner_history_add "$HD" same; H1="${H1}[$(hh)]"
+rm -f "$HD/orca-roles.planner-handles" "$HD/orca-roles.kicked" "$HD/orca-roles.env"; planner_history_add "$HD" ""; H1="${H1}[$(hh)$(wc -c < "$HD/orca-roles.planner-handles" | tr -d ' ')]"
+check "planner history: seeded from kicked then env (first PLANNER line each), adds without duplicates or empty lines, never reseeded, empty file with nothing to seed, no temp file left" "$H1:$(find "$HD" -name '*tmp*' | wc -l | tr -d ' ')" "[k1 e1 ][k1 e1 n1 ][k1 e1 n1 n2 ][same ][0]:0"
+# stale_run: the newest Run still bound to an old handle of the Planner, never the current one, never an unrelated one
+printf 'old1\nold2\ncur\n' > "$HD/orca-roles.planner-handles"; rm -f "$MF"/rl.*
+sr() { rm -f "$MF/rl.n"; PATH="$MF/bin:$PATH" stale_run "$HD" "${1:-cur}" | tr '\t' '~'; }   # prints the line; the return code is read with src
+src() { rm -f "$MF/rl.n"; PATH="$MF/bin:$PATH" stale_run "$HD" cur >/dev/null && echo 0 || echo 1; }
+rr() { jq -nc --arg id "$1" --arg h "$2" --arg u "$3" --arg o "$4" '{id: $id, coordinator_handle: $h, updated_at: $u, objective: $o}'; }
+page() { printf '{"result":{"runs":[%s]%s}}' "$2" "${3:+,\"nextCursor\":\"$3\"}" > "$MF/rl.page.$1"; }
+page first "$(rr r1 other 2026-01-05 unrelated),$(rr r2 cur 2026-01-06 current)"; S1="[$(sr)]"
+page first "$(rr r3 old1 2026-01-02 one)"; S1="${S1}[$(sr)]"
+page first "$(rr r4 old1 2026-01-02 older),$(rr r5 old2 2026-01-03 newer),$(rr r6 other 2026-01-09 unrelated)"; S1="${S1}[$(sr)]"
+page first "$(rr r5 old2 2026-01-03 newer),$(rr r4 old1 2026-01-02 older)"; S1="${S1}[$(sr)]"
+X119="$(printf 'x%.0s' $(seq 1 119))"; X120="${X119}x"; X121="${X120}x"
+page first "$(rr r7 old1 2026-02-01 "a	b
+c$X121")"; S1="${S1}[$(sr | cut -d'~' -f3 | tr -d '\n' | wc -c | tr -d ' '):$(sr | cut -d'~' -f3 | cut -c1-5)]"
+page first "$(rr r8 old1 2026-02-01 "$X120")"; S1="${S1}[$(sr | cut -d'~' -f3 | tr -d '\n' | wc -c | tr -d ' ')]"
+page first '{"id":"r9","coordinator_handle":"old1","updated_at":"2026-03-01"}'; S1="${S1}[$(sr)]"
+page first "$(rr r10 old1 2026-01-02 "gone")"; S1="${S1}[$(sr old1)]"
+mv "$HD/orca-roles.planner-handles" "$HD/hist.off"; S1="${S1}[$(sr)$([ -e "$MF/rl.n" ] && echo called || true)]"; mv "$HD/hist.off" "$HD/orca-roles.planner-handles"
+check "stale_run: nothing for unrelated or current-handle Runs, the Run bound to an old handle otherwise, the newest of several in either order, objective on one line cut to 120, a Run without objective, the current handle excluded, no history file means no run-list call" "$S1" "[][r3~old1~one][r5~old2~newer][r5~old2~newer][120:a b c][120][r9~old1~][][]"
+# stale_run: pages, the page cap, failures
+rm -f "$MF"/rl.page.*; page first "$(rr r1 other 2026-01-05 unrelated)" c2; page c2 "$(rr r2 old2 2026-01-01 second-page)"; S2="[$(sr)]:$(grep -c -- '--cursor c2' "$MF/orch.log")"
+rm -f "$MF"/rl.page.*; : > "$MF/rl.always"; S2="${S2}[$(sr)$(src):$(cat "$MF/rl.n")]"; rm -f "$MF/rl.always"
+: > "$MF/rl.fail"; S2="${S2}[$(src)]"; rm -f "$MF/rl.fail"
+page first "$(rr r1 other 2026-01-05 unrelated)" c2; page c2 "$(rr r2 old2 2026-01-01 second-page)"; echo 2 > "$MF/rl.failat"; S2="${S2}[$(src)]"; rm -f "$MF/rl.failat"
+: > "$MF/rl.junk"; S2="${S2}[$(src)]"; rm -f "$MF/rl.junk"
+printf '{"result":{}}' > "$MF/rl.page.first"; S2="${S2}[$(sr)$(src)]"; rm -f "$MF"/rl.page.* "$MF"/rl.n
+check "stale_run: follows nextCursor to the second page, stops at 50 pages without error, returns 1 when run-list fails (first page, second page, not JSON), empty and 0 when there are no runs" "$S2" "[r2~old2~second-page]:1[0:50][1][1][1][0]"
+# kickoff: the Planner's message carries the stale-Run reminder (never a bind), the history gets the Planner's new handle only, and a failing run-list does not stop anything
+rm -f "$MF"/rl.page.*; RUNB='Run r9 (Paper: topic) is still bound to a previous tab of yours. If this is your Run, bind it with `orca orchestration run-use --id r9 --json` before anything else, so worker reports reach you.'
+page first "$(rr r9 old1 2026-04-01 'Paper: topic'),$(rr r8 other 2026-05-01 unrelated)"
+HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "planner dev"
+K1="$(grep -cF "$RUNB" "$MF/text.hp"):$(grep -c 'is still bound' "$MF/text.hd" || true):$(grep -c '^Run r9 is bound to an old Planner tab (old1); the Planner was told\.$' "$MF/out.log"):$(grep -cE 'run-use|run-create' "$MF/orch.log" || true):$(tr '\n' ' ' < "$MF/gd/orca-roles.planner-handles")"
+check "kickoff: the Planner's message ends with the reminder to bind the stale Run (named, with its objective), the worker's does not, nothing binds it, the history keeps the old handles and gains none but the Planner's" "$K1" "1:0:1:0:old1 hp "
+: > "$MF/rl.fail"; HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "planner dev"; rm -f "$MF/rl.fail"
+K2="$(grep -c "^Could not list the Runs to check the Planner's binding\.$" "$MF/out.log"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(find "$MF" -maxdepth 1 -name 'text.*' | wc -l | tr -d ' ')"
+page first "$(rr r2 hp 2026-06-01 'bound to the current handle')"; HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "planner dev"
+K2="$K2:$(grep -c 'is still bound' "$MF/text.hp" || true):$(grep -c 'is bound to an old Planner tab' "$MF/out.log" || true)"
+page first "$(rr r3 old1 2026-06-01 'bound to an old tab')"; mf "$(mfc "$DEVOK")" clean "planner dev"
+K2="$K2:$(grep -c 'is still bound' "$MF/text.hp" || true):$(tr '\n' ' ' < "$MF/gd/orca-roles.planner-handles")"
+rm -f "$MF"/rl.page.*
+check "kickoff: run-list failing -> logged, the Planner and the worker still get their messages unchanged; a Run bound to the current handle gets no reminder; with no history (seeded from the env) an old Run is not reminded" "$K2" "1:0:2:0:0:0:hp "
+# kickoff: the 'Roles reopened' status when the Planner ran the launch itself
+CFGT2="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')"; HU='Use these handles from now on:/PLANNER=hp/DEV=hd/TESTER=ht/AUDITOR=ha'
+OTH=hp mf "$CFGT2" clean "dev tester"; R4="$(hnds | sed 's/^HND //')|$(grep -c '^Told the Planner the roles were reopened\.$' "$MF/out.log")"
+OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')|$(grep -c '^TESTER=' "$MF/gd/orca-roles.kicked" || true)"
+OTH=hp SENDFAIL="hd ht" mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"
+REUSED=dev OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"
+FAILHND=1 OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(grep -c '^Could not tell the Planner the roles were reopened\.$' "$MF/out.log"):$(grep -c '^Told the Planner' "$MF/out.log" || true)"
+check "roles reopened: one status to the Planner naming the roles whose role message was sent, 'Not reached' for those whose kick failed (also all of them), a reused role not listed, the handles; the failed send is logged" "$R4" "hp|status|Roles reopened|roles opened or reopened: Dev, Tester./$HU|1|hp|status|Roles reopened|roles opened or reopened: Dev. Not reached (no role message sent): Tester./$HU|0|hp|status|Roles reopened|roles opened or reopened: none. Not reached (no role message sent): Dev, Tester./$HU|hp|status|Roles reopened|roles opened or reopened: Tester./$HU|1:0"
 # check_config and docs
 cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }
 # defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
