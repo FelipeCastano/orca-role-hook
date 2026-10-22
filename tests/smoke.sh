@@ -3852,7 +3852,28 @@ for bad in "$XW --label x -- true" "$XD/full --label x -- true" "$XD/nodir --lab
   eval "xrun run $bad"
   check "crosscheck run: refuses [${bad#"$XD/"}] with a message and no JSON" "$([ "$XRC" != 0 ] && echo fail):$([ -n "$XERR" ] && echo msg):$XOUT" "fail:msg:"
 done
-check "crosscheck: the worktree is unchanged after every run" "$(xstate)" "$X0"
+# export and apply: a candidate's change goes from one copy to another, split into tests and the rest
+xrun tree "$XD/cand" --ref "$XBASE"; XC="$(cd "$XD/cand" && pwd -P)"
+printf 'v3\n' > "$XC/src/a"; printf 'b\n' > "$XC/src/b"; printf 'ct\n' > "$XC/tests/c"; rm "$XC/sub/k"; printf '\000\001bin' > "$XC/src/blob"
+xrun export "$XD/cand"; XALL="$XOUT"
+check "crosscheck export: every change since the copy was made (modified, new, deleted, binary), and not the links" "$XRC:$(printf '%s\n' "$XALL" | sed -n 's|^diff --git a/\([^ ]*\) .*|\1|p' | LC_ALL=C sort | tr '\n' ' ')" "0:src/a src/b src/blob sub/k tests/c "
+xrun export "$XD/cand" --only tests; check "crosscheck export --only: just those paths" "$(printf '%s\n' "$XOUT" | sed -n 's|^diff --git a/\([^ ]*\) .*|\1|p' | tr '\n' ' ')" "tests/c "
+xrun export "$XD/cand" --except tests --except src/blob; check "crosscheck export --except: everything else" "$(printf '%s\n' "$XOUT" | sed -n 's|^diff --git a/\([^ ]*\) .*|\1|p' | LC_ALL=C sort | tr '\n' ' ')" "src/a src/b sub/k "
+xrun export "$XD/cand" --only 'src/*'; check "crosscheck export: paths are literal, not globs" "$XRC:$XOUT" "0:"
+printf '%s\n' "$XALL" > "$XD/all.diff"; xrun tree "$XD/other" --ref "$XBASE"; xrun apply "$XD/other" "$XD/all.diff"
+check "crosscheck apply: the exported patch rebuilds the candidate in another copy (binary included)" "$XRC:$(cd "$XD/other" && cat src/a src/b tests/c | tr '\n' ' '):$([ -e "$XD/other/sub/k" ] && echo k || echo nok):$(cmp -s "$XC/src/blob" "$XD/other/src/blob" && echo same)" "0:v3 b ct :nok:same"
+xrun tree "$XD/cand2" --ref "$XBASE"; printf 'v4\n' > "$XD/cand2/src/a"; printf 'z\n' > "$XD/cand2/src/z"; xrun export "$XD/cand2"; printf '%s\n' "$XOUT" > "$XD/part.diff"
+XS="$(cd "$XD/other" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum | shasum)"
+xrun apply "$XD/other" "$XD/part.diff"
+check "crosscheck apply: a patch that does not apply fails with a message" "$([ "$XRC" != 0 ] && echo fail):$([ -n "$XERR" ] && echo msg)" "fail:msg"
+check "crosscheck apply: and changes nothing, not even the files that would apply (all or nothing)" "$(cd "$XD/other" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum | shasum)" "$XS"
+: > "$XD/empty.diff"; xrun apply "$XD/other" "$XD/empty.diff"; check "crosscheck apply: an empty patch changes nothing and says so" "$XRC:$(printf '%s' "$XERR" | grep -c 'nothing applied')" "0:1"
+xrun tree "$XD/clean" --ref "$XBASE"; xrun export "$XD/clean"; check "crosscheck export: an untouched copy exports nothing" "$XRC:$XOUT" "0:"
+for bad in "export $XW" "export $XD/full" "export $XD/cand --only ../x" "export $XD/cand --only /etc" "export $XD/cand --except ':(glob)*'" "export $XD/cand --only a/./b" "export $XD/cand --only" "export $XD/cand --bogus" "apply $XW $XD/all.diff" "apply $XD/full $XD/all.diff" "apply $XD/cand $XD/none.diff" "apply $XD/cand" "apply $XD/cand $XD/all.diff extra"; do
+  eval "xrun $bad"
+  check "crosscheck: refuses [${bad//$XD\//}] with a message and no output" "$([ "$XRC" != 0 ] && echo fail):$([ -n "$XERR" ] && echo msg):$XOUT" "fail:msg:"
+done
+check "crosscheck: the worktree is unchanged after every run, export and apply" "$(xstate)" "$X0"
 }
 
 sec_model_check() {

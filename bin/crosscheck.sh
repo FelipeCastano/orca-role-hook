@@ -3,17 +3,21 @@
 # for example) without touching the worktree. A copy lives in the worker's scratchDir and carries its own throwaway git repo.
 # Usage (from the worktree):  crosscheck.sh tree <dir> --ref <ref> [--overlay <file>...]
 #                             crosscheck.sh run <dir> --label <label> [--timeout <seconds>] -- <command> [<arg>...]
+#                             crosscheck.sh export <dir> [--only <path>]... [--except <path>]...   |   crosscheck.sh apply <dir> <patch>
 # tree: writes the files of <ref> (a commit, e.g. a checkpoint ref) into <dir>, outside the worktree: new, empty, or an earlier copy
 #   (replaced). Links the worktree's ignored entries (dependencies such as node_modules or .venv; caches excluded) instead of copying
 #   them, commits the copy in a repo of its own, then copies each --overlay file (a path of the worktree, e.g. the tests you wrote) on
 #   top, uncommitted.
 # run: runs the command inside a copy made by tree, cut after --timeout seconds (default 600); its output goes to <dir>.<label>.log
 #   and one JSON line is printed: {label, dir, exit, seconds, timedOut, log}. A timed-out run is an error, not a failing test.
+# export: prints, as a binary-safe patch, what changed in a copy since tree made it (new files included, links left out), limited to
+#   the --only paths and without the --except ones (literal paths of the project, files or folders). Nothing to export: empty output.
+# apply: applies a patch (e.g. one export printed) to a copy, all or nothing. An empty patch changes nothing.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 MARK=orca-crosscheck
 die() { echo "crosscheck.sh: $*" >&2; exit 1; }
-usage() { sed -n 4,5p "$0" >&2; exit 2; }
+usage() { sed -n 4,6p "$0" >&2; exit 2; }
 abs_dir() { (cd "$1" 2>/dev/null && pwd -P); }   # physical path of an existing directory
 phys_path() {   # physical path of a directory that may not exist yet: its nearest existing ancestor, resolved, plus the rest
   local p="$1" rest=""
@@ -110,6 +114,35 @@ case "$CMD" in
     jq -nc --arg label "$LABEL" --arg dir "$D" --argjson exit "$RC" --argjson seconds "$(( $(date +%s) - START ))" --argjson timedOut "$TIMED" --arg log "$LOGF" \
       '{label: $label, dir: $dir, exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log}'
     ;;
-  -h|--help) sed -n 2,12p "$0"; exit 0;;
+  export)
+    DIR="${1:-}"; [ -n "$DIR" ] || usage; shift
+    SPECS=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --only|--except)
+          p="${2:-}"; [ -n "$p" ] || die "$1 needs a path"
+          case "$p" in /*|:*|*'\'*) die "$1 takes a path of the project, relative and literal: $p";; esac
+          case "/${p%/}/" in */../*|*/./*) die "$1 path must not contain . or ..: $p";; esac
+          if [ "$1" = --only ]; then SPECS+=(":(literal)$p"); else SPECS+=(":(exclude,literal)$p"); fi
+          shift 2;;
+        *) usage;;
+      esac
+    done
+    D="$(abs_dir "$DIR")" || die "no such directory: $DIR"
+    is_copy "$D" || die "$DIR is not a copy made by crosscheck.sh tree"
+    git -C "$D" add -A || die "cannot read the changes of $DIR"
+    git -C "$D" diff --cached --binary HEAD -- ${SPECS[@]+"${SPECS[@]}"} || die "cannot export the changes of $DIR"
+    ;;
+  apply)
+    DIR="${1:-}"; PATCH="${2:-}"; [ -n "$DIR" ] && [ -n "$PATCH" ] && [ $# = 2 ] || usage
+    D="$(abs_dir "$DIR")" || die "no such directory: $DIR"
+    is_copy "$D" || die "$DIR is not a copy made by crosscheck.sh tree"
+    [ -f "$PATCH" ] && [ -r "$PATCH" ] || die "no such patch file: $PATCH"
+    PD="$(abs_dir "$(dirname "$PATCH")")" && PATCH="$PD/$(basename "$PATCH")"
+    if [ ! -s "$PATCH" ]; then echo "crosscheck.sh: $PATCH is empty: nothing applied" >&2; exit 0; fi
+    git -C "$D" apply --binary "$PATCH" || die "the patch does not apply to $DIR (nothing was changed)"
+    echo "Applied $(basename "$PATCH") to $D" >&2
+    ;;
+  -h|--help) sed -n 2,16p "$0"; exit 0;;
   *) usage;;
 esac

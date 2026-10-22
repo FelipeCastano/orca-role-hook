@@ -809,7 +809,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── kickoff.sh               # sends each agent its role, passes the Jira ticket and closes the extra agent
 │   ├── clean.sh                 # cleans the workers' context and resends their role
 │   ├── checkpoint.sh            # records the tree under refs/orca-roles/checkpoints/ (the Planner's briefs diff rounds against it)
-│   ├── crosscheck.sh            # throwaway copies of a ref (with the worktree's dependencies linked) to run tests on other code
+│   ├── crosscheck.sh            # throwaway copies of a ref (with the worktree's dependencies linked) to run tests on other code, and patches between them
 │   ├── close-role.sh            # closes a role's tab in the current workspace
 │   ├── relaunch-role.sh         # relaunches one role with another model
 │   ├── forget-trust.sh          # removes the trust the kit gave to worktrees in ~/.claude.json
