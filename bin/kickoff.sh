@@ -188,8 +188,11 @@ composer_watch & WATCH_PID=$!
 if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
   kick "$PLANNER" planner "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
-  # a coordinator's marker covers only this first start: a Planner opened here again later talks to the user as usual
-  if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)"; then rm -f "$CM"; fi
+  # a coordinator's marker covers only this first start: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
+  if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
+    if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
+    rm -f "$CM"
+  fi
 fi
 OPENED_WORKERS=""
 for id in $ROLES; do

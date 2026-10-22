@@ -464,10 +464,21 @@ coordinated_marker() {
   common="$(git rev-parse --git-common-dir 2>/dev/null)" && top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
   printf '%s/orca-roles.coordinated/%s' "$(cd "$common" && pwd)" "${top##*/}"
 }
+# The Run of the coordinator that opened this worktree: the id it wrote in its marker, or the copy kickoff.sh keeps beside the state
+# (<git dir>/orca-roles.coordinator) so it outlives the marker, the Planner's restarts and its cleared conversations. Fails if none.
+coordinator_run() {
+  local f r
+  for f in "$(coordinated_marker)" "$(dirname "$1")/orca-roles.coordinator"; do
+    [ -f "$f" ] || continue
+    r="$(head -n 1 "$f")"
+    case "$r" in run_*[!A-Za-z0-9_]*) ;; run_?*) printf '%s' "$r"; return 0;; esac
+  done
+  return 1
+}
 
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note cap oc esc e cm
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note cap oc esc e cm cr
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -510,6 +521,10 @@ planner_msg() {
   oc=""; for id in $roles; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
   [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): Orca's worker-start --terminal times out on their tabs, so dispatch their tasks with \`orca orchestration dispatch --task <task_id> --to <handle> --inject --json\` instead (create the task first, as for worker-start). They are unsupervised for Orca: worker-show, worker-stop and worker-abandon do not apply to them; their worker_done reaches you as usual."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
+  # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the Planner asking in the tab
+  if cr="$(coordinator_run "$state")"; then
+    msg="$msg This worktree works under a coordinator whose Run is $cr, and it does not read this tab. Outside a dispatch from it (for example when it typed your task here), everything your prompt has you ask, propose or report to the user goes to it as an Orca message: bind your own Run first (create it with the task's objective if you have none yet), then \`orca orchestration send --to run:$cr --type question --subject \"<branch>: <topic>\" --body \"<text>\" --json\`, with \`--type status\` for a report or the end of the task and the absolute path of the file that holds it. Its answers reach your Run's mailbox like your workers' messages. Never ask it in this tab or in a question dialog. Inside a dispatch from it, use the preamble's commands. If the user writes in this tab, the user takes precedence."
+  fi
   if [ "$resume" = 1 ]; then
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
   elif [ "$resume" = 3 ]; then
