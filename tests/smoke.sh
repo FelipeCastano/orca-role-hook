@@ -3638,6 +3638,27 @@ case "$EM" in "${BASEP%Start with the startup.}"*"Round log and escalation: "*"r
 check "escalation: planner_msg has one round log sentence, not two, with recordRounds too" "$(jq '.settings.flow.recordRounds = true' "$RD/e1.json" > "$RD/e2.json"; PM "$RD/e2.json" | grep -o 'Round log' | wc -l | tr -d ' ')" "1"
 jq '.settings.flow = {escalation: {dev: {to: 3}}}' "$C" > "$RD/e3.json"; check "escalation: an invalid value -> planner_msg unchanged" "$(PM "$RD/e3.json")" "$BASEP"
 jq '.settings.flow = {escalation: {deployer: {to: "m-big"}}}' "$C" > "$RD/e4.json"; check "escalation: a role that is not active -> planner_msg unchanged" "$(PM "$RD/e4.json")" "$BASEP"
+# --cross: the Tester's cross-check result of the round, only when given
+N2="$(grep -c . "$RG/orca-roles.rounds.jsonl")"
+try rd dev --step 3 --round 1 --outcome rejected --cross disagree
+check "rounds --cross: recorded as cross, after the other fields" "$RC|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -c '[.step, .outcome, .cross, (keys_unsorted | last)]')" '0|["3","rejected","disagree","cross"]'
+try rd dev --step 3 --round 2 --outcome accepted
+check "rounds: without --cross the line has no cross field" "$RC|$(tail -1 "$RG/orca-roles.rounds.jsonl" | jq -c 'has("cross")')" "0|false"
+for args in "dev --step 3 --round 3 --outcome accepted --cross maybe" "dev --step 3 --round 3 --outcome accepted --cross" "dev --step 3 --round 3 --outcome accepted --cross AGREE"; do
+  # shellcheck disable=SC2086
+  try rd $args; check "rounds: '$args' -> exit 1, nothing recorded" "$RC:$(grep -c . "$RG/orca-roles.rounds.jsonl")" "1:$((N2 + 2))"
+done
+# planner_msg: --cross is asked for only when the round log and the cross-check are both on
+printf 'PLANNER=t1\nDEV=t2\nCROSS_DEV=t5\n' > "$TMP/state-x.env"
+PMX() { planner_msg "$1" "planner dev cross-dev" "$TMP/state-x.env" "" "" 0 2>/dev/null; }
+XR='With the cross-check on, add `--cross agree|disagree|none` to each of those round.sh calls'
+jq '.roles["cross-dev"] = {title: "Cross-Dev", agent: "opencode", model: "p/other"}' "$C" > "$RD/x0.json"
+jq '.settings.flow = {recordRounds: true, crossCheck: true}' "$RD/x0.json" > "$RD/x1.json"
+case "$(PMX "$RD/x1.json")" in *"Round log: "*"$XR"*) echo "ok   rounds --cross: asked for with recordRounds and crossCheck";; *) echo "FAIL rounds --cross: not asked for"; FAIL=1;; esac
+jq '.settings.flow = {escalation: {dev: {to: "m-big"}}, crossCheck: true}' "$RD/x0.json" > "$RD/x2.json"
+case "$(PMX "$RD/x2.json")" in *"Round log and escalation: "*"$XR"*) echo "ok   rounds --cross: asked for with escalation and crossCheck";; *) echo "FAIL rounds --cross with escalation"; FAIL=1;; esac
+jq '.settings.flow = {recordRounds: true}' "$RD/x0.json" > "$RD/x3.json"; jq '.settings.flow = {crossCheck: true}' "$RD/x0.json" > "$RD/x4.json"
+check "rounds --cross: not asked for with the round log alone or the cross-check alone" "$(PMX "$RD/x3.json" | grep -c -- '--cross' || true):$(PMX "$RD/x4.json" | grep -c -- '--cross' || true)" "0:0"
 }
 
 sec_kit_path() {

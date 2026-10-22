@@ -648,6 +648,7 @@ Each call appends one JSON line to `orca-roles.rounds.jsonl` in the repository's
 - `ts`, `worktree` (its branch), `step`, `round`, `role`, `task` and `outcome` (`oracle-red` when the oracle is red, whatever the Tester says).
 - The `agent` and `model` in effect for that role in this worktree. After a `relaunch-role.sh`, that is the new model.
 - `files`, `added` and `removed`: the worktree's uncommitted change against `HEAD`. It accumulates over the set, since nothing is committed per step.
+- `cross` (only with [Cross-check](#cross-check) on): the Tester's cross-check result for that round, `agree`, `disagree` or `none` (Cross-Dev left no candidate). The Planner passes it with `--cross`; the startup message asks for it.
 
 The point is data: which tasks each model gets right on the first round. Read it with `jq -s` (e.g. the acceptance rate per model), alongside the tokens per role that `metrics.sh` reports. The file is local and never leaves the worktree.
 
@@ -692,7 +693,7 @@ Turn it on with `settings.flow.crossCheck: true` (programmer mode) and the role 
 1. In each step with code, the Planner gives Cross-Dev the same spec as Dev, at the same time, with the step's base ref. That is the one exception to "one code task in flight", since Cross-Dev only writes in its own copies. Fix rounds go to Dev alone.
 2. Once both have reported, the Tester's brief adds the paths of the candidate's two diffs and the command that runs its tests.
 3. The Tester runs its tests (T) and the candidate's (C) on the base, on Dev's tree and on the base plus the candidate's patch, each set in its own copy. Every test should fail on the base and pass on the other two. T failing only with the candidate's patch while C passes on both points to a test tied to Dev's implementation; C failing only on Dev's tree points to a bug in Dev's code, which the Tester reproduces in the worktree before calling it a finding; a test failing on both points to a wrong test or an ambiguous spec, which the Planner settles as a contract decision.
-4. The Tester reports `Cross-check: agree` or `disagree` with the matrix, and the Planner keeps it in the step's ledger.
+4. The Tester reports `Cross-check: agree` or `disagree` with the matrix, and the Planner keeps it in the step's ledger and, with `recordRounds`, in the [Round log](#round-log) (`cross`), which is the data to judge whether the cross-check pays for itself.
 
 It costs one more worker per step and a few test runs. It is modeled on execution-based cross-validation between agents that write both tests and patches, which one published study (four candidates, Python bugs) reports beats each agent checking only its own work; with two candidates, and on this flow, the gain is not measured yet.
 

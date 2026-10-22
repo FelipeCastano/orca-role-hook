@@ -495,7 +495,7 @@ coordinator_run() {
 
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note cap oc esc e cm cr
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note cap oc esc e cm cr xc
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -520,7 +520,8 @@ planner_msg() {
   cap=""; [ "$(mode_of "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
   [ -n "$cap" ] && msg="$msg Flow override: stop and check with the user when a step piles up $cap rejected rounds (this replaces the 3 in your prompt)."
   [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
-  flow_cross_check "$cfg" "$roles" && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
+  xc=""; flow_cross_check "$cfg" "$roles" && xc=1
+  [ -n "$xc" ] && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
   esc=""; if [ "$(mode_of "$cfg")" = programmer ]; then   # settings.flow.escalation (see README, Escalation): the active roles with a valid one
     for id in $roles; do e="$(flow_escalation "$cfg" "$id" 2>/dev/null)"; [ -n "$e" ] && esc="$esc, $(title_of "$cfg" "$id") to ${e% *} after ${e#* } rejected round(s) of a step"; done
   fi
@@ -530,6 +531,7 @@ planner_msg() {
     else
       msg="$msg Round log and escalation: after each round of a worker that writes code (Dev, or the role you gave the step to), once you have its verdict (the Tester's ACCEPTED or REJECTED, or the oracle's red) and before the next dispatch, run \`$(kit_env)$KIT/bin/round.sh <role> --step <step> --round <n> --outcome accepted|rejected|oracle-red --task <task id>\` from the worktree (oracle-red when the oracle is red, whatever the Tester says). Never call it with a dispatch to that role in flight. It escalates${esc#,}: it relaunches the role on that model, and on the step's accepted round it brings it back to its own model. This is configured, so it does not need the user's confirmation; when it relaunches a role, tell the user in one line (not as a question) and use the new handle it prints for the next dispatch. The rejected rounds keep counting toward the step's limit across models."
     fi
+    [ -n "$xc" ] && msg="$msg With the cross-check on, add \`--cross agree|disagree|none\` to each of those round.sh calls: the Tester's Cross-check result for that round, none when Cross-Dev left no candidate."
   fi
   if [ "$(mode_of "$cfg")" = programmer ] && oracle_enabled "$cfg"; then   # settings.oracle (see README, Optional oracle); off = byte-identical message
     msg="$msg Oracle: every Dev task spec gets a section \`## Acceptance command\` with a fenced block of commands from the allowlist (pytest, ruff, mypy, npm/pnpm/yarn test|lint|build|typecheck, vitest, jest, tsc, eslint, playwright test, make, go test|vet|build, cargo test|check|clippy|build, bash <file>.sh; joined only with &&, no pipes or redirections). Save each Dev spec to <your scratchDir>/spec-<task_id>.md; after each Dev worker_done, before briefing the Tester, run \`$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file>\`: pass or pass_flaky means go on to the Tester; fail, a cheat, command_not_allowed, env_not_runnable or no_acceptance_command means back to Dev with the oracle's output (a rejected round). The Tester's VERDICT stays, but the oracle decides whether the step's code is accepted."
