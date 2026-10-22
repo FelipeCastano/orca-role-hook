@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -3800,6 +3800,56 @@ check "upgrade_config moves the old defaults 15/5 to 8/3" "$(mm '{"roles":{"audi
 check "upgrade_config keeps a user's own maxMutants/maxSelfMutants" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":12}},"tester":{"params":{"maxSelfMutants":4}}}}')" "[12,4]"
 check "upgrade_config gives 8/3 to a config without the keys" "$(mm '{"roles":{}}')" "[8,3]"
 echo "ok   checkpoint defaults"
+}
+
+sec_crosscheck() {
+# crosscheck.sh: throwaway copies of a ref for running tests against code other than the worktree's, never touching the worktree
+XD="$TMP/xc"; rm -rf "$XD"; mkdir -p "$XD/wt"; XW="$XD/wt"
+xg() { git -C "$XW" "$@"; }
+xg init -q -b main; xg config user.email t@example.com; xg config user.name tester
+printf 'deps/\n*.log\nsrc/__pycache__/\n' > "$XW/.gitignore"; printf 'tests export-ignore\n' > "$XW/.gitattributes"
+mkdir -p "$XW/src/__pycache__" "$XW/tests" "$XW/deps" "$XW/sub"; printf 'v1\n' > "$XW/src/a"; printf 't\n' > "$XW/tests/t"; printf 'k\n' > "$XW/sub/k"
+xg add -A; xg commit -q -m init; XBASE="$(xg rev-parse HEAD)"
+printf 'd\n' > "$XW/deps/lib"; printf 'c\n' > "$XW/src/__pycache__/x"; printf 'l\n' > "$XW/run.log"
+printf 'v2\n' > "$XW/src/a"; printf 'new\n' > "$XW/src/new"; printf 'mine\n' > "$XW/tests/t2"; ln -s ../src/a "$XW/tests/link"
+xstate() { ( cd "$XW" && git rev-parse HEAD; GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 -uall --ignored; find . -path ./.git -prune -o -print | LC_ALL=C sort | while IFS= read -r f; do if [ -L "$f" ]; then echo "$f -> $(readlink "$f")"; elif [ -f "$f" ]; then echo "$f $(shasum < "$f" | cut -d' ' -f1)"; else echo "$f/"; fi; done ) | shasum | cut -d' ' -f1; }
+xrun() { XRC=0; XOUT="$(cd "$XW/sub" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" "$@" 2>"$TMP/xc.err")" || XRC=$?; XERR="$(cat "$TMP/xc.err")"; }
+X0="$(xstate)"
+xrun tree "$XD/base" --ref "$XBASE" --overlay tests/t2; XB="$(cd "$XD/base" 2>/dev/null && pwd -P)"
+check "crosscheck tree: exit 0, prints the copy's physical path, one summary line on stderr" "$XRC:$XOUT:$(printf '%s' "$XERR" | grep -c '^Copy of .*: 2 ignored entries linked, 1 overlay file(s)\.$')" "0:$XB:1"
+check "crosscheck tree: the worktree (HEAD, status with ignored files, every file and link) is unchanged" "$(xstate)" "$X0"
+check "crosscheck tree: files of the ref, not of the working tree (src/a), and Dev's new file absent" "$(cat "$XD/base/src/a"):$([ -e "$XD/base/src/new" ] && echo present || echo absent)" "v1:absent"
+check "crosscheck tree: export-ignore paths are kept (tests/t)" "$(cat "$XD/base/tests/t" 2>/dev/null)" "t"
+check "crosscheck tree: the copy's commit holds exactly the ref's tree" "$(git -C "$XD/base" rev-parse 'HEAD^{tree}')" "$(xg rev-parse "$XBASE^{tree}")"
+check "crosscheck tree: ignored entries are linked to the worktree's (deps, run.log), caches are not (src/__pycache__)" "$(readlink "$XD/base/deps"):$(readlink "$XD/base/run.log"):$([ -e "$XD/base/src/__pycache__" ] || [ -L "$XD/base/src/__pycache__" ] && echo linked || echo none)" "$(cd "$XW" && pwd -P)/deps:$(cd "$XW" && pwd -P)/run.log:none"
+check "crosscheck tree: the overlay is copied on top, uncommitted, and the links stay out of the copy's status" "$(cat "$XD/base/tests/t2"):$(git -C "$XD/base" status --porcelain | tr '\n' ' ')" "mine:?? tests/t2 "
+xrun tree "$XD/empty-ok" --ref HEAD; mkdir -p "$XD/pre"; xrun tree "$XD/pre" --ref HEAD
+check "crosscheck tree: an existing empty directory is accepted" "$XRC:$(cat "$XD/pre/src/a")" "0:v1"
+printf 'stale\n' > "$XD/base/stale"; xrun tree "$XD/base" --ref "$XBASE"
+check "crosscheck tree: an earlier copy is replaced (old files gone, no overlay now) and what its links pointed to is kept" "$XRC:$([ -e "$XD/base/stale" ] && echo stale || echo gone):$(git -C "$XD/base" status --porcelain | tr '\n' ' '):$(cat "$XW/deps/lib")" "0:gone::d"
+check "crosscheck tree: replacing a copy left the worktree unchanged" "$(xstate)" "$X0"
+xrun tree "$XD/base" --ref "$XBASE" --overlay tests/t2
+# refusals: nothing created, worktree unchanged
+mkdir -p "$XD/full"; printf 'x\n' > "$XD/full/f"; printf 'f\n' > "$XD/afile"
+for bad in "$XW/inside --ref HEAD" "../src/deeper/x --ref HEAD" "$XW --ref HEAD" "$XD/full --ref HEAD" "$XD/afile --ref HEAD" "$XD/r1 --ref nope" "$XD/r2" "$XD/r3 --ref HEAD --overlay tests/none" "$XD/r4 --ref HEAD --overlay ../x" "$XD/r5 --ref HEAD --overlay tests/../tests/t2" "$XD/r6 --ref HEAD --overlay /etc/hosts" "$XD/r7 --ref HEAD --overlay tests/link" "$XD/r8 --ref HEAD --bogus" "$XD/new/../r9 --ref HEAD" "$XD --ref HEAD"; do
+  eval "xrun tree $bad"
+  check "crosscheck tree: refuses [${bad#"$XD/"}] with a message, creates nothing" "$([ "$XRC" != 0 ] && echo fail):$([ -n "$XERR" ] && echo msg):$(ls "$XD" | LC_ALL=C sort | tr '\n' ' ')" "fail:msg:afile base empty-ok full pre wt "
+done
+check "crosscheck tree: refusals left the worktree unchanged (no folder created inside it)" "$(xstate)" "$X0"
+xrun; check "crosscheck: no subcommand -> usage, exit 2" "$XRC" "2"
+# run
+xrun run "$XD/base" --label t1 -- sh -c 'cat src/a; echo err >&2; exit 3'
+check "crosscheck run: one JSON line with the command's exit code, its label and folder, and no timeout" "$XRC:$(printf '%s' "$XOUT" | jq -r '"\(.label) \(.exit) \(.timedOut) \(.dir == "'"$XB"'") \(.seconds | type)"')" "0:t1 3 false true number"
+check "crosscheck run: the command ran inside the copy and its output (stdout and stderr) is in <dir>.<label>.log" "$(printf '%s' "$XOUT" | jq -r .log):$(cat "$XB.t1.log" | tr '\n' ' ')" "$XB.t1.log:v1 err "
+xrun run "$XD/base" --label ok -- true; check "crosscheck run: a passing command reports exit 0" "$(printf '%s' "$XOUT" | jq -r .exit)" "0"
+xrun run "$XD/base" --label slow --timeout 1 -- sleep 9.137
+check "crosscheck run: a run over --timeout is cut and reported as timedOut" "$XRC:$(printf '%s' "$XOUT" | jq -r '"\(.timedOut) \(.exit != 0) \(.seconds < 5)"')" "0:true true true"
+check "crosscheck run: the cut run left no process behind" "$(pgrep -f 'sleep 9.137' | wc -l | tr -d ' ')" "0"
+for bad in "$XW --label x -- true" "$XD/full --label x -- true" "$XD/nodir --label x -- true" "$XD/base -- true" "$XD/base --label a/b -- true" "$XD/base --label .x -- true" "$XD/base --label x --timeout 0 -- true" "$XD/base --label x --timeout 1.5 -- true" "$XD/base --label x" "$XD/base --label x --"; do
+  eval "xrun run $bad"
+  check "crosscheck run: refuses [${bad#"$XD/"}] with a message and no JSON" "$([ "$XRC" != 0 ] && echo fail):$([ -n "$XERR" ] && echo msg):$XOUT" "fail:msg:"
+done
+check "crosscheck: the worktree is unchanged after every run" "$(xstate)" "$X0"
 }
 
 sec_model_check() {
