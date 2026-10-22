@@ -267,6 +267,8 @@ for p in tester auditor; do
   GCO="$(grep -F 'git checkout' "$PD/$p.md" || true)"; [ -n "$GCO" ] && grep -vqE 'Never (use|run) .git checkout.' <<<"$GCO" && { echo "FAIL rules R11: $p.md mentions git checkout without forbidding it"; FAIL=1; }
 done
 rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
+rule R11 "$PD/tester.md" 'crosscheck.sh tree <scratchDir>/base' '^7\. \*\*Base check'
+rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
 check "rules R11: common-workers.md earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$PD/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$PD/common-workers.md")$(grep -c -- '--short' "$PD/common-workers.md" || true)$(grep -c 'copy-rev/' "$PD/common-workers.md")" "1101"
 check "rules R11: tester.md mutation in place, no copy" "$(grep -c 'in place in the worktree' "$PD/tester.md")$(grep -c 'rsync' "$PD/tester.md")" "10"
 check "rules R11: no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
@@ -2604,7 +2606,8 @@ sec_prompts_misc() {
 check "marketplace: lists the orca-roles plugin from ./plugin" "$(jq -r '.plugins[] | "\(.name) \(.source)"' "$ROOT/.claude-plugin/marketplace.json")" "orca-roles ./plugin"
 check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/.claude-plugin/marketplace.json")" "$(jq -r '.name' "$ROOT/plugin/.claude-plugin/plugin.json")"
 
-check "defaults: Tester maxSelfMutants and Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,"high"]'
+check "defaults: Tester maxSelfMutants and baseCheck, Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.tester.params.baseCheck, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,true,"high"]'
+check "defaults: every default Tester parameter is listed in tester.md's Parameters" "$(jq -r '.roles.tester.params | keys[]' "$ROOT/config.default.json" | while IFS= read -r k; do awk '/^## Parameters/{f=1;next} /^## /{f=0} f' "$ROOT/prompts/programmer/tester.md" | grep -qF -- "- \`$k\`:" || echo "$k"; done)" ""
 echo "ok   marketplace and defaults"
 }
 
