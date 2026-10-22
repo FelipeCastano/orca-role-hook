@@ -269,6 +269,8 @@ done
 rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
 rule R11 "$PD/tester.md" 'crosscheck.sh tree <scratchDir>/base' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
+rule R11 "$PD/tester.md" 'each test set in its own copy outside the worktree' '^8\. \*\*Cross-check matrix'
+rule R11 "$PD/planner.md" 'its patch never goes into the worktree' '^Cross-Dev writes an independent candidate'
 check "rules R11: common-workers.md earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$PD/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$PD/common-workers.md")$(grep -c -- '--short' "$PD/common-workers.md" || true)$(grep -c 'copy-rev/' "$PD/common-workers.md")" "1101"
 check "rules R11: tester.md mutation in place, no copy" "$(grep -c 'in place in the worktree' "$PD/tester.md")$(grep -c 'rsync' "$PD/tester.md")" "10"
 check "rules R11: no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
@@ -618,6 +620,35 @@ jq '.settings.flow = {workerReportBody: "medium"}' "$C" > "$TMP/f5.json"
 check "flow medium: planner_msg unchanged" "$(PM "$TMP/f5.json" 2>/dev/null)" "$BASEP"
 check "flow medium: worker_msg unchanged" "$(WM "$TMP/f5.json" 2>/dev/null)" "$BASEW"
 case "$(WM "$TMP/f5.json" 2>&1 >/dev/null)$(PM "$TMP/f5.json" 2>&1 >/dev/null)" in *"settings.flow.workerReportBody must be"*) echo "ok   flow medium: warning";; *) echo "FAIL flow medium: no warning"; FAIL=1;; esac
+# crossCheck: only in programmer mode with the cross-dev role active; anything else leaves the message byte-identical
+printf 'PLANNER=t1\nDEV=t2\nCROSS_DEV=t5\n' > "$TMP/state-x.env"
+PX() { planner_msg "$1" "${2:-planner dev cross-dev}" "$TMP/state-x.env" "" "" 0; }
+XS='Flow override: the cross-check is on: follow your section "Cross-check" with Cross-Dev.'
+jq '.roles["cross-dev"] = {title: "Cross-Dev", agent: "opencode", model: "p/other"}' "$C" > "$TMP/x0.json"
+BASEX="$(PX "$TMP/x0.json" 2>&1)"
+jq '.settings.flow = {crossCheck: false}' "$TMP/x0.json" > "$TMP/x1.json"
+check "flow crossCheck false: planner_msg unchanged, no warning" "$(PX "$TMP/x1.json" 2>&1)" "$BASEX"
+jq '.settings.flow = {crossCheck: true}' "$TMP/x0.json" > "$TMP/x2.json"
+check "flow crossCheck true with cross-dev active (another model than Dev's): no warning" "$(PX "$TMP/x2.json" 2>&1 >/dev/null)" ""
+case "$(PX "$TMP/x2.json" 2>/dev/null)" in *"$XS"*"$XS"*) echo "FAIL flow crossCheck: sentence twice"; FAIL=1;; *"$XS"*) echo "ok   flow crossCheck true: sentence";; *) echo "FAIL flow crossCheck true: no sentence"; FAIL=1;; esac
+check "flow crossCheck true: the message is the base one plus the sentence" "$(PX "$TMP/x2.json" 2>/dev/null | sed "s| $XS||")" "$BASEX"
+check "flow crossCheck true: worker_msg unchanged" "$(WM "$TMP/x2.json" 2>&1)" "$(WM "$TMP/x0.json" 2>&1)"
+check "flow crossCheck true without cross-dev active: planner_msg unchanged" "$(PX "$TMP/x2.json" "planner dev" 2>/dev/null)" "$(PX "$TMP/x0.json" "planner dev" 2>/dev/null)"
+case "$(PX "$TMP/x2.json" "planner dev" 2>&1 >/dev/null)" in *"settings.flow.crossCheck needs the cross-dev role enabled"*) echo "ok   flow crossCheck without cross-dev: warning";; *) echo "FAIL flow crossCheck without cross-dev: no warning"; FAIL=1;; esac
+for v in 1 '"true"' '"yes"' null '{}'; do
+  jq --argjson v "$v" '.settings.flow = {crossCheck: $v}' "$TMP/x0.json" > "$TMP/x3.json"
+  check "flow crossCheck $v: planner_msg unchanged" "$(PX "$TMP/x3.json" 2>/dev/null)" "$BASEX"
+  case "$v:$(PX "$TMP/x3.json" 2>&1 >/dev/null)" in null:) echo "ok   flow crossCheck null: no warning (same as unset)";; null:*) echo "FAIL flow crossCheck null: warned"; FAIL=1;; *"settings.flow.crossCheck must be true or false"*) echo "ok   flow crossCheck $v: warning";; *) echo "FAIL flow crossCheck $v: no warning"; FAIL=1;; esac
+done
+jq '.settings.flow = {crossCheck: true} | .settings.mode = "pr-reviewer"' "$TMP/x0.json" > "$TMP/x4.json"; jq '.settings.mode = "pr-reviewer"' "$TMP/x0.json" > "$TMP/x5.json"
+check "flow crossCheck true in pr-reviewer: planner_msg unchanged, no warning" "$(PX "$TMP/x4.json" 2>&1)" "$(PX "$TMP/x5.json" 2>&1)"
+jq '.settings.flow = {crossCheck: true} | .roles["cross-dev"] = {title: "Cross-Dev", agent: "claude", model: "m-other"}' "$C" > "$TMP/x6.json"
+case "$(PX "$TMP/x6.json" 2>&1)" in *"$XS"*) echo "ok   flow crossCheck: a Claude cross-dev works too (not tied to OpenCode)";; *) echo "FAIL flow crossCheck claude cross-dev"; FAIL=1;; esac
+case "$(PX "$TMP/x6.json" 2>&1 >/dev/null)" in "") echo "ok   flow crossCheck: another model than Dev's, no warning";; *) echo "FAIL flow crossCheck other model: warned"; FAIL=1;; esac
+jq '.settings.flow = {crossCheck: true} | .roles["cross-dev"] = {title: "Cross-Dev"}' "$C" > "$TMP/x7.json"
+case "$(PX "$TMP/x7.json" 2>&1 >/dev/null)" in *"cross-dev runs the same agent and model as dev"*) echo "ok   flow crossCheck: same agent and model as Dev is warned";; *) echo "FAIL flow crossCheck same model: no warning"; FAIL=1;; esac
+case "$(PX "$TMP/x7.json" 2>/dev/null)" in *"$XS"*) echo "ok   flow crossCheck: the same model still turns it on";; *) echo "FAIL flow crossCheck same model: off"; FAIL=1;; esac
+check "flow crossCheck: the prompts it points to exist (the Planner's section, the Tester's matrix, the candidate's two diffs)" "$(grep -c '^## Cross-check' "$KIT/prompts/programmer/planner.md"):$(grep -c 'Cross-check matrix' "$KIT/prompts/programmer/tester.md"):$(for f in cand-code.diff cand-tests.diff; do for p in planner tester cross-dev; do grep -qF "$f" "$KIT/prompts/programmer/$p.md" || echo "$p lacks $f"; done; done)" "1:1:"
 check "clean.sh --msg of a worker carries the short-body sentence" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" "$(cd "$TMP" && KIT="$TMP/home/.orca-roles" worker_msg "$TMP/f3.json" dev)"
 case "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" in *"at most ~8 lines"*) echo "ok   clean.sh --msg: short-body sentence";; *) echo "FAIL clean.sh --msg: no short-body sentence"; FAIL=1;; esac
 rm -rf "$KIT/tmp"

@@ -120,6 +120,15 @@ Steps run strictly one at a time, in plan order. A step is **open** from its fir
 
 If your startup message does not include a role, skip its points in the flow (for example, without a Tester the set audit is the only review of Dev's work).
 
+## Cross-check (only when your startup message turns it on)
+
+Cross-Dev writes an independent candidate for a step, a patch and its tests, so the Tester can run its own tests and the candidate's against the step's base, Dev's tree and the candidate's patch, and tell a wrong test from wrong code. The candidate is a probe: its patch never goes into the worktree.
+
+- **Dispatch.** In each step with code, give Cross-Dev the same spec as Dev, at the same time, with the step's base ref (see "Briefed rounds") and nothing from Dev. This is the one exception to "One step at a time": Cross-Dev only writes in copies in its scratchDir built from the base ref, never in the tree Dev is changing. Fix rounds go to Dev alone; Cross-Dev gets a new task only when the spec changes (a contract decision), and then it gets the whole new spec.
+- **Brief.** Create the Tester's task once both have reported. Its brief adds the absolute paths of Cross-Dev's `cand-code.diff` and `cand-tests.diff` and the command that runs its tests, as Cross-Dev reported them, never its reasoning. If Cross-Dev failed or left no usable diff, the brief says so, the Tester skips the matrix and the step goes on as without a cross-check.
+- **Result.** The Tester reports `Cross-check: agree` or `disagree` with the matrix. A disagreement the Tester traced to Dev's code is a code finding like any other; one traced to an ambiguous spec is a contract decision (see "When a rejection forces a contract decision"), never settled by choosing whichever patch looks better.
+- **Ledger.** Record the matrix and the result of each round in the step's ledger.
+
 ## Working under a coordinator
 Normally you talk to the user in this tab. If your startup message says a coordinator opened this worktree, do the startup and wait for its dispatch as that message says: no planning and no question dialog before it arrives. A coordinator that manages several worktrees stands in for the user for the task it gives you, whether the task arrives as an Orca dispatch (a preamble with Task and Dispatch IDs) or typed into this tab:
 - The coordinator's spec is the user's request: plan from its objective, scope and acceptance criteria.

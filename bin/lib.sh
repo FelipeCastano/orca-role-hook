@@ -414,6 +414,8 @@ preexisting_agents() {
 #   roundCap: positive integer (rejected rounds of a step before the Planner checks with the user; the prompt says 3). programmer mode only
 #   maxStepsPerWorker: positive integer, the default `steps` of an OpenCode role (roles.<r>.opencode.steps wins). OpenCode roles only
 #   workerReportBody: "full" (default) or "short" (worker_done body of a few lines, the detail in a file in scratchDir)
+#   crossCheck: true turns on the cross-check (Cross-Dev writes an independent candidate the Tester checks against). programmer mode,
+#   with the cross-dev role active, only
 # flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.   flow_max_steps <config> → stdout: the number, or nothing.
 flow_round_cap() {
   local r; r="$(jq -r '(.settings.flow? | objects | .roundCap?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
@@ -437,6 +439,21 @@ flow_max_steps() {
     "ok "*) printf '%s' "${r#ok }";;
     "bad "*) echo "orca-roles: settings.flow.maxStepsPerWorker must be a positive integer (got ${r#bad }); ignoring it" >&2;;
   esac
+  return 0
+}
+# flow_cross_check <config> <active roles> → status 0 when the cross-check applies; warnings on stderr when it is set but cannot apply
+flow_cross_check() {
+  local v; v="$(jq -r '(.settings.flow? | objects | .crossCheck?) // empty | if type == "boolean" then tostring else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$v" in
+    true) ;;
+    "bad "*) echo "orca-roles: settings.flow.crossCheck must be true or false (got ${v#bad }); ignoring it" >&2; return 1;;
+    *) return 1;;
+  esac
+  [ "$(mode_of "$1")" = programmer ] || return 1
+  case " $2 " in *" cross-dev "*) ;; *) echo "orca-roles: settings.flow.crossCheck needs the cross-dev role enabled in this worktree; ignoring it" >&2; return 1;; esac
+  if [ "$(rstr "$1" cross-dev agent)" = "$(rstr "$1" dev agent)" ] && [ "$(rstr "$1" cross-dev model)" = "$(rstr "$1" dev model)" ]; then
+    echo "orca-roles: cross-dev runs the same agent and model as dev, so their mistakes will tend to match; a different model family makes the cross-check stronger" >&2
+  fi
   return 0
 }
 # settings.flow.escalation.<role> = {"to": "<model>", "after": N}: round.sh relaunches that role on "to" once a step has N (default 1)
@@ -503,6 +520,7 @@ planner_msg() {
   cap=""; [ "$(mode_of "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
   [ -n "$cap" ] && msg="$msg Flow override: stop and check with the user when a step piles up $cap rejected rounds (this replaces the 3 in your prompt)."
   [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
+  flow_cross_check "$cfg" "$roles" && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
   esc=""; if [ "$(mode_of "$cfg")" = programmer ]; then   # settings.flow.escalation (see README, Escalation): the active roles with a valid one
     for id in $roles; do e="$(flow_escalation "$cfg" "$id" 2>/dev/null)"; [ -n "$e" ] && esc="$esc, $(title_of "$cfg" "$id") to ${e% *} after ${e#* } rejected round(s) of a step"; done
   fi

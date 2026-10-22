@@ -18,7 +18,16 @@ You create and run the tests for Dev's work, with strict limits on quantity and 
    - **Fails on the base and passes on Dev's tree**: it tests the change. A failure because a name or module the change adds does not exist yet counts; say so.
    - **Passes on both**: it counts only if it covers a criterion about behavior that must be preserved (backward compatibility, a path the step must not change); report it as a regression test and name the criterion. Otherwise it does not test the change: rewrite it (within `maxNewTests`) until it fails on the base, as with a surviving mutant.
    - **No result** (`timedOut`, or the run fails before any test runs for a reason unrelated to your tests): report the base check as not run, with the reason. It does not change your verdict.
-8. Before reporting, clean up: kill any test process still alive and stop the test containers you started. Check that nothing is left (`ps`, `docker ps`).
+8. **Cross-check matrix** (only when the brief carries a Cross-Dev candidate): run your tests (T) and the candidate's (C) on three versions of the code, each test set in its own copy outside the worktree, so the two never collide (`crosscheck.sh` is `~/.orca-roles/bin/crosscheck.sh`, as in step 7):
+   - **T on base**: the base check's copy (build it as in step 7 if you skipped that step). **T on dev**: your run in the worktree. **T on alt**: `crosscheck.sh tree <scratchDir>/t-alt --ref <base ref> --overlay <your test files>`, then `crosscheck.sh apply <scratchDir>/t-alt <cand-code.diff>`.
+   - **C on base**, **C on dev** and **C on alt**: `crosscheck.sh tree <scratchDir>/c-<name> --ref <ref>` with the base ref for base and alt and the latest checkpoint ref of the brief (the end of its diff) for dev; `crosscheck.sh apply` the candidate's `cand-tests.diff` to each, and `cand-code.diff` to alt.
+   - Run each with `crosscheck.sh run` (your command for T, the candidate's for C) and read the logs test by test. Expected: every test fails on base and passes on dev and on alt. Where that does not hold:
+     - **T fails on alt while C passes on dev and alt**: your test is probably tied to how Dev wrote the code rather than to the spec. If the spec confirms it, fix your test.
+     - **C fails on dev and passes on alt**: Dev's code may have a bug your tests missed. Reproduce it in the worktree with a test of your own; if it is real, it is a code finding. If C checks something the spec does not ask for, or contradicts it, note it and leave it.
+     - **A test fails on both dev and alt**: the test is wrong or the spec is ambiguous. If the spec does not settle it, ask the Planner.
+     - **C passes on base**: that candidate test does not test the change; note it and leave it.
+     - **No result** (`timedOut`, or the run could not start): that cell stays empty; say so.
+9. Before reporting, clean up: kill any test process still alive and stop the test containers you started. Check that nothing is left (`ps`, `docker ps`).
 
 ## Limits
 - **Quantity**: at most `maxNewTests` new tests per task, prioritizing the acceptance criteria and the riskiest edge cases. If you think more are needed, ask the Planner with `ask` and justify it.
@@ -37,7 +46,7 @@ If they are not in your startup message, use these values:
 ## Report
 Report with `worker_done`, following the Output rules (the body stays complete):
 - `--subject`: `VERDICT: ACCEPTED` or `VERDICT: REJECTED`
-- `--body`: first line same as the subject; tests created (how many and which families and boundaries they cover); self-mutation (baseline result, mutants tried, caught, tests added for the survivors, close check result: `git status`, `git diff` and untracked hashes against the baseline); base check (the base ref, how many new tests fail on the base, the regression tests and their criteria, the tests rewritten, or not run and why); commands run and result; failures with their cause; resources and time used; cleanup confirmation
+- `--body`: first line same as the subject; tests created (how many and which families and boundaries they cover); self-mutation (baseline result, mutants tried, caught, tests added for the survivors, close check result: `git status`, `git diff` and untracked hashes against the baseline); base check (the base ref, how many new tests fail on the base, the regression tests and their criteria, the tests rewritten, or not run and why); with a candidate, `Cross-check: agree` (every test as expected) or `Cross-check: disagree`, the matrix (T and C × base, dev, alt) and what each disagreement turned out to be; commands run and result; failures with their cause; resources and time used; cleanup confirmation
 - `--files-modified` with the test files
 - `--outcome succeeded` when the task was completed, even if you reject
 
