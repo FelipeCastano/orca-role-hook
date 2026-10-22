@@ -269,6 +269,7 @@ done
 rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
 rule R11 "$PD/tester.md" 'crosscheck.sh tree <scratchDir>/base' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
+rule R11 "$PD/tester.md" 'report the base check as not run for that reason' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'each test set in its own copy outside the worktree' '^8\. \*\*Cross-check matrix'
 rule R11 "$PD/planner.md" 'its patch never goes into the worktree' '^Cross-Dev writes an independent candidate'
 check "rules R11: common-workers.md earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$PD/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$PD/common-workers.md")$(grep -c -- '--short' "$PD/common-workers.md" || true)$(grep -c 'copy-rev/' "$PD/common-workers.md")" "1101"
@@ -3252,6 +3253,7 @@ try newrole "$OC/role.json"; check "from-json: an unknown agent is refused namin
 # the shipped example is disabled
 check "config.default.json: dev-opencode is a disabled opencode example" "$(jq -c '.roles["dev-opencode"] | [.agent, .enabled, .opencode.steps]' "$ROOT/config.default.json")" '["opencode",false,120]'
 check "config.default.json: cross-dev is a disabled opencode role with no model of the kit's and the Tester's limits" "$(jq -c '.roles["cross-dev"] | [.agent, .enabled, .model, .nice, .params.maxWorkers, .env.OMP_NUM_THREADS, (.modes | join(","))]' "$ROOT/config.default.json")" '["opencode",false,"",10,2,"2","programmer"]'
+check "cross-dev.md and tester.md: what to do when a copy links back into the worktree" "$(grep -c 'backLinks: true' "$ROOT/prompts/programmer/cross-dev.md"):$(grep -c 'backLinks: true' "$ROOT/prompts/programmer/tester.md")" "1:2"
 check "cross-dev.md: works only in crosscheck copies of the base ref and never touches the worktree" "$(grep -c 'crosscheck.sh tree <scratchDir>/cand --ref <base ref>' "$ROOT/prompts/programmer/cross-dev.md"):$(grep -c 'You do not commit and you never touch the worktree' "$ROOT/prompts/programmer/cross-dev.md"):$(grep -c "never read what Dev is changing there" "$ROOT/prompts/programmer/cross-dev.md")" "1:1:1"
 
 # sessions: the role gets its own id, saved in the git dir; --resume continues it; a session flag in extraArgs leaves the sessions to the user
@@ -3928,6 +3930,23 @@ for bad in "export $XW" "export $XD/full" "export $XD/cand --only ../x" "export 
   check "crosscheck: refuses [${bad//$XD\//}] with a message and no output" "$([ "$XRC" != 0 ] && echo fail):$([ -n "$XERR" ] && echo msg):$XOUT" "fail:msg:"
 done
 check "crosscheck: the worktree is unchanged after every run, export and apply" "$(xstate)" "$X0"
+xrun --help; check "crosscheck --help: the header comment only" "$XRC:$(printf '%s\n' "$XOUT" | grep -c '^# Throwaway copies'):$(printf '%s\n' "$XOUT" | grep -vc '^#' || true)" "0:1:0"
+xrun run "$XD/base" --label nb -- true; check "crosscheck run: no link back into the worktree -> backLinks false" "$(printf '%s' "$XOUT" | jq -r .backLinks)" "false"
+# links back into the worktree: an editable Python install in a linked venv, a workspace package in a linked node_modules
+XE="$XD/ewt"; mkdir -p "$XE"; git -C "$XE" init -q -b main; printf '.venv/\nnode_modules/\nvenv2/\n' > "$XE/.gitignore"
+mkdir -p "$XE/pkg" "$XE/packages/w"; printf 'x\n' > "$XE/pkg/m.py"; printf 'w\n' > "$XE/packages/w/i.js"
+git -C "$XE" add -A; git -C "$XE" -c user.name=t -c user.email=t@t commit -qm init
+XET="$(cd "$XE" && pwd -P)"
+mkdir -p "$XE/.venv/lib/python3.12/site-packages" "$XE/venv2/lib/python3.12/site-packages" "$XE/node_modules/dep" "$XE/node_modules/@s"
+: > "$XE/.venv/pyvenv.cfg"; printf '%s/pkg\n' "$XET" > "$XE/.venv/lib/python3.12/site-packages/__editable__.pkg-0.1.pth"
+: > "$XE/venv2/pyvenv.cfg"; printf '/elsewhere\n' > "$XE/venv2/lib/python3.12/site-packages/other.pth"
+printf 'd\n' > "$XE/node_modules/dep/index.js"; ln -s ../../packages/w "$XE/node_modules/@s/w"; ln -s dep "$XE/node_modules/alias"
+xerun() { XRC=0; XOUT="$(cd "$XE" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" "$@" 2>"$TMP/xc.err")" || XRC=$?; XERR="$(cat "$TMP/xc.err")"; }
+xerun tree "$XD/eb" --ref HEAD
+check "crosscheck tree: an editable install and a workspace link pointing back into the worktree are each warned about, a plain venv is not" "$XRC:$(printf '%s\n' "$XERR" | grep -c '^crosscheck.sh: warning: .venv links back into the worktree, editable install (lib/python3.12/site-packages/__editable__.pkg-0.1.pth)'):$(printf '%s\n' "$XERR" | grep -c '^crosscheck.sh: warning: node_modules links back into the worktree, workspace link (@s/w -> packages/w)'):$(printf '%s\n' "$XERR" | grep -c 'venv2')" "0:1:1:0"
+xerun run "$XD/eb" --label e -- true; check "crosscheck run: backLinks true in a copy whose links point back into the worktree" "$(printf '%s' "$XOUT" | jq -r .backLinks)" "true"
+rm "$XE/node_modules/@s/w" "$XE/.venv/lib/python3.12/site-packages/__editable__.pkg-0.1.pth"; xerun tree "$XD/eb" --ref HEAD; xerun run "$XD/eb" --label e -- true
+check "crosscheck: without them (a link inside node_modules is fine), no warning, and a replaced copy forgets the old ones" "$(printf '%s' "$XERR" | grep -c warning || true):$(printf '%s' "$XOUT" | jq -r .backLinks)" "0:false"
 }
 
 sec_model_check() {

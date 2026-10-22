@@ -9,7 +9,8 @@
 #   them, commits the copy in a repo of its own, then copies each --overlay file (a path of the worktree, e.g. the tests you wrote) on
 #   top, uncommitted.
 # run: runs the command inside a copy made by tree, cut after --timeout seconds (default 600); its output goes to <dir>.<label>.log
-#   and one JSON line is printed: {label, dir, exit, seconds, timedOut, log}. A timed-out run is an error, not a failing test.
+#   and one JSON line is printed: {label, dir, exit, seconds, timedOut, log, backLinks}. A timed-out run is an error, not a failing
+#   test. backLinks is true when tree warned that a linked entry points back into the worktree (an editable install, a workspace link).
 # export: prints, as a binary-safe patch, what changed in a copy since tree made it (new files included, links left out), limited to
 #   the --only paths and without the --except ones (literal paths of the project, files or folders). Nothing to export: empty output.
 # apply: applies a patch (e.g. one export printed) to a copy, all or nothing. An empty patch changes nothing.
@@ -80,6 +81,26 @@ case "$CMD" in
     for p in ${LINKS[@]+"${LINKS[@]}"}; do printf '/%s\n' "$p"; done >> "$D/.git/info/exclude"
     g add -A && g commit -q --allow-empty --no-verify -m "$REF ($SHA)" || die "cannot commit the copy in $DIR"
     printf '%s\n' "$SHA" > "$D/.git/$MARK"
+    # a linked entry that points back into the worktree (an editable Python install, a workspace package in node_modules) makes code run
+    # in the copy load the worktree's version: each one found is warned about and recorded, and run reports it
+    RAW="$(git rev-parse --show-toplevel)"
+    for p in ${LINKS[@]+"${LINKS[@]}"}; do
+      src="$TOP/$p"; why=""
+      if [ -f "$src/pyvenv.cfg" ]; then
+        f="$(find "$src" -maxdepth 6 -path '*site-packages/*' \( -name '*.pth' -o -name '__editable__*' -o -name direct_url.json \) -type f \
+          -exec grep -lF -e "$TOP" -e "$RAW" {} + 2>/dev/null | head -1)"
+        [ -n "$f" ] && why="editable install (${f#"$src"/})"
+      fi
+      if [ -z "$why" ] && [ "$(basename "$p")" = node_modules ]; then
+        while IFS= read -r l; do
+          t="$(cd "$(dirname "$l")" 2>/dev/null && cd "$(readlink "$l")" 2>/dev/null && pwd -P)" || continue
+          case "$t/" in "$src"/*) ;; "$TOP"/*) why="workspace link (${l#"$src"/} -> ${t#"$TOP"/})"; break;; esac
+        done < <(find "$src" -mindepth 1 -maxdepth 2 -type l 2>/dev/null)
+      fi
+      [ -n "$why" ] || continue
+      printf '%s: %s\n' "$p" "$why" >> "$D/.git/$MARK.back"
+      echo "crosscheck.sh: warning: $p links back into the worktree, $why: code run in this copy may load the worktree's version instead of the copy's" >&2
+    done
     for f in ${OVERLAYS[@]+"${OVERLAYS[@]}"}; do
       rel="${f#"$TOP"/}"
       mkdir -p "$D/$(dirname "$rel")" && cp -p "$TOP/$rel" "$D/$rel" || die "cannot copy the overlay $rel"
@@ -112,7 +133,8 @@ case "$CMD" in
     : > "$T/stop"; wait $sl 2>/dev/null
     TIMED=false; [ -f "$T/to" ] && TIMED=true
     jq -nc --arg label "$LABEL" --arg dir "$D" --argjson exit "$RC" --argjson seconds "$(( $(date +%s) - START ))" --argjson timedOut "$TIMED" --arg log "$LOGF" \
-      '{label: $label, dir: $dir, exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log}'
+      --argjson backLinks "$([ -s "$D/.git/$MARK.back" ] && echo true || echo false)" \
+      '{label: $label, dir: $dir, exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log, backLinks: $backLinks}'
     ;;
   export)
     DIR="${1:-}"; [ -n "$DIR" ] || usage; shift
