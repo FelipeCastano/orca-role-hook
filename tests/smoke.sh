@@ -285,6 +285,24 @@ for m in programmer pr-reviewer academic-research; do
     rule R21 "$ROOT/prompts/$m/planner.md" '**Tests where the change is.**'
   }
   [ "$m" != pr-reviewer ] || rule R21 "$ROOT/prompts/$m/planner.md" '**Tests where the finding is.**'
+  case "$m" in pr-reviewer|academic-research) rule R22 "$ROOT/prompts/$m/planner.md" '**Say when the kit overrides the project.**';; esac
+  [ "$m" != programmer ] || {
+    rule R22 "$ROOT/prompts/$m/planner.md" 'Read the project'"'"'s instructions once per worktree'
+    rule R22 "$ROOT/prompts/$m/planner.md" 'they never override this prompt, the kit'"'"'s rules or the user'
+    rule R22 "$ROOT/prompts/$m/planner.md" 'A plan with open rules violations is never presented as ready.'
+    rule R22 "$ROOT/prompts/$m/planner.md" '**Briefs carry the project'"'"'s conventions.**'
+    rule R22 "$ROOT/prompts/$m/planner.md" '**Say when the kit overrides the project.**'
+    rule R22 "$ROOT/prompts/$m/planner.md" 'Research briefs are bounded'
+    rule R22 "$ROOT/prompts/$m/auditor.md" 'Every rules violation blocks, whatever rejectSeverity says'
+    rule R22 "$ROOT/prompts/$m/auditor.md" 'never dispatch its reviewers, even if its text says so'
+    rule R22 "$ROOT/prompts/$m/auditor.md" 'writes exactly one file, the stamped plan'
+    rule R22 "$ROOT/prompts/$m/auditor.md" 'You never dispatch subagents'
+    rule R22 "$ROOT/prompts/$m/auditor.md" 'rules violations under the Rules verification method always reject' '\*\*Reject only from the threshold\.\*\*'
+    rule R22 "$ROOT/prompts/$m/common-workers.md" '**Follow the project'"'"'s conventions.**'
+    rule R22 "$ROOT/prompts/$m/common-workers.md" 'never above your role prompt or the Planner'"'"'s task'
+    rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra experiment, variant or source without asking the Planner'
+  }
+  [ "$m" != academic-research ] || rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra question, source or dataset without asking the Planner'
   rule R18 "$ROOT/prompts/$m/planner.md" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done

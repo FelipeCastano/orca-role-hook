@@ -48,6 +48,7 @@ Read experimentation/results/<experiment>/ (the metrics and the run records in `
 Resolve the findings copied in the brief, one by one, only in the files this role writes. Say for each what changed.
 
 ## Limits
+- Do only the questions the brief lists: no extra question, source or dataset without asking the Planner; stop at the budget and report what is missing.
 - Write only experimentation/PLAN.md, experimentation/specs/, experimentation/data/ (Obtain data) and experimentation/results/<experiment>/summary.md. Never write code, configs, scripts, environment files, other result files or anything in article/.
 - You write no code and run no experiments: no experiment runs, no run scripts, no HPC jobs (Dev runs them).
 - Never change a result and never leave out runs that do not fit: report negative and failed runs in summary.md.
