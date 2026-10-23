@@ -46,7 +46,16 @@ case "$AGENT" in
     PDIR="$(dirname "$PROMPT")"
     case "$PDIR/" in "$KIT/prompts/"*) ;; *) [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR");; esac
     add_list extraDirs --add-dir path
-    add_list pluginDirs --plugin-dir path   # Claude Code plugins for this role only (the Planner's skill)
+    # Claude Code plugins for this role only (the Planner's skill, superpowers); a folder that does not exist is skipped
+    # settings.superpowers = false: the kit's superpowers folder is not loaded for any role (and so gets no kit deny list)
+    SP_REAL=""; [ -d "$KIT/plugins/superpowers" ] && SP_REAL="$(cd "$KIT/plugins/superpowers" && pwd -P)"
+    SP_OFF=0; [ "$(jq -r 'if .settings.superpowers == false then "off" else "on" end' "$CFG")" = off ] && SP_OFF=1
+    LOADED_PLUGINS=()
+    while IFS= read -r x; do
+      [ -n "$x" ] || continue; x="$(expand_path "$x")"
+      if [ "$SP_OFF" = 1 ] && { [ "${x%/}" = "$KIT/plugins/superpowers" ] || { [ -n "$SP_REAL" ] && [ -d "$x" ] && [ "$(cd "$x" && pwd -P)" = "$SP_REAL" ]; }; }; then continue; fi
+      if [ -d "$x" ]; then ARGS+=(--plugin-dir "$x"); LOADED_PLUGINS+=("$x"); else echo "agent.sh: plugin folder $x not found; skipped." >&2; fi
+    done < <(rcfg "$CFG" "$ROLE" pluginDirs | jq -r '.[]?' 2>/dev/null)
     ARGS+=(--append-system-prompt "$(role_anchor "$CFG" "$ROLE")")   # survives /clear, unlike the role message
     if [ -n "$MCPFILE" ]; then
       ARGS+=(--strict-mcp-config --mcp-config "$MCPFILE")
@@ -54,16 +63,33 @@ case "$AGENT" in
     fi
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
+    # The kit's deny list for superpowers: first, and not removable by the role's own list. The Planner always gets it (its entries are inert
+    # without the plugin, and a superpowers the user installed may load); any other role gets it when it loads the kit's superpowers folder
+    # (compared by physical path: a trailing slash, a '..' or a symlink to the folder match too)
+    DENY_KIT=0; [ "$ROLE" != planner ] || DENY_KIT=1
+    for x in ${LOADED_PLUGINS[@]+"${LOADED_PLUGINS[@]}"}; do
+      if [ -n "$SP_REAL" ] && [ "$(cd "$x" && pwd -P)" = "$SP_REAL" ]; then DENY_KIT=1; break; fi
+    done
+    if [ "$DENY_KIT" = 1 ]; then
+      DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(superpowers_deny)
+      ARGS+=(--disallowedTools "${DENY[@]}")
+    fi
     # Nobody answers a dialog in a worker's tab (the Planner is the only one that talks to the user): workers cannot open one. In permissionMode
     # plan the plan tools stay, they are how that mode works. A --disallowedTools in extraArgs adds to this list.
     if [ "$ROLE" != planner ]; then
       if [ "$PERM" = plan ]; then ARGS+=(--disallowedTools AskUserQuestion)
       else ARGS+=(--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode); fi
     fi
+    # The role's own disallowedTools: it only adds to the lists above, it never removes the kit's
+    OWN=(); while IFS= read -r t; do [ -n "$t" ] && OWN+=("$t"); done < <(rcfg "$CFG" "$ROLE" disallowedTools | jq -r '.[]?')
+    [ ${#OWN[@]} -gt 0 ] && ARGS+=(--disallowedTools "${OWN[@]}")
     # Claude Code's own `language` setting (user settings) outranks the prompt: workers override it to English. Not the Planner, which
     # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
-    # extraArgs replaces this one and should carry its own "language".
-    [ "$ROLE" != planner ] && ARGS+=(--settings '{"language":"english"}')
+    # extraArgs replaces this one and should carry its own "language". It also keeps superpowers out of the workers even when a project or the
+    # user enables it (only those two plugin ids); a --settings in extraArgs replaces it whole.
+    [ "$ROLE" != planner ] && ARGS+=(--settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    # settings.superpowers = false: "off" also means off for a superpowers the user installed (the Planner has no other kit --settings)
+    [ "$ROLE" = planner ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"

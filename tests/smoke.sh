@@ -19,6 +19,7 @@ trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
 # where set -e ended the script: the failing command of the main shell (not of a $(...) or a subshell, where its status shows up on the line that ran it); only recorded while errexit is on
 set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINENO: $BASH_COMMAND";; esac' ERR
 export KIT="$TMP/kit"; mkdir -p "$KIT"
+export ORCA_ROLES_SUPERPOWERS_FETCH=skip   # install.sh must never reach the network from the suite (the fetch tests put a fake git first on the PATH and clear this)
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
 FAIL=0
@@ -1769,6 +1770,9 @@ check "upgrade_config: a user's own researcher modes stay (other lists, order, a
 check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-research"],false]:[["programmer","academic-research"],["experiment","writing"]]'
 check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-research"],["writing"]]'
 check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style","mine",false,"C"]'
+check "upgrade_config: the planner's pluginDirs [\"{kit}/plugin\"] move to the default (with superpowers); any other list, order or string is kept; a missing entry gets the default" "$(for v in '["{kit}/plugin"]' '["{kit}/plugin","/mine"]' '["{kit}/plugins/superpowers","{kit}/plugin"]' '["/mine"]' '[]' '"{kit}/plugin"'; do awu "{\"roles\":{\"planner\":{\"pluginDirs\":$v}}}" | jq -c '.roles.planner.pluginDirs'; done | tr '\n' ' ')$(awu '{"roles":{}}' | jq -c '.roles.planner.pluginDirs')" '["{kit}/plugin","{kit}/plugins/superpowers"] ["{kit}/plugin","/mine"] ["{kit}/plugins/superpowers","{kit}/plugin"] ["/mine"] [] "{kit}/plugin" ["{kit}/plugin","{kit}/plugins/superpowers"]'
+CDT() { jq -c --argjson v "$1" '.roles.dev.disallowedTools = $v' "$D" > "$TMP/cdt.json"; check_config "$TMP/cdt.json" | tr '\n' '|'; }
+check "check_config: disallowedTools must be a list of strings (a string, a number, an object, null, a list with a non-string are errors; a list of names, an empty list are fine)" "$(for v in '"Foo"' '5' '{}' 'null' '["a",1]' '["a","b"]' '[]'; do CDT "$v"; echo; done | tr '\n' ' ')" "ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names|   "
 check "upgrade_config: a user's own values on a new role stay" "$(awu '{"roles":{"writer":{"model":"mine","enabled":false}}}' | jq -c '.roles.writer | [.model, .enabled, .phases, .modes]')" '["mine",false,["writing"],["academic-research"]]'
 awu '{"roles":{"researcher":{"modes":["programmer"]}}}' > "$TMP/awd-up.json"
 check "upgrade_config: the migrated configuration passes check_config, and its programmer team is the old one" "$(check_config "$TMP/awd-up.json"):$(enabled_roles "$TMP/awd-up.json" | tr '\n' ' ')" ":researcher planner dev tester auditor e2e-tester deployer "
@@ -2025,7 +2029,7 @@ sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
 check "skill: name in the frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/team/SKILL.md")" "name: team"
-check "default config: the planner's plugin" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin"]'
+check "default config: the planner's plugins (the kit's skill and the pinned superpowers)" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin","{kit}/plugins/superpowers"]'
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester" } } }
 J
@@ -2041,6 +2045,8 @@ try newrole "$TMP/role2.json"; check "from-json: overwrite" "$RC:$(jq -r '.roles
 printf '%s' '{"id":"cu-agent","description":"custom","agent":"custom","command":"agy {scratch}","addDirFlag":"--add-dir","trust":{"file":"~/s.json","jq":".t = [$dir]"},"clearCommand":"/new","nice":5,"pluginDirs":["{kit}/p"],"prompt":"# Role: CU\n\n## Report\nx\n"}' > "$TMP/role4.json"
 try newrole "$TMP/role4.json"; check "from-json: custom keeps addDirFlag, trust, clearCommand, nice and pluginDirs" "$RC $(jq -c '.roles["cu-agent"] | [.addDirFlag, .trust, .clearCommand, .nice, .pluginDirs]' "$KIT/config.json")" '0 ["--add-dir",{"file":"~/s.json","jq":".t = [$dir]"},"/new",5,["{kit}/p"]]'
 jq 'del(.roles["cu-agent"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/cu-agent.md"
+printf '%s' '{"id":"dt-role","description":"x","disallowedTools":["Foo","Bar"],"prompt":"# x\n## Report\n"}' > "$TMP/role-dt.json"; try newrole "$TMP/role-dt.json"; check "from-json: copies the role's disallowedTools" "$RC $(jq -c '.roles["dt-role"].disallowedTools' "$KIT/config.json")" '0 ["Foo","Bar"]'
+jq 'del(.roles["dt-role"])' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"; rm -f "$KIT/roles/programmer/dt-role.md"
 }
 
 sec_wizard() {
@@ -2099,6 +2105,7 @@ cat > "$KIT/config.json" <<'J'
 { "defaults": { "mcp": [] }, "mcpServers": {}, "roles": { "planner": { "agent": "claude", "mcp": "all", "extraDirs": ["{kit}", "~/x"], "pluginDirs": ["{kit}/plugin"] } } }
 J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; chmod +x "$TMP/fakebin/claude"
+mkdir -p "$KIT/plugin"   # agent.sh skips a plugin folder that does not exist (the scratch kit has none)
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
 case "$OUT" in *"--add-dir $TMP/home/.orca-roles --add-dir $TMP/home/x --plugin-dir $TMP/home/.orca-roles/plugin "*) echo "ok   agent.sh: --plugin-dir and --add-dir expanded";; *) echo "FAIL agent.sh plugin: $OUT"; FAIL=1;; esac
 case "$OUT" in *'"language":"english"'*) echo "FAIL agent.sh: the Planner got the English language override"; FAIL=1;; *) echo "ok   agent.sh: the Planner keeps the user's language (no --settings override)";; esac
@@ -2285,20 +2292,20 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; cp "$TMP/fak
 printf '#!/bin/sh\nprintf "nice %%s %%s\\n" "$1" "$2"; shift 2; echo "GOMAXPROCS=$GOMAXPROCS"; exec "$@"\n' > "$TMP/fakebin/nice"; chmod +x "$TMP/fakebin/nice"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester | tr '\n' ' ')"
 case "$OUT" in "nice -n 10 GOMAXPROCS=2 --add-dir "*) echo "ok   agent.sh: nice -n and the role's env";; *) echo "FAIL agent.sh nice: $OUT"; FAIL=1;; esac
-case "$OUT" in *'--settings {"language":"english"} '*) echo "ok   agent.sh: claude workers launch with the English language setting";; *) echo "FAIL agent.sh worker without the English setting: $OUT"; FAIL=1;; esac
+case "$OUT" in *'--settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '*) echo "ok   agent.sh: claude workers launch with the English language setting and superpowers disabled";; *) echo "FAIL agent.sh worker without the English setting: $OUT"; FAIL=1;; esac
 case "$OUT" in *'Always write in English'*) echo "ok   agent.sh: the worker's system prompt carries the English rule";; *) echo "FAIL agent.sh worker anchor without the English rule: $OUT"; FAIL=1;; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tx | tr '\n' ' ')"
-case "$OUT" in *'--settings {"language":"english"} --settings {"language":"spanish"} '*) echo "ok   agent.sh: a role's own --settings in extraArgs comes after (and wins over) the English one";; *) echo "FAIL agent.sh extraArgs --settings order: $OUT"; FAIL=1;; esac
+case "$OUT" in *'--settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} --settings {"language":"spanish"} '*) echo "ok   agent.sh: a role's own --settings in extraArgs comes after (and wins over) the English one";; *) echo "FAIL agent.sh extraArgs --settings order: $OUT"; FAIL=1;; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner | tr '\n' ' ')"
 case "$OUT" in *--settings*|*'Always write in English'*) echo "FAIL agent.sh: the Planner got the English setting or rule: $OUT"; FAIL=1;; *) echo "ok   agent.sh: the Planner gets neither --settings nor the English rule";; esac
 ag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | tr '\n' ' '); }
-DQ='--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --settings {"language":"english"} '
+DQ='--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '
 case "$(ag dev)" in *"$DQ"*) A1=dev-ok;; *) A1=dev-no;; esac
 case "$(ag aq)" in *'--allowedTools Read AskUserQuestion '"$DQ"'--disallowedTools Foo '*) A1="$A1 aq-ok";; *) A1="$A1 aq-no";; esac
 check "agent.sh: a claude worker cannot open dialogs (--disallowedTools after --allowedTools, before --settings), its allowedTools and extraArgs (a second --disallowedTools) are kept" "$A1" "dev-ok aq-ok"
-A2="$(ag pw | grep -c -- '--permission-mode plan --add-dir' || true):$(ag pw | grep -cF -- '--disallowedTools AskUserQuestion --settings {"language":"english"} ' || true):$(ag pw | grep -c 'EnterPlanMode\|ExitPlanMode' || true)"
+A2="$(ag pw | grep -c -- '--permission-mode plan --add-dir' || true):$(ag pw | grep -cF -- '--disallowedTools AskUserQuestion --settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} ' || true):$(ag pw | grep -c 'EnterPlanMode\|ExitPlanMode' || true)"
 A2="$A2:$(ag planner | grep -c 'disallowedTools' || true):$(ag cx | grep -c 'disallowedTools' || true):$(ag cu | grep -c 'disallowedTools' || true):$(ag cu | grep -c 'CUSTOM' || true)"
-check "agent.sh: a worker in permissionMode plan loses only AskUserQuestion (it can still leave plan mode); the Planner, a codex and a custom role get no --disallowedTools" "$A2" "1:1:0:0:0:0:1"
+check "agent.sh: a worker in permissionMode plan loses only AskUserQuestion (it can still leave plan mode); the Planner always gets the kit deny list (one --disallowedTools); a codex and a custom role get none" "$A2" "1:1:0:1:0:0:1"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" dev --resume abc-123 | tr '\n' ' ')"
 case "$OUT" in "--add-dir "*"--resume abc-123 "*) echo "ok   agent.sh: --resume passes the session to claude";; *) echo "FAIL agent.sh resume: $OUT"; FAIL=1;; esac
 case "$OUT" in nice*) echo "FAIL agent.sh: nice without the option"; FAIL=1;; *) echo "ok   agent.sh: no nice without the option";; esac
@@ -2317,6 +2324,63 @@ CFGT="$KIT/config.json"   # role_anchor runs with the kit seen from the fake HOM
 check "agent.sh claude: one line in the system prompt that asks for the role after /clear" "$(printf '%s\n' "$OUT" | grep -A1 -x -- --append-system-prompt | tail -1)" "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)"
 case "$(KIT="$TMP/home/.orca-roles" role_anchor "$CFGT" tester)" in (*"after /clear"*"$TMP/home/.orca-roles/bin/clean.sh --msg tester"*) echo "ok   role_anchor: names the role and the command";; (*) echo "FAIL role_anchor"; FAIL=1;; esac
 check "agent.sh leaves pre-seeded scratch content intact" "$([ -f "$SDT/f" ] && [ -f "$SDT/sub/g" ] && [ -f "$SDT/.hidden" ] && echo y)" "y"
+# the Planner's superpowers: the kit deny list whenever the pinned folder is loaded (before the role's own list), a missing folder is skipped, workers get the dialog deny + the settings and never the kit list, codex ignores the field
+SPD="$KIT/plugins/superpowers"; mkdir -p "$SPD" "$KIT/plugin"
+NSJ='{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}'
+KD='--disallowedTools Skill(superpowers:subagent-driven-development) Skill(superpowers:executing-plans) Skill(superpowers:dispatching-parallel-agents) Skill(superpowers:requesting-code-review) Skill(superpowers:using-git-worktrees) Skill(superpowers:finishing-a-development-branch) Skill(superpowers:writing-skills) Skill(superpowers:diagnosing-superpowers) EnterWorktree ExitWorktree Agent Task '
+agj() {  # agj <config json> <role>: the arguments (and stderr) of agent.sh, on one line
+  printf '%s' "$1" > "$TMP/acfg.json"; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/acfg.json" "$TMP/home/.orca-roles/bin/agent.sh" "$2" 2>&1 | tr '\n' ' ')
+}
+APB='{"defaults":{"mcp":[]},"mcpServers":{},"roles":{"planner":{"agent":"claude","mcp":"all","allowedTools":["Bash(orca:*)","Read"],"pluginDirs":["{kit}/plugin","{kit}/plugins/superpowers"]},"dev":{"agent":"claude","disallowedTools":["Mine"]},"cx":{"agent":"codex","disallowedTools":["Mine"]}}}'
+PO="$(agj "$APB" planner)"; PH="$TMP/home/.orca-roles"
+G1="$(printf '%s\n' "$PO" | grep -cF -- "--plugin-dir $PH/plugin --plugin-dir $PH/plugins/superpowers " || true)"; G1="$G1:$(printf '%s\n' "$PO" | grep -cF -- "--allowedTools Bash(orca:*) Read $KD" || true)"; G1="$G1:$(printf '%s\n' "$PO" | grep -c -- '--settings\|AskUserQuestion' || true)"
+rmdir "$SPD"; PM="$(agj "$APB" planner)"
+G1="$G1|$(printf '%s\n' "$PM" | grep -c "agent.sh: plugin folder $PH/plugins/superpowers not found; skipped\\." || true):$(printf '%s\n' "$PM" | grep -c -- '--plugin-dir [^ ]*plugins/superpowers' || true):$(printf '%s\n' "$PM" | grep -cF -- "--allowedTools Bash(orca:*) Read $KD" || true):$(printf '%s\n' "$PM" | grep -cF -- "--plugin-dir $PH/plugin " || true):$(printf '%s\n' "$PM" | grep -c -- '--settings' || true)"
+mkdir -p "$SPD"; PW="$(agj "$(printf '%s' "$APB" | jq -c '.roles.planner.disallowedTools = ["Mine"]')" planner)"
+G1="$G1|$(printf '%s\n' "$PW" | grep -cF -- "--allowedTools Bash(orca:*) Read ${KD}--disallowedTools Mine " || true)"
+check "planner argv: with the pinned superpowers loaded the kit deny list follows --allowedTools (and no settings or dialog deny), the role's own disallowedTools comes after it; with the folder missing it is skipped with one line and not loaded, the kit list is still given (a user-installed superpowers may load), the kit's own plugin still loads, no --settings" "$G1" "1:1:0|1:0:1:1:0|1"
+DW="$(agj "$APB" dev)"; CW="$(agj "$APB" cx)"
+check "worker argv: the dialog deny, then the role's own disallowedTools, then the settings that disable superpowers; never the kit list or a plugin dir; codex ignores the field (no --disallowedTools, no --settings)" "$(printf '%s\n' "$DW" | grep -cF -- "--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --disallowedTools Mine --settings $NSJ " || true):$(printf '%s\n' "$DW" | grep -c 'Skill(superpowers\|--plugin-dir' || true):$(printf '%s\n' "$CW" | grep -c 'disallowedTools\|--settings' || true)" "1:0:0"
+# the kit deny list follows the physical folder: a trailing slash, a '..', a symlink, ~ and {home} all match; another folder named superpowers does not
+mkdir -p "$SPD" "$TMP/other/superpowers"; ln -sfn superpowers "$KIT/plugins/sp-link"
+V1=""; W1=""; for pd in '{kit}/plugins/superpowers' '{kit}/plugins/superpowers/' '{kit}/plugins/../plugins/superpowers' '{kit}/plugins/sp-link' "$(printf '~')/.orca-roles/plugins/superpowers" '{home}/.orca-roles/plugins/superpowers' "$TMP/other/superpowers" '{kit}/plugins/superpowersx'; do
+  V1="$V1$(agj "$(printf '%s' "$APB" | jq -c --arg d "$pd" '.roles.planner.pluginDirs = [$d]')" planner | grep -c 'Skill(superpowers:using-git-worktrees)' || true)"
+  W1="$W1$(agj "$(printf '%s' "$APB" | jq -c --arg d "$pd" '.roles.dev.pluginDirs = [$d]')" dev | grep -c 'Skill(superpowers:using-git-worktrees)' || true)"
+done
+check "kit deny list: the Planner always gets it whatever plugin folders it loads; another role gets it when it loads the pinned folder (also written with a trailing slash, a '..', through a symlink, with ~ or {home}), and not for another folder named superpowers or a missing one" "$V1|$W1" "11111111|11111100"
+rm -f "$KIT/plugins/sp-link"
+# settings.superpowers = false: the kit's superpowers folder is loaded for no role (so no kit deny list either), whatever way the folder is written; true or absent loads it; an unrelated folder is untouched
+mkdir -p "$SPD" "$TMP/other/superpowers"; ln -sfn superpowers "$KIT/plugins/sp-link"
+APF="$(printf '%s' "$APB" | jq -c '.settings.superpowers = false | .roles.dev.pluginDirs = ["{kit}/plugins/superpowers"]')"
+APT="$(printf '%s' "$APB" | jq -c '.settings.superpowers = true | .roles.dev.pluginDirs = ["{kit}/plugins/superpowers"]')"
+spn() { printf '%s\n' "$1" | grep -c -- "--plugin-dir [^ ]*plugins/superpowers" || true; }   # superpowers folders loaded
+spd() { printf '%s\n' "$1" | grep -c 'Skill(superpowers:using-git-worktrees)' || true; }    # kit deny lists given
+OF="$(agj "$APF" planner)"; OFD="$(agj "$APF" dev)"; ON="$(agj "$APT" planner)"; OND="$(agj "$APT" dev)"; OA="$(agj "$APB" planner)"
+PSJ='--settings {"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '
+S1="off:$(spn "$OF")$(spd "$OF"):$(printf '%s\n' "$OF" | grep -cF -- "--plugin-dir $PH/plugin " || true):$(printf '%s\n' "$OF" | grep -c 'not found; skipped' || true):$(printf '%s\n' "$OF" | grep -cF -- "$PSJ" || true):$(printf '%s\n' "$OF" | grep -c 'language' || true)"
+S1="$S1|worker off:$(spn "$OFD")$(spd "$OFD")|worker on:$(spn "$OND")$(spd "$OND")|true:$(spn "$ON")$(spd "$ON"):$(printf '%s\n' "$ON" | grep -c -- '--settings' || true)|absent:$(spn "$OA")$(spd "$OA"):$(printf '%s\n' "$OA" | grep -c -- '--settings' || true)"
+for pd in '{kit}/plugins/superpowers/' '{kit}/plugins/../plugins/superpowers' '{kit}/plugins/sp-link' '{home}/.orca-roles/plugins/superpowers'; do
+  S1="$S1|$(spn "$(agj "$(printf '%s' "$APF" | jq -c --arg d "$pd" '.roles.planner.pluginDirs = [$d]')" planner)")$(spd "$(agj "$(printf '%s' "$APF" | jq -c --arg d "$pd" '.roles.planner.pluginDirs = [$d]')" planner)")"
+done
+OTHR="$(agj "$(printf '%s' "$APF" | jq -c --arg d "$TMP/other/superpowers" '.roles.planner.pluginDirs = [$d]')" planner)"; S1="$S1|other:$(printf '%s\n' "$OTHR" | grep -cF -- "--plugin-dir $TMP/other/superpowers" || true)$(spd "$OTHR")"
+rmdir "$SPD"; S1="$S1|missing:$(agj "$APF" planner | grep -c 'not found; skipped' || true)"; mkdir -p "$SPD"
+check "settings.superpowers=false: neither the Planner nor a worker loads the kit's superpowers folder (also written with a trailing slash, '..', a symlink or {home}; no 'not found' noise when it is missing), the kit's own plugin still loads; the Planner still gets the kit deny list and, only with false, a --settings disabling the two superpowers ids (no language setting); a worker without the folder gets neither; true, absent and a worker with it in pluginDirs load it with the list; another folder named superpowers is loaded (and, for the Planner, the list)" "$S1" "off:01:1:0:1:0|worker off:00|worker on:11|true:11:0|absent:11:0|01|01|01|01|other:11|missing:0"
+# the switch lives in settings, so it survives an install.sh update: upgrade_config keeps it (and migrates the old default pluginDirs), the upgraded config still loads no superpowers
+UPJ='{"settings":{"superpowers":false},"roles":{"planner":{"agent":"claude","mcp":"all","pluginDirs":["{kit}/plugin"]}}}'
+printf '%s' "$UPJ" > "$TMP/up-user.json"; upgrade_config "$KIT/config.default.json" "$TMP/up-user.json" > "$TMP/up-new.json"
+printf '%s' '{"roles":{"planner":{"pluginDirs":["{kit}/plugin"]}}}' > "$TMP/up-user2.json"; upgrade_config "$KIT/config.default.json" "$TMP/up-user2.json" > "$TMP/up-new2.json"
+UPO="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/up-new.json" "$TMP/home/.orca-roles/bin/agent.sh" planner 2>&1 | tr '\n' ' ')"; UPO2="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/up-new2.json" "$TMP/home/.orca-roles/bin/agent.sh" planner 2>&1 | tr '\n' ' ')"
+check "the switch is durable: after upgrade_config a user with settings.superpowers=false keeps it and the migrated default pluginDirs, and agent.sh still loads no superpowers folder (the Planner keeps the kit list); a user without the setting gets true and loads it with the list" "$(jq -c '[.settings.superpowers, .roles.planner.pluginDirs]' "$TMP/up-new.json"):$(spn "$UPO")$(spd "$UPO"):$(jq -c .settings.superpowers "$TMP/up-new2.json"):$(spn "$UPO2")$(spd "$UPO2")" '[false,["{kit}/plugin","{kit}/plugins/superpowers"]]:01:true:11'
+# the same switch from a project file and from --set, and check_config validates it
+SPP="$TMP/spproj"; rm -rf "$SPP"; mkdir -p "$SPP"; git -C "$SPP" init -q; printf '%s' '{"settings":{"superpowers":false}}' > "$SPP/.orca-roles.json"
+printf '%s' "$APB" > "$KIT/config.json"
+SPO="$(cd "$SPP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" "$TMP/home/.orca-roles/bin/agent.sh" planner 2>&1 | tr '\n' ' ')"; rm -f "$SPP/.orca-roles.json"
+SPO2="$(cd "$SPP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" "$TMP/home/.orca-roles/bin/agent.sh" planner 2>&1 | tr '\n' ' ')"
+overrides_from_args --set settings.superpowers=false > "$TMP/sw-ovr.json"; apply_overrides "$TMP/up-new2.json" "$TMP/sw-ovr.json" > "$TMP/sw-set.json"
+CV=""; for v in true false '"false"' 0 null '[]'; do jq -c --argjson v "$v" '.settings.superpowers = $v' "$KIT/config.default.json" > "$TMP/cs.json"; CV="$CV$(check_config "$TMP/cs.json" | grep -c 'settings.superpowers must be true or false' || true)"; done
+check "settings.superpowers from a project .orca-roles.json turns it off for that project only, --set settings.superpowers=false stores the boolean false, and check_config accepts only true or false" "$(spn "$SPO")$(spd "$SPO"):$(spn "$SPO2")$(spd "$SPO2"):$(jq -c .settings.superpowers "$TMP/sw-set.json"):$CV" "01:11:false:001111"
+rm -f "$KIT/plugins/sp-link"
+rmdir "$SPD" "$KIT/plugins" 2>/dev/null || true
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 }
 
@@ -2814,6 +2878,59 @@ for bad in '"nope"' '5' 'null' '""'; do
   check "install.sh Enabled: invalid settings.mode $bad is unknown, exit 0, error on stderr" "$IRC:$IENA:$(grep -c . "$IH/err.txt" | tr -d ' ')" "0:Enabled: unknown (invalid settings.mode):1"
   check "install.sh Enabled: invalid settings.mode $bad, the install goes on" "$(printf '%s\n' "$IOUT" | grep -c '^To enable or disable roles')" "1"
 done
+# fetch_superpowers: the pinned copy, with a fake git first on the PATH (the suite never reaches the network)
+FG="$TMP/fgit"; rm -rf "$FG"; mkdir -p "$FG"; FGL="$FG/log"; FGM="$FG/mode"; SPSHA=2ce8aa15d05bd57213e6f746f953aafb7ded7a8b
+cat > "$FG/git" <<EOS
+#!/bin/bash
+echo "\$*" >> "$FGL"
+case "\$1" in
+  fetch) [ "\$(cat "$FGM")" = fail ] && exit 1; exit 0;;
+  checkout) mkdir -p .git skills; echo fake > skills/s.md; echo '{}' > package.json; exit 0;;
+  -C) if [ "\$3" = rev-parse ]; then if [ "\$(cat "$FGM")" = wrongsha ]; then echo 0000000000000000000000000000000000000000; else echo $SPSHA; fi; fi; exit 0;;
+esac
+exit 0
+EOS
+chmod +x "$FG/git"
+fsp() {  # fsp <home> <mode> [fetch hook value]: install.sh with the fake git first; output in FOUT, status in FRC
+  mkdir -p "$1/tmpd"; echo "$2" > "$FGM"
+  if FOUT="$(cd "$TMP" && HOME="$1" PATH="$FG:$PATH" TMPDIR="$1/tmpd" ORCA_ROLES_SUPERPOWERS_FETCH="${3:-}" bash "$ROOT/install.sh" </dev/null 2>&1)"; then FRC=0; else FRC=$?; fi
+}
+sps() { printf '%s' "$FOUT" | grep -c "$1" || true; }
+FH1="$TMP/fsp1"; rm -rf "$FH1"; : > "$FGL"; fsp "$FH1" ok; SPD1="$FH1/.orca-roles/plugins/superpowers"
+FS="$FRC:$(sps '^Installed superpowers 2ce8aa1 for the Planner\.$'):$(cat "$SPD1/.orca-roles-pin"):$([ -d "$SPD1/.git" ] && echo git || echo nogit):$([ -f "$SPD1/skills/s.md" ] && echo files):$(grep -c -- "^fetch -q --depth 1 https://github.com/obra/superpowers.git $SPSHA\$" "$FGL"):$(find "$FH1/.orca-roles/plugins" -mindepth 1 -maxdepth 1 \( -name '.superpowers.*' -o -name 'superpowers.old.*' \) 2>/dev/null | wc -l | tr -d ' ')"
+: > "$FGL"; fsp "$FH1" ok
+FS="$FS|$FRC:$(sps '^Superpowers 2ce8aa1 already installed\.$'):$(wc -l < "$FGL" | tr -d ' '):$([ -f "$SPD1/skills/s.md" ] && echo kept)"
+FH2="$TMP/fsp2"; rm -rf "$FH2"; mkdir -p "$FH2/.orca-roles/plugins/superpowers"; echo OLD > "$FH2/.orca-roles/plugins/superpowers/old.md"; echo oldsha > "$FH2/.orca-roles/plugins/superpowers/.orca-roles-pin"
+FW=""; for m in wrongsha fail; do fsp "$FH2" "$m"; FW="$FW$FRC:$(sps 'could not install superpowers 2ce8aa1 for the Planner (.*); the previous copy is kept\.'):$(cat "$FH2/.orca-roles/plugins/superpowers/old.md"):$(cat "$FH2/.orca-roles/plugins/superpowers/.orca-roles-pin"):$(find "$FH2/.orca-roles/plugins" -mindepth 1 -maxdepth 1 \( -name '.superpowers.*' -o -name 'superpowers.old.*' \) 2>/dev/null | wc -l | tr -d ' '):$(sps '^Enabled'|| true) "; done
+FH3="$TMP/fsp3"; rm -rf "$FH3"; for m in wrongsha fail; do fsp "$FH3" "$m"; FW="$FW|$FRC:$(sps 'the Planner works without it\.'):$([ -d "$FH3/.orca-roles/plugins/superpowers" ] && echo dir || echo none)"; done
+FW="$FW|$(sps 'the fetched commit is not the pinned one')"
+fsp "$FH3" wrongsha; FW="$FW:$(sps 'the fetched commit is not the pinned one')"
+check "fetch_superpowers: the pinned commit of the pinned repository is fetched, no .git, marker holds the sha, no temp left; a second install and a kit update skip it by the marker and keep the folder" "$FS" "0:1:$SPSHA:nogit:files:1:0|0:1:0:kept"
+check "fetch_superpowers: a wrong commit or a failed fetch warns, install.sh still exits 0 and goes on, the old copy and its marker are kept, nothing is left in the temp folder; with no old copy none is created" "$FW" "0:1:OLD:oldsha:0:1 0:1:OLD:oldsha:0:1 |0:1:none|0:1:none|0:1"
+# the final mv fails (a shim that leaves a partial folder and fails): with an old copy it is restored in place (nothing nested), install.sh exits 0, no leftovers
+MV="$TMP/mvshim"; rm -rf "$MV"; mkdir -p "$MV"; REALMV="$(command -v mv)"
+cat > "$MV/mv" <<EOS
+#!/bin/bash
+case "\$1" in */.superpowers.*) mkdir -p "\${@: -1}"; echo partial > "\${@: -1}/p"; exit 1;; esac
+exec "$REALMV" "\$@"
+EOS
+chmod +x "$MV/mv"
+FH6="$TMP/fsp6"; rm -rf "$FH6"; mkdir -p "$FH6/.orca-roles/plugins/superpowers"; echo OLD > "$FH6/.orca-roles/plugins/superpowers/old.md"; echo oldsha > "$FH6/.orca-roles/plugins/superpowers/.orca-roles-pin"
+mkdir -p "$FH6/tmpd"; echo ok > "$FGM"
+if FOUT="$(cd "$TMP" && HOME="$FH6" PATH="$MV:$FG:$PATH" TMPDIR="$FH6/tmpd" ORCA_ROLES_SUPERPOWERS_FETCH='' bash "$ROOT/install.sh" </dev/null 2>&1)"; then FRC=0; else FRC=$?; fi
+SPD6="$FH6/.orca-roles/plugins/superpowers"
+check "fetch_superpowers: when the final move fails the old copy is back in place (its files and marker, no partial file, nothing nested), a warning says the previous copy is kept, install.sh exits 0 and goes on, no temp or .old folder left" "$FRC:$(sps 'could not move the new copy into place); the previous copy is kept'):$(cat "$SPD6/old.md"):$(cat "$SPD6/.orca-roles-pin"):$([ -e "$SPD6/p" ] && echo partial || echo clean):$(find "$SPD6" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' '):$(find "$FH6/.orca-roles/plugins" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' '):$(sps '^Enabled')" "0:1:OLD:oldsha:clean:2:1:1"
+# the same failing move with NO old copy: no partial folder is left behind
+FH7="$TMP/fsp7"; rm -rf "$FH7"; mkdir -p "$FH7/tmpd"; echo ok > "$FGM"
+if FOUT="$(cd "$TMP" && HOME="$FH7" PATH="$MV:$FG:$PATH" TMPDIR="$FH7/tmpd" ORCA_ROLES_SUPERPOWERS_FETCH='' bash "$ROOT/install.sh" </dev/null 2>&1)"; then FRC=0; else FRC=$?; fi
+check "fetch_superpowers: when the final move fails and there is no old copy, no partial plugins/superpowers is left (nor a temp folder), the warning says the Planner works without it, install.sh exits 0 and goes on" "$FRC:$(sps 'could not move the new copy into place); the Planner works without it'):$([ -e "$FH7/.orca-roles/plugins/superpowers" ] && echo partial || echo none):$(find "$FH7/.orca-roles/plugins" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' '):$(sps '^Enabled')" "0:1:none:0:1"
+# no git, and the skip hook: warning only, the install goes on, git is never called
+NG="$TMP/nogit"; rm -rf "$NG"; mkdir -p "$NG"; IFS=: read -ra PDS <<<"$PATH"; for pd in "${PDS[@]}"; do for pf in "$pd"/*; do pb="${pf##*/}"; case "$pb" in git|git-*) continue;; esac; [ -e "$NG/$pb" ] || ln -s "$pf" "$NG/$pb" 2>/dev/null || true; done; done
+FH4="$TMP/fsp4"; rm -rf "$FH4"; mkdir -p "$FH4"
+if FOUT="$(cd "$TMP" && HOME="$FH4" PATH="$NG" ORCA_ROLES_SUPERPOWERS_FETCH='' bash "$ROOT/install.sh" </dev/null 2>&1)"; then FRC=0; else FRC=$?; fi
+NGX="$FRC:$(sps '^Warning: git is missing: superpowers for the Planner was not installed'):$([ -d "$FH4/.orca-roles/plugins/superpowers" ] && echo dir || echo none):$(sps '^Enabled')"
+FH5="$TMP/fsp5"; rm -rf "$FH5"; : > "$FGL"; fsp "$FH5" ok skip
+check "fetch_superpowers: without git only a warning (install exits 0, no folder); with ORCA_ROLES_SUPERPOWERS_FETCH=skip git is never called and nothing is installed" "$NGX|$FRC:$(sps '^Superpowers: fetch skipped'):$(wc -l < "$FGL" | tr -d ' '):$([ -d "$FH5/.orca-roles/plugins" ] && echo dir || echo none)" "0:1:none:1|0:1:0:none"
 }
 
 sec_install_migration() {
