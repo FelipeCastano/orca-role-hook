@@ -9,6 +9,7 @@
     "language": "auto",
     "mode": "programmer",
     "oracle": { "enabled": false, "maxLoad": 0.8, "waitMax": 300, "timeout": 600, "retries": 1 },
+    "telemetry": { "roleAttribute": false },
     "prReviewer": { "marketplace": "romerox3/lens-review", "plugin": "lens-review@lens-review", "skill": "skills/lens-review/SKILL.md" }
   },
   "defaults": {

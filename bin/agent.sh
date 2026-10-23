@@ -18,6 +18,8 @@ PROMPT="$(prompt_of "$CFG" "$ROLE")"
 
 # The role's environment variables (defaults.env + roles.<role>.env)
 while IFS=$'\t' read -r k v; do [ -n "$k" ] && export "$k=$v"; done < <(jq -r --arg r "$ROLE" '((.defaults.env // {}) * (.roles[$r].env // {})) | to_entries[] | "\(.key)\t\(.value)"' "$CFG")
+# settings.telemetry.roleAttribute: the role as an OpenTelemetry attribute, added to the ones already set (shell or env above), never replacing them
+if telemetry_role_attribute "$CFG"; then export OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES:+$OTEL_RESOURCE_ATTRIBUTES,}orca_roles.role=$ROLE"; fi
 
 # The role's MCP servers, in a file in mcpServers format. With mcp="all" none is generated: the agent uses its own configuration.
 MCPFILE=""

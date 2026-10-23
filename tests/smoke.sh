@@ -1818,6 +1818,17 @@ check "provenance: the planner's model is null when none is configured" "$(tail 
 rm -f "$KIT/VERSION" "$KIT/.installed"
 agent_run "$MP" cu
 check "provenance: a custom agent has cliVersion null" "$(tail -1 "$PF" | jq -c '[.agent, .cliVersion]')" '["custom",null]'
+# settings.telemetry.roleAttribute: the role added to OTEL_RESOURCE_ATTRIBUTES, after the shell's and the role env's values, never replacing them
+printf '#!/bin/sh\nprintf "%%s" "${OTEL_RESOURCE_ATTRIBUTES-unset}" > "%s"\n' "$TMP/otel.out" > "$MB/claude"; chmod +x "$MB/claude"
+agent_otel() { rm -f "$TMP/otel.out"; (cd "$MP" && if [ -n "$2" ]; then export OTEL_RESOURCE_ATTRIBUTES="$2"; else unset OTEL_RESOURCE_ATTRIBUTES; fi
+  HOME="$TMP/home" PATH="$MB:$PATH" ORCA_ROLES_CONFIG="$1" "$TMP/home/.orca-roles/bin/agent.sh" dev >/dev/null 2>&1) || true; cat "$TMP/otel.out" 2>/dev/null || echo missing; }
+MOT="$TMP/mt-otel.json"; jq '.settings.telemetry.roleAttribute = true' "$MCFG" > "$MOT"
+check "telemetry: off by default, the attributes are left as they are" "$(agent_otel "$MCFG" ""):$(agent_otel "$MCFG" team.id=a)" "unset:team.id=a"
+check "telemetry: on, the role is added, after what the shell set" "$(agent_otel "$MOT" ""):$(agent_otel "$MOT" team.id=a)" "orca_roles.role=dev:team.id=a,orca_roles.role=dev"
+jq '.roles.dev.env.OTEL_RESOURCE_ATTRIBUTES = "team.id=t1"' "$MOT" > "$MOT.x"
+check "telemetry: on, after the role env's value" "$(agent_otel "$MOT.x" "")" "team.id=t1,orca_roles.role=dev"
+jq '.settings.telemetry.roleAttribute = "true"' "$MCFG" > "$MOT.x"
+check "telemetry: only the boolean true turns it on" "$(agent_otel "$MOT.x" "")" "unset"
 printf '#!/bin/sh\n[ "$1" = --version ] && sleep 30\necho started\n' > "$MB/claude"
 S1="$(date +%s)"; agent_run "$MP" dev; S2="$(date +%s)"
 check "provenance: a claude that hangs on --version does not hang agent.sh, version null" "$([ $((S2 - S1)) -lt 20 ] && echo fast):$(tail -1 "$PF" | jq -r .cliVersion)" "fast:null"
