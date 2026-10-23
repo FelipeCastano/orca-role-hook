@@ -474,6 +474,8 @@ flow_escalation() {
 flow_record_rounds() { [ "$(jq -r '(.settings.flow? | objects | .recordRounds?) == true' "$1" 2>/dev/null)" = true ]; }
 # settings.oracle.enabled is true: the Planner runs the executable oracle (bin/oracle.sh) on Dev's work.  oracle_enabled <config>
 oracle_enabled() { [ "$(jq -r '(.settings.oracle? | objects | .enabled?) == true' "$1" 2>/dev/null)" = true ]; }
+# settings.telemetry.roleAttribute: agent.sh tags the agent's OpenTelemetry data with orca_roles.role=<role>
+telemetry_role_attribute() { [ "$(jq -r '(.settings.telemetry? | objects | .roleAttribute?) == true' "$1" 2>/dev/null)" = true ]; }
 # The marker a coordinator leaves before it creates a worktree (prompts/coordinator.md), read from inside that worktree:
 # <git common dir>/orca-roles.coordinated/<worktree folder name>. Only the Planner's first start reads it, and kickoff.sh removes it then.
 coordinated_marker() {

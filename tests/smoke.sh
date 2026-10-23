@@ -1852,6 +1852,17 @@ check "provenance: the planner's model is null when none is configured" "$(tail 
 rm -f "$KIT/VERSION" "$KIT/.installed"
 agent_run "$MP" cu
 check "provenance: a custom agent has cliVersion null" "$(tail -1 "$PF" | jq -c '[.agent, .cliVersion]')" '["custom",null]'
+# settings.telemetry.roleAttribute: the role added to OTEL_RESOURCE_ATTRIBUTES, after the shell's and the role env's values, never replacing them
+printf '#!/bin/sh\nprintf "%%s" "${OTEL_RESOURCE_ATTRIBUTES-unset}" > "%s"\n' "$TMP/otel.out" > "$MB/claude"; chmod +x "$MB/claude"
+agent_otel() { rm -f "$TMP/otel.out"; (cd "$MP" && if [ -n "$2" ]; then export OTEL_RESOURCE_ATTRIBUTES="$2"; else unset OTEL_RESOURCE_ATTRIBUTES; fi
+  HOME="$TMP/home" PATH="$MB:$PATH" ORCA_ROLES_CONFIG="$1" "$TMP/home/.orca-roles/bin/agent.sh" dev >/dev/null 2>&1) || true; cat "$TMP/otel.out" 2>/dev/null || echo missing; }
+MOT="$TMP/mt-otel.json"; jq '.settings.telemetry.roleAttribute = true' "$MCFG" > "$MOT"
+check "telemetry: off by default, the attributes are left as they are" "$(agent_otel "$MCFG" ""):$(agent_otel "$MCFG" team.id=a)" "unset:team.id=a"
+check "telemetry: on, the role is added, after what the shell set" "$(agent_otel "$MOT" ""):$(agent_otel "$MOT" team.id=a)" "orca_roles.role=dev:team.id=a,orca_roles.role=dev"
+jq '.roles.dev.env.OTEL_RESOURCE_ATTRIBUTES = "team.id=t1"' "$MOT" > "$MOT.x"
+check "telemetry: on, after the role env's value" "$(agent_otel "$MOT.x" "")" "team.id=t1,orca_roles.role=dev"
+jq '.settings.telemetry.roleAttribute = "true"' "$MCFG" > "$MOT.x"
+check "telemetry: only the boolean true turns it on" "$(agent_otel "$MOT.x" "")" "unset"
 printf '#!/bin/sh\n[ "$1" = --version ] && sleep 30\necho started\n' > "$MB/claude"
 S1="$(date +%s)"; agent_run "$MP" dev; S2="$(date +%s)"
 check "provenance: a claude that hangs on --version does not hang agent.sh, version null" "$([ $((S2 - S1)) -lt 20 ] && echo fast):$(tail -1 "$PF" | jq -r .cliVersion)" "fast:null"
@@ -1863,35 +1874,54 @@ check "provenance: outside a git repository nothing is written" "$(find "$TMP/mt
 WTP="$(cd "$MP" && pwd -P)"; CC="$TMP/mtcc"; PD="$CC/projects/$(printf '%s' "$WTP" | tr '/.' '--')"; mkdir -p "$PD"
 asst() { printf '{"type":"assistant","sessionId":"%s","cwd":"%s","version":"2.0.1","timestamp":"%s","message":{"model":"%s","usage":{"input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}}}\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"; }
 { printf '{"type":"user","sessionId":"s-pl","cwd":"%s","timestamp":"2026-02-01T10:00:00.000Z","message":{"role":"user","content":"Read /k/prompts/programmer/planner.md and adopt that role from now on. Mode: programmer."}}\n' "$WTP"
-  asst s-pl "$WTP" 2026-02-01T10:00:05.000Z m-a 10 20 30 40; } > "$PD/s-pl.jsonl"
+  # one response over three lines, one per content block (an advisor call among them), then the cost-state Claude Code writes when the session ends
+  for b in '{"type":"text","text":"x"}' '{"type":"tool_use","id":"t1","name":"Bash","input":{}}' '{"type":"server_tool_use","id":"t2","name":"advisor","input":{}}'; do
+    printf '{"type":"assistant","sessionId":"s-pl","cwd":"%s","version":"2.0.1","timestamp":"2026-02-01T10:00:05.000Z","message":{"id":"msg_pl1","model":"m-a","content":[%s],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":40}}}}\n' "$WTP" "$b"; done
+  printf '{"type":"cost-state","sessionId":"s-pl","totalCostUSD":1.5,"modelUsage":{"m-a":{"inputTokens":10,"outputTokens":20,"cacheReadInputTokens":30,"cacheCreationInputTokens":40,"costUSD":1.2},"m-adv":{"inputTokens":900,"outputTokens":9,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.3}}}\n'; } > "$PD/s-pl.jsonl"
 { printf '{"type":"user","sessionId":"s-dev","cwd":"%s","timestamp":"2026-02-01T11:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}\n' "$WTP"
   printf '{"type":"user","sessionId":"s-dev","cwd":"%s","timestamp":"2026-02-01T11:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/dev.md and adopt that role from now on. Follow its instructions to the letter. Notes: see other.md"}]}}\n' "$WTP"
-  asst s-dev "$WTP" 2026-02-01T11:00:05.000Z m-a 1 2 3 4; asst s-dev "$WTP" 2026-03-01T11:00:05.000Z m-b 100 200 300 400; } > "$PD/s-dev.jsonl"
+  asst s-dev "$WTP" 2026-02-01T11:00:05.000Z m-a 1 2 3 4 | sed 's/"message":{/"message":{"stop_reason":"end_turn",/'; asst s-dev /scratch/dev 2026-03-01T11:00:05.000Z m-b 100 200 300 400; } > "$PD/s-dev.jsonl"   # the role moved to its scratch dir
 { printf '{"type":"user","sessionId":"s-other","cwd":"/elsewhere","timestamp":"2026-02-01T12:00:00.000Z","message":{"role":"user","content":"Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/tester.md and adopt that role"}}\n'
   asst s-other /elsewhere 2026-02-01T12:00:05.000Z m-a 999 999 999 999; } > "$PD/s-other.jsonl"
 { printf '{"type":"user","sessionId":"s-none","cwd":"%s","timestamp":"2026-02-01T13:00:00.000Z","message":{"role":"user","content":"hello"}}\n' "$WTP"
-  asst s-none "$WTP" 2026-02-01T13:00:05.000Z m-a 5 6 7 8; printf '{"type":"summary","summary":"x"}\n'; } > "$PD/s-none.jsonl"
-mx() { (cd "$MP" && HOME="$TMP/home" PATH="$MB:$PATH" CLAUDE_CONFIG_DIR="$CC" ORCA_ROLES_CONFIG="$MCFG" "$TMP/home/.orca-roles/bin/metrics.sh" "$@" 2>"$TMP/mt.err"); }
+  asst s-none "$WTP" 2026-02-01T13:00:05.000Z m-a 5 6 7 8; printf '{"type":"summary","summary":"x"}\n'
+  # 20 minutes later, with one-hour cache writes: not a pause longer than the cache's lifetime
+  asst s-none "$WTP" 2026-02-01T13:20:05.000Z m-a 0 0 0 10 | sed 's/"cache_creation_input_tokens":10}/"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":10}}/'; } > "$PD/s-none.jsonl"
+# a PATH without opencode, which this machine may have installed: the stubs, links to jq and git, and the system folders
+NP="$TMP/mtnooc"; rm -rf "$NP"; mkdir -p "$NP"; for c in jq git; do ln -s "$(command -v "$c")" "$NP/$c"; done; MPATH="$MB:$NP:/usr/bin:/bin:/usr/sbin:/sbin"
+mx() { (cd "$MP" && HOME="$TMP/home" PATH="$MPATH" CLAUDE_CONFIG_DIR="$CC" ORCA_ROLES_CONFIG="$MCFG" "$TMP/home/.orca-roles/bin/metrics.sh" "$@" 2>"$TMP/mt.err"); }
 SUMQ='[.turns, .input, .output, .cacheRead, .cacheWrite] | map(tostring) | join(",")'
 try mx
 check "metrics: one line per role and session; the session of another cwd is ignored" "$RC:$(printf '%s\n' "$OUT" | jq -r '[.role, .session] | join(":")' | sort | tr '\n' ' ')" "0:dev:s-dev planner:s-pl unknown:s-none "
 check "metrics: stdout is valid JSONL" "$(printf '%s\n' "$OUT" | jq -c . | cmp -s - <(printf '%s\n' "$OUT") && echo same)" "same"
-check "metrics: the dev session sums its two turns" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | '"$SUMQ")" "2,101,202,303,404"
+check "metrics: the dev session sums its two turns, the one it ran from another folder included" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | '"$SUMQ")" "2,101,202,303,404"
 check "metrics: the dev line's agent, model (last turn), version, first and last" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | [.agent, .model, .version, .first, .last] | join("|")')" "claude|m-b|2.0.1|2026-02-01T11:00:05.000Z|2026-03-01T11:00:05.000Z"
-check "metrics: the planner and the role-less session" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "planner" or .role == "unknown") | .role + "=" + ('"$SUMQ"')' | sort | tr '\n' ' ')" "planner=1,10,20,30,40 unknown=1,5,6,7,8 "
+check "metrics: the planner (one response written over three lines counts once) and the role-less session" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "planner" or .role == "unknown") | .role + "=" + ('"$SUMQ"')' | sort | tr '\n' ' ')" "planner=1,10,20,30,40 unknown=2,5,6,7,18 "
+check "metrics: the planner's cache writes split by lifetime, its advisor call, and the cost Claude Code recorded (per model, advisor's model included)" "$(printf '%s\n' "$OUT" | jq -c 'select(.role == "planner") | [.cacheWrite5m, .cacheWrite1h, .advisorCalls, .usd, .byModel["m-adv"].usd, .byModel["m-a"].cacheRead]')" '[0,40,1,1.5,0.3,30]'
+check "metrics: without cache_creation or cost-state (a session still running) those fields are null, no advisor call" "$(printf '%s\n' "$OUT" | jq -c 'select(.role == "dev") | [.cacheWrite5m, .cacheWrite1h, .advisorCalls, .usd, .byModel]')" '[null,null,0,null,null]'
+DIAGQ='[.startupTurns, .startupWrite, .idle, .longPauses, .longPauseWrite, .avgContext, .maxContext] | map(tostring) | join(",")'
+check "metrics: dev: started in its first response (end_turn), then a month-long pause past the five-minute cache, context 8 and 800" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | '"$DIAGQ")" "1,4,false,1,400,404,800"
+check "metrics: planner without end_turn is idle; the role-less session's 20-minute pause is within its one-hour cache" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "planner" or .role == "unknown") | .role + "=" + ('"$DIAGQ"')' | sort | tr '\n' ' ')" "planner=1,40,true,0,0,80,80 unknown=2,18,true,0,0,15,20 "
+try mx --summary
+check "metrics: --summary: one line per role, by cost then name, then the total" "$RC:$(printf '%s\n' "$OUT" | jq -r .role | tr '\n' ',')" "0:planner,dev,unknown,total,"
+check "metrics: --summary total: sessions, idle, turns, tokens, turn-weighted context, cost and its sessions" "$(printf '%s\n' "$OUT" | jq -c 'select(.role == "total") | [.sessions, .idle, .turns, .input, .cacheWrite, .avgContext, .maxContext, .usd, .usdSessions, .usdShare, .advisorCalls, .longPauseWrite]')" '[3,2,5,116,462,183,800,1.5,1,1,1,400]'
+check "metrics: --summary adds byModel across sessions and gives each role its share of the cost" "$(printf '%s\n' "$OUT" | jq -c 'select(.role == "total") | .byModel["m-adv"]'):$(printf '%s\n' "$OUT" | jq -c 'select(.role != "total") | [.role, .usdShare, .byModel]' | tr '\n' ' ')" '{"input":900,"output":9,"cacheRead":0,"cacheWrite":0,"usd":0.3}:["planner",1,{"m-a":{"input":10,"output":20,"cacheRead":30,"cacheWrite":40,"usd":1.2},"m-adv":{"input":900,"output":9,"cacheRead":0,"cacheWrite":0,"usd":0.3}}] ["dev",null,null] ["unknown",null,null] '
 check "metrics: no opencode line and no warning without opencode" "$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0"
 check "metrics: without --save nothing is written" "$([ -e "$MG/orca-roles.runs.jsonl" ] && echo written || echo none)" "none"
 try mx --since 2026-02-15
 check "metrics: --since keeps only later turns (the dev session loses its first one; the others are gone)" "$(printf '%s\n' "$OUT" | jq -r '.role + "=" + ('"$SUMQ"')' | tr '\n' ' ')" "dev=1,100,200,300,400 "
+try mx --since 2026-01-01
+check "metrics: with --since the cost is null (cost-state covers the whole session), tokens and advisor calls are not" "$(printf '%s\n' "$OUT" | jq -c 'select(.role == "planner") | [.usd, .byModel, .turns, .advisorCalls]')" '[null,null,1,1]'
 try mx --save
 check "metrics: --save prints and appends the same lines" "$(cmp -s "$MG/orca-roles.runs.jsonl" <(printf '%s\n' "$OUT") && echo same):$(wc -l < "$MG/orca-roles.runs.jsonl" | tr -d ' ')" "same:3"
 try mx --save; check "metrics: --save appends again" "$(wc -l < "$MG/orca-roles.runs.jsonl" | tr -d ' ')" "6"
-try mx -h; check "metrics: -h prints the header" "$RC:$(printf '%s' "$OUT" | grep -c -e '^# Usage' -e '^#   --since' -e '^#   --save')" "0:3"
+try mx -h; check "metrics: -h prints the header" "$RC:$(printf '%s' "$OUT" | grep -c -e '^# Usage' -e '^#   --since' -e '^#   --save' -e '^#   --summary' -e '^# `stats` output')" "0:5"
 try mx --bogus; check "metrics: an unknown option fails" "$RC" "1"
 # OpenCode: only with the binary on the PATH and a role that runs it
 printf '#!/bin/sh\n[ "$1" = stats ] && { echo "{\\"sessions\\": 3, \\"args\\": \\"$*\\"}"; exit 0; }\nexit 1\n' > "$MB/opencode"; chmod +x "$MB/opencode"
 try mx
 check "metrics: one opencode line with its raw stats (not split per role)" "$(printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | [.role, .raw.sessions, .raw.args] | map(tostring) | join("|")'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "null|3|stats --json --cost --project .:4"
+try mx --summary; check "metrics: --summary leaves the opencode line out" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(printf '%s\n' "$OUT" | jq -r .role | tail -1)" "0:0:total"
 jq 'del(.roles.oc)' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
 try mx; check "metrics: no opencode line when no role runs opencode" "$(printf '%s\n' "$OUT" | grep -c opencode)" "0"
 jq '.roles.oc = {agent: "opencode"}' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
@@ -1899,7 +1929,7 @@ try mx; check "metrics: agent opencode counts too" "$(printf '%s\n' "$OUT" | gre
 printf '#!/bin/sh\necho oops >&2; exit 1\n' > "$MB/opencode"
 try mx; check "metrics: a failing opencode gives a warning on stderr and no line, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(grep -c 'warning' "$TMP/mt.err")" "0:0:1"
 printf '#!/bin/sh\nsleep 30\n' > "$MB/opencode"
-S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3:$PATH" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>/dev/null' _ "$MP" "$TMP/home" "$MB" "$CC" "$MCFG"; S2="$(date +%s)"
+S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>/dev/null' _ "$MP" "$TMP/home" "$MPATH" "$CC" "$MCFG"; S2="$(date +%s)"
 check "metrics: a hanging opencode is cut off" "$RC:$([ $((S2 - S1)) -lt 20 ] && echo fast):$(printf '%s\n' "$OUT" | grep -c opencode)" "0:fast:0"
 rm -f "$MB/opencode"
 try mx; check "metrics: the stub removed, no opencode line and no error" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0:0"
