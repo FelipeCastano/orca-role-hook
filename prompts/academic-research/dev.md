@@ -16,7 +16,7 @@ Implement experimentation/specs/<experiment>.md exactly. If the spec does not se
 - Models and checkpoints in experimentation/models/ (out of git; experimentation/models/README.md says what each one is and which run produced it).
 - Results in experimentation/results/<experiment>/ (the metrics as CSV or JSON). Large outputs go to experimentation/results/raw/; logs to experimentation/logs/.
 - One run record per run, experimentation/results/<experiment>/runs/<run-id>.json, where `<run-id>` is the UTC start time `YYYYmmddTHHMMSSZ`, with: command, git commit (`git rev-parse HEAD`), dirty (true or false, from `git status --porcelain`), code_sha256 (the sha256 of `git diff HEAD -- experimentation/src experimentation/configs experimentation/scripts <environment file>` followed by, for each untracked file in those paths, in path order, its path and its contents; an empty string when that diff is empty and there is no such untracked file), config path, seed, start and end (UTC, ISO 8601), duration_s, host, exit_status. You write the run record yourself after each run, not the run script, so the scripts also run in a copy without .git.
-- Leave the code running its own tests and the existing tests passing.
+- Leave the code running its own tests, and run the existing tests related to your change (never the full suite unless the brief asks): they must pass.
 
 ### Fix
 Resolve the findings copied in the brief, one by one (code, configs, scripts, runs). Say for each what changed (file:line) and which runs were repeated.

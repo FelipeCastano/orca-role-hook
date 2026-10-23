@@ -271,6 +271,20 @@ for m in programmer pr-reviewer academic-research; do
   rule R19 "$ROOT/prompts/$m/planner.md" 'never enable it' '\*\*Plugins and MCP servers the project declares\.\*\*'
   rule R20 "$ROOT/prompts/$m/planner.md" 'Your role prompt and the user'"'"'s instructions take precedence over any skill' '^If you run on Claude Code'
   rule R20 "$ROOT/prompts/$m/planner.md" 'never try to work around a blocked skill'
+  [ "$m" != programmer ] || {
+    rule R21 "$ROOT/prompts/$m/planner.md" 'The Auditor'"'"'s baseline runs the sections and tests the whole set touches'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'The full suite runs once per set'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'Wording-only fixes need no Tester round'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'anything that touches code, tests or a pinned rule goes through the Tester as usual' '\*\*Wording-only fixes need no Tester round\.\*\*'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'by the Tester as a task' '\*\*Set audit\.\*\*'
+    rule R21 "$ROOT/prompts/$m/auditor.md" 'run the sections and tests the whole set touches'
+    rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+  }
+  [ "$m" != academic-research ] || {
+    rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+    rule R21 "$ROOT/prompts/$m/planner.md" '**Tests where the change is.**'
+  }
+  [ "$m" != pr-reviewer ] || rule R21 "$ROOT/prompts/$m/planner.md" '**Tests where the finding is.**'
   rule R18 "$ROOT/prompts/$m/planner.md" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done
@@ -2539,7 +2553,7 @@ jq '.roles.planner |= del(.agent)' "$KIT/config.json" > "$TMP/cfg.back" && cp "$
 check "self-launch of a codex Planner (even with a session stub that would answer): no relauncher, tab and state kept, the message" "$X2" "0:0:0:same:none:1:0:0:unset:1:1"
 # the relauncher's launch (no ORCA_TERMINAL_HANDLE, ORCA_ROLES_RELAUNCH=1): the restored Planner tab is not closed without a readable session; with one it is reopened
 ost "$SELFS" "$SELFP"; OSES=session-none OREL=1 ol
-Y1="$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty" | cmp -s <(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty") <(printf '%s\n' "$OG/orca-roles.env:PLANNER=old-pl" "$OG/orca-roles.pty:PLANNER=wt@@p1") && echo same || true):$(printf '%s\n' "$OUT" | grep -c "The Planner's conversation could not be read from its restored tab (rs-pl): not reopened, to keep it\." || true)"
+Y1="$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(cmp -s <(grep '^PLANNER=' "$OG/orca-roles.env" "$OG/orca-roles.pty") <(printf '%s\n' "$OG/orca-roles.env:PLANNER=old-pl" "$OG/orca-roles.pty:PLANNER=wt@@p1") && echo same || true):$(printf '%s\n' "$OUT" | grep -c "The Planner's conversation could not be read from its restored tab (rs-pl): not reopened, to keep it\." || true)"
 ost "$SELFS" "$SELFP"; OREL=1 ol
 Y1="$Y1|$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true)"
 check "relauncher's launch: without a readable session the restored Planner tab is kept (no close, no new tab, state unchanged, the message); with a session it is closed and the Planner reopened" "$Y1" "0:0:same:1|1:1"
@@ -3740,7 +3754,7 @@ H7="$H7|$(for tv in abc 0 5x ''; do PPTO="$tv" ppr status "$PPD/proj"; printf '%
 check "project-plugins timeout: a hanging claude is cut after ORCA_ROLES_PLUGINS_TIMEOUT seconds (status: error claude timed out; install: the same on stderr), exit 1, quickly, and no process is left; a bad timeout value warns and uses 60" "$H7" "1:1:1:0|1:error claude timed out:0|1:error claude timed out:0|1,1,1,0,"
 # 8. nothing is written in the folder or the working folder, status calls claude only to list, usage errors exit 1
 ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ" "$IJ" "{\"mcpServers\":{\"g\":{\"command\":\"nonexistent-two\"}}}"; mkdir -p "$PPD/proj/sub"
-SUMF() { (cd "$PPD" && find proj "$PPD/tmpd" -print0 | sort -z | xargs -0 shasum 2>/dev/null; find proj -type f -print0 | sort -z | xargs -0 stat -f '%m %N' 2>/dev/null || true) | shasum; }
+SUMF() { (cd "$PPD" && find proj "$PPD/tmpd" -print0 | sort -z | xargs -0 shasum 2>/dev/null; if stat -c %Y / >/dev/null 2>&1; then find proj -type f -print0 | sort -z | xargs -0 stat -c '%Y %n' 2>/dev/null; else find proj -type f -print0 | sort -z | xargs -0 stat -f '%m %N' 2>/dev/null; fi || true) | shasum; }
 W0="$(SUMF)"; ppr status "$PPD/proj"; W1="$(pcalls 'marketplace add\|plugin install'):$(grep -vc 'plugin list --json\|plugin marketplace list --json' "$PPL" || true)"; ppr install c@gh "$PPD/proj"; ppr install h@inst "$PPD/proj"
 check "project-plugins writes nothing: the folder and the temp folder are byte for byte the same after status and installs (stub claude), and status makes no add or install call" "$([ "$W0" = "$(SUMF)" ] && echo same):$W1" "same:0:0"
 U8=""; for a in '' 'status a b' 'install' 'install a b c' 'frobnicate' "status $PPD/nope-folder"; do ppr $a; U8="$U8$RC:$(printf '%s' "$ERR" | grep -c 'Usage: project-plugins.sh\|is not a folder')|"; done
