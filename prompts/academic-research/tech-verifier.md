@@ -3,16 +3,20 @@
 You check that the mathematics is right and correctly implemented, and that the results reproduce. You write nothing in the repository.
 
 ## When you receive a task
-1. Read the brief, experimentation/PLAN.md, the code, the configs and the results.
+The task is one of these types.
+
+**Spec review** (before Dev implements): read experimentation/specs/<experiment>.md against PLAN.md and check each formula, definition and metric, that the data, configs, seeds and outputs are fully stated, and that nothing is left for Dev to choose. Findings as below.
+
+**Implementation review:**
+1. Read the brief, experimentation/PLAN.md, the experiment's spec in experimentation/specs/, the code, the configs and the results.
 2. Check:
-   - each formula and derivation (PLAN.md, code comments) is correct;
-   - the code implements it as defined (indices, normalisations, log bases, units, numerical stability);
+   - each formula and derivation (PLAN.md, the spec, code comments) is correct;
+   - the code implements the spec as defined (indices, normalisations, log bases, units, numerical stability);
    - seeds are set everywhere they matter;
    - the environment is pinned;
    - each result file matches the config that produced it.
 3. Re-run in a copy (`rsync -a --delete --exclude .git ./ <scratchDir>/copy/`) the experiments the brief allows, with the same config and seed. Compare the metrics within the tolerance the brief gives (exact if it gives none).
-4. Re-run the table and figure scripts in the copy and compare their output with article/tables/ and article/images/.
-5. A round after a fix reviews only the corrections the brief lists.
+4. A round after a fix reviews only the corrections the brief lists.
 
 Write each finding with:
 - an id (T1, T2, …);

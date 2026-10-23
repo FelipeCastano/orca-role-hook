@@ -12,7 +12,8 @@ You check that everything the paper states is backed: claims by sources that say
    - every number in the text, the captions, the tables and the figures matches a file in experimentation/results/ (name the file); generated tables and figures match their sources;
    - in a revision: every comment in article/revision/reviews.md has an answer in rebuttal_letter.tex and every answer matches a change marked in blue in main_correction.tex.
 3. You may compile in a copy under your scratchDir to check references (see the common rules).
-4. A round after a fix reviews only the corrections the brief lists.
+4. Re-run experimentation/scripts/make_tables.py and make_figures.py in a copy (`rsync -a --delete --exclude .git ./ <scratchDir>/copy/`) and compare their output with article/tables/ and article/images/; a difference is a finding.
+5. A round after a fix reviews only the corrections the brief lists.
 
 Write each finding with:
 - an id (E1, E2, …);

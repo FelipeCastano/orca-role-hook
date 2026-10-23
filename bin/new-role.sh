@@ -6,8 +6,8 @@
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
 #   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompts
 #     The JSON has: id, description and prompt required; modes, phases, title, agent, model, permissionMode, command,
-#     addDirFlag, modelError, models, trust, clearCommand, common, mcp, allowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs, opencode, enabled,
-#     after and overwrite optional.  agent: claude (default), codex, opencode or custom (needs command).  opencode: an object
+#     addDirFlag, modelError, models, trust, clearCommand, common, mcp, allowedTools, disallowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs,
+#     opencode, enabled, after and overwrite optional.  agent: claude (default), codex, opencode or custom (needs command).  opencode: an object
 #     {"steps": <positive int>, "permissions": [{action, resource, effect}...]} for agent opencode (see README, "OpenCode roles").
 #     modes: "all", or one mode id (a string or a one-element list); missing = "programmer". prompt: Markdown text
 #     (a role with one mode) or {"<mode>": "<Markdown>"} covering exactly the role's modes ("all" = every mode).
@@ -217,7 +217,7 @@ if [ -n "$FROM_JSON" ]; then
   json_role() {  # json_role <prompt object>
     jq --argjson prompt "$1" --argjson modes "$MODES_FIELD" --arg agent "$AGENT" '
       {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
-      + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","modelError","models","trust","clearCommand","common","mcp","allowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs","opencode"))))
+      + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","modelError","models","trust","clearCommand","common","mcp","allowedTools","disallowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs","opencode"))))
       + {modes: $modes}
       + (if has("phases") then {phases: .phases} else {} end)
       + (if ($prompt | length) > 0 then {prompt: $prompt} else {} end)' "$JF"

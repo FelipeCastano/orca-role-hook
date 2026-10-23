@@ -214,6 +214,9 @@ def kit_prefixes($kit; $home): ["{kit}/"] + (if $kit == "" then [] else [$kit + 
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
+# ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
+# claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
+# ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # Old mode id in the user's settings.mode, role modes, prompt keys, or prompt paths inside the kit?  config_has_old_mode <config.json>
 config_has_old_mode() {
   jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
@@ -225,6 +228,10 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
+    | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
+    | .roles.tester.modes |= (if . == ["programmer"] then $d.roles.tester.modes else . end)
+    | .roles.writer.model |= (if . == "claude-opus-5-5" then $d.roles.writer.model else . end)
+    | .roles.planner.pluginDirs |= (if . == ["{kit}/plugin"] then $d.roles.planner.pluginDirs else . end)
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
@@ -310,6 +317,9 @@ check_config() {
           else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
       else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.roles | to_entries[] | select(.value | has("disallowedTools")) | select(.value.disallowedTools | type != "array" or any(.[]; type != "string"))
+    | "ERROR: role \(.key): disallowedTools must be a list of tool names"' "$1" 2>/dev/null)" || true
+  [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
     | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: modelError must be a non-empty string"; return 0; }
@@ -324,6 +334,9 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("prReviewer") then (.prReviewer | select((type != "object") or ([.marketplace, .plugin, .skill] | map(select(type != "string" or . == "")) | length > 0))
       | "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("superpowers") then (.superpowers | select(. != true and . != false) | "ERROR: invalid configuration: settings.superpowers must be true or false") else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.superpowers must be true or false"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
@@ -553,12 +566,43 @@ planner_msg() {
     msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
+    [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && msg="$msg You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit's settings)."
   elif cm="$(coordinated_marker)" && [ -f "$cm" ]; then   # a coordinator will dispatch the task: an idle Planner with no dialog open is what lets it in
     msg="$msg This worktree was opened by a coordinator that will send you its task as an Orca dispatch (see your section \"Working under a coordinator\"). Do the startup and stop there: do not start phase 1, do not infer a goal from the branch, a linked issue or the Runs, and open no question dialog, because an open dialog blocks the dispatch. End your turn with one line saying you are waiting for the coordinator's task. If the user writes in this tab first, the user takes precedence."
   else
     msg="$msg Start with the startup."
   fi
   printf '%s' "$msg"
+}
+# Every handle the Planner's tab has had in this worktree: <git dir>/orca-roles.planner-handles, one per line, no duplicates, atomic.
+# If the file does not exist it is first seeded with the PLANNER values of orca-roles.kicked and orca-roles.env.  With an empty handle it only seeds.
+planner_history_add() {  # planner_history_add <git dir> <handle>
+  local f="$1/orca-roles.planner-handles" tmp="$1/orca-roles.planner-handles.tmp.$$"
+  {
+    if [ -f "$f" ]; then cat "$f"
+    else
+      grep '^PLANNER=' "$1/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-
+      grep '^PLANNER=' "$1/orca-roles.env" 2>/dev/null | head -1 | cut -d= -f2-
+    fi
+    printf '%s\n' "$2"
+  } | awk 'NF && !seen[$0]++' > "$tmp" && mv "$tmp" "$f"
+}
+# The Run most recently updated that is still bound to a previous tab of the Planner (a handle in the history other than the current one):
+# prints "<id><TAB><old handle><TAB><objective>" (objective on one line, up to 120 characters), nothing if there is none or no history;
+# 1 if the Runs cannot be listed.  stale_run <git dir> <current planner handle>
+stale_run() {
+  local hist="$1/orca-roles.planner-handles" cursor="" js runs="[]" i=0
+  [ -f "$hist" ] || return 0
+  while [ "$i" -lt 50 ]; do
+    if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --cursor "$cursor" 2>/dev/null)" || return 1
+    else js="$(orca orchestration run-list --json 2>/dev/null)" || return 1; fi
+    runs="$(printf '%s' "$js" | jq -c --argjson acc "$runs" '$acc + [(.result.runs // [])[]]' 2>/dev/null)" || return 1
+    cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)" || return 1
+    i=$((i + 1)); [ -n "$cursor" ] || break
+  done
+  printf '%s' "$runs" | jq -r --argjson hs "$(jq -R . "$hist" | jq -s .)" --arg cur "$2" \
+    '[.[] | select(.coordinator_handle as $h | $h != $cur and ($hs | index($h)))] | max_by(.updated_at) // empty
+     | "\(.id)\t\(.coordinator_handle)\t\((.objective // "") | gsub("[\t\n\r]"; " ") | .[0:120])"' 2>/dev/null || return 1
 }
 # The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt
 # (--append-system-prompt), codex as developer_instructions, custom through {anchor} / $ORCA_ROLES_ANCHOR if its command uses them.
@@ -627,6 +671,14 @@ worker_msg() {
   printf '%s' "Read $cm and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$short$notes"
 }
 # A path with ~, {kit} or {home} expanded
+# What the kit never lets the Planner do while its superpowers folder is loaded: the kit's Planner coordinates through Orca (no worktrees,
+# no subagents of its own, no implementation, merge or push). agent.sh applies it whenever $KIT/plugins/superpowers is loaded, whatever the
+# role's own disallowedTools say.  superpowers_deny → one tool or Skill(...) per line
+superpowers_deny() {
+  printf '%s\n' 'Skill(superpowers:subagent-driven-development)' 'Skill(superpowers:executing-plans)' 'Skill(superpowers:dispatching-parallel-agents)' \
+    'Skill(superpowers:requesting-code-review)' 'Skill(superpowers:using-git-worktrees)' 'Skill(superpowers:finishing-a-development-branch)' \
+    'Skill(superpowers:writing-skills)' 'Skill(superpowers:diagnosing-superpowers)' EnterWorktree ExitWorktree Agent Task
+}
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {

@@ -129,7 +129,7 @@ kick() {  # $1 handle, $2 role, $3 message
     [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
   fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
-  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; kicked_set "$2" "$1"; }
+  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; }
   case "$ocm" in
     present) record_model "$2" "$model";;
     missing) model_failed "$2" "$model" "not in opencode models";;
@@ -187,26 +187,57 @@ composer_watch & WATCH_PID=$!
 
 if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
-  kick "$PLANNER" planner "$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+  PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+  planner_history_add "$GITDIR" ""   # seeds the handle history from the previous kicked/env files before kicked_set overwrites them
+  if STALE="$(stale_run "$GITDIR" "$PLANNER")"; then
+    if [ -n "$STALE" ]; then
+      IFS=$'\t' read -r STALE_ID STALE_OLD STALE_OBJ <<<"$STALE"
+      PLANNER_MSG="$PLANNER_MSG Run $STALE_ID ($STALE_OBJ) is still bound to a previous tab of yours. If this is your Run, bind it with \`orca orchestration run-use --id $STALE_ID --json\` before anything else, so worker reports reach you."
+      echo "Run $STALE_ID is bound to an old Planner tab ($STALE_OLD); the Planner was told."
+    fi
+  else
+    echo "Could not list the Runs to check the Planner's binding."
+  fi
+  kick "$PLANNER" planner "$PLANNER_MSG"
   # a coordinator's marker covers only this first start: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
   if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
     if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
     rm -f "$CM"
   fi
 fi
-OPENED_WORKERS=""
+OPENED_WORKERS=""; OPENED_IDS=""
 for id in $ROLES; do
   [ "$id" = planner ] && continue
   is_new "$id" || continue
   v=$(var_of "$id")
-  case " $REUSED " in *" $id "*) ;; *) OPENED_WORKERS="${OPENED_WORKERS:+$OPENED_WORKERS, }$(title_of "$CFG" "$id")";; esac
+  case " $REUSED " in *" $id "*) ;; *) OPENED_WORKERS="${OPENED_WORKERS:+$OPENED_WORKERS, }$(title_of "$CFG" "$id")"; OPENED_IDS="$OPENED_IDS $id";; esac
   if remembers "$id"; then kick "${!v}" "$id" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$id" "$(worker_msg "$CFG" "$id")"; fi
 done
 
 # A live Planner learns the new handles only from this message: its role message (with the handles) is sent only when it is (re)opened.
 if ! is_new planner && [ -n "$OPENED_WORKERS" ] && [ -n "${PLANNER:-}" ]; then
-  if [ "${ORCA_TERMINAL_HANDLE:-}" = "$PLANNER" ]; then
-    echo "Not telling the Planner the new handles: it ran this launch itself."
+  if [ "${ORCA_ROLES_SELF_RELAUNCH:-}" = 1 ]; then
+    echo "The Planner will be reopened by its relauncher; its role message carries the handles."
+  elif [ "${ORCA_ROLES_SELF_NO_SESSION:-}" = 1 ]; then
+    echo "The Planner keeps its restored tab (its conversation could not be read, so it was not reopened); run roles from another terminal to give it the handles and the kit's settings."
+  elif [ "${ORCA_ROLES_PLANNER_BUSY:-}" = 1 ]; then
+    echo "The Planner's restored tab was busy and was not reopened; run roles again when it is idle: its role message will carry the handles."
+  elif [ "${ORCA_TERMINAL_HANDLE:-}" = "$PLANNER" ]; then
+    # the Planner ran this launch from its own tab: it learns the outcome from a status message, sent once every kick is done
+    OK_TITLES=""; FAIL_TITLES=""
+    for id in $OPENED_IDS; do
+      v=$(var_of "$id")
+      if [ "$(grep "^$v=" "$GITDIR/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-)" = "${!v}" ]; then OK_TITLES="${OK_TITLES:+$OK_TITLES, }$(title_of "$CFG" "$id")"
+      else FAIL_TITLES="${FAIL_TITLES:+$FAIL_TITLES, }$(title_of "$CFG" "$id")"; fi
+    done
+    REOPENED_BODY="roles opened or reopened: ${OK_TITLES:-none}.${FAIL_TITLES:+ Not reached (no role message sent): $FAIL_TITLES.}
+Use these handles from now on:
+$(cat "$STATE")"
+    if orca orchestration send --to "$PLANNER" --type status --subject "Roles reopened" --body "$REOPENED_BODY" --json >/dev/null 2>&1; then
+      echo "Told the Planner the roles were reopened."
+    else
+      echo "Could not tell the Planner the roles were reopened."
+    fi
   else
     HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
 $(cat "$STATE")"

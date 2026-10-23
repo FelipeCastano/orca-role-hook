@@ -15,6 +15,11 @@ set -euo pipefail
 REPO="${ORCA_ROLES_REPO:-FelipeCastano/orca-role-hook}"
 REF="${ORCA_ROLES_REF:-${ORCA_ROLES_BRANCH:-main}}"   # a branch, tag or commit sha
 KIT="$HOME/.orca-roles"
+# The superpowers plugin the Planner loads: a pinned copy (this commit of this repository), outside the folders the install regenerates
+SP_REPO="https://github.com/obra/superpowers.git"
+SP_SHA="2ce8aa15d05bd57213e6f746f953aafb7ded7a8b"
+SP_DIR="$KIT/plugins/superpowers"
+SP_MARK="$SP_DIR/.orca-roles-pin"   # holds the sha of the installed copy
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -87,6 +92,36 @@ manifest_of "$KIT" > "$KIT/.manifest"   # written right after the copy, so a lat
 mkdir -p "$KIT/pw"   # the pinned browser stack: node_modules and browsers/ are kept across updates
 cp "$SRC/pw/package.json" "$SRC/pw/package-lock.json" "$SRC/pw/e2e.config.js" "$KIT/pw/"
 rm -f "$KIT/config.env"   # old format
+# Installs the pinned superpowers copy unless it is already there. Never aborts the install: a failure only warns.
+fetch_superpowers() {
+  local short="${SP_SHA:0:7}" tmp old prev reason=""
+  if [ "${ORCA_ROLES_SUPERPOWERS_FETCH:-}" = skip ]; then echo "Superpowers: fetch skipped (ORCA_ROLES_SUPERPOWERS_FETCH=skip)."; return 0; fi
+  if [ -f "$SP_MARK" ] && [ "$(cat "$SP_MARK" 2>/dev/null)" = "$SP_SHA" ]; then echo "Superpowers $short already installed."; return 0; fi
+  if ! command -v git >/dev/null 2>&1; then echo "Warning: git is missing: superpowers for the Planner was not installed (the Planner works without it)."; return 0; fi
+  if [ -d "$SP_DIR" ]; then prev="the previous copy is kept"; else prev="the Planner works without it"; fi
+  # the temporary copy lives next to its destination, so the final mv is a rename on the same device
+  mkdir -p "$KIT/plugins" 2>/dev/null && tmp="$(mktemp -d "$KIT/plugins/.superpowers.XXXXXX" 2>/dev/null)" \
+    || { echo "Warning: could not install superpowers $short for the Planner (no temporary folder); $prev."; return 0; }
+  (cd "$tmp" && git init -q && GIT_TERMINAL_PROMPT=0 git fetch -q --depth 1 "$SP_REPO" "$SP_SHA" && git checkout -q FETCH_HEAD) >/dev/null 2>&1 || reason="fetch or checkout failed"
+  if [ -z "$reason" ] && [ "$(git -C "$tmp" rev-parse HEAD 2>/dev/null)" != "$SP_SHA" ]; then reason="the fetched commit is not the pinned one"; fi
+  if [ -z "$reason" ]; then
+    rm -rf "$tmp/.git"; chmod 755 "$tmp"
+    printf '%s\n' "$SP_SHA" > "$tmp/.orca-roles-pin" || reason="could not write the marker"
+  fi
+  if [ -z "$reason" ]; then
+    old="$SP_DIR.old.$$"
+    if [ -d "$SP_DIR" ]; then mv "$SP_DIR" "$old" || reason="could not move the previous copy aside"; fi
+    if [ -z "$reason" ]; then
+      if mv "$tmp" "$SP_DIR"; then rm -rf "$old"
+      else reason="could not move the new copy into place"; rm -rf "$SP_DIR"; if [ -d "$old" ]; then mv "$old" "$SP_DIR"; fi; fi
+    fi
+  fi
+  rm -rf "$tmp"
+  if [ -n "$reason" ]; then echo "Warning: could not install superpowers $short for the Planner ($reason); $prev."
+  else echo "Installed superpowers $short for the Planner."; fi
+  return 0
+}
+fetch_superpowers || true
 . "$KIT/bin/lib.sh"
 CONF="$KIT/config.json"
 if [ ! -f "$CONF" ]; then
