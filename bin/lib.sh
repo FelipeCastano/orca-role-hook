@@ -261,6 +261,12 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("superpowers") then (.superpowers | select(. != true and . != false) | "ERROR: invalid configuration: settings.superpowers must be true or false") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.superpowers must be true or false"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("artifacts") then (.artifacts
+      | if type != "object" or ((keys - ["plans", "designs", "research", "deployment"]) | length) > 0 then "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"
+        else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-") or . == ".git") or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
+          | "ERROR: invalid configuration: settings.artifacts.\(.key) must be a relative path inside the worktree") end) else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
@@ -347,7 +353,7 @@ preexisting_agents() {
 }
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note art
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -366,6 +372,8 @@ planner_msg() {
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
   [ -n "$params" ] && msg="$msg Configuration parameters: $params."
+  art="$(jq -r '(.settings.artifacts | if type == "object" then . else {} end) | [("plans", "designs", "research", "deployment") as $k | select(has($k)) | "\($k)=\(.[$k])"] | join(", ")' "$cfg" 2>/dev/null)"
+  [ -z "$art" ] || msg="$msg Artifact locations set for this worktree (they win over the project's conventions): $art."
   [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
   if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
@@ -460,6 +468,9 @@ superpowers_deny() {
     'Skill(superpowers:requesting-code-review)' 'Skill(superpowers:using-git-worktrees)' 'Skill(superpowers:finishing-a-development-branch)' \
     'Skill(superpowers:writing-skills)' 'Skill(superpowers:diagnosing-superpowers)' EnterWorktree ExitWorktree Agent Task
 }
+# The auditor verifies plans against a repo's rules itself and must never dispatch a gate's reviewer subagents. The list lives in the kit so a
+# user's own disallowedTools (which replace a config default) cannot drop it.  auditor_deny → one tool per line
+auditor_deny() { printf '%s\n' Agent Task; }
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {
