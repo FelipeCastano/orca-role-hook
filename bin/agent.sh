@@ -154,9 +154,9 @@ case "$AGENT" in
     N0=${#ARGS[@]}; add_list extraArgs
     # Own session id, saved in the git dir, so close-role.sh/launch.sh/clean.sh can delete or continue the role's session. A session flag in
     # extraArgs means the user owns the sessions: nothing is added or saved. --resume <id> (from launch.sh) continues that session.
-    OWN=0; i=$N0
-    while [ "$i" -lt "${#ARGS[@]}" ]; do case "${ARGS[$i]}" in --session|--session=*|-s|--continue|-c|--fork|--fork=*) OWN=1;; esac; i=$((i + 1)); done
-    if [ "$OWN" = 1 ]; then
+    OWN_SESSION=0; i=$N0
+    while [ "$i" -lt "${#ARGS[@]}" ]; do case "${ARGS[$i]}" in --session|--session=*|-s|--continue|-c|--fork|--fork=*) OWN_SESSION=1;; esac; i=$((i + 1)); done
+    if [ "$OWN_SESSION" = 1 ]; then
       [ -z "$RESUME" ] || echo "agent.sh: --resume ignored; $ROLE (opencode) has a session flag in extraArgs and keeps its own sessions." >&2
     else
       OCID="$RESUME"; [ -n "$OCID" ] || OCID="ses_orca_$(printf '%s' "$ROLE" | tr -c 'A-Za-z0-9_-' _)_$(date +%s)$$$RANDOM"
