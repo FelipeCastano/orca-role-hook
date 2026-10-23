@@ -5,7 +5,8 @@
 #   --save     also append the lines to <git dir>/orca-roles.runs.jsonl
 #   --summary  print one line per role and a "total" line instead of one per session (Claude sessions only; --save still saves those)
 # Claude: reads Claude Code's session files (${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<worktree path with / and . as ->/<session>.jsonl);
-# the role of a session is found from the kit's role message in it ("unknown" if there is none); a response written over several
+# a session is this worktree's when its first line ran here (its later turns count even if the role moved to another folder, such as its
+# scratch dir); the role of a session is found from the kit's role message in it ("unknown" if there is none); a response written over several
 # lines (one per content block, each repeating its usage) counts once, by message.id; usd and byModel come from the session's last
 # cost-state line, which Claude Code writes when the session ends (null while it runs, and with --since). OpenCode: one line with its raw
 # `stats` output, not split per role (it cannot be).
@@ -17,7 +18,7 @@ while [ $# -gt 0 ]; do
     --save) SAVE=1;;
     --summary) SUMMARY=1;;
     --since) SINCE="${2:-}"; [ -n "$SINCE" ] || { echo "metrics.sh: --since needs a date" >&2; exit 1; }; shift;;
-    -h|--help) sed -n 2,12p "$0"; exit 0;;
+    -h|--help) sed -n 2,13p "$0"; exit 0;;
     *) echo "metrics.sh: unknown option $1" >&2; sed -n 3,6p "$0" >&2; exit 1;;
   esac
   shift
@@ -49,7 +50,8 @@ if [ -d "$SDIR" ]; then
         | [scan("[^/\\s]+\\.md")] | map(sub("\\.md$"; "")) | map(select(startswith("common-") | not)) | last // empty;
       def secs: try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null;
       def ctx: (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0);
-      [.[] | select(type == "object" and .cwd == $wt)] as $l
+      [.[] | select(type == "object" and (.cwd | type) == "string")] as $l
+      | select(($l | length) > 0 and $l[0].cwd == $wt)
       | ([.[] | select(type == "object" and .type == "cost-state")] | last) as $cs
       | ([$l[] | select(.type == "user") | role_of] | first // "unknown") as $role
       | [$l[] | select(.type == "assistant" and (.message.usage | type) == "object" and ($since == "" or (.timestamp // "") >= $since))] as $a
