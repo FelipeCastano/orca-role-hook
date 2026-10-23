@@ -4,7 +4,8 @@
 #   --since  only turns at or after that timestamp/date (e.g. 2026-01-31 or 2026-01-31T09:00:00Z)
 #   --save   also append the lines to <git dir>/orca-roles.runs.jsonl
 # Claude: reads Claude Code's session files (${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<worktree path with / and . as ->/<session>.jsonl);
-# the role of a session is found from the kit's role message in it ("unknown" if there is none). OpenCode: one line with its raw
+# the role of a session is found from the kit's role message in it ("unknown" if there is none); a response written over several
+# lines (one per content block, each repeating its usage) counts once, by message.id. OpenCode: one line with its raw
 # `stats` output, not split per role (it cannot be). Tokens only, no prices.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
@@ -13,7 +14,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --save) SAVE=1;;
     --since) SINCE="${2:-}"; [ -n "$SINCE" ] || { echo "metrics.sh: --since needs a date" >&2; exit 1; }; shift;;
-    -h|--help) sed -n 2,9p "$0"; exit 0;;
+    -h|--help) sed -n 2,10p "$0"; exit 0;;
     *) echo "metrics.sh: unknown option $1" >&2; sed -n 3,5p "$0" >&2; exit 1;;
   esac
   shift
@@ -45,7 +46,8 @@ if [ -d "$SDIR" ]; then
         | [scan("[^/\\s]+\\.md")] | map(sub("\\.md$"; "")) | map(select(startswith("common-") | not)) | last // empty;
       [.[] | select(type == "object" and .cwd == $wt)] as $l
       | ([$l[] | select(.type == "user") | role_of] | first // "unknown") as $role
-      | [$l[] | select(.type == "assistant" and (.message.usage | type) == "object" and ($since == "" or (.timestamp // "") >= $since))] as $t
+      | [$l[] | select(.type == "assistant" and (.message.usage | type) == "object" and ($since == "" or (.timestamp // "") >= $since))]
+      | [to_entries[] | .value + {k: (.value.message.id // .value.requestId // "line \(.key)")}] | group_by(.k) | map(.[0]) | sort_by(.timestamp // "") as $t
       | select($t | length > 0)
       | {agent: "claude", role: $role, session: ($t[0].sessionId // $file),
          model: ([$t[] | .message.model // empty | select(. != "<synthetic>")] | last),

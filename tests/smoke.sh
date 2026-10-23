@@ -1829,7 +1829,7 @@ check "provenance: outside a git repository nothing is written" "$(find "$TMP/mt
 WTP="$(cd "$MP" && pwd -P)"; CC="$TMP/mtcc"; PD="$CC/projects/$(printf '%s' "$WTP" | tr '/.' '--')"; mkdir -p "$PD"
 asst() { printf '{"type":"assistant","sessionId":"%s","cwd":"%s","version":"2.0.1","timestamp":"%s","message":{"model":"%s","usage":{"input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}}}\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"; }
 { printf '{"type":"user","sessionId":"s-pl","cwd":"%s","timestamp":"2026-02-01T10:00:00.000Z","message":{"role":"user","content":"Read /k/prompts/programmer/planner.md and adopt that role from now on. Mode: programmer."}}\n' "$WTP"
-  asst s-pl "$WTP" 2026-02-01T10:00:05.000Z m-a 10 20 30 40; } > "$PD/s-pl.jsonl"
+  for _ in 1 2 3; do asst s-pl "$WTP" 2026-02-01T10:00:05.000Z m-a 10 20 30 40 | sed 's/"message":{/"message":{"id":"msg_pl1",/'; done; } > "$PD/s-pl.jsonl"   # one response over three lines (one per content block)
 { printf '{"type":"user","sessionId":"s-dev","cwd":"%s","timestamp":"2026-02-01T11:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}\n' "$WTP"
   printf '{"type":"user","sessionId":"s-dev","cwd":"%s","timestamp":"2026-02-01T11:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/dev.md and adopt that role from now on. Follow its instructions to the letter. Notes: see other.md"}]}}\n' "$WTP"
   asst s-dev "$WTP" 2026-02-01T11:00:05.000Z m-a 1 2 3 4; asst s-dev "$WTP" 2026-03-01T11:00:05.000Z m-b 100 200 300 400; } > "$PD/s-dev.jsonl"
@@ -1846,7 +1846,7 @@ check "metrics: one line per role and session; the session of another cwd is ign
 check "metrics: stdout is valid JSONL" "$(printf '%s\n' "$OUT" | jq -c . | cmp -s - <(printf '%s\n' "$OUT") && echo same)" "same"
 check "metrics: the dev session sums its two turns" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | '"$SUMQ")" "2,101,202,303,404"
 check "metrics: the dev line's agent, model (last turn), version, first and last" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "dev") | [.agent, .model, .version, .first, .last] | join("|")')" "claude|m-b|2.0.1|2026-02-01T11:00:05.000Z|2026-03-01T11:00:05.000Z"
-check "metrics: the planner and the role-less session" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "planner" or .role == "unknown") | .role + "=" + ('"$SUMQ"')' | sort | tr '\n' ' ')" "planner=1,10,20,30,40 unknown=1,5,6,7,8 "
+check "metrics: the planner (one response written over three lines counts once) and the role-less session" "$(printf '%s\n' "$OUT" | jq -r 'select(.role == "planner" or .role == "unknown") | .role + "=" + ('"$SUMQ"')' | sort | tr '\n' ' ')" "planner=1,10,20,30,40 unknown=1,5,6,7,8 "
 check "metrics: no opencode line and no warning without opencode" "$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0"
 check "metrics: without --save nothing is written" "$([ -e "$MG/orca-roles.runs.jsonl" ] && echo written || echo none)" "none"
 try mx --since 2026-02-15
