@@ -1837,7 +1837,9 @@ asst() { printf '{"type":"assistant","sessionId":"%s","cwd":"%s","version":"2.0.
   asst s-other /elsewhere 2026-02-01T12:00:05.000Z m-a 999 999 999 999; } > "$PD/s-other.jsonl"
 { printf '{"type":"user","sessionId":"s-none","cwd":"%s","timestamp":"2026-02-01T13:00:00.000Z","message":{"role":"user","content":"hello"}}\n' "$WTP"
   asst s-none "$WTP" 2026-02-01T13:00:05.000Z m-a 5 6 7 8; printf '{"type":"summary","summary":"x"}\n'; } > "$PD/s-none.jsonl"
-mx() { (cd "$MP" && HOME="$TMP/home" PATH="$MB:$PATH" CLAUDE_CONFIG_DIR="$CC" ORCA_ROLES_CONFIG="$MCFG" "$TMP/home/.orca-roles/bin/metrics.sh" "$@" 2>"$TMP/mt.err"); }
+# a PATH without opencode, which this machine may have installed: the stubs, links to jq and git, and the system folders
+NP="$TMP/mtnooc"; rm -rf "$NP"; mkdir -p "$NP"; for c in jq git; do ln -s "$(command -v "$c")" "$NP/$c"; done; MPATH="$MB:$NP:/usr/bin:/bin:/usr/sbin:/sbin"
+mx() { (cd "$MP" && HOME="$TMP/home" PATH="$MPATH" CLAUDE_CONFIG_DIR="$CC" ORCA_ROLES_CONFIG="$MCFG" "$TMP/home/.orca-roles/bin/metrics.sh" "$@" 2>"$TMP/mt.err"); }
 SUMQ='[.turns, .input, .output, .cacheRead, .cacheWrite] | map(tostring) | join(",")'
 try mx
 check "metrics: one line per role and session; the session of another cwd is ignored" "$RC:$(printf '%s\n' "$OUT" | jq -r '[.role, .session] | join(":")' | sort | tr '\n' ' ')" "0:dev:s-dev planner:s-pl unknown:s-none "
@@ -1865,7 +1867,7 @@ try mx; check "metrics: agent opencode counts too" "$(printf '%s\n' "$OUT" | gre
 printf '#!/bin/sh\necho oops >&2; exit 1\n' > "$MB/opencode"
 try mx; check "metrics: a failing opencode gives a warning on stderr and no line, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(grep -c 'warning' "$TMP/mt.err")" "0:0:1"
 printf '#!/bin/sh\nsleep 30\n' > "$MB/opencode"
-S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3:$PATH" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>/dev/null' _ "$MP" "$TMP/home" "$MB" "$CC" "$MCFG"; S2="$(date +%s)"
+S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>/dev/null' _ "$MP" "$TMP/home" "$MPATH" "$CC" "$MCFG"; S2="$(date +%s)"
 check "metrics: a hanging opencode is cut off" "$RC:$([ $((S2 - S1)) -lt 20 ] && echo fast):$(printf '%s\n' "$OUT" | grep -c opencode)" "0:fast:0"
 rm -f "$MB/opencode"
 try mx; check "metrics: the stub removed, no opencode line and no error" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0:0"
