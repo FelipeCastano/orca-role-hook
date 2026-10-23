@@ -4861,7 +4861,7 @@ ppf() {  # ppf <settings.json> <settings.local.json> <.mcp.json> (empty = no fil
 }
 ppr() {  # ppr <args...>: stdout in OUT (tabs shown as ~), stderr in ERR, status in RC; env PPPATH (the PATH), PPTO (timeout)
   : > "$PPL"
-  (cd "$PPD" && KIT="$KIT" PATH="${PPPATH:-$PPD/bin:$PATH}" TMPDIR="$PPD/tmpd" ORCA_ROLES_PLUGINS_TIMEOUT="${PPTO:-60}" "$KIT/bin/project-plugins.sh" "$@" > "$PPD/out" 2> "$PPD/err") && RC=0 || RC=$?
+  (cd "$PPD" && export KIT && PATH="${PPPATH:-$PPD/bin:$PATH}" TMPDIR="$PPD/tmpd" ORCA_ROLES_PLUGINS_TIMEOUT="${PPTO:-60}" "$KIT/bin/project-plugins.sh" "$@" > "$PPD/out" 2> "$PPD/err") && RC=0 || RC=$?
   OUT="$(tr '\t' '~' < "$PPD/out")"; ERR="$(tr '\t' '~' < "$PPD/err")"
 }
 pphung() { poll pphgone; pgrep -f '^pphang31 31$' | wc -l | tr -d ' ' || true; }   # hanging stubs still alive after the script returned (a leak lives 31 s; a killed one needs a moment to go)
