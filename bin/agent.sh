@@ -74,6 +74,11 @@ case "$AGENT" in
       DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(superpowers_deny)
       ARGS+=(--disallowedTools "${DENY[@]}")
     fi
+    # The auditor never dispatches subagents (a kit list, like the Planner's superpowers one): the role's own disallowedTools only add to it
+    if [ "$ROLE" = auditor ]; then
+      ADENY=(); while IFS= read -r t; do ADENY+=("$t"); done < <(auditor_deny)
+      ARGS+=(--disallowedTools "${ADENY[@]}")
+    fi
     # Nobody answers a dialog in a worker's tab (the Planner is the only one that talks to the user): workers cannot open one. In permissionMode
     # plan the plan tools stay, they are how that mode works. A --disallowedTools in extraArgs adds to this list.
     if [ "$ROLE" != planner ]; then
