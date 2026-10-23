@@ -9,7 +9,7 @@
 #                    saved, and kept when later options omit it
 #   (academic-research: the phase, settings.phase, is changed with phase.sh, not by hand)
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
-#   --status         shows the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
+#   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
@@ -21,7 +21,7 @@
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,20p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
 WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=()
 while [ $# -gt 0 ]; do
@@ -64,7 +64,7 @@ role_alive() {  # role_alive <role> <handle>
     ROLE_ALIVE_CODE="${code:-no-response}"; return 4
   fi
   printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
-  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac
+  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts; Orca sets agentIdentity only after mini's first message
   local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
     [ -n "$(agent_in "$2")" ] && return 0
     [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
@@ -72,6 +72,8 @@ role_alive() {  # role_alive <role> <handle>
   return 2
 }
 if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launch log
+  kv="$(head -1 "$KIT/VERSION" 2>/dev/null)"; ki="$(head -1 "$KIT/.installed" 2>/dev/null)"   # what the installer recorded
+  echo "Kit: ${kv:-unknown} (${ki:-unknown})"
   if [ ! -s "$STATE" ]; then echo "No team launched in this worktree."; exit 0; fi
   SCFG="$CFG"
   if [ ! -f "$CFG" ]; then   # no saved copy: the effective configuration, built aside and removed on exit
@@ -90,7 +92,9 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
     role_alive "$role" "$handle"; rc=$?
     case $rc in 0) st="alive";; 1) st="no tab";; 2) st="agent gone";; 4) st="unknown ($ROLE_ALIVE_CODE)";; *) st="orphaned";; esac
     used="$(grep "^$var=" "$GITDIR/orca-roles.models" 2>/dev/null | head -1 | cut -d= -f2-)"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$title" "$handle" "$st" "${cm:--}" "${used:--}"
+    # what the role last ran (agent@CLI version) and its prompt's sha1 prefix, from the last provenance line written by agent.sh
+    prov="$(jq -r --arg r "$role" 'select(.role == $r) | "\(.agent // "-")@\(.cliVersion // "-")\t\((.promptSha // "-")[0:7])"' "$GITDIR/orca-roles.provenance.jsonl" 2>/dev/null | tail -1)"; [ -n "$prov" ] || prov="-$(printf '\t')-"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$title" "$handle" "$st" "${cm:--}" "${used:--}" "$prov"
   done < "$STATE"
   exit 0
 fi
@@ -314,8 +318,12 @@ fi
 [ -f "$STATE" ] && . "$STATE"
 ROLES="$(launchable_roles "$CFG" | tr '\n' ' ')"
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
-for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
-trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
+if [ "$(trust_of "$CFG")" = never ]; then
+  echo "The folder is not marked as trusted (settings.trust is \"never\"): the agents will ask you to trust it; answer in each tab."
+else
+  for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folder; break;; esac; done
+  trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
+fi
 state_set() {  # state_set <file> <VAR> <value>: replaces that line (or adds it), keeps the others, atomically
   local tmp="$1.tmp.$$"; [ -f "$1" ] || : > "$1"
   awk -v k="$2" -v v="$3" 'index($0, k "=") == 1 { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$1" > "$tmp" && mv "$tmp" "$1"
@@ -344,6 +352,7 @@ kickoff_of() {  # kickoff_of <role>: prints the pid of a live kickoff that will 
   done
   return 1
 }
+oc_forget() { [ "$(rstr "$CFG" "$1" agent)" = opencode ] && oc_session_delete "$1" "$GITDIR"; return 0; }   # an OpenCode role replaced without memory: its saved session goes
 NEW=""; REUSED=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the Planner recovers the state); REMEMBERED: reopened with their conversation
 SELF_RELAUNCH=0; SELF_HANDLE=""; PLANNER_KEEP_PTY=""; PLANNER_BUSY=0; SELF_NO_SESSION=0   # the Planner's restored tab runs this launch: it is reopened later by its relauncher; its saved ptyId is kept
 for id in $ROLES; do
@@ -359,9 +368,11 @@ for id in $ROLES; do
   fi
   if [ "$st" = 3 ]; then
     RESUMED="$RESUMED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one."
+    oc_forget "$id"
     orca terminal close --terminal "${!v}" --json >/dev/null 2>&1 || orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
   elif [ "$st" = 2 ]; then
     RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
+    oc_forget "$id"
     orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
   elif [ -n "${!v:-}" ]; then
     p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p")"
@@ -379,7 +390,10 @@ for id in $ROLES; do
         fi
         continue
       fi
-      case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_handle "$rh")";; esac
+      case "$(rstr "$CFG" "$id" agent)" in
+        claude|"") sid="$(session_of_handle "$rh")";;
+        opencode) ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] && sid="$(head -1 "$ocf")";;   # the id agent.sh saved: --session continues it
+      esac
       if [ "$id" = planner ] && [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && [ -z "$sid" ]; then
         PLANNER_KEEP_PTY="$p"
         echo "The Planner's conversation could not be read from its restored tab ($rh): not reopened, to keep it."
@@ -398,11 +412,12 @@ for id in $ROLES; do
       fi
     else
       RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
+      oc_forget "$id"
     fi
   fi
   h=""
   for try in 1 2 3; do
-    h=$(orca terminal create --worktree "$WT" --title "$t" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
+    h=$(orca terminal create --worktree "$WT" --title "$t" --command "$(kit_env)ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
     [ -n "$h" ] && break
     echo "Retrying $t ($try/3)..."; sleep 2
   done

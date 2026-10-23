@@ -4,7 +4,7 @@
 # The Planner runs it after the user confirms, once the role has no task in flight. It never closes the Planner.
 # It does not change the configuration: if the role is still enabled, 'roles' would open it again (see the message it prints).
 set -uo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 [ -f "$STATE" ] && [ -f "$CFG" ] || { echo "$STATE or $CFG not found: run this from the worktree where the roles were opened." >&2; exit 1; }
@@ -28,6 +28,8 @@ for x in "$@"; do
   t="$(title_of "$CFG" "$id")"
   [ "$id" = planner ] && { echo "$t: the Planner is never closed."; RC=1; continue; }
   v="$(var_of "$id")"; h="${!v}"
+  # An OpenCode role's session keeps running in OpenCode's service after its tab is gone: delete it first (this also stops its turn)
+  [ "$(rstr "$CFG" "$id" agent)" = opencode ] && oc_session_delete "$id" "$GITDIR"
   if orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
     orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1 || { echo "$t: could not close its tab ($h)."; RC=1; continue; }
     echo "$t: tab closed ($h)."

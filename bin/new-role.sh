@@ -6,14 +6,15 @@
 #   new-role --from-json <file> [--repo <clone-path>]   # without questions (used by the Planner's skill)
 #   new-role --remove <id> [--repo <clone-path>]        # removes a role you created: its entry and its prompts
 #     The JSON has: id, description and prompt required; modes, phases, title, agent, model, permissionMode, command,
-#     addDirFlag, modelError, models, trust, clearCommand, mcp, allowedTools, disallowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs, enabled,
-#     after and overwrite optional.
+#     addDirFlag, modelError, models, trust, clearCommand, common, mcp, allowedTools, disallowedTools, extraDirs, extraArgs, env, params, nice, pluginDirs,
+#     opencode, enabled, after and overwrite optional.  agent: claude (default), codex, opencode or custom (needs command).  opencode: an object
+#     {"steps": <positive int>, "permissions": [{action, resource, effect}...]} for agent opencode (see README, "OpenCode roles").
 #     modes: "all", or one mode id (a string or a one-element list); missing = "programmer". prompt: Markdown text
 #     (a role with one mode) or {"<mode>": "<Markdown>"} covering exactly the role's modes ("all" = every mode).
 #     phases (academic-research only, the other modes have none): a non-empty list of "experiment", "writing"; missing = both phases.
 #     Each mode has its own prompt file: roles/<mode>/<id>.md (local) or prompts/<mode>/<id>.md (--repo).
 set -euo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 TTY="${NEW_ROLE_TTY:-/dev/tty}"
 
 REPO=""; FROM_JSON=""; REMOVE=""
@@ -206,7 +207,7 @@ if [ -n "$FROM_JSON" ]; then
   fi
   repo_collision_check || exit 1
   AGENT="$(J agent)"; AGENT="${AGENT:-claude}"
-  case "$AGENT" in claude|codex|custom) ;; *) echo "Invalid agent: $AGENT" >&2; exit 1;; esac
+  case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Invalid agent: $AGENT (use claude, codex, opencode or custom)" >&2; exit 1;; esac
   [ "$AGENT" != custom ] || [ -n "$(J command)" ] || { echo "A custom agent needs a command" >&2; exit 1; }
   if jq -e --arg r "$ID" '.roles | has($r)' "$TARGET_CFG" >/dev/null && [ "$(J overwrite)" != true ]; then
     echo "Role '$ID' already exists; pass \"overwrite\": true to replace it" >&2; exit 1
@@ -216,7 +217,7 @@ if [ -n "$FROM_JSON" ]; then
   json_role() {  # json_role <prompt object>
     jq --argjson prompt "$1" --argjson modes "$MODES_FIELD" --arg agent "$AGENT" '
       {title: (.title // (.id | split("-") | map((.[:1] | ascii_upcase) + .[1:]) | join("-"))), description, enabled: (.enabled // true), agent: $agent}
-      + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","modelError","models","trust","clearCommand","mcp","allowedTools","disallowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs"))))
+      + (with_entries(select(.key | IN("model","permissionMode","command","addDirFlag","modelError","models","trust","clearCommand","common","mcp","allowedTools","disallowedTools","extraDirs","extraArgs","env","params","nice","pluginDirs","opencode"))))
       + {modes: $modes}
       + (if has("phases") then {phases: .phases} else {} end)
       + (if ($prompt | length) > 0 then {prompt: $prompt} else {} end)' "$JF"
@@ -298,8 +299,8 @@ fi
 
 # ---------- agent and model ----------
 section "Agent"
-ask AGENT "Agent (claude | codex | custom)" "claude"
-case "$AGENT" in claude|codex|custom) ;; *) echo "Invalid agent: $AGENT" >&2; exit 1;; esac
+ask AGENT "Agent (claude | codex | opencode | custom)" "claude"
+case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Invalid agent: $AGENT" >&2; exit 1;; esac
 DEF_MODEL=""; [ "$AGENT" = claude ] && DEF_MODEL="claude-sonnet-5-5"
 ask MODEL "Exact model (empty = the agent's default)" "$DEF_MODEL"
 COMMAND=""; CLEAR=""; ADDDIR=""; MERR=""; MLIST=""; MPARSE=""; MPROBE=""

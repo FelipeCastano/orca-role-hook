@@ -4,7 +4,7 @@
 # for the Planner, the one for after its conversation was cleared: see role_anchor, which tells each role to ask for it)
 # The Planner runs it after the user confirms. It never cleans the Planner or a worker with a task in flight (the Planner ensures that).
 set -uo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 [ -f "$STATE" ] && [ -f "$CFG" ] || { echo "$STATE or $CFG not found: run this from the worktree where the roles were opened." >&2; exit 1; }
@@ -47,13 +47,20 @@ for id in "${TARGETS[@]}"; do
   orca terminal show --terminal "$h" --json >/dev/null 2>&1 || { echo "$t: its tab ($h) does not respond."; RC=1; continue; }
   cmd="$(clear_command "$CFG" "$id")"
   [ -n "$cmd" ] || { echo "$t: its agent has no cleanup command; define 'clearCommand' in its role in config.json."; RC=1; continue; }
+  ocf=""; [ "$(rstr "$CFG" "$id" agent)" = opencode ] && { ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] || ocf=""; }
+  since=$(( $(date +%s) * 1000 ))   # OpenCode: /new makes the tab switch to a session created after this moment
   orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 1
   orca terminal send --terminal "$h" --text "$cmd" --enter --json >/dev/null || { echo "$t: could not send $cmd."; RC=1; continue; }
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
     echo "$t: context cleaned ($cmd) and role resent."
+    # OpenCode: /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
+    if [ -n "$ocf" ]; then
+      orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      oc_retrack "$id" "$since" "$GITDIR"
+    fi
   else
-    echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
+    echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($(kit_env)$KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
   fi
 done
 exit $RC

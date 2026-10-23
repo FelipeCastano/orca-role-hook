@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Lists the models a role can use and, with --check, tests each one.  Usage: models.sh <role|title> [--check] [--model <m>]
 # Without --check it prints the candidates, one per line, and spends nothing: claude's aliases (it cannot list the models of your
-# login), codex's `codex debug models`, or the role's models.list command (custom). The role's own model comes first.
+# login), codex's `codex debug models`, opencode's `opencode models` or the role's models.list command (custom; it also replaces
+# opencode's). The role's own model comes first.
 # With --check it runs one minimal probe per candidate, in parallel, and prints "<model><TAB>ok<TAB><resolved id>",
 # "<model><TAB>unavailable" or "<model><TAB>unknown<TAB><reason>" (the probe could not tell: not logged in, offline, timed out...).
+# An opencode probe (no models.probe) only checks that the model is in `opencode models`: it costs nothing.
 # A claude probe costs nothing for a model that does not exist and at most about 0.012 USD the first time for one that does.
 # --model <m> replaces the candidates with exactly <m>, to test or print only that one.
 # Nothing is written outside a temporary folder except the agents' own logs (Codex keeps its logs even for ephemeral runs), and no agent
 # setting is changed. The role's env is exported to the list command and the probes. At most 6 probes run at a time.
 set -uo pipefail
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 case "${1:-}" in -h|--help) sed -n 2,10p "$0"; exit 0;; esac
 ROLEARG=""; CHECK=0; ONLY=""
 while [ $# -gt 0 ]; do a="$1"; case "$a" in --check) CHECK=1;; --model) [ -n "${2:-}" ] || { echo "models.sh: --model needs a value" >&2; exit 1; }; ONLY="$2"; shift;; -*) echo "models.sh: unknown option $a" >&2; exit 1;; *) [ -z "$ROLEARG" ] && ROLEARG="$a" || { echo "models.sh: only one role at a time" >&2; exit 1; };; esac; shift; done
@@ -45,7 +47,7 @@ bounded() {
 }
 CANDS="$T/cands"; : > "$CANDS"
 emit() { [ -z "$1" ] || printf '%s\n' "$1" >> "$CANDS"; }
-case "$AGENT" in claude|codex|custom) ;; *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex or custom)" >&2; exit 1;; esac
+case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex, opencode or custom)" >&2; exit 1;; esac
 [ -n "$ONLY" ] || case "$AGENT" in
   claude)
     emit "$MODEL"; for m in sonnet opus haiku fable; do emit "$m"; done
@@ -59,9 +61,10 @@ case "$AGENT" in claude|codex|custom) ;; *) echo "Unknown agent for $ROLE: $AGEN
     else
       echo "codex debug models failed: $(first_line < "$T/dm.err")" >&2
     fi;;
-  custom)
+  custom|opencode)
     emit "$MODEL"
     LIST="$(mopt list)"; PARSE="$(mopt parse)"; PARSE="${PARSE:-lines}"
+    [ -n "$LIST" ] || [ "$AGENT" != opencode ] || LIST="opencode models"   # one provider/model per line
     if [ -z "$LIST" ]; then echo "$ROLE has no models.list in its configuration" >&2
     elif bounded list bash -c "$LIST"; [ "$TIMED" = 1 ]; then echo "models.list timed out after $TO s" >&2
     elif [ "$RC" != 0 ]; then echo "models.list failed: $(first_line < "$T/list.err")" >&2
@@ -91,6 +94,13 @@ codex_why() {
   printf '%s\n' "$w" | first_line
 }
 probe_codex() { codex exec --ephemeral --json --skip-git-repo-check -m "$1" "Reply ok."; }
+# opencode: the role's models.probe if it has one, else the model is in `opencode models` (exit 97: the list itself could not be read)
+probe_opencode() {
+  local l
+  if [ -n "$PROBE" ]; then probe_custom "$1"; return; fi
+  l="$(opencode models 2>/dev/null)" || return 97
+  grep -qxF -- "$1" <<<"$l"
+}
 probe_custom() { bash -c "${PROBE//\{model\}/$(printf '%q' "$1")}"; }
 one() {  # <i> <model> → writes $T/<i>.res
   local i="$1" m="$2" why res
@@ -112,6 +122,10 @@ one() {  # <i> <model> → writes $T/<i>.res
       elif grep -qE 'does not exist|not supported|model_not_found' "$T/$i.out" "$T/$i.err"; then res="unavailable"
       else why="$(codex_why "$i")"; [ -n "$why" ] || why="exit $RC"; res="unknown	${why:0:80}"; fi;;
     custom) if [ "$RC" = 0 ]; then res="ok	-"; else res="unavailable"; fi;;
+    opencode)
+      if [ "$RC" = 0 ]; then res="ok	-"
+      elif [ "$RC" = 97 ] && [ -z "$PROBE" ]; then res="unknown	opencode models failed"
+      else res="unavailable"; fi;;
   esac; fi
   printf '%s\t%s\n' "$m" "$res" > "$T/$i.res"
 }
