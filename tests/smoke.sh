@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill project-plugins relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -3603,6 +3603,203 @@ for good in '{}' '{"list":"a","parse":"json:.x","probe":"p {model}"}' '{"parse":
   check "models: check_config accepts $good" "$(mcc "$(jq -nc --argjson m "$good" '{defaults:{models:$m},roles:{dev:{models:$m}}}')")" ""
 done
 unset MM
+}
+
+sec_project_plugins() {
+# project-plugins.sh: status lines, precedence, bad files, mcp lines, install paths, timeouts, nothing written; a stub claude records every call (the real claude is never run)
+PPD="$TMP/pp"; rm -rf "$PPD"; mkdir -p "$PPD/bin" "$PPD/c" "$PPD/tmpd"; PPL="$PPD/calls.log"
+cat > "$PPD/bin/claude" <<EOS
+#!/bin/bash
+echo "\$*" >> "$PPL"
+C="$PPD/c"
+case "\$1 \$2 \$3" in
+  "plugin list --json") [ -f "\$C/list-hang" ] && exec -a pphang31 sleep 31; [ -f "\$C/list-fail" ] && { echo "boom list" >&2; exit 1; }; [ -f "\$C/list-junk" ] && { echo "not json"; exit 0; }; cat "\$C/list.json";;
+  "plugin marketplace list") cat "\$C/mk.json";;
+  "plugin marketplace add") [ -f "\$C/add-hang" ] && exec -a pphang31 sleep 31; [ -f "\$C/add-fail" ] && { echo "add boom" >&2; exit 1; }; [ -f "\$C/add-exists" ] && { echo "Marketplace already exists" >&2; exit 1; }
+    shift 3; src=""; sp=""   # --sparse takes every following argument up to the next option, so a source after it is swallowed
+    while [ \$# -gt 0 ]; do case "\$1" in --scope) shift 2;; --sparse) shift; while [ \$# -gt 0 ] && [ "\${1#-}" = "\$1" ]; do sp="\$sp \$1"; shift; done;; -*) shift;; *) src="\$1"; shift;; esac; done
+    [ -n "\$src" ] || { echo "error: missing source" >&2; exit 1; }
+    echo "ADDPARSE src=\$src sparse=\${sp# }" >> "$PPL"; echo added;;
+  "plugin install --scope") [ -f "\$C/inst-hang" ] && exec -a pphang31 sleep 31; [ -f "\$C/inst-fail" ] && { echo "install boom" >&2; exit 1; }; echo done;;
+esac
+exit 0
+EOS
+chmod +x "$PPD/bin/claude"
+NC="$PPD/noclaude"; mkdir -p "$NC"; IFS=: read -ra PDS <<<"$PATH"; for pd in "${PDS[@]}"; do for pf in "$pd"/*; do pb="${pf##*/}"; [ "$pb" = claude ] && continue; [ -e "$NC/$pb" ] || ln -s "$pf" "$NC/$pb" 2>/dev/null || true; done; done
+ppc() {  # ppc <list json> <marketplace list json>: what the stub claude answers; clears the modes
+  rm -f "$PPD"/c/*; printf '%s' "${1:-[]}" > "$PPD/c/list.json"; printf '%s' "${2:-[]}" > "$PPD/c/mk.json"
+}
+ppf() {  # ppf <settings.json> <settings.local.json> <.mcp.json> (empty = no file): a fresh project folder
+  rm -rf "$PPD/proj"; mkdir -p "$PPD/proj/.claude"
+  [ -z "${1:-}" ] || printf '%s' "$1" > "$PPD/proj/.claude/settings.json"; [ -z "${2:-}" ] || printf '%s' "$2" > "$PPD/proj/.claude/settings.local.json"; [ -z "${3:-}" ] || printf '%s' "$3" > "$PPD/proj/.mcp.json"
+}
+ppr() {  # ppr <args...>: stdout in OUT (tabs shown as ~), stderr in ERR, status in RC; env PPPATH (the PATH), PPTO (timeout)
+  : > "$PPL"
+  (cd "$PPD" && PATH="${PPPATH:-$PPD/bin:$PATH}" TMPDIR="$PPD/tmpd" ORCA_ROLES_PLUGINS_TIMEOUT="${PPTO:-60}" "$KIT/bin/project-plugins.sh" "$@" > "$PPD/out" 2> "$PPD/err") && RC=0 || RC=$?
+  OUT="$(tr '\t' '~' < "$PPD/out")"; ERR="$(tr '\t' '~' < "$PPD/err")"
+}
+pphung() { poll pphgone; pgrep -f '^pphang31 31$' | wc -l | tr -d ' ' || true; }   # hanging stubs still alive after the script returned (a leak lives 31 s; a killed one needs a moment to go)
+pphgone() { ! pgrep -f '^pphang31 31$' >/dev/null; }
+pcalls() { grep -c "$1" "$PPL" || true; }
+# 1. every status line kind, in declared order; the kit's own plugins and false ids are not reported
+ppc '[{"id":"a@mk1","scope":"user","enabled":true,"installPath":"/x"},{"id":"b@mk1","scope":"user","enabled":false,"installPath":"/y"},{"id":"zz@m","scope":"user","enabled":true,"installPath":""}]' '[{"name":"inst"}]'
+ppf '{"enabledPlugins":{"a@mk1":true,"b@mk1":true,"c@gh":true,"d@gh2":true,"e@gitm":true,"f@urlm":true,"g@dirm":true,"h@inst":true,"i@nowhere":true,"j@npmm":true,"k@ghbad":true,"noat":true,"x@y@z":true,"superpowers@superpowers-marketplace":true,"superpowers@claude-plugins-official":true,"orca-roles@whatever":true,"off@mk1":false},"extraKnownMarketplaces":{"gh":{"source":{"source":"github","repo":"o/r"}},"gh2":{"source":{"source":"github","repo":"o/r2","ref":"v1"}},"gitm":{"source":{"source":"git","url":"https://x/y.git"}},"urlm":{"source":{"source":"url","url":"https://x/m.json"}},"dirm":{"source":{"source":"directory","path":"/p/q"}},"npmm":{"source":{"source":"npm","package":"p"}},"ghbad":{"source":{"source":"github"}}}}'
+ppr status "$PPD/proj"
+check "project-plugins status: installed, disabled, missing with each source form (github, github#ref, git, url, directory, installed marketplace), unknown marketplace, unsupported source (npm, github without a valid repo), invalid ids, in declared order; the kit's own ids and a false id are not reported; exit 2, nothing on stderr" "$RC|$OUT|[$ERR]" "2|plugin~a@mk1~installed
+plugin~b@mk1~disabled
+plugin~c@gh~missing~github:o/r
+plugin~d@gh2~missing~github:o/r2#v1
+plugin~e@gitm~missing~git:https://x/y.git
+plugin~f@urlm~missing~url:https://x/m.json
+plugin~g@dirm~missing~directory:/p/q
+plugin~h@inst~missing~installed marketplace inst
+plugin~i@nowhere~unknown-marketplace
+plugin~j@npmm~unsupported-source~npm
+plugin~k@ghbad~unsupported-source~invalid repo
+plugin~noat~invalid-id
+plugin~x@y@z~invalid-id|[]"
+# 2. precedence: settings.local.json over settings.json per id and per marketplace; an installed marketplace wins over a declared one
+ppc '[]' '[]'; P2=""
+ppf '{"enabledPlugins":{"a@m":true}}' '{"enabledPlugins":{"a@m":false}}'; ppr status "$PPD/proj"; P2="$RC:[$OUT]:$(pcalls 'plugin list')"
+ppf '{"enabledPlugins":{"a@m":false}}' '{"enabledPlugins":{"a@m":true}}' ; ppr status "$PPD/proj"; P2="$P2|$RC:[$OUT]"
+ppf '{"enabledPlugins":{"a@m":true}}' '{"enabledPlugins":{"b@m":true}}'; ppr status "$PPD/proj"; P2="$P2|$OUT"
+ppf '{"enabledPlugins":{"a@m":true}}' '{"enabledPlugins":{"a@m":"yes"}}'; ppr status "$PPD/proj"; P2="$P2|$RC:[$OUT]"
+ppf '{"enabledPlugins":{"a@m":true},"extraKnownMarketplaces":{"m":{"source":{"source":"github","repo":"p/r"}}}}' '{"extraKnownMarketplaces":{"m":{"source":{"source":"github","repo":"l/r"}}}}'; ppr status "$PPD/proj"; P2="$P2|$OUT"
+ppc '[]' '[{"name":"m"}]'; ppr status "$PPD/proj"; P2="$P2|$OUT"
+check "project-plugins precedence: local false hides a project true (and then claude is not even asked), local true shows a project false, ids of both files are merged, a non-true local value hides it, the local marketplace definition wins, an installed marketplace wins over a declared one" "$P2" "0:[]:0|2:[plugin~a@m~unknown-marketplace]|plugin~a@m~unknown-marketplace
+plugin~b@m~unknown-marketplace|0:[]|plugin~a@m~missing~github:l/r|plugin~a@m~missing~installed marketplace m"
+# 3. bad files: reported, ignored, the other file still read, exit 1; claude failures are errors too
+ppc '[]' '[]'; MK='"extraKnownMarketplaces":{"m":{"source":{"source":"github","repo":"o/r"}}}'; P3=""
+ppf '{ not json' "{\"enabledPlugins\":{\"a@m\":true},$MK}"; ppr status "$PPD/proj"; P3="$RC:$OUT"
+ppf "{\"enabledPlugins\":{\"a@m\":true},$MK}" '[1,2]'; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"
+ppf '{"enabledPlugins":["a@m"]}' "{\"enabledPlugins\":{\"b@m\":true},$MK}"; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"
+ppf '{"enabledPlugins":null}' "{\"enabledPlugins\":{\"b@m\":true},$MK}"; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"
+ppf "{\"enabledPlugins\":{\"a@m\":true},$MK}" '' '{ nope'; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"
+ppf "{\"enabledPlugins\":{\"a@m\":true},$MK}"; : > "$PPD/proj/.claude/settings.local.json"; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"
+ppf "{\"enabledPlugins\":{\"a@m\":true},$MK}"; touch "$PPD/c/list-fail"; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"; rm -f "$PPD/c/list-fail"
+touch "$PPD/c/list-junk"; ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"; rm -f "$PPD/c/list-junk"
+ppf "{\"enabledPlugins\":{\"a@m\":true},$MK}"; PPPATH="$NC" ppr status "$PPD/proj"; P3="$P3|$RC:$OUT"
+check "project-plugins bad input: invalid JSON, a non-object file, enabledPlugins not an object (list, null), an invalid .mcp.json and an empty file give one error line and exit 1 while the other file's declarations are still reported; claude failing, printing junk or missing is an error line" "$P3" "1:plugin~a@m~missing~github:o/r
+error .claude/settings.json is not valid JSON|1:plugin~a@m~missing~github:o/r
+error .claude/settings.local.json is not valid JSON|1:plugin~b@m~missing~github:o/r
+error .claude/settings.json enabledPlugins is not an object|1:plugin~b@m~missing~github:o/r
+error .claude/settings.json enabledPlugins is not an object|1:plugin~a@m~missing~github:o/r
+error .mcp.json is not valid JSON|1:plugin~a@m~missing~github:o/r
+error .claude/settings.local.json is not valid JSON|1:error boom list|1:error claude plugin list did not print a JSON list|1:error claude not found"
+# 4. mcp servers: only commands that are missing, never ones with \${...}, url servers or no command; names and commands are data; printed even without claude
+MCPJ="$(jq -nc --arg inj "x;\$(touch $PPD/pwned)" --arg q 'it'"'"'s "quoted"' '{mcpServers:{ok:{command:"sh"},gone:{command:"definitely-not-a-cmd-xyz"},var:{command:"${HOME}/bin/x"},http:{type:"http",url:"https://x"},nocmd:{args:["a"]},inj:{command:$inj},q:{command:$q},"s b":{command:"nonexistent-two"}}}')"
+ppc '[]' '[]'; ppf '' '' "$MCPJ"
+ppr status "$PPD/proj"; M4="$RC|$OUT|$([ -e "$PPD/pwned" ] && echo PWNED || echo clean)"
+PPPATH="$NC" ppr status "$PPD/proj"; M4="$M4|$RC:$(printf '%s\n' "$OUT" | grep -c '^mcp~'):$(printf '%s\n' "$OUT" | grep -c '^error claude not found$')"
+check "project-plugins mcp: only missing commands are listed (not present ones, \${...} commands, url servers, servers without a command); odd names and commands are printed as data and nothing is executed; the mcp lines and 'claude not found' (exit 1) show together without claude" "$M4" "2|mcp~gone~missing-command~definitely-not-a-cmd-xyz
+mcp~inj~missing-command~x;\$(touch $PPD/pwned)
+mcp~q~missing-command~it's \"quoted\"
+mcp~s b~missing-command~nonexistent-two|clean|1:4:1"
+# only installs that count for this folder: user or managed ones, or project/local ones whose projectPath is this folder (physical paths compared); entries of other folders are ignored
+PHY="$(cd "$PPD" && pwd -P)"; mkdir -p "$PPD/proj" "$PPD/other"; ln -sfn "$PPD/proj" "$PPD/projlink"
+ee() { jq -nc --arg id "$1" --arg sc "$2" --arg pp "$3" --argjson en "$4" '{id:$id,enabled:$en,installPath:"/x"} + (if $sc == "" then {} else {scope:$sc} end) + (if $pp == "" then {} else {projectPath:$pp} end)'; }
+G3L="[$(ee c1@m user '' true),$(ee c2@m managed '' true),$(ee c3@m project "$PHY/proj" true),$(ee c4@m project "$PPD/projlink" true),$(ee c5@m project "$PHY/other" true),$(ee c6@m local "$PHY/other" true),$(ee c7@m project "$PHY/nowhere" true),$(ee c8@m '' '' true),$(ee c9@m project "$PHY/proj" false),$(ee c10@m user '' false),$(ee c10@m project "$PHY/other" true),$(ee c11@m project "$PHY/other" true),$(ee c11@m user '' true)]"
+ppc "$G3L" '[{"name":"m"}]'
+ppf '{"enabledPlugins":{"c1@m":true,"c2@m":true,"c3@m":true,"c4@m":true,"c5@m":true,"c6@m":true,"c7@m":true,"c8@m":true,"c9@m":true,"c10@m":true,"c11@m":true}}'
+ppr status "$PPD/proj"
+check "project-plugins scope: a user or managed install, a project install whose projectPath is this folder (also through a symlink) count; a project or local install of another folder, a missing path and an entry with no scope do not (missing); a disabled one here is disabled; another folder's enabled copy does not hide a disabled user one but a user one next to it does count" "$RC|$OUT" "2|plugin~c1@m~installed
+plugin~c2@m~installed
+plugin~c3@m~installed
+plugin~c4@m~installed
+plugin~c5@m~missing~installed marketplace m
+plugin~c6@m~missing~installed marketplace m
+plugin~c7@m~missing~installed marketplace m
+plugin~c8@m~missing~installed marketplace m
+plugin~c9@m~disabled
+plugin~c10@m~disabled
+plugin~c11@m~installed"
+rm -f "$PPD/projlink"
+# 5. install: a missing plugin adds its declared marketplace (--scope user, the right source form) and installs with --scope user; an installed marketplace is not added again; 'already exists' is tolerated; failures stop
+IJ='{"enabledPlugins":{"c@gh":true,"e@gitm":true,"f@urlm":true,"g@dirm":true,"h@inst":true,"a@mk1":true,"b@mk1":true,"i@nowhere":true,"j@npmm":true,"noat":true,"d@gh2":true,"off@mk1":false},"extraKnownMarketplaces":{"gh":{"source":{"source":"github","repo":"o/r"}},"gh2":{"source":{"source":"github","repo":"o/r2","ref":"v1"}},"gitm":{"source":{"source":"git","url":"https://x/y.git"}},"urlm":{"source":{"source":"url","url":"https://x/m.json"}},"dirm":{"source":{"source":"directory","path":"/p/q"}},"npmm":{"source":{"source":"npm","package":"p"}}}}'
+LJ='[{"id":"a@mk1","scope":"user","enabled":true,"installPath":"/x"},{"id":"b@mk1","scope":"user","enabled":false,"installPath":"/y"}]'
+ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ"; I5=""
+for id in c@gh e@gitm f@urlm g@dirm h@inst; do ppr install "$id" "$PPD/proj"; I5="$I5$RC:$OUT:$(grep -v 'plugin list\|marketplace list\|^ADDPARSE' "$PPL" | tr '\n' ';')|"; done
+touch "$PPD/c/add-exists"; ppr install c@gh "$PPD/proj"; I5="$I5$RC:$OUT:$(grep -c 'plugin install --scope user c@gh' "$PPL" || true)|"; rm -f "$PPD/c/add-exists"
+touch "$PPD/c/add-fail"; ppr install c@gh "$PPD/proj"; I5="$I5$RC:[$OUT]:$ERR:$(pcalls 'plugin install')|"; rm -f "$PPD/c/add-fail"
+touch "$PPD/c/inst-fail"; ppr install c@gh "$PPD/proj"; I5="$I5$RC:[$OUT]:$ERR"; rm -f "$PPD/c/inst-fail"
+check "project-plugins install: the declared marketplace is added with --scope user in the CLI form of its source (repo, url, url, path), an installed one is not added, then the plugin is installed with --scope user; 'already exists' is tolerated; a failed add stops before install; a failed install is an error (exit 1)" "$I5" "0:installed c@gh:plugin marketplace add --scope user o/r;plugin install --scope user c@gh;|0:installed e@gitm:plugin marketplace add --scope user https://x/y.git;plugin install --scope user e@gitm;|0:installed f@urlm:plugin marketplace add --scope user https://x/m.json;plugin install --scope user f@urlm;|0:installed g@dirm:plugin marketplace add --scope user /p/q;plugin install --scope user g@dirm;|0:installed h@inst:plugin install --scope user h@inst;|0:installed c@gh:1|1:[]:error add boom:0|1:[]:error install boom"
+# 6. install refuses: already installed (0), disabled (3, never re-enabled), not declared or false (2), unknown / unsupported / invalid (2, their status line), a ref (2): nothing added or installed
+ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ"; I6=""
+for id in a@mk1 b@mk1 off@mk1 nothere@x superpowers@superpowers-marketplace i@nowhere j@npmm noat; do ppr install "$id" "$PPD/proj"; I6="$I6$RC:[$OUT]:[$ERR]:$(pcalls 'marketplace add\|plugin install')|"; done
+check "project-plugins install refuses what status does not call missing: installed -> 'installed <id>' 0, disabled -> 3 with the enable hint, a false, unknown or kit-skipped id -> 'not declared' 2, unknown marketplace, unsupported source and invalid id -> their line 2; no add and no install call in any of them" "$I6" "0:[installed a@mk1]:[]:0|3:[]:[disabled b@mk1: enable it with claude plugin enable b@mk1]:0|2:[]:[not declared by this project: off@mk1]:0|2:[]:[not declared by this project: nothere@x]:0|2:[]:[not declared by this project: superpowers@superpowers-marketplace]:0|2:[]:[plugin~i@nowhere~unknown-marketplace]:0|2:[]:[plugin~j@npmm~unsupported-source~npm]:0|2:[]:[plugin~noat~invalid-id]:0|"
+# 7. a hanging claude is cut by the timer (list, marketplace add, install), with no process left; the timeout setting is validated
+ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ"; touch "$PPD/c/list-hang"; T0=$SECONDS; PPTO=1 ppr status "$PPD/proj"; H7="$RC:$(printf '%s\n' "$OUT" | grep -c '^error claude timed out$'):$((SECONDS - T0 < 8 ? 1 : 0)):$(pphung)"
+rm -f "$PPD/c/list-hang"; touch "$PPD/c/add-hang"; PPTO=1 ppr install c@gh "$PPD/proj"; H7="$H7|$RC:$ERR:$(pphung)"
+rm -f "$PPD/c/add-hang"; touch "$PPD/c/inst-hang"; PPTO=1 ppr install h@inst "$PPD/proj"; H7="$H7|$RC:$ERR:$(pphung)"; rm -f "$PPD/c/inst-hang"
+H7="$H7|$(for tv in abc 0 5x ''; do PPTO="$tv" ppr status "$PPD/proj"; printf '%s,' "$(printf '%s\\n' "$ERR" | grep -c 'must be a whole number of seconds; using 60')"; done)"
+check "project-plugins timeout: a hanging claude is cut after ORCA_ROLES_PLUGINS_TIMEOUT seconds (status: error claude timed out; install: the same on stderr), exit 1, quickly, and no process is left; a bad timeout value warns and uses 60" "$H7" "1:1:1:0|1:error claude timed out:0|1:error claude timed out:0|1,1,1,0,"
+# 8. nothing is written in the folder or the working folder, status calls claude only to list, usage errors exit 1
+ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ" "$IJ" "{\"mcpServers\":{\"g\":{\"command\":\"nonexistent-two\"}}}"; mkdir -p "$PPD/proj/sub"
+SUMF() { (cd "$PPD" && find proj "$PPD/tmpd" -print0 | sort -z | xargs -0 shasum 2>/dev/null; find proj -type f -print0 | sort -z | xargs -0 stat -f '%m %N' 2>/dev/null || true) | shasum; }
+W0="$(SUMF)"; ppr status "$PPD/proj"; W1="$(pcalls 'marketplace add\|plugin install'):$(grep -vc 'plugin list --json\|plugin marketplace list --json' "$PPL" || true)"; ppr install c@gh "$PPD/proj"; ppr install h@inst "$PPD/proj"
+check "project-plugins writes nothing: the folder and the temp folder are byte for byte the same after status and installs (stub claude), and status makes no add or install call" "$([ "$W0" = "$(SUMF)" ] && echo same):$W1" "same:0:0"
+U8=""; for a in '' 'status a b' 'install' 'install a b c' 'frobnicate' "status $PPD/nope-folder"; do ppr $a; U8="$U8$RC:$(printf '%s' "$ERR" | grep -c 'Usage: project-plugins.sh\|is not a folder')|"; done
+ppr -h; U8="$U8$RC:$(printf '%s\\n' "$OUT" | grep -c '^# Reports\|^Reports')"
+check "project-plugins usage: no command, an unknown one, too many or missing arguments and a folder that does not exist exit 1 with a usage or folder message; -h prints the help and exits 0" "$U8" "1:1|1:1|1:1|1:1|1:1|1:1|0:1"
+# round 2: every value that reaches a claude argument is validated (nothing starting with '-' gets through)
+ppc '[]' '[]'
+SRC1="$(jq -nc '{enabledPlugins:{"x@evil":true,"--scope=project@evil2":true,"y@evil3":true},extraKnownMarketplaces:{evil:{source:{source:"github",repo:"--scope=project"}},evil2:{source:{source:"directory",path:"-s"}},evil3:{source:{source:"git",url:"--upload-pack=x"}}}}')"
+ppf "$SRC1"; ppr status "$PPD/proj"; J1="$RC|$OUT"
+for id in x@evil '--scope=project@evil2' y@evil3; do ppr install "$id" "$PPD/proj"; J1="$J1|$RC:[$OUT]:[$ERR]:$(pcalls 'marketplace add\|plugin install')"; done
+check "project-plugins option injection: a repo, a path or a url starting with '-' and an id starting with '-' are reported (invalid-id, unsupported-source with the reason) and install refuses them with exit 2 and no add or install call" "$J1" "2|plugin~x@evil~unsupported-source~invalid repo
+plugin~--scope=project@evil2~invalid-id
+plugin~y@evil3~unsupported-source~invalid url|2:[]:[plugin~x@evil~unsupported-source~invalid repo]:0|2:[]:[plugin~--scope=project@evil2~invalid-id]:0|2:[]:[plugin~y@evil3~unsupported-source~invalid url]:0"
+# the allow-lists, case by case (V = status calls the plugin missing, x = refused): ids, github repos, urls, paths, refs, sparse paths
+ppsrc() {  # ppsrc <source object json> [id]
+  ppf "$(jq -nc --argjson s "$1" --arg id "${2:-a@m}" '{enabledPlugins:{($id):true},extraKnownMarketplaces:{(($id | split("@") | .[1] // "m")):{source:$s}}}')"; ppr status "$PPD/proj"
+  case "$OUT" in *~missing~*) printf V;; *) printf x;; esac
+}
+VAL=""
+for id in 'a@m' 'a.b-c_d@m-1' '0@0' ' a@m' 'a@m ' '@m' 'a@' '.a@m' 'a/b@m' 'a@-m' 'a b@m' 'a@m@n' '-a@m' 'a@m;ls' $'a@m\n'; do VAL="$VAL$(ppsrc '{"source":"github","repo":"o/r"}' "$id")"; done; VAL="$VAL|"
+for rp in 'o/r' 'o.x/r_y-z' '-o/r' 'o/-r' 'o' 'o/r/x' 'o/r ' '/r' 'o/' 'o r/x' '--scope=project' $'o/r\n'; do VAL="$VAL$(ppsrc "$(jq -nc --arg r "$rp" '{source:"github",repo:$r}')")"; done; VAL="$VAL|"
+for u in 'https://x/y.git' 'http://x/y' 'ssh://h/p' 'git@h:o/r.git' 'ftp://x' '-x' 'https://x y' 'file:///x' 'x@y' 'ext::sh' '--upload-pack=x' "https://x$(printf '\t')y"; do VAL="$VAL$(ppsrc "$(jq -nc --arg u "$u" '{source:"git",url:$u}')")$(ppsrc "$(jq -nc --arg u "$u" '{source:"url",url:$u}')") "; done; VAL="$VAL|"
+for pa in '/a' './a' "$(printf '~')/a" 'a' '../a' '-s' '--x' ' /a'; do VAL="$VAL$(ppsrc "$(jq -nc --arg p "$pa" '{source:"directory",path:$p}')")$(ppsrc "$(jq -nc --arg p "$pa" '{source:"file",path:$p}')") "; done; VAL="$VAL|"
+for rf in 'v1' 'feature/x-1.0' '-x' '/x' '.x' 'a b' '' $'v1\n'; do VAL="$VAL$(ppsrc "$(jq -nc --arg r "$rf" '{source:"github",repo:"o/r",ref:$r}')")"; done; VAL="$VAL|"
+for sp in '["docs","a/b",".github"]' '[]' '["-x"]' '["a b"]' '[1]' '"docs"' '[""]' '["a","-b"]' '["docs\n"]'; do VAL="$VAL$(ppsrc "{\"source\":\"github\",\"repo\":\"o/r\",\"sparsePaths\":$sp}")"; done
+check "project-plugins allow-lists (V = missing, x = refused): ids, github repos, git and url urls, directory and file paths, refs, sparse paths, each with its boundaries (a trailing newline is refused too)" "$VAL" "VVVxxxxxxxxxxxx|VVxxxxxxxxxx|VV VV VV VV xx xx xx xx xx xx xx xx |VV VV VV xx xx xx xx xx |VVxxxxxx|VVxxxxxxx"
+# refs, sparse paths and the file type reach claude in the documented form (ref after the source with '#', --sparse before the source); fields the CLI cannot express are unsupported
+ppc '[]' '[]'
+EP='{"enabledPlugins":{"r1@gr":true,"r2@gi":true,"r3@gs":true,"r4@gsp":true,"r5@fl":true,"u1@gp":true,"u2@gip":true,"u3@uh":true,"u4@uhh":true,"u5@st":true,"u6@no":true,"u7@npm":true},"extraKnownMarketplaces":{"gr":{"source":{"source":"github","repo":"o/r","ref":"v1"}},"gi":{"source":{"source":"git","url":"https://x/y.git","ref":"main"}},"gs":{"source":{"source":"github","repo":"o/r","ref":"v2","sparsePaths":["docs","src"]}},"gsp":{"source":{"source":"github","repo":"o/r","sparsePaths":["a"]}},"fl":{"source":{"source":"file","path":"/p/f.json"}},"gp":{"source":{"source":"github","repo":"o/r","path":"sub"}},"gip":{"source":{"source":"git","url":"https://x/y.git","path":"sub"}},"uh":{"source":{"source":"url","url":"https://x/m.json","headers":{"A":"b"}}},"uhh":{"source":{"source":"url","url":"https://x/m.json","headersHelper":"h"}},"st":{"source":{"source":"settings","inline":{}}},"no":{"x":1},"npm":{"source":{"source":"npm","package":"p"}}}}'
+ppf "$EP"; ppr status "$PPD/proj"; Q3="$OUT"
+for id in r1@gr r2@gi r3@gs r4@gsp r5@fl; do ppr install "$id" "$PPD/proj"; Q3="$Q3|$RC:$(grep 'marketplace add' "$PPL" | sed 's/^plugin marketplace add --scope user //'):$(grep -c "plugin install --scope user $id\$" "$PPL" || true)"; done
+for id in u1@gp u2@gip u3@uh u4@uhh u5@st u6@no u7@npm; do ppr install "$id" "$PPD/proj"; Q3="$Q3|$RC:$(pcalls 'marketplace add\|plugin install')"; done
+check "project-plugins sources: github and git refs go as <source>#<ref>, sparse paths as --sparse <paths> after the source (the stub parses it as a variadic option, so a source after it would be lost), a file source as its path; github/git with a path, url with headers or headersHelper, settings, npm and a source without type are unsupported (install refuses, no call)" "$Q3" "plugin~r1@gr~missing~github:o/r#v1
+plugin~r2@gi~missing~git:https://x/y.git#main
+plugin~r3@gs~missing~github:o/r#v2 sparse:docs,src
+plugin~r4@gsp~missing~github:o/r sparse:a
+plugin~r5@fl~missing~file:/p/f.json
+plugin~u1@gp~unsupported-source~github+path
+plugin~u2@gip~unsupported-source~git+path
+plugin~u3@uh~unsupported-source~url+headers
+plugin~u4@uhh~unsupported-source~url+headersHelper
+plugin~u5@st~unsupported-source~settings
+plugin~u6@no~unsupported-source~none
+plugin~u7@npm~unsupported-source~npm|0:o/r#v1:1|0:https://x/y.git#main:1|0:o/r#v2 --sparse docs src:1|0:o/r --sparse a:1|0:/p/f.json:1|2:0|2:0|2:0|2:0|2:0|2:0|2:0"
+# mcp commands: absolute -> that file must be executable, with a slash -> looked up in the project folder, bare -> on the PATH
+ppc '[]' '[]'; ppf '' '' '{"mcpServers":{"abs-ok":{"command":"/bin/sh"},"abs-gone":{"command":"/nonexistent/x"},"rel-ok":{"command":"./bin/srv"},"rel-gone":{"command":"./bin/gone"},"rel2-ok":{"command":"bin/srv"},"rel-noexec":{"command":"bin/noexec"},"up":{"command":"../outside-x"},"bare-ok":{"command":"sh"},"bare-gone":{"command":"nonexistent-cmd-two"}}}'
+mkdir -p "$PPD/proj/bin"; printf '#!/bin/sh\n' > "$PPD/proj/bin/srv"; chmod +x "$PPD/proj/bin/srv"; printf '#!/bin/sh\n' > "$PPD/proj/bin/noexec"; chmod -x "$PPD/proj/bin/noexec"
+ppr status "$PPD/proj"
+check "project-plugins mcp commands: an absolute command must exist and be executable, one with a slash is looked up in the project folder (not where the script runs), a bare one on the PATH; a missing, non-executable or '..' one is reported with its original text" "$RC|$OUT" "2|mcp~abs-gone~missing-command~/nonexistent/x
+mcp~rel-gone~missing-command~./bin/gone
+mcp~rel-noexec~missing-command~bin/noexec
+mcp~up~missing-command~../outside-x
+mcp~bare-gone~missing-command~nonexistent-cmd-two"
+# control characters never reach the terminal (they become ?), in status lines, error lines and install messages
+ppc '[]' '[]'; ESC=$'\033'; BEL=$'\007'; DEL=$'\177'
+ppf "$(jq -nc '{enabledPlugins:{"x\u001b[2J@m":true,"y\u0007\u007f@m":true,"cr\r@m":true,"ok@m1":true},extraKnownMarketplaces:{m1:{source:{source:"weird\u001b[31m"}}}}')" '' "$(jq -nc '{mcpServers:{"n\u0007":{command:"c\u001bz"}}}')"
+ppr status "$PPD/proj"; C5="$RC|$OUT|$(LC_ALL=C grep -c "[$ESC$BEL$DEL]" "$PPD/out" || true)"
+ppr install "a${ESC}[2Jb@m" "$PPD/proj"; C5="$C5|$ERR|$(LC_ALL=C grep -c "[$ESC$BEL$DEL]" "$PPD/err" || true)"
+check "project-plugins control characters: escape, bell, delete and carriage return in ids, types, server names, commands and in the id given to install are shown as ? (no such byte reaches stdout or stderr)" "$C5" "2|plugin~x?[2J@m~invalid-id
+plugin~y??@m~invalid-id
+plugin~cr\r@m~invalid-id
+plugin~ok@m1~unsupported-source~weird?[31m
+mcp~n?~missing-command~c?z|0|not declared by this project: a?[2Jb@m|0"
+rm -rf "$PPD"
 }
 
 sec_review_skill() {
