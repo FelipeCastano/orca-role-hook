@@ -5,8 +5,9 @@
 #   --save   also append the lines to <git dir>/orca-roles.runs.jsonl
 # Claude: reads Claude Code's session files (${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<worktree path with / and . as ->/<session>.jsonl);
 # the role of a session is found from the kit's role message in it ("unknown" if there is none); a response written over several
-# lines (one per content block, each repeating its usage) counts once, by message.id. OpenCode: one line with its raw
-# `stats` output, not split per role (it cannot be). Tokens only, no prices.
+# lines (one per content block, each repeating its usage) counts once, by message.id; usd and byModel come from the session's last
+# cost-state line, which Claude Code writes when the session ends (null while it runs, and with --since). OpenCode: one line with its raw
+# `stats` output, not split per role (it cannot be).
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 SAVE=0; SINCE=""
@@ -14,7 +15,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --save) SAVE=1;;
     --since) SINCE="${2:-}"; [ -n "$SINCE" ] || { echo "metrics.sh: --since needs a date" >&2; exit 1; }; shift;;
-    -h|--help) sed -n 2,10p "$0"; exit 0;;
+    -h|--help) sed -n 2,11p "$0"; exit 0;;
     *) echo "metrics.sh: unknown option $1" >&2; sed -n 3,5p "$0" >&2; exit 1;;
   esac
   shift
@@ -45,9 +46,10 @@ if [ -d "$SDIR" ]; then
       def role_of: txt | (capture("Read (?<p>.*?) and adopt that role"; "s") | .p) // empty
         | [scan("[^/\\s]+\\.md")] | map(sub("\\.md$"; "")) | map(select(startswith("common-") | not)) | last // empty;
       [.[] | select(type == "object" and .cwd == $wt)] as $l
+      | ([.[] | select(type == "object" and .type == "cost-state")] | last) as $cs
       | ([$l[] | select(.type == "user") | role_of] | first // "unknown") as $role
-      | [$l[] | select(.type == "assistant" and (.message.usage | type) == "object" and ($since == "" or (.timestamp // "") >= $since))]
-      | [to_entries[] | .value + {k: (.value.message.id // .value.requestId // "line \(.key)")}] | group_by(.k) | map(.[0]) | sort_by(.timestamp // "") as $t
+      | [$l[] | select(.type == "assistant" and (.message.usage | type) == "object" and ($since == "" or (.timestamp // "") >= $since))] as $a
+      | [$a | to_entries[] | .value + {k: (.value.message.id // .value.requestId // "line \(.key)")}] | group_by(.k) | map(.[0]) | sort_by(.timestamp // "") as $t
       | select($t | length > 0)
       | {agent: "claude", role: $role, session: ($t[0].sessionId // $file),
          model: ([$t[] | .message.model // empty | select(. != "<synthetic>")] | last),
@@ -57,7 +59,13 @@ if [ -d "$SDIR" ]; then
          input: ([$t[] | .message.usage.input_tokens // 0] | add),
          output: ([$t[] | .message.usage.output_tokens // 0] | add),
          cacheRead: ([$t[] | .message.usage.cache_read_input_tokens // 0] | add),
-         cacheWrite: ([$t[] | .message.usage.cache_creation_input_tokens // 0] | add)}' "$f" 2>/dev/null >> "$OUTF" \
+         cacheWrite: ([$t[] | .message.usage.cache_creation_input_tokens // 0] | add),
+         cacheWrite5m: (if any($t[]; .message.usage.cache_creation | type == "object") then [$t[] | .message.usage.cache_creation.ephemeral_5m_input_tokens // 0] | add else null end),
+         cacheWrite1h: (if any($t[]; .message.usage.cache_creation | type == "object") then [$t[] | .message.usage.cache_creation.ephemeral_1h_input_tokens // 0] | add else null end),
+         advisorCalls: ([$a[] | .message.content | arrays | .[] | select(type == "object" and (.type == "server_tool_use" or .type == "tool_use") and .name == "advisor")] | length),
+         usd: (if $since == "" and $cs != null then $cs.totalCostUSD else null end),
+         byModel: (if $since == "" and $cs != null then ($cs.modelUsage // {} | with_entries(.value |= {input: .inputTokens, output: .outputTokens,
+           cacheRead: .cacheReadInputTokens, cacheWrite: .cacheCreationInputTokens, usd: .costUSD})) else null end)}' "$f" 2>/dev/null >> "$OUTF" \
       || echo "metrics.sh: warning: could not read $(basename "$f")" >&2
   done
 fi
