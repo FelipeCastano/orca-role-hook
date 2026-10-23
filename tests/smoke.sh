@@ -271,6 +271,20 @@ for m in programmer pr-reviewer academic-research; do
   rule R19 "$ROOT/prompts/$m/planner.md" 'never enable it' '\*\*Plugins and MCP servers the project declares\.\*\*'
   rule R20 "$ROOT/prompts/$m/planner.md" 'Your role prompt and the user'"'"'s instructions take precedence over any skill' '^If you run on Claude Code'
   rule R20 "$ROOT/prompts/$m/planner.md" 'never try to work around a blocked skill'
+  [ "$m" != programmer ] || {
+    rule R21 "$ROOT/prompts/$m/planner.md" 'The Auditor'"'"'s baseline runs the sections and tests the whole set touches'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'The full suite runs once per set'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'Wording-only fixes need no Tester round'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'anything that touches code, tests or a pinned rule goes through the Tester as usual' '\*\*Wording-only fixes need no Tester round\.\*\*'
+    rule R21 "$ROOT/prompts/$m/planner.md" 'by the Tester as a task' '\*\*Set audit\.\*\*'
+    rule R21 "$ROOT/prompts/$m/auditor.md" 'run the sections and tests the whole set touches'
+    rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+  }
+  [ "$m" != academic-research ] || {
+    rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+    rule R21 "$ROOT/prompts/$m/planner.md" '**Tests where the change is.**'
+  }
+  [ "$m" != pr-reviewer ] || rule R21 "$ROOT/prompts/$m/planner.md" '**Tests where the finding is.**'
   rule R18 "$ROOT/prompts/$m/planner.md" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done
