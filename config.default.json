@@ -8,6 +8,7 @@
     "cleanWorkersAfterStep": true,
     "language": "auto",
     "mode": "programmer",
+    "superpowers": true,
     "prReviewer": { "marketplace": "romerox3/lens-review", "plugin": "lens-review@lens-review", "skill": "skills/lens-review/SKILL.md" }
   },
   "defaults": {
@@ -37,7 +38,7 @@
       "mcp": "all",
       "allowedTools": ["Bash(orca:*)", "Read"],
       "extraDirs": ["{kit}"],
-      "pluginDirs": ["{kit}/plugin"]
+      "pluginDirs": ["{kit}/plugin", "{kit}/plugins/superpowers"]
     },
     "researcher": {
       "title": "Researcher",

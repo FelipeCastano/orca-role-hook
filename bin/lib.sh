@@ -139,6 +139,7 @@ OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--he
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
 # ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
 # claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
+# ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # Old mode id in the user's settings.mode, role modes, prompt keys, or prompt paths inside the kit?  config_has_old_mode <config.json>
 config_has_old_mode() {
   jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
@@ -153,6 +154,7 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
     | .roles.tester.modes |= (if . == ["programmer"] then $d.roles.tester.modes else . end)
     | .roles.writer.model |= (if . == "claude-opus-5-5" then $d.roles.writer.model else . end)
+    | .roles.planner.pluginDirs |= (if . == ["{kit}/plugin"] then $d.roles.planner.pluginDirs else . end)
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
@@ -238,6 +240,9 @@ check_config() {
           else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
       else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.roles | to_entries[] | select(.value | has("disallowedTools")) | select(.value.disallowedTools | type != "array" or any(.[]; type != "string"))
+    | "ERROR: role \(.key): disallowedTools must be a list of tool names"' "$1" 2>/dev/null)" || true
+  [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
     | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: modelError must be a non-empty string"; return 0; }
@@ -252,6 +257,9 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("prReviewer") then (.prReviewer | select((type != "object") or ([.marketplace, .plugin, .skill] | map(select(type != "string" or . == "")) | length > 0))
       | "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.prReviewer must be {marketplace, plugin, skill}"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("superpowers") then (.superpowers | select(. != true and . != false) | "ERROR: invalid configuration: settings.superpowers must be true or false") else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.superpowers must be true or false"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
@@ -444,6 +452,14 @@ worker_msg() {
   printf '%s' "Read $(prompts_dir_of "$1")/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
 }
 # A path with ~, {kit} or {home} expanded
+# What the kit never lets the Planner do while its superpowers folder is loaded: the kit's Planner coordinates through Orca (no worktrees,
+# no subagents of its own, no implementation, merge or push). agent.sh applies it whenever $KIT/plugins/superpowers is loaded, whatever the
+# role's own disallowedTools say.  superpowers_deny → one tool or Skill(...) per line
+superpowers_deny() {
+  printf '%s\n' 'Skill(superpowers:subagent-driven-development)' 'Skill(superpowers:executing-plans)' 'Skill(superpowers:dispatching-parallel-agents)' \
+    'Skill(superpowers:requesting-code-review)' 'Skill(superpowers:using-git-worktrees)' 'Skill(superpowers:finishing-a-development-branch)' \
+    'Skill(superpowers:writing-skills)' 'Skill(superpowers:diagnosing-superpowers)' EnterWorktree ExitWorktree Agent Task
+}
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {
