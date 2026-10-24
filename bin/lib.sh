@@ -105,6 +105,24 @@ launchable_roles() {
 # The role id a name (id or title, any case) refers to in a configuration; nothing if there is none.  resolve_role <config> <name>
 resolve_role() { jq -r --arg x "$2" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$1" 2>/dev/null | head -1; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
+# The tab title: the role's title plus "(<agent>)", the agent's CLI name. Orca (1.4.239) only dispatches to a tab it recognizes as an
+# agent, by its title or its process, and a native Claude Code's process is named after its version: the name in the title is what works.
+# tab_title_of <config> <role>
+tab_title_of() {
+  local t a c w tok="" words=() lt; t="$(title_of "$1" "$2")"; a="$(rstr "$1" "$2" agent)"; a="${a:-claude}"
+  if [ "$a" = custom ]; then
+    c="$(rstr "$1" "$2" command)"; read -r -a words <<< "$c" || true
+    for w in ${words[@]+"${words[@]}"}; do
+      case "$w" in *=*) continue;; esac
+      w="${w##*/}"; tok="$(printf '%s' "${w%%.*}" | tr '[:upper:]' '[:lower:]')"; break
+    done
+  else
+    tok="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+  fi
+  [ -n "$tok" ] || { printf '%s\n' "$t"; return 0; }
+  lt="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]')"
+  case "$lt" in *"($tok)") printf '%s\n' "$t";; *) printf '%s (%s)\n' "$t" "$tok";; esac
+}
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # The kit's prompts folder for the configuration's mode
 prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }

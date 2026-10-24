@@ -97,6 +97,9 @@ case "$AGENT" in
     [ "$ROLE" = planner ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
+    # Claude Code keeps the kit's tab title (workers only): its session-summary titles hide the agent's name, and Orca then refuses
+    # dispatches to the tab (stablyai/orca#32090). A value set in defaults.env or roles.<id>.env (exported above) wins.
+    if [ "$ROLE" != planner ]; then export CLAUDE_CODE_DISABLE_TERMINAL_TITLE="${CLAUDE_CODE_DISABLE_TERMINAL_TITLE:-1}"; fi
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"
     ;;
   codex)
