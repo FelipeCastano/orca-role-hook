@@ -306,6 +306,34 @@ for m in programmer pr-reviewer academic-research; do
   rule R18 "$ROOT/prompts/$m/planner.md" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$ROOT/prompts/$m/planner.md" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
 done
+# R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into Dev's spec (Phase 2 point 2), and passes 16-18 of the plan review
+PP="$ROOT/prompts/programmer/planner.md"
+r23() { local f="$1" frag="$2" lp="$3"; grep -qF -- "$frag" <<<"$(grep -E -- "$lp" <<<"$f" || true)" || { echo "FAIL rules R23: programmer/planner.md lost '$frag'"; FAIL=1; }; }
+R23P1="$(awk '/^## Phase 1: planning/{s=1;next} /^## /{s=0} s' "$PP")"
+R23NEXT="$(awk '/^   - \*\*Rules per step\.\*\*/{g=1;next} g{print;exit}' <<<"$R23P1")"
+R23P2="$(awk '/^## Phase 2: flow of each step/{s=1;next} /^## /{s=0} s' "$PP")"
+R23PASS="$(awk '/^### Passes \(in this order\)/{s=1;next} /^### /{s=0} s' "$PP")"
+r23 "$R23NEXT" '**Interfaces between steps.** When a step produces something another step uses (a function, a command-line option, a file format, an environment variable, a message that another step matches), the step has an "Interfaces" line: what it produces and what it consumes from other steps or from existing code, with the exact names, signatures or formats. Dev'"'"'s spec carries its step'"'"'s line verbatim.' '^   - \*\*Interfaces between steps\.\*\*'
+r23 "$R23P2" '(backward compatibility, other callers), and its step'"'"'s "Interfaces" line verbatim when it has one. Open design questions' '^2\. \*\*Development\*\*'
+r23 "$R23PASS" '**Interfaces.** For each pair of steps that share a file or an interface, and for each step that consumes existing code, check that names, signatures, formats and messages match on both sides, as the "Interfaces" lines state them and as the code has them today. A mismatch is fixed in the plan.' '^16\. \*\*Interfaces\.\*\*'
+r23 "$R23PASS" '**Review focus.** List up to 5 kinds of input or situation that a reasonable user of the change would expect to work and that no criterion covers (for example an empty value, a path with spaces, a second run, a missing optional file). Each one becomes a criterion of its step, with pass/fail examples, when the request already implies it; otherwise it goes to the out-of-scope proposals list for the user.' '^17\. \*\*Review focus\.\*\*'
+r23 "$R23PASS" '**Lines that decide nothing.** Read each step'"'"'s text in the plan, and each Dev spec before you send it, looking for text that leaves the decision to Dev: "TBD", "handle edge cases", "appropriate validation", "as needed", "or similar", "if necessary", "etc.". Replace each one with the decision; if you cannot take it, resolve it with the Researcher or the user before presenting the plan or sending the spec.' '^18\. \*\*Lines that decide nothing\.\*\*'
+r23 "$R23PASS" '**Project rules.**' '^15\. '
+[ "$(grep -oE '^[0-9]+\. ' <<<"$R23PASS" | tr -d '. ' | tr '\n' ' ')" = "$(seq 1 "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" | tr '\n' ' ')" ] && [ "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" -ge 18 ] || { echo "FAIL rules R23: the passes are not numbered 1 to N in order with N at least 18"; FAIL=1; }
+# R24 programmer rulings: the Ledger bullet ends with the Ruling rule; the Set audit bullet shows "Rulings I made" right after the below-medium sentence, before the full run and the commit list
+r24() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *"$frag" ]] && ok=1;; has) [[ "$f" == *"$frag"* ]] && ok=1;; esac; [ "$ok" = 1 ] || { echo "FAIL rules R24: programmer/planner.md lost '${frag:0:60}...' in its bullet"; FAIL=1; }; }
+R24LED="$(grep -E -- '^   - \*\*Ledger\.\*\*' <<<"$R23P2" || true)"
+R24SET="$(grep -E -- '^   - \*\*Set audit\.\*\*' <<<"$R23P2" || true)"
+r24 "$R24LED" 'Every decision you take on the user'"'"'s behalf in the step (a Dev decision you accept or change, an ambiguity of the request you settle, how you route a finding) is a line starting with `Ruling:` in the ledger: what you decided, why, and what it costs if it is wrong. Decisions the user took are not rulings.' end
+r24 "$R24SET" 'or left as notes if the user agrees. When the set audit has no open finding at or above medium, and before the full run and the commits, show the user "Rulings I made": every `Ruling:` line from the set'"'"'s ledgers, grouped by step, each with what it costs if it is wrong. A ruling the user overturns becomes a fix (Dev, then the Tester, and a corrections review by the Auditor unless it is minor) before the full run. When the set audit (and its corrections review) has no open finding at or above medium, the set is committed' has
+# R25 academic-research rulings: the Ledger bullet ends with the Ruling rule; the Commits section shows "Rulings I made" right after the stage sentence, before the commit proposal
+AP="$ROOT/prompts/academic-research/planner.md"
+r25() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *"$frag" ]] && ok=1;; has) [[ "$f" == *"$frag"* ]] && ok=1;; esac; [ "$ok" = 1 ] || { echo "FAIL rules R25: academic-research/planner.md lost '${frag:0:60}...' in its bullet or section"; FAIL=1; }; }
+R25COM="$(awk '/^## Commits/{s=1;next} /^## /{s=0} s' "$AP")"
+R25MEC="$(awk '/^## Common mechanics for any task/{s=1;next} /^## /{s=0} s' "$AP")"
+R25LED="$(grep -E -- '^- \*\*Ledger\.\*\*' <<<"$R25MEC" || true)"
+r25 "$R25LED" 'Every decision you take on the user'"'"'s behalf (a Dev decision you accept or change, an ambiguity of the request you settle, how you route a finding) is a line starting with `Ruling:` in the ledger: what you decided, why, and what it costs if it is wrong. Decisions the user took are not rulings.' end
+r25 "$R25COM" 'A commit closes a stage (the literature, the plan, an experiment iteration, a section, a phase switch'"'"'s STATE.md, a revision). Before proposing a commit, show the user "Rulings I made": every `Ruling:` line in the ledger since the previous commit, each with what it costs if it is wrong. A ruling the user overturns is fixed before that commit, through the same flow as a finding of that stage. Before each: the convention check' has
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/planner.md" 'checked every time' 'follows the repository.s own conventions'
 rule R15 "$PD/planner.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'
