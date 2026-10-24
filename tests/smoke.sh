@@ -557,6 +557,12 @@ check "rcfg mcp all" "$(rcfg "$C" planner mcp)" '"all"'
 check "rcfg empty when there is no value" "$(rcfg "$C" dev command)" ""
 check "setting with default" "$(setting "$C" kickoffTimeoutSeconds 180)" "180"
 check "setting defined" "$(setting "$C" launchWaitSeconds 15)" "3"
+SV=""; for v in false true 0 '""' '"abc"' 42 1.5; do jq -c --argjson v "$v" '{settings: {k: $v}}' <<< '{}' > "$TMP/sv.json"; SV="${SV}[$(setting "$TMP/sv.json" k D)]"; done
+check "setting: a present value of any type is returned as text, false, true, 0 and \"\" included, never the default" "$SV" "[false][true][0][][abc][42][1.5]"
+SV=""; for c in '{"settings":{}}' '{"settings":{"k":null}}' '{}' '{"settings":null}' '{"settings":[]}' '{"settings":["k"]}' '{"settings":"k"}' '{"settings":5}' '{"settings":true}' '{"settings":{"other":false}}'; do printf '%s' "$c" > "$TMP/sv.json"; SV="${SV}[$(setting "$TMP/sv.json" k D)]"; done
+check "setting: the default for an absent key, a null value, no settings and settings that is not an object" "$SV" "[D][D][D][D][D][D][D][D][D][D]"
+echo '{"settings":{"launchWaitSeconds":7,"kickoffTimeoutSeconds":0,"language":"Spanish"}}' > "$TMP/sv.json"
+check "setting: numbers and strings as before" "$(setting "$TMP/sv.json" launchWaitSeconds 15):$(setting "$TMP/sv.json" kickoffTimeoutSeconds 180):$(setting "$TMP/sv.json" language auto):$(setting "$TMP/sv.json" composerAgentWindowSeconds 180)" "7:0:Spanish:180"
 check "title_of" "$(title_of "$C" dev)" "Dev"
 check "title_of without title" "$(title_of "$C" newone)" "newone"
 tt() { jq -n --arg t "$1" --arg a "$2" --arg c "$3" '{roles:{x:({agent:$a,command:$c} + (if $t == "-" then {} else {title:$t} end) | with_entries(select(.value != "")))}}' > "$TMP/tt.json"; tab_title_of "$TMP/tt.json" x; }
@@ -631,6 +637,9 @@ case "$M3" in (*"Handles: Dev=t2."*"conversation was cleared"*"After your conver
 jq '.settings.language = "Spanish"' "$KIT/config.json" > "$TMP/lang.json"
 case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in *"Always reply to the user in Spanish, whatever language they write in."*) echo "ok   planner_msg: settings.language";; *) echo "FAIL planner_msg language"; FAIL=1;; esac
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
+jq '.settings.cleanWorkersAfterStep = false' "$KIT/config.json" > "$TMP/cw.json"; jq '.settings.cleanWorkersAfterStep = true' "$KIT/config.json" > "$TMP/cw1.json"
+CW0="$(planner_msg "$TMP/cw.json" "planner dev" "$TMP/state.env" "" "" 0)"; CW1="$(planner_msg "$TMP/cw1.json" "planner dev" "$TMP/state.env" "" "" 0)"
+check "planner_msg: cleanWorkersAfterStep false -> only if the user asks; true -> proposed at each step" "$(printf '%s' "$CW0" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW0" | grep -cF "propose to the user cleaning"):$(printf '%s' "$CW1" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW1" | grep -cF "propose to the user cleaning")" "1:0:0:1"
 # settings.artifacts in the Planner's message: only when something is set, in the fixed order, in every start mode
 AM() { jq -c --argjson a "$1" '.settings.artifacts = $a' "$KIT/config.json" > "$TMP/art.json"; planner_msg "$TMP/art.json" "planner dev" "$TMP/state.env" "" "" "${2:-0}"; }
 ASENT=" Artifact locations set for this worktree (they win over the project's conventions): "
@@ -793,6 +802,11 @@ check "jira: key after prefix" "$(jira_key feature/DEVGD-220 "" "")" "DEVGD-220"
 check "jira: fix-123 is not a ticket" "$(jira_key feature/fix-123 "" "")" ""
 check "jira: release-1.4 is not a ticket" "$(jira_key release-1.4 "" "")" ""
 check "jira: branch without key" "$(jira_key main "" "")" ""
+mkdir -p "$TMP/jbin"; printf '#!/bin/sh\necho '"'"'{"worktree":{"linkedWorkItem":{"provider":"jira","number":0,"url":"https://x.atlassian.net/browse/ABC-7","jiraIdentifier":"ABC-7"}}}'"'"'\n' > "$TMP/jbin/orca"; chmod +x "$TMP/jbin/orca"
+for v in true false; do jq -c --argjson v "$v" '{settings: {jiraHandoff: $v}}' <<< '{}' > "$TMP/jh-$v.json"; done
+echo '{}' > "$TMP/jh-none.json"
+jh() { (cd "$TMP" && PATH="$TMP/jbin:$PATH" worktree_jira "$TMP" "$1" | tr '\n' ' '); }
+check "worktree_jira: jiraHandoff false -> empty key (the url stays); true or unset -> the key" "[$(jh "$TMP/jh-false.json")][$(jh "$TMP/jh-true.json")][$(jh "$TMP/jh-none.json")]" "[ https://x.atlassian.net/browse/ABC-7 ][ABC-7 https://x.atlassian.net/browse/ABC-7 ][ABC-7 https://x.atlassian.net/browse/ABC-7 ]"
 JSON='{"worktree":{"branch":"x","linkedWorkItem":{"provider":"jira","type":"issue","number":0,"title":"t","url":"https://jira.company.com/browse/DEVGD-9","jiraIdentifier":"DEVGD-9"}}}'
 check "jira: jiraIdentifier in orca worktree show" "$(printf '%s' "$JSON" | jq -r '[.. | objects | select(.provider? == "jira") | .jiraIdentifier // empty] | first // empty')" "DEVGD-9"
 }
@@ -2248,6 +2262,12 @@ check "composer: never touches a shell with the same title" "$(grep -c 'terminal
 claunch
 for _ in 1 2 3 4 5; do grep -q "Not a new worktree" "$CP/.git/orca-roles-kickoff.log" 2>/dev/null && break; sleep 1; done
 check "composer: not looked for when resuming" "$(grep -c 'Not a new worktree' "$CP/.git/orca-roles-kickoff.log")" "1"
+CP2="$TMP/cproj2"; mkdir -p "$CP2"; git -C "$CP2" init -q -b feat-x; rm -f "$TMP/clist.seen"; : > "$COLOG"
+jq '.settings.closeComposerAgent = false' "$KIT/config.json" > "$KIT/config.json.new" && mv "$KIT/config.json.new" "$KIT/config.json"
+(cd "$CP2" && HOME="$TMP/home" PATH="$TMP/cbin:$PATH" "$TMP/home/.orca-roles/bin/launch.sh" >/dev/null 2>&1)
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -z "$(ls -A "$CP2/.git/orca-roles.kickoff.d" 2>/dev/null)" ] && [ -s "$CP2/.git/orca-roles-kickoff.log" ] && break; sleep 0.5; done
+sleep 1
+check "composer: closeComposerAgent false -> a new worktree's extra session is not looked for or closed" "$([ -f "$CP2/.git/orca-roles.preexisting.json" ] && echo fresh):$(grep -c 'terminal close --terminal x1' "$COLOG" || true):$(grep -c 'Composer extra session\|Closed x1\|Not a new worktree\|No Jira key and no branch' "$CP2/.git/orca-roles-kickoff.log" || true)" "fresh:0:0"
 }
 
 sec_orca_alias() {

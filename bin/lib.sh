@@ -50,7 +50,8 @@ model_error_regex() {
     custom) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
   esac
 }
-setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
+# A setting's value as text, or the default when it is absent or null (false is a value: jq's // would drop it).
+setting() { jq -r --arg k "$2" --arg d "$3" '(if (.settings | type) == "object" and (.settings | has($k)) and .settings[$k] != null then .settings[$k] else $d end) | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
 MODE_IDS="programmer pr-reviewer academic-research"
 MODES_JSON='["programmer","pr-reviewer","academic-research"]'
