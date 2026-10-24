@@ -550,6 +550,11 @@ check "setting with default" "$(setting "$C" kickoffTimeoutSeconds 180)" "180"
 check "setting defined" "$(setting "$C" launchWaitSeconds 15)" "3"
 check "title_of" "$(title_of "$C" dev)" "Dev"
 check "title_of without title" "$(title_of "$C" newone)" "newone"
+tt() { jq -n --arg t "$1" --arg a "$2" --arg c "$3" '{roles:{x:({agent:$a,command:$c} + (if $t == "-" then {} else {title:$t} end) | with_entries(select(.value != "")))}}' > "$TMP/tt.json"; tab_title_of "$TMP/tt.json" x; }
+check "tab_title_of: claude by default, codex, another agent lowercased, no title -> the id" "$(tt Dev claude ''):$(tt Dev '' ''):$(tt Researcher codex ''):$(tt Dev Codex ''):$(tt - claude '')" "Dev (claude):Dev (claude):Researcher (codex):Dev (codex):x (claude)"
+check "tab_title_of: a title already ending in the agent's name is unchanged in any case; another agent's suffix does not count" "$(tt 'Dev (claude)' claude ''):$(tt 'Dev (Claude)' claude ''):$(tt 'Dev (CLAUDE)' codex ''):$(tt 'Dev (codex)' claude ''):$(tt 'Dev (claude) x' claude '')" "Dev (claude):Dev (Claude):Dev (CLAUDE) (codex):Dev (codex) (claude):Dev (claude) x (claude)"
+check "tab_title_of: custom takes the first word of command that is not an assignment, basename, cut at the first dot, lowercased" "$(tt X custom 'opencode run {prompt}'):$(tt X custom 'FOO=1 BAR=2 /opt/bin/gemini --yolo'):$(tt X custom './bin/my-agent.sh --flag'):$(tt X custom 'Aider.EXE'):$(tt X custom '* --x')" "X (opencode):X (gemini):X (my-agent):X (aider):X (*)"
+check "tab_title_of: custom without a usable word in command adds no suffix" "$(tt X custom ''):$(tt X custom 'FOO=1'):$(tt X custom '.hidden'):$(tt X custom '   ')" "X:X:X:X"
 check "var_of" "$(var_of e2e-tester)" "E2E_TESTER"
 # Renamed role: visual-tester → e2e-tester, keeping the user's settings and position
 printf '{"roles":{"dev":{},"visual-tester":{"title":"Visual-Tester","enabled":false},"deployer":{}}}' > "$TMP/legacy.json"
@@ -1280,7 +1285,7 @@ OW="$TMP/oproj"; mkdir -p "$OW" "$TMP/obin"; git -C "$OW" init -q; OG="$OW/.git"
 cat > "$TMP/obin/orca" <<'EOS'
 #!/bin/sh
 case "$1 $2" in
-  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; echo "{\"handle\":\"h-$t\"}";;
   "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
@@ -1314,7 +1319,7 @@ L="$TMP/lproj"; mkdir -p "$L" "$TMP/lbin"; git -C "$L" init -q
 cat > "$TMP/lbin/orca" <<'EOS'
 #!/bin/sh
 case "$1 $2" in
-  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; echo "{\"handle\":\"h-$t\"}";;
   "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
 exit 0
@@ -1348,7 +1353,7 @@ check "launch: an error does not overwrite the saved exceptions" "$(jq -c .only 
 mkdir -p "$TMP/lbin2"; cat > "$TMP/lbin2/orca" <<'EOS'
 #!/bin/sh
 case "$1 $2" in
-  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; echo "{\"handle\":\"h-$t\"}";;
+  "terminal create") while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; echo "{\"handle\":\"h-$t\"}";;
   "terminal show") [ -n "$FAKE_SHOW" ] && echo "$FAKE_SHOW" && exit 0; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
   "repo show") cat "$FAKE_REPO" 2>/dev/null;;
 esac
@@ -1372,7 +1377,7 @@ cat > "$LK/bin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$LKL"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; [ -f "$LK/failcreate-\$t" ] && exit 1; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; [ -f "$LK/failcreate-\$t" ] && exit 1; echo "{\"handle\":\"h-\$t\"}";;
   "terminal list") [ -f "$LK/listfail" ] && exit 1; echo '{"terminals":[]}';;
   "terminal show") case "\$4" in
     h-*) echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\"}}}";;
@@ -1391,6 +1396,8 @@ lkreg() { local pid="$1"; shift; { mkdir -p "$LKG/orca-roles.kickoff.d" && print
 lkcnt() { grep -cE "^terminal $1" "$LKL" || true; }
 lksum() { cat "$LKG/orca-roles.env" "$LKG/orca-roles.pty" 2>/dev/null | cksum; }
 lkseed() { printf 'PLANNER=p1\nDEV=d1\nDEPLOYER=x1\n' > "$LKG/orca-roles.env"; printf 'PLANNER=pty1\nDEV=pty2\nDEPLOYER=pty3\n' > "$LKG/orca-roles.pty"; cp "$KIT/config.json" "$LKG/orca-roles.config.json"; }
+# every tab opens with the agent's name in its title, while the saved state keeps the plain handles
+lkreset; try lkl; check "launch: each role's tab is created with the agent in its title; the saved handles stay plain" "$RC:$(grep -E '^terminal create' "$LKL" | grep -o -- '--title [A-Za-z0-9-]* ([a-z]*)' | tr '\n' ',' ):$(grep -c '(' "$LKG/orca-roles.env" || true):$(cut -d= -f2 "$LKG/orca-roles.env" | tr '\n' ' ')" "0:--title Planner (claude),--title Dev (claude),--title Deployer (claude),:0:h-Planner h-Dev h-Deployer "
 # role 2 unknown: the stale role 1 is not reopened either; nothing is closed or opened and the state is byte-identical
 lkreset; lkseed; echo alive > "$LK/show.x1"; echo rt > "$LK/show.d1"; B="$(lksum)"
 try lkl; R1="$RC:$(printf '%s' "$OUT" | grep -c 'ERROR: Orca is not ready (runtime_unavailable) for Dev: no tab was closed or opened'):$(lkcnt create):$(lkcnt close):$(lksum)"
@@ -1562,7 +1569,7 @@ cat > "$TMP/mbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$MLOG"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
   "terminal list") [ -f "$TMP/m-listfail" ] && exit 1; exit 0;;
   "terminal show") [ -f "$TMP/m-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/m-orphan" ] && { echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}'; exit 0; }; [ -f "$TMP/m-noagent" ] && { echo '{"result":{"terminal":{"handle":"x"}}}'; exit 0; }; [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
@@ -2210,7 +2217,7 @@ cat > "$TMP/cbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$COLOG"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
   "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
   "terminal list")
     if [ -f "$TMP/clist.seen" ]; then t=done; else t=feat-x; : > "$TMP/clist.seen"; fi
@@ -2299,7 +2306,7 @@ cat > "$TMP/sbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$SLOG"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
   "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
   "terminal list") echo '{"terminals":[{"handle":"x1","title":"✳ Claude Code","agentIdentity":"claude","preview":""},{"handle":"s1","title":"bash","agentIdentity":null,"preview":""}]}';;
 esac
@@ -2339,7 +2346,7 @@ cat > "$TMP/dbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$DLOG"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
   "terminal show") case "\$*" in *t-dev*|*t-cu*) echo '{"result":{"terminal":{"agentIdentity":null}}}';; *t-orp*) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
 esac
 exit 0
@@ -2383,6 +2390,14 @@ OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG
 case "$OUT" in *--settings*|*'Always write in English'*) echo "FAIL agent.sh: the Planner got the English setting or rule: $OUT"; FAIL=1;; *) echo "ok   agent.sh: the Planner gets neither --settings nor the English rule";; esac
 ag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | tr '\n' ' '); }
 DQ='--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '
+unset CLAUDE_CODE_DISABLE_TERMINAL_TITLE
+printf '#!/bin/sh\necho "TITLE=${CLAUDE_CODE_DISABLE_TERMINAL_TITLE-unset}"\n' > "$TMP/fakebin/claude"
+ENVC="$(ag dev | grep -o 'TITLE=[^ ]*'):$(ag planner | grep -o 'TITLE=[^ ]*'):$(ag cx | grep -c 'TITLE=' || true)"
+jq '.defaults.env = {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "0"} | .roles.pw.env = {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "2"}' "$KIT/config.json" > "$TMP/envt.json"
+agt() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/envt.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | grep -o 'TITLE=[^ ]*'); }
+ENVC="$ENVC:$(agt dev):$(agt pw):$(agt planner)"
+check "agent.sh: a claude worker keeps the kit's tab title (CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1), the Planner and a codex role do not get it, defaults.env and the role's env win" "$ENVC" "TITLE=1:TITLE=unset:0:TITLE=0:TITLE=2:TITLE=0"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"
 case "$(ag dev)" in *"$DQ"*) A1=dev-ok;; *) A1=dev-no;; esac
 case "$(ag aq)" in *'--allowedTools Read AskUserQuestion '"$DQ"'--disallowedTools Foo '*) A1="$A1 aq-ok";; *) A1="$A1 aq-no";; esac
 check "agent.sh: a claude worker cannot open dialogs (--disallowedTools after --allowedTools, before --settings), its allowedTools and extraArgs (a second --disallowedTools) are kept" "$A1" "dev-ok aq-ok"
@@ -2488,7 +2503,7 @@ cat > "$TMP/rbin/orca" <<EOS
 echo "\$*" >> "$RLOG"
 case "\$1 \$2" in
   "terminal list") echo '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"},{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"},{"handle":"other","ptyId":"wt@@p9","title":"z"}]}';;
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"new-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
   "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *new-Planner*) echo '{"result":{"terminal":{"ptyId":"wt@@n1","agentIdentity":"claude"}}}';; *new-Dev*) echo '{"result":{"terminal":{"ptyId":"wt@@n2","agentIdentity":"claude"}}}';; *) echo '{"result":{"terminal":{"ptyId":"wt@@n3","agentIdentity":"claude"}}}';; esac;;
 esac
 exit 0
@@ -2539,7 +2554,7 @@ cat > "$TMP/obin/orca" <<EOS
 echo "\$*" >> "$OLOG"
 case "\$1 \$2" in
   "terminal list") cat "$TMP/olist";;
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"new-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
   "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *) echo '{"result":{"terminal":{"ptyId":"wt@@x","agentIdentity":"claude"}}}';; esac;;
   "terminal wait") [ -e "$TMP/owaitfail" ] && { echo '{"ok":false}'; exit 1; };;
 esac
@@ -4054,7 +4069,7 @@ cat > "$TMP/rlbin/orca" <<EOS
 echo "\$*" >> "$RLOG"
 case "\$1 \$2" in
   "terminal create") [ -f "$TMP/rl-failcreate" ] && exit 1
-    while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t-\$(grep -c '^terminal create' "$RLOG")\"}";;
+    while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t-\$(grep -c '^terminal create' "$RLOG")\"}";;
   "terminal close") [ -f "$TMP/rl-failclose" ] && exit 1;;
   "terminal show") [ -f "$TMP/r-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
@@ -4164,7 +4179,7 @@ cat > "$TMP/awbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$ALOG"
 case "\$1 \$2" in
-  "terminal create") [ -f "$TMP/aw-createfail" ] && exit 1; while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") [ -f "$TMP/aw-createfail" ] && exit 1; while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
   "terminal close") [ -f "$TMP/aw-closefail" ] && exit 1; exit 0;;
   "terminal list") [ -f "$TMP/aw-listfail" ] && exit 1; [ -f "$TMP/aw-listjson" ] && cat "$TMP/aw-listjson"; exit 0;;
   "terminal show") [ -f "$TMP/aw-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/aw-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;

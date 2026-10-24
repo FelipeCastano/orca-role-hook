@@ -402,7 +402,7 @@ for id in $ROLES; do
   fi
   h=""
   for try in 1 2 3; do
-    h=$(orca terminal create --worktree "$WT" --title "$t" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
+    h=$(orca terminal create --worktree "$WT" --title "$(tab_title_of "$CFG" "$id")" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
     [ -n "$h" ] && break
     echo "Retrying $t ($try/3)..."; sleep 2
   done
