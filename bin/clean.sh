@@ -27,7 +27,8 @@ if [ "$1" = --msg ]; then
   id="$(resolve "${2:-}")"; [ -n "$id" ] || { echo "Unknown role: ${2:-}" >&2; exit 1; }
   if [ "$id" = planner ]; then
     wt="${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}"; { IFS= read -r key; IFS= read -r url; } < <(worktree_jira "${wt:-active}" "$CFG")
-    planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3
+    if [ -e "$GITDIR/orca-roles.mode-pending" ]; then planner_ask_msg "$CFG"
+    else planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3; fi
   else worker_msg "$CFG" "$id"; fi
   echo; exit 0
 fi
