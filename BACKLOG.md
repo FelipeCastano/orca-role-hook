@@ -5,8 +5,8 @@ Known pending work for the kit. Each entry says what to do and why; remove it wh
 ## Pending verification
 
 - **Codex and OpenCode tab titles.** The kit titles each role's tab with the agent's name ("Researcher (codex)") so Orca recognizes it as an agent (stablyai/orca#32090). Claude Code is kept from retitling its tab with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`; whether Codex and OpenCode retitle their tab, and with what switch to stop it, is unverified (for Codex, `[tui] terminal_title` in `~/.codex/config.toml`, see stablyai/orca#26557). Verify without driving the agents interactively.
-- **The tab-title fix on Windows + WSL.** Verified on macOS only.
-- **WSL: stale handles after an Orca restart.** On WSL, `orca-roles.env` kept old handles for every role but one after Orca restarted, and the "Roles reopened" message carried them. Not reproduced on macOS.
+- **The tab-title fix on Windows + WSL.** Verified on macOS only, including a simulated Ubuntu `.bashrc` that retitles the tab at its prompt (the kit sets its title again before starting the agent). Confirm on WSL that `worker-start --terminal <role>` is accepted after `roles`.
+- **WSL: stale handles after an Orca restart.** On WSL, `orca-roles.env` kept old handles for every role but one after Orca restarted, and the "Roles reopened" message carried them. Not reproduced on macOS. A side effect seen there: `relaunch-role.sh` reopened the whole team, because the other roles' tabs counted as "closed but Orca kept its session running".
 
 ## Revert when Orca fixes it
 

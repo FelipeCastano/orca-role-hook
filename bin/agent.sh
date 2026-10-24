@@ -13,6 +13,9 @@ MODEL="$(rstr "$CFG" "$ROLE" model)"
 NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester and the Auditor run lowered
 RUN=(); if [ -n "$NICE" ] && [ "$NICE" != 0 ] && command -v nice >/dev/null; then RUN=(nice -n "$NICE"); fi
 [ -n "$RESUME" ] && [ "$AGENT" != claude ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
+# The tab's title, with the agent's name, is what lets Orca dispatch to it (stablyai/orca#32090), and a shell profile may have
+# replaced it before this script runs (Ubuntu's .bashrc titles the tab "user@host: dir" at each prompt): set it again, last.
+if [ -t 1 ]; then printf '\033]0;%s\007' "$(tab_title_of "$CFG" "$ROLE" | tr -d '\000-\037\177')"; fi
 PERM="$(rstr "$CFG" "$ROLE" permissionMode)"
 PROMPT="$(prompt_of "$CFG" "$ROLE")"
 

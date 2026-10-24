@@ -441,6 +441,15 @@ rule A12 "$AD/writer.md" 'only keys that exist in article/refs.bib' '^2\. Cite o
 rule A12 "$AD/writer.md" '[CITATION NEEDED:' '^5\. Where a claim needs'
 rule A12 "$AD/writer.md" 'never invent a key' '^5\. Where a claim needs'
 # pins of rules the prompts already state: pr-reviewer and academic-research limits, the programmer Planner's relaunch and escalation rules, the Report line of the skeleton
+# R26 the agent's name in each role's tab title (Orca only dispatches to a tab it recognizes as an agent): README paragraph, troubleshooting rows, backlog entry to revert
+rule R26 "$ROOT/README.md" "Each role's tab is titled with the role's title plus the agent's name"
+rule R26 "$ROOT/README.md" 'Claude workers start with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`'
+rule R26 "$ROOT/README.md" 'The kit sets that title again right before it starts the agent'
+rule R26 "$ROOT/README.md" 'close-role.sh <role>' '`worker-start` fails with `agent_unconfigured`, or `dispatch --inject` with `inject_rejected`'
+rule R26 "$ROOT/plugin/skills/team/SKILL.md" 'close-role.sh <role>' '`worker-start` fails with `agent_unconfigured`, or `dispatch --inject` with `inject_rejected`'
+[ -f "$ROOT/BACKLOG.md" ] || { echo "FAIL rules R26: BACKLOG.md is missing"; FAIL=1; }
+rule R26 "$ROOT/BACKLOG.md" 'stablyai/orca#32999' '^- \*\*Agent name in tab titles'
+grep -qxF '## Revert when Orca fixes it' "$ROOT/BACKLOG.md" 2>/dev/null || { echo "FAIL rules R26: BACKLOG.md lost its 'Revert when Orca fixes it' section"; FAIL=1; }
 # R2 an ambiguous answer is not a yes to the commits
 rule R2 "$PD/planner.md" 'neither is an ambiguous answer ("ok, continue"): ask again' '\*\*Set audit\.\*\*'
 # pr-reviewer: no worktrees or terminals, no git state changes, context cleaned only with the user's yes, no AI attribution, kit changes only with the user's yes
@@ -2409,6 +2418,35 @@ case "$OUT" in "--add-dir "*"--resume abc-123 "*) echo "ok   agent.sh: --resume 
 case "$OUT" in nice*) echo "FAIL agent.sh: nice without the option"; FAIL=1;; *) echo "ok   agent.sh: no nice without the option";; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" cx --resume abc-123 2>&1 | tr '\n' ' ')"
 case "$OUT" in *"--resume only applies to claude"*) echo "ok   agent.sh: --resume ignored for codex";; *) echo "FAIL agent.sh codex resume: $OUT"; FAIL=1;; esac
+# agent.sh sets the tab title again right before the agent starts, only on a terminal, without control characters (stablyai/orca#32090)
+cat > "$TMP/pty.py" <<'P'
+import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+data = b""
+while True:
+    try:
+        d = os.read(fd, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    data += d
+os.waitpid(pid, 0)
+sys.stdout.write(repr(data.replace(b"\r\n", b"\n")))
+P
+cat > "$TMP/ttl.json" <<'J'
+{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "planner": {}, "dev": { "title": "Dev" }, "cx": { "agent": "codex", "title": "Researcher" }, "cu": { "agent": "custom", "command": "echo CUSTOM", "title": "Gem" }, "inj": { "title": "D\u00e9v\u0007\u001b]0;evil\u0007\n\u007f\u0001\u001f\u00fc" } } }
+J
+ttyag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/ttl.json" python3 -I "$TMP/pty.py" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1); }
+pipeag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/ttl.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | od -An -c | tr -d ' \n' | sed 's/\\n/;/g'); }
+ttt() { local o; o="$(ttyag "$1")"; case "$o" in "b'\\x1b]0;$2\\x07"*|"b\"\\x1b]0;$2\\x07"*) ;; *) echo "bad:$o"; return;; esac; echo "$(printf '%s' "$o" | grep -o '\\x1b\]0;' | wc -l | tr -d ' ')"; }
+check "agent.sh on a terminal: one OSC 0 with the tab title first, for claude (a worker and the Planner), codex and custom" "$(ttt dev 'Dev (claude)'):$(ttt planner 'planner (claude)'):$(ttt cx 'Researcher (codex)'):$(ttt cu 'Gem (echo)')" "1:1:1:1"
+OUT="$(ttyag inj)"
+check "agent.sh on a terminal: control characters in the title are removed (no ESC or BEL but the OSC's own, no newline, DEL or SOH), printable and non-ASCII text stays" "${OUT%%--*}" "b'\\x1b]0;D\\xc3\\xa9v]0;evil\\xc3\\xbc (claude)\\x07"
+check "agent.sh in a pipe: no escape byte and no BEL, for a worker and the Planner" "$(pipeag dev | grep -c '033\|\\a'):$(pipeag planner | grep -c '033\|\\a')" "0:0"
+check "agent.sh in a pipe: a custom agent's output carries no escape byte and no BEL, and is not empty" "$(pipeag cu | grep -c '033\|\\a'):$(pipeag cu | grep -c 'CUSTOM')" "0:1"
 # agent.sh: --add-dir <scratch> only for claude agents (the fake claude and codex echo their arguments)
 SDT="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir tester)"; mkdir -p "$SDT/sub"; touch "$SDT/f" "$SDT/sub/g" "$SDT/.hidden"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester | tr '\n' ' ')"
@@ -5127,7 +5165,7 @@ check "cli: an unguarded failing command in a section -> exit 1, stderr names th
 cli_f guarded; check "cli: guarded failures (if, ||, &&, a failing command in a condition) print no 'aborted' line and do not change the result" "$CRC:$(grep -c 'aborted' "$TMP/cli.err"):$(grep -c '^ok   marker guarded$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1:1"
 cli_f quit; check "cli: a section that exits 0 early prints no 'aborted' line" "$(grep -c 'aborted' "$TMP/cli.err")" "0"
 # the rules helpers fail loudly: an unmodified copy of the prompts passes, a lost fragment or a renamed pr-reviewer section does not
-RT="$TMP/rules-selftest"; rm -rf "$RT"; mkdir -p "$RT/tests"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$ROOT/README.md" "$RT/"; mkdir -p "$RT/plugin"; cp -R "$ROOT/plugin/skills" "$RT/plugin/"; cp "$ROOT/tests/smoke.sh" "$RT/tests/smoke.sh"
+RT="$TMP/rules-selftest"; rm -rf "$RT"; mkdir -p "$RT/tests"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$ROOT/README.md" "$ROOT/BACKLOG.md" "$RT/"; mkdir -p "$RT/plugin"; cp -R "$ROOT/plugin/skills" "$RT/plugin/"; cp "$ROOT/tests/smoke.sh" "$RT/tests/smoke.sh"
 rt_run() { CRC=0; bash "$RT/tests/smoke.sh" rules > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
 rt_run; check "rules helpers: an unmodified copy of the prompts passes" "$CRC:$(grep -c '^FAIL' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1"
 sed -i.bak "s/Nothing leaves the worktree without the user's explicit yes/Nothing leaves/" "$RT/prompts/programmer/planner.md"; rm -f "$RT/prompts/programmer/planner.md.bak"
