@@ -20,6 +20,7 @@ trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
 # where set -e ended the script: the failing command of the main shell (not of a $(...) or a subshell, where its status shows up on the line that ran it); only recorded while errexit is on
 set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINENO: $BASH_COMMAND";; esac' ERR
 export KIT="$TMP/kit"; mkdir -p "$KIT"
+printf '#!/bin/sh\necho 4242\n' > "$TMP/agent-pid"; chmod +x "$TMP/agent-pid"; export ORCA_ROLES_AGENT_PID="$TMP/agent-pid"   # by default every fake tab with an agent identity has a live agent process behind it; a test that needs "no process" points the hook at a script that prints nothing
 export ORCA_ROLES_SUPERPOWERS_FETCH=skip   # install.sh must never reach the network from the suite (the fetch tests put a fake git first on the PATH and clear this)
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
@@ -3159,8 +3160,10 @@ case "\$1 \$2" in
   "terminal list") jq -sc '{terminals: .}' "$TMP/wbase" "$TMP/wwoken" 2>/dev/null; [ ! -e "$TMP/wlistfail" ] || exit 1;;
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
   "terminal show") h=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; shift; done
+    [ ! -e "$TMP/wstale.\$h" ] || { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }
     case "\$h" in
       old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+      noid-*) echo "{\"result\":{\"terminal\":{\"tabId\":\"tab-\$h\",\"leafId\":\"leaf-\$h\",\"ptyId\":\"wt@@x-\$h\"}}}";;
       h-ok) echo '{"result":{"terminal":{"handle":"h-ok","tabId":"T1","leafId":"L1"}}}';;
       h-split) echo '{"a":{"tabId":"X"},"b":{"tabId":"T2","leafId":"L2"},"c":{"tabId":"T3","leafId":"L3"}}';;
       h-noleaf) echo '{"result":{"terminal":{"tabId":"T1"}}}';;
@@ -3184,9 +3187,21 @@ cat > "$TMP/wbin/wake" <<EOS
 echo "WAKE \$*" >> "$WOLOG"
 [ ! -e "$TMP/wmsg.\$2" ] || cat "$TMP/wmsg.\$2"
 rc=0; [ ! -e "$TMP/wrc.\$2" ] || rc="\$(cat "$TMP/wrc.\$2")"
-[ "\$rc" != 0 ] || [ ! -e "$TMP/wadd.\$2" ] || cat "$TMP/wadd.\$2" >> "$TMP/wwoken"
+if [ "\$rc" = 0 ]; then
+  [ ! -e "$TMP/wph.\$2" ] || [ -e "$TMP/wnostale.\$2" ] || touch "$TMP/wstale.\$(cat "$TMP/wph.\$2")"
+  if [ -e "$TMP/wdelay.\$2" ]; then ( sleep 2; "$TMP/wbin/wake-land" "\$2" ) >/dev/null 2>&1 &
+  else "$TMP/wbin/wake-land" "\$2"; fi
+fi
 exit "\$rc"
 EOS
+cat > "$TMP/wbin/wake-land" <<EOS
+#!/bin/sh
+[ ! -e "$TMP/wadd.\$1" ] || cat "$TMP/wadd.\$1" >> "$TMP/wwoken"
+if [ -e "$TMP/wph.\$1" ] && [ ! -e "$TMP/wphkeep.\$1" ]; then grep -vF "\"handle\":\"\$(cat "$TMP/wph.\$1")\"" "$TMP/wbase" > "$TMP/wbase.t"; mv "$TMP/wbase.t" "$TMP/wbase"; fi
+exit 0
+EOS
+printf '#!/bin/sh\n[ -e "%s/wnoproc.$1" ] || echo 4242\n' "$TMP" > "$TMP/wbin/agent-pid"
+chmod +x "$TMP/wbin/wake-land" "$TMP/wbin/agent-pid"
 printf '#!/bin/sh\n[ ! -e "%s/wsess.$1" ] || echo 11111111-2222-3333-4444-555555555555\nexit 0\n' "$TMP" > "$TMP/wbin/session-of"
 printf '#!/bin/sh\necho "$*" > "%s/wkick.args"\n' "$TMP" > "$TMP/wbin/kickoff"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/wbin/relauncher"
@@ -3202,15 +3217,18 @@ wst() {  # wst <env> <pty> <tabs>: the saved state of the team, an empty termina
   printf '%s' "$1" > "$WG/orca-roles.env"; printf '%s' "$2" > "$WG/orca-roles.pty"; printf '%s' "$3" > "$WG/orca-roles.tabs"
   printf 'PLANNER=old-pl\n' > "$WG/orca-roles.kicked"; cp "$KIT/config.json" "$WG/orca-roles.config.json"
   rm -rf "$WG/orca-roles.lock" "$WG/orca-roles.overrides.json" "$WG/orca-roles.planner-handles" "$WG/orca-roles.mode-pending" "$WG/orca-roles.switch-from"
-  rm -f "$TMP"/wrc.* "$TMP"/wmsg.* "$TMP"/wadd.* "$TMP"/wsess.* "$TMP/wwaitfail" "$TMP/wlistfail" "$TMP/wnoleaf"
+  rm -f "$TMP"/wrc.* "$TMP"/wmsg.* "$TMP"/wadd.* "$TMP"/wsess.* "$TMP"/wnoproc.* "$TMP"/wph.* "$TMP"/wphkeep.* "$TMP"/wstale.* "$TMP"/wnostale.* "$TMP"/wdelay.* "$TMP/wwaitfail" "$TMP/wlistfail" "$TMP/wnoleaf"
   : > "$TMP/wbase"; : > "$TMP/wwoken"; : > "$WOLOG"
 }
 wadd() {  # wadd <tab> <handle> <pty> [nosession]: waking <tab> makes <handle> appear in the list with that ptyId, and (unless nosession) its Claude session readable
   printf '{"handle":"%s","ptyId":"%s","title":"x"}\n' "$2" "$3" > "$TMP/wadd.$1"; [ "${4:-}" = nosession ] || : > "$TMP/wsess.$2"
 }
+wph() {  # wph <tab> <old handle> <new handle> <pty> [nosession]: the old handle is listed with that pty and has no agent process; waking <tab> makes the old handle stale and drops it from the list (unless wphkeep.<tab> exists: it stays listed, first, next to the new one), and <new handle> appears with that pty
+  : > "$TMP/wnoproc.$2"; printf '%s\n' "$2" > "$TMP/wph.$1"; printf '{"handle":"%s","ptyId":"%s"}\n' "$2" "$4" >> "$TMP/wbase"; wadd "$1" "$3" "$4" "${5:-}"
+}
 wl() {  # wl <launch.sh args...>; env: OTH (ORCA_TERMINAL_HANDLE), OWT (ORCA_WORKTREE_ID), WHOOK (ORCA_ROLES_WAKE), WB (budget)
   : > "$WOLOG"
-  OUT="$(cd "$WP" && HOME="$TMP/home" PATH="$TMP/wbin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" ORCA_WORKTREE_ID="${OWT-wt-fix}" ORCA_ROLES_WAKE="${WHOOK-$TMP/wbin/wake}" ORCA_ROLES_WAKE_BUDGET="${WB:-3}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/wbin/session-of" ORCA_ROLES_KICKOFF="$TMP/wbin/kickoff" ORCA_ROLES_RELAUNCHER="$TMP/wbin/relauncher" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
+  OUT="$(cd "$WP" && HOME="$TMP/home" PATH="$TMP/wbin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" ORCA_WORKTREE_ID="${OWT-wt-fix}" ORCA_ROLES_WAKE="${WHOOK-$TMP/wbin/wake}" ORCA_ROLES_WAKE_BUDGET="${WB:-3}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_AGENT_PID="$TMP/wbin/agent-pid" ORCA_ROLES_SESSION_OF="$TMP/wbin/session-of" ORCA_ROLES_KICKOFF="$TMP/wbin/kickoff" ORCA_ROLES_RELAUNCHER="$TMP/wbin/relauncher" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
 }
 wev() {  # the wake calls, switches, closes and creates, in order
   awk '/^WAKE /{print "W:"$3; next} /^terminal switch/{print "switch:"$4; next} /^terminal close/{print "close:"$4; next} /^terminal create/{if (match($0,/--title [A-Za-z0-9]+/)) print "create:" substr($0,RSTART+8,RLENGTH-8)}' "$WOLOG" | tr '\n' ' '
@@ -3303,6 +3321,98 @@ wcfgp experiment; wst $'EXPR=old-expr
 '; wcfgp writing; wadd tab-expr rs-expr wt@@p7; S0="$(wsum)"
 OTH=other wl; check "wake on an academic-research phase change: the asleep role of the old phase is woken although the new phase does not have it, so the phase guard refuses naming it, with nothing closed or opened and the saved state untouched" "$RC:$(wev):$(wn "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Expr is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)" "1:W:tab-expr switch:other :1:same"
 rm -rf "$KIT/prompts/academic-research"; wcfg
+# 8c. placeholders: after a restart Orca can list a role's tab, with its old handle, ptyId and often a stale agent identity, with no agent process behind it; waking it makes Orca resume the conversation under a new handle
+WPT=$'PLANNER=tab-pl leaf-pl\nDEV=tab-dev leaf-dev\n'
+wpn() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c 'terminal close' "$WOLOG" || true)"; }
+SESS='(11111111-2222-3333-4444-555555555555)'
+# a: a placeholder whose identity is stale (the fake show gives claude) and one with no identity (noid-*): both woken with the ids 'terminal show' gives, then reopened once with their conversation; neither is "already open" or "gone"
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2
+OTH=other wl; P="a:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.'):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open\|is gone\|no longer exists' || true)"
+wst $'DEV=noid-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-noid-dev noid-dev rs-dev wt@@p2
+OTH=other wl; P="$P b:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')"
+# c: no ids from 'terminal show' (a tab id only): the tabs file's ids are used; with neither, the placeholder is not woken and is closed as gone
+wst $'DEV=h-noleaf\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-dev h-noleaf rs-dev wt@@p2
+OTH=other wl; P="$P c:$RC:$(wev)"
+wst $'DEV=h-noleaf\n' $'DEV=wt@@p2\n' $'PLANNER=tab-pl leaf-pl\n'; wph tab-dev h-noleaf rs-dev wt@@p2
+OTH=other wl; P="$P d:$RC:$(wev):$(wpn):$(wn 'The agent in the tab of Dev (h-noleaf) is gone; closing that tab and opening a new one.')"
+check "wake of placeholders: a tab listed with its old handle and no agent process (stale identity, or none) is woken with the ids 'terminal show' gives, announced, then closed under its new handle and reopened once with its conversation, never 'already open' or 'gone'; without ids from 'terminal show' the tabs file's are used; with neither it is not woken and takes the 'agent is gone' path" "$P" \
+"a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:1:0 b:0:W:tab-noid-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1 c:0:W:tab-dev switch:other create:Planner close:rs-dev create:Dev create:Tst  d:0:create:Planner close:h-noleaf create:Dev create:Tst :0:1:1"
+# e: the old handle is still listed (with a readable session and idle) while the new one has not appeared yet: the wait ignores it, so the tab reopened is the one under the new handle
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wdelay.tab-od-dev"; : > "$TMP/wsess.od-dev"; WB=8
+OTH=other wl; unset WB; sleep 3
+check "wake of a placeholder: while the old handle is still listed the readiness wait does not take it for the woken tab; the new handle is the one closed and reopened, the old one is never closed" "$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
+# f: a placeholder that cannot be woken (the helper says unavailable, 2, or fails, 1) is a tab whose agent is gone: closed by its old handle and replaced, never 'already open'
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; echo 2 > "$TMP/wrc.tab-od-dev"
+OTH=other wl; Q="a:$RC:$(wev):$(wn "$WNOWAKE"):$(wn 'The agent in the tab of Dev (od-dev) is gone; closing that tab and opening a new one.'):$(printf '%s\n' "$OUT" | grep -c 'already open' || true)"
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; echo 1 > "$TMP/wrc.tab-od-dev"; echo 'no such tab' > "$TMP/wmsg.tab-od-dev"
+OTH=other wl; Q="$Q b:$RC:$(wev):$(wn 'Could not wake the tab of Dev (no such tab); it is treated as closed.'):$(wn 'The agent in the tab of Dev (od-dev) is gone; closing that tab and opening a new one.'):$(printf '%s\n' "$OUT" | grep -c 'already open' || true)"
+check "wake of a placeholder that cannot be woken: helper code 2 (the sentence once) or 1 ('Could not wake') ends in 'The agent in the tab of Dev (od-dev) is gone', its tab closed by the old handle and a new one opened, never 'already open'" "$Q" \
+"a:0:W:tab-od-dev create:Planner close:od-dev create:Dev create:Tst :1:1:0 b:0:W:tab-od-dev create:Planner close:od-dev create:Dev create:Tst :1:1:0"
+# g: a role whose agent process is there is not a placeholder: no wake, no close; h: a custom agent has no identity to go stale, it is never one
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; rm -f "$TMP/wnoproc.od-dev"
+OTH=other wl; G="a:$RC:$(wpn):$(wn 'The agent in the tab of Dev (od-dev) is gone; closing that tab and opening a new one.')"
+wcfg ', "cu": { "title": "Cu", "agent": "custom", "command": "x" }'; : > "$KIT/prompts/programmer/cu.md"
+wst $'CU=od-cu\n' $'CU=wt@@p4\n' $'PLANNER=tab-pl leaf-pl\nCU=tab-cu leaf-cu\n'; wph tab-od-cu od-cu rs-cu wt@@p4
+OTH=other wl; G="$G b:$RC:$(wpn):$(wn 'The agent in the tab of Cu (od-cu) is gone; closing that tab and opening a new one.')"
+rm -f "$KIT/prompts/programmer/cu.md"; wcfg
+check "a role with an agent process behind its tab, or a custom agent, is not a placeholder: no wake, nothing closed, not reported as gone" "$G" "a:0:0:0:0 b:0:0:0:0"
+# i: --status shows a placeholder as an agent gone and a live tab as alive
+wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPT"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2
+OTH=other wl --status; ST1="$(printf '%s\n' "$OUT" | grep -E '^(Planner|Dev)	' | cut -f1-3 | tr '\t' ' ' | tr '\n' ',')"
+rm -f "$TMP/wnoproc.od-dev"; OTH=other wl --status; ST1="$ST1|$(printf '%s\n' "$OUT" | grep -E '^Dev	' | cut -f1-3 | tr '\t' ' ' | tr '\n' ',')"
+check "--status: a tab listed with an identity but no agent process is 'agent gone', the same tab with its process is 'alive'; nothing is woken by a status" "$ST1:$(grep -c '^WAKE ' "$WOLOG" || true)" "Planner pl alive,Dev od-dev agent gone,|Dev od-dev alive,:0"
+# j: the mode switch counts a placeholder that was not woken as an open tab: refused from another terminal, naming it; closed by its old handle from the Planner's tab
+WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; S0="$(wsum)"
+WHOOK='' OTH=other wl --mode pr-reviewer; X="a:$RC:$(wn "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: Dev (od-dev). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)"
+wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPT"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2
+WHOOK='' OTH=pl wl --mode pr-reviewer; X="$X b:$RC:$(wev):$(wn 'Switching mode from programmer to pr-reviewer: closing Dev; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared.')"
+rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"
+check "a mode switch with a placeholder that could not be woken: from another terminal it is an open tab (refusal naming it, nothing changed); from the Planner's tab its tab is closed by the old handle" "$X" "a:1:1:same b:0:close:od-dev :1"
+# k: the old handle stays listed, first, next to the new one: the new one is the woken tab, reopened with its conversation; the old one is never taken (not by the wait, not by the reopening, not by a mode switch)
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wphkeep.tab-od-dev"
+OTH=other wl; K="a:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'Could not wake\|could not be read' || true)"
+WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPT"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wphkeep.tab-od-dev"
+OTH=pl wl --mode pr-reviewer; K="$K b:$RC:$(wev)"
+rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"
+check "wake of a placeholder whose old handle stays listed first next to the new one: the readiness wait finds the new handle, the role is reopened from it with its conversation (no 'could not wake', no unread session) and the old handle is never closed; a mode switch from the Planner's tab closes the new handle, not the old" "$K" \
+"a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 b:0:W:tab-od-dev switch:pl close:rs-dev "
+# l: the wake does not need the tabs file when 'terminal show' gives the ids: empty, or missing
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' ""; wph tab-od-dev od-dev rs-dev wt@@p2
+OTH=other wl; L="a:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')"
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' ""; rm -f "$WG/orca-roles.tabs"; wph tab-od-dev od-dev rs-dev wt@@p2
+OTH=other wl; L="$L b:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')"
+check "wake of a listed placeholder with an empty or missing orca-roles.tabs (a team saved before the file existed): woken with the ids 'terminal show' gives and reopened with its conversation" "$L" \
+"a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1 b:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
+# m: a listed tab whose new handle never appears has its own, shorter budget (ORCA_ROLES_WAKE_LISTED_BUDGET) and then takes the 'agent is gone' path; an asleep (unlisted) one in the same run keeps ORCA_ROLES_WAKE_BUDGET
+WGONE='The tab of Dev (od-dev) has no agent running and Orca did not resume it; it is handled as an agent that is gone.'
+wst $'PLANNER=old-pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPT"; printf '%s\n{"handle":"od-dev","ptyId":"wt@@p2"}\n' "$WOTHER" > "$TMP/wbase"; : > "$TMP/wnoproc.od-dev"
+T0=$(date +%s);WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; T1=$(date +%s)
+M="a:$RC:$(wev):$(wn "$WGONE"):$(wn 'The agent in the tab of Dev (od-dev) is gone; closing that tab and opening a new one.'):$(wn "Could not wake the tab of Planner (it did not appear in Orca's terminal list); it is treated as closed."):$(printf '%s\n' "$OUT" | grep -c 'Could not wake the tab of Dev' || true):$([ $((T1 - T0)) -ge 5 ] && echo slow || echo fast)"
+wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; printf '%s\n{"handle":"od-dev","ptyId":"wt@@p2"}\n' "$WOTHER" > "$TMP/wbase"; : > "$TMP/wnoproc.od-dev"
+T0=$(date +%s); WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; T1=$(date +%s)
+M="$M b:$RC:$(wev):$(wn "$WGONE"):$([ $((T1 - T0)) -lt 5 ] && echo fast || echo slow)"
+check "wake of a listed tab that never gets a new handle: it waits only ORCA_ROLES_WAKE_LISTED_BUDGET (fast when it is the only one, the unlisted one in the same run still keeps ORCA_ROLES_WAKE_BUDGET), prints the 'has no agent running and Orca did not resume it' line, then the 'agent is gone' path closes it by its old handle and opens a new one; the unlisted one is 'treated as closed'; never 'Could not wake' for the listed one" "$M" \
+"a:0:W:tab-pl W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:1:1:0:slow b:0:W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:fast"
+# n: the old handle of a woken placeholder keeps answering 'terminal show' (and stays listed) after the wake: the role is not 'gone'; its restored tab is reopened from the new handle with its conversation and the old handle is never closed (role loop and mode switch)
+WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+N=""
+for keep in listed unlisted; do
+  wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; [ "$keep" = unlisted ] || : > "$TMP/wphkeep.tab-od-dev"
+  OTH=other wl; N="$N $keep:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'is gone' || true)"
+done
+wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPT"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; : > "$TMP/wphkeep.tab-od-dev"
+OTH=pl wl --mode pr-reviewer; N="$N switch:$RC:$(wev)"
+rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"
+check "wake of a placeholder whose old handle still answers 'terminal show' after the wake (listed or not): classified as no tab, not gone; reopened from the new handle with its conversation, the old handle never closed; a mode switch from the Planner's tab closes the new handle only" "$N" \
+" listed:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 unlisted:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 switch:0:W:tab-od-dev switch:pl close:rs-dev "
+# o: an empty leafId from 'terminal show' falls back to the tabs file for the ids to wake with
+wst $'DEV=h-emptyleaf\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-dev h-emptyleaf rs-dev wt@@p2
+OTH=other wl; check "wake of a listed placeholder whose 'terminal show' gives an empty leafId: the tabs file's ids are used (woken with tab-dev), not skipped" "$RC:$(wev)" "0:W:tab-dev switch:other create:Planner close:rs-dev create:Dev create:Tst "
 # 9. orca-roles.tabs upkeep: close-role.sh forgets a role's line (and works with no file), a Planner that keeps its restored tab keeps its previous line (and none if it had none), a tab whose ids Orca does not give is not written
 wst $'PLANNER=a\nDEV=b\n' $'PLANNER=wt@@a\nDEV=wt@@b\n' "$WPD_T"
 (cd "$WP" && HOME="$TMP/home" PATH="$TMP/wbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1) || true; U="a:$(tr '\n' '|' < "$WG/orca-roles.tabs")"

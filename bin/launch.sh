@@ -72,6 +72,18 @@ SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has c
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
 # Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
 # An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
+# The pid of the claude or codex process whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
+agent_pid_of_handle() {
+  [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
+  local pid env
+  for pid in $(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)(claude|codex)$/ {print $1}'); do
+    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
+    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
+    echo "$pid"
+    return 0
+  done
+  return 0
+}
 agent_in()   { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
 role_alive() {  # role_alive <role> <handle>
   [ -n "${2:-}" ] || return 1
@@ -84,7 +96,11 @@ role_alive() {  # role_alive <role> <handle>
   printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
   case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac
   local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
-    [ -n "$(agent_in "$2")" ] && return 0
+    if [ -n "$(agent_in "$2")" ]; then
+      # Orca can list a tab after a restart with its old identity but no agent running
+      [ -n "$(agent_pid_of_handle "$2")" ] || return 2
+      return 0
+    fi
     [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
   done
   return 2
@@ -260,7 +276,16 @@ saved_pty() { grep "^$1=" "$PTY" 2>/dev/null | head -1 | cut -d= -f2-; }
 # After a restart (of the computer or of Orca), Orca restores the tabs that were open with NEW handles and, in each agent tab,
 # relaunches the agent with 'claude --resume <session>' but without the kit's settings (model, auto mode, plugin, MCP...).
 # The ptyId of a tab does not change, so the restored tab of a role is the worktree terminal whose ptyId is the saved one.
-restored_handle() { printf '%s' "$LIST" | jq -r --arg p "$1" '[.. | objects | select(has("handle") and .ptyId == $p) | .handle] | first // empty' 2>/dev/null; }
+# The optional second argument is a handle to leave out: the old one of a tab Orca kept asleep, which it may still list next to the new one.
+restored_handle() { printf '%s' "$LIST" | jq -r --arg p "$1" --arg s "${2:-}" '[.. | objects | select(has("handle") and .ptyId == $p and .handle != $s) | .handle] | first // empty' 2>/dev/null; }
+# The old handle of a role's tab that this run woke (set in the wake block), for restored_handle's second argument.
+woke_old() { local k="WOKE_OLD_$1"; printf '%s' "${!k:-}"; }
+# role_alive for a saved handle, except that the old handle of a tab this run woke and found ready counts as no tab (1): the restored tab has another handle.
+role_state() {  # role_state <var> <role> <handle>
+  local wo; wo="$(woke_old "$1")"
+  [ -z "$wo" ] || [ "${3:-}" != "$wo" ] || return 1
+  role_alive "$2" "$3"
+}
 # The Claude session Orca resumed in a restored tab: the 'claude' process whose ORCA_TERMINAL_HANDLE is that handle, started with --resume <id>.
 session_of_handle() {
   [ -n "${ORCA_ROLES_SESSION_OF:-}" ] && { "$ORCA_ROLES_SESSION_OF" "$1"; return 0; }   # test hook
@@ -283,7 +308,7 @@ LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
 [ "$ASK" = 1 ] && LROLES="planner"
 # After a restart Orca keeps agent tabs asleep: not in the terminal list, no handle, until someone clicks them (then Orca resumes their session itself).
 # Waking them first lets the code below see them as the restored tabs they are and reopen each with its conversation, instead of opening a second tab.
-if [ "$LISTOK" = 1 ] && [ -s "$STATE" ] && [ -s "$TABS" ]; then
+if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
   WAKE_ALL=0
   if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ]; then WAKE_ALL=1; fi
   if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then WAKE_ALL=1; fi
@@ -295,8 +320,14 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ] && [ -s "$TABS" ]; then
     wid="$(printf '%s' "$wv" | tr 'A-Z_' 'a-z-')"
     if [ "$WAKE_ALL" = 0 ]; then case " $LROLES " in *" $wid "*) ;; *) continue;; esac; fi
     wp="$(saved_pty "$wv")"; [ -n "$wp" ] || continue
-    [ -z "$(restored_handle "$wp")" ] || continue
+    wold="$(restored_handle "$wp")"
     wt="$(grep "^$wv=" "$TABS" 2>/dev/null | head -1 | cut -d= -f2-)"
+    if [ -n "$wold" ]; then
+      case "$(rstr "$CFG" "$wid" agent)" in claude|codex|"") ;; *) continue;; esac
+      [ -z "$(agent_pid_of_handle "$wold")" ] || continue
+      wsh="$(tabs_of_handle "$wold")"
+      [ -z "$wsh" ] || wt="$wsh"
+    fi
     wtab="${wt%% *}"; wleaf="${wt#* }"
     [ -n "$wtab" ] && [ -n "$wleaf" ] && [ "$wtab" != "$wt" ] || continue
     wtitle="$(title_of "$CFG" "$wid")"
@@ -306,19 +337,23 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ] && [ -s "$TABS" ]; then
     esac
     reason="$(wake_tab "${WT#id:}" "$wtab" "$wleaf")"; wrc=$?
     case "$wrc" in
-      0) W_ROLE[$W_N]="$wid"; W_PTY[$W_N]="$wp"; W_TITLE[$W_N]="$wtitle"; W_HANDLE[$W_N]=""; W_READY[$W_N]=0; W_N=$((W_N + 1));;
+      0) W_ROLE[$W_N]="$wid"; W_PTY[$W_N]="$wp"; W_TITLE[$W_N]="$wtitle"; W_HANDLE[$W_N]=""; W_OLD[$W_N]="$wold"; W_VAR[$W_N]="$wv"; W_READY[$W_N]=0; W_N=$((W_N + 1));;
       2) echo "$WAKE_MSG"; W_STOP=1;;
       *) echo "Could not wake the tab of $wtitle ($reason); it is treated as closed.";;
     esac
   done
   if [ "$W_N" -gt 0 ]; then
-    W_END=$((SECONDS + ${ORCA_ROLES_WAKE_BUDGET:-30}))
+    W_T0=$SECONDS
+    for ((wi = 0; wi < W_N; wi++)); do
+      if [ -n "${W_OLD[$wi]}" ]; then W_END[$wi]=$((W_T0 + ${ORCA_ROLES_WAKE_LISTED_BUDGET:-10})); else W_END[$wi]=$((W_T0 + ${ORCA_ROLES_WAKE_BUDGET:-30})); fi
+      W_DONE[$wi]=0
+    done
     while :; do
       NL="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && LIST="$NL"
       W_ALL=1
       for ((wi = 0; wi < W_N; wi++)); do
-        [ "${W_READY[$wi]}" = 0 ] || continue
-        wh="$(restored_handle "${W_PTY[$wi]}")"
+        [ "${W_READY[$wi]}" = 0 ] && [ "${W_DONE[$wi]}" = 0 ] || continue
+        wh="$(restored_handle "${W_PTY[$wi]}" "${W_OLD[$wi]}")"
         if [ -n "$wh" ]; then W_HANDLE[$wi]="$wh"; fi
         wok=0
         if [ -n "$wh" ]; then
@@ -331,18 +366,22 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ] && [ -s "$TABS" ]; then
         fi
         if [ "$wok" = 1 ]; then
           W_READY[$wi]=1; echo "Orca kept the tab of ${W_TITLE[$wi]} asleep after a restart; woke it."
+          [ -z "${W_OLD[$wi]}" ] || printf -v "WOKE_OLD_${W_VAR[$wi]}" '%s' "${W_OLD[$wi]}"
+        elif [ "$SECONDS" -ge "${W_END[$wi]}" ]; then
+          W_DONE[$wi]=1
         else
           W_ALL=0
         fi
       done
       [ "$W_ALL" = 0 ] || break
-      [ "$SECONDS" -lt "$W_END" ] || break
       sleep 1
     done
     [ -z "${ORCA_TERMINAL_HANDLE:-}" ] || orca terminal switch --terminal "$ORCA_TERMINAL_HANDLE" --json >/dev/null 2>&1 || true
     for ((wi = 0; wi < W_N; wi++)); do
       [ "${W_READY[$wi]}" = 0 ] || continue
-      if [ -z "${W_HANDLE[$wi]}" ]; then
+      if [ -z "${W_HANDLE[$wi]}" ] && [ -n "${W_OLD[$wi]}" ]; then
+        echo "The tab of ${W_TITLE[$wi]} (${W_OLD[$wi]}) has no agent running and Orca did not resume it; it is handled as an agent that is gone."
+      elif [ -z "${W_HANDLE[$wi]}" ]; then
         echo "Could not wake the tab of ${W_TITLE[$wi]} (it did not appear in Orca's terminal list); it is treated as closed."
       else
         fail "ERROR: Orca woke the tab of ${W_TITLE[$wi]} but its conversation has not started yet; run roles again in a moment. No tab was opened."
@@ -368,10 +407,10 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
     OPEN=0; rh=""
     [ -n "${line#*=}" ] || continue
     srole="$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')"
-    role_alive "$srole" "${line#*=}"; rc=$?
+    role_state "${line%%=*}" "$srole" "${line#*=}"; rc=$?
     [ "$rc" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready."
     [ "$rc" -eq 1 ] || OPEN=1
-    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && rh="$(restored_handle "$p")"
+    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "${line%%=*}")")"
     [ -z "$rh" ] || OPEN=1
     stitle="$(title_of "$CFG" "$srole")"
     if [ "$OPEN" = 1 ]; then
@@ -423,10 +462,10 @@ if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] &&
     prole="$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')"
     [ "$prole" != planner ] || continue
     printf '%s\n' "$NEWENABLED" | grep -qxF "$prole" && continue
-    role_alive "$prole" "${line#*=}"; rc=$?
+    role_state "${line%%=*}" "$prole" "${line#*=}"; rc=$?
     [ "$rc" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready."
     [ "$rc" -eq 1 ] || OPEN=1
-    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p")" ] && OPEN=1
+    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p" "$(woke_old "${line%%=*}")")" ] && OPEN=1
     [ "$OPEN" = 1 ] || continue
     fail "ERROR: this worktree's team is in phase '$OLDPHASE' and phase '$NEWPHASE' was requested while $(title_of "$CFG" "$prole") is still open. Change the phase with ~/.orca-roles/bin/phase.sh $NEWPHASE. Nothing was changed."
   done
@@ -516,7 +555,7 @@ kicked_of() { grep "^$1=" "$KICKED" 2>/dev/null | head -1 | cut -d= -f2-; }
 # Classify every role before closing or opening anything: if Orca cannot tell, the team is left exactly as it is
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
-  role_alive "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
+  role_state "$v" "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
   [ "$st" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE) for $t: no tab was closed or opened. Run roles again once Orca is ready."
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
@@ -560,7 +599,7 @@ for id in $ROLES; do
     RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
     orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
   elif [ -n "${!v:-}" ]; then
-    p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p")"
+    p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "$v")")"
     if [ -n "$rh" ]; then
       if [ "$id" = planner ] && [ "$rh" = "${ORCA_TERMINAL_HANDLE:-}" ]; then
         PLANNER_KEEP_PTY="$p"
