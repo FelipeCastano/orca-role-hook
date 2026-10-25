@@ -732,7 +732,8 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │       ├── common-workers.md    # rules common to the mode's workers
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── docs/
-│   └── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
+│   ├── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
+│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand
 ├── tests/
 │   ├── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
 │   └── live/                    # live checks: mac.sh, wsl.sh, agents.sh (see docs/live-checks.md)

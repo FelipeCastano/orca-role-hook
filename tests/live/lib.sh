@@ -60,7 +60,9 @@ live_is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' is missing." >&2; exit 1; }; }
 live_preflight() {  # the installed kit must be this checkout (the checks test the code, not an older install)
   need jq; need git; need orca
-  [ -n "${ORCA_WORKTREE_ID:-}" ] || { echo "ERROR: run this from an Orca terminal (ORCA_WORKTREE_ID is not set)." >&2; exit 1; }
+  orca status --json 2>/dev/null | jq -e '.ok == true' >/dev/null || { echo "ERROR: Orca is not running or its CLI does not answer (orca status)." >&2; exit 1; }
+  # the worktree id of this checkout: launches run as if typed in one of its terminals (so T2 exercises the folder's-worktree rule)
+  HOST_WTID="${ORCA_WORKTREE_ID:-$(cd "$LIVE_ROOT" && orca worktree current --json 2>/dev/null | jq -r '.result.worktree.id // empty')}"
   local d; d="$(diff -rq "$LIVE_ROOT/bin" "$KIT/bin" 2>/dev/null | grep -v 'Only in /' | head -3)"
   [ -n "$d" ] && { echo "ERROR: the installed kit (~/.orca-roles/bin) differs from this checkout. Install it first: $LIVE_ROOT/install.sh" >&2; echo "$d" >&2; exit 1; }
   return 0
@@ -75,17 +77,35 @@ for k in sys.argv[1].split("."):
 print(d if not isinstance(d,(dict,list)) else json.dumps(d))' "$1"; }
 
 # ---------- throwaway project and worktree ----------
-project_setup() {  # creates $PROJ once: a git repo with a cheap team (.orca-roles.json), the kit as setup script, registered in Orca
-  if [ ! -d "$PROJ/.git" ]; then
-    mkdir -p "$PROJ" && git -C "$PROJ" init -q -b main
-    echo "# orca-roles live checks (throwaway)" > "$PROJ/README.md"
-    jq -n --arg m "$MODEL" '{settings: {jiraHandoff: false, cleanWorkersAfterStep: false, language: "auto"},
-      roles: {planner: {model: $m}, dev: {model: $m}, tester: {model: $m}, auditor: {model: $m},
-              researcher: {enabled: false}, "e2e-tester": {enabled: false}, deployer: {enabled: false}}}' > "$PROJ/.orca-roles.json"
-    git -C "$PROJ" add -A && git -C "$PROJ" -c user.name=live -c user.email=live@localhost commit -qm "live checks project"
+project_setup() {  # $PROJ: a git repo with a cheap team (.orca-roles.json), the kit as setup script, registered in Orca
+  [ -d "$PROJ/.git" ] || { mkdir -p "$PROJ" && git -C "$PROJ" init -q -b main && echo "# orca-roles live checks (throwaway)" > "$PROJ/README.md"; }
+  # every role of the installed configuration is disabled except Planner, Dev, Tester and Auditor (and pr-reviewer's auditor-pr if the
+  # configuration has it), which run on the cheap model:
+  # the same small team in every mode, whatever roles the user's config.json adds
+  jq --arg m "$MODEL" '{settings: {jiraHandoff: false, cleanWorkersAfterStep: false, language: "auto"},
+      roles: ((.roles | keys | map({key: ., value: {enabled: false}}) | from_entries)
+              + {planner: {model: $m}, dev: {model: $m, enabled: true}, tester: {model: $m, enabled: true}, auditor: {model: $m, enabled: true}}
+              + (if .roles["auditor-pr"] then {"auditor-pr": {model: $m, enabled: true}} else {} end))}' \
+    "$KIT/config.json" > "$PROJ/.orca-roles.json.new" 2>/dev/null || jq '.' "$KIT/config.default.json" > /dev/null
+  if [ -s "$PROJ/.orca-roles.json.new" ] && ! cmp -s "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; then mv "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; else rm -f "$PROJ/.orca-roles.json.new"; fi
+  if [ -n "$(git -C "$PROJ" status --porcelain -- README.md .orca-roles.json)" ]; then
+    git -C "$PROJ" add README.md .orca-roles.json && git -C "$PROJ" -c user.name=live -c user.email=live@localhost commit -qm "live checks project"
   fi
   (cd "$PROJ" && "$KIT/bin/orca-yaml.sh" >/dev/null 2>&1) || true    # setup script without --mode: a new worktree asks the mode
   orca repo add --path "$PROJ" --json >/dev/null 2>&1 || true
+}
+team_for() {  # team_for <mode>: the state variables of the team the kit opens in the worktree in that mode, sorted, space-ended
+  local t; t="$(mktemp)"
+  bash -c '. "$1/bin/lib.sh"; merged_config "$2" | jq --arg m "$3" ".settings.mode = \$m" > "$4"; launchable_roles "$4" 2>/dev/null | tr "a-z-" "A-Z_" | sort | tr "\n" " "' _ "$KIT" "$WT" "$1" "$t"
+  rm -f "$t"
+}
+launch_wait() {  # launch_wait <launch log lines before>: waits (up to 180 s) for a launch to end and its kickoff with it
+  local _
+  for _ in $(seq 1 90); do
+    tail -n +"$(($1 + 1))" "$GD/orca-roles-launch.log" 2>/dev/null | grep -qE 'Role kickoff in progress|All roles are already open|^ERROR' && break
+    sleep 2
+  done
+  sleep 2; [ -e "$GD/orca-roles.lock" ] && sleep 5; kickoff_wait
 }
 WT=""; WTID=""; GD=""
 wt_load() { WT="$(st_get wt)"; WTID="$(st_get wtid)"; [ -n "$WT" ] && GD="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)"; }
@@ -102,8 +122,10 @@ d=json.loads(sys.stdin.read(),strict=False)
 for t in (d.get("result") or {}).get("terminals") or []:
     print("\t".join([t.get("handle",""), t.get("ptyId",""), t.get("title") or "", t.get("agentIdentity") or ""]))'
 }
-roles_run() {  # roles_run [options]: the kit's launch in the worktree, from this terminal (the kit takes the folder's worktree); output in $LIVE_DIR/last-roles.log
-  (cd "$WT" && "$KIT/bin/launch.sh" "$@") > "$LIVE_DIR/last-roles.log" 2>&1; local rc=$?
+roles_run() {  # roles_run [options]: the kit's launch in the throwaway worktree, as if typed in a terminal of this checkout (the kit takes the folder's worktree); output in $LIVE_DIR/last-roles.log
+  if [ -n "${HOST_WTID:-}" ]; then (cd "$WT" && ORCA_WORKTREE_ID="$HOST_WTID" "$KIT/bin/launch.sh" "$@") > "$LIVE_DIR/last-roles.log" 2>&1
+  else (cd "$WT" && "$KIT/bin/launch.sh" "id:$WTID" "$@") > "$LIVE_DIR/last-roles.log" 2>&1; fi
+  local rc=$?
   kickoff_wait; return $rc
 }
 kickoff_wait() {  # waits (up to 300 s) until no kickoff of the worktree is running
@@ -117,7 +139,7 @@ L=[l for l in t.get("tail",[]) if isinstance(l,str) and l.strip()]
 print("\n".join(L[-int(sys.argv[1]):]))' "${2:-40}"
 }
 wait_screen() {  # wait_screen <handle> <extended regex> <seconds>: 0 when the screen matches in time
-  local _; for _ in $(seq 1 "$3"); do screen "$1" 80 | grep -Eqi "$2" && return 0; sleep 1; done; return 1
+  local _; for _ in $(seq 1 "$3"); do screen "$1" 80 | tr '\n' ' ' | tr -s ' ' | grep -Eqi "$2" && return 0; sleep 1; done; return 1   # lines joined: a message wraps
 }
 pid_of_handle() {  # the agent process (claude or codex) whose environment has ORCA_TERMINAL_HANDLE=<handle>
   local pid env
@@ -233,8 +255,10 @@ c_fresh_worktree() {  # a new worktree created by Orca with an agent: the setup 
   local id=$1 terms
   wt_create "live-$(date +%H%M%S)" --agent claude --model "$MODEL" --prompt "Reply only: ok" || { fail "$id" "orca worktree create failed"; return 1; }
   for _ in $(seq 1 90); do [ -s "$GD/orca-roles-kickoff.log" ] && [ -z "$(ls -A "$GD/orca-roles.kickoff.d" 2>/dev/null)" ] && break; sleep 2; done
-  check "$id.marker" "the mode is pending after a fresh start (orca-roles.mode-pending)" "$([ -e "$GD/orca-roles.mode-pending" ] && echo yes)" yes
-  check "$id.only-planner" "only the Planner was opened" "$(cut -d= -f1 "$GD/orca-roles.env" 2>/dev/null | tr '\n' ' ')" "PLANNER "
+  # judged from the first launch's block of the log: the Planner (or you) may choose the mode seconds later
+  local first; first="$(awk '/^== /{n++} n==1' "$GD/orca-roles-launch.log")"
+  printf '%s' "$first" | grep -q 'No mode chosen yet: only the Planner is opened' && ok "$id.ask" "the first launch only opened the Planner and left the mode pending" || fail "$id.ask" "the first launch did not ask the mode"
+  check "$id.only-planner" "the first launch opened only the Planner" "$(printf '%s\n' "$first" | grep -oE '^[A-Z_]+=term_' | cut -d= -f1 | tr '\n' ' ')" "PLANNER "
   wait_screen "$(env_of PLANNER)" 'pr-reviewer' 120 && ok "$id.asks" "the Planner asks which mode (its screen names the modes)" || fail "$id.asks" "the Planner's screen does not name the modes after 120 s"
   terms="$(wt_terms)"
   info "$id.composer" "kickoff: $(grep -iE 'composer|Closed' "$GD/orca-roles-kickoff.log" | tr '\n' ' ' | cut -c1-300); seen titles: $(jq -c '[.[]?.title]' "$GD/orca-roles.composer-seen.json" 2>/dev/null)"
@@ -245,7 +269,7 @@ c_choose_mode() {  # the mode chosen from another worktree's terminal: the kit t
   local id=$1
   roles_run --mode programmer
   grep -q 'using the worktree of the current folder' "$LIVE_DIR/last-roles.log" && ok "$id.folder" "launch.sh took the folder's worktree, not this terminal's" || fail "$id.folder" "no 'using the worktree of the current folder' line"
-  check "$id.team" "the programmer team is open" "$(cut -d= -f1 "$GD/orca-roles.env" | sort | tr '\n' ' ')" "AUDITOR DEV PLANNER TESTER "
+  check "$id.team" "the programmer team is open" "$(cut -d= -f1 "$GD/orca-roles.env" | sort | tr '\n' ' ')" "$(team_for programmer)"
   check "$id.marker" "the mode is no longer pending" "$([ -e "$GD/orca-roles.mode-pending" ] && echo yes || echo no)" no
   attach "$id roles --mode programmer" "$LIVE_DIR/last-roles.log"
 }
@@ -267,14 +291,17 @@ c_handles_changed() {  # a worker reopened while the Planner keeps its tab: kick
   local id=$1 dev
   dev="$(env_of DEV)"; orca terminal close --terminal "$dev" --tab --json >/dev/null 2>&1; sleep 2
   roles_run
-  grep -q 'Role handles changed' "$GD/orca-roles-kickoff.log" && ok "$id" "kickoff sent the Planner 'Role handles changed'" || fail "$id" "no 'Role handles changed' in the kickoff log"
+  grep -q 'Told the Planner the new handles' "$GD/orca-roles-kickoff.log" && ok "$id" "kickoff sent the Planner 'Role handles changed' (Told the Planner the new handles.)" || fail "$id" "the kickoff log has no 'Told the Planner the new handles'"
   attach "$id kickoff log" "$GD/orca-roles-kickoff.log"
 }
 c_switch_from_planner() {  # a mode switch typed in the Planner's own tab: workers closed quickly, Esc + clear while kickoff runs, role message (#45)
-  local id=$1 to=$2 expect=$3 pl t0 t1
-  pl="$(env_of PLANNER)"; t0=$SECONDS
+  local id=$1 to=$2 pl t0 t1 n expect
+  pl="$(env_of PLANNER)"; expect="$(team_for "$to")"; n="$(wc -l < "$GD/orca-roles-launch.log" | tr -d ' ')"
+  orca terminal wait --terminal "$pl" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
+  t0=$SECONDS
   orca terminal send --terminal "$pl" --text "!$KIT/bin/launch.sh --mode $to" --enter --json >/dev/null 2>&1
-  sleep 5; kickoff_wait; t1=$SECONDS
+  launch_wait "$n"; t1=$SECONDS
+  attach "$id launch log" "$(tail -n +"$((n + 1))" "$GD/orca-roles-launch.log")"
   check "$id.team" "after switching to $to the team is" "$(cut -d= -f1 "$GD/orca-roles.env" | sort | tr '\n' ' ')" "$expect"
   check "$id.file" "the switch-from file is gone" "$([ -e "$GD/orca-roles.switch-from" ] && echo present || echo gone)" gone
   grep -q 'cleared' "$GD/orca-roles-kickoff.log" && ok "$id.clear" "the Planner's conversation was cleared ($(grep -o 'cleared ([^)]*)' "$GD/orca-roles-kickoff.log" | head -1))" || fail "$id.clear" "no clear in the kickoff log"
@@ -288,8 +315,13 @@ c_restart_prepare() {  # before the restart: what each role had
 c_restart_after() {  # after a real restart: asleep tabs are woken and reopened with their conversation, no duplicate (n13, #8, #38)
   local id=$1 asleep live t0 t1 r
   live="$(wt_terms)"; asleep=""
-  while IFS='=' read -r v h; do printf '%s\n' "$live" | grep -q "$(grep "^$v=" "$GD/orca-roles.pty" | cut -d= -f2-)" || asleep="$asleep $v"; done < "$GD/orca-roles.env"
-  info "$id.asleep" "roles asleep after the restart (not in terminal list):${asleep:- none}"
+  local ph=""   # asleep: not listed; placeholder: listed (old handle, maybe a stale identity) but no agent process behind it
+  while IFS='=' read -r v h; do
+    if printf '%s\n' "$live" | grep -q "$(grep "^$v=" "$GD/orca-roles.pty" | cut -d= -f2-)"; then pid_of_handle "$h" >/dev/null || ph="$ph $v"
+    else asleep="$asleep $v"; fi
+  done < "$GD/orca-roles.env"
+  info "$id.asleep" "roles asleep after the restart (not in terminal list):${asleep:- none}; listed without an agent (placeholders):${ph:- none}"
+  asleep="$asleep$ph"
   attach "$id terminals after the restart, before roles" "$live"
   t0=$SECONDS; roles_run; t1=$SECONDS
   attach "$id roles after the restart" "$LIVE_DIR/last-roles.log"
@@ -298,7 +330,7 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
   if live_is_wsl; then
     grep -q 'Cannot wake tabs' "$LIVE_DIR/last-roles.log" && info "$id.wake" "WSL: the kit says it cannot wake asleep tabs (expected until the WSL PR)" || info "$id.wake" "woke $r tabs"
   else
-    check "$id.wake" "every asleep role was woken" "$r" "$(echo $asleep | wc -w | tr -d ' ')"
+    check "$id.wake" "every asleep or placeholder role was woken" "$r" "$(echo $asleep | wc -w | tr -d ' ')"
   fi
   check "$id.memory" "every role reopened with its conversation" "$(grep -c 'reopening it with its conversation' "$LIVE_DIR/last-roles.log")" "$(grep -c . "$GD/orca-roles.env")"
   check "$id.lost" "no role started without memory" "$(grep -c 'no longer exists\|could not be read\|treated as closed' "$LIVE_DIR/last-roles.log")" 0
@@ -326,6 +358,7 @@ live_main() {
   live_start "$1"; live_preflight
   local phase; phase="$(st_get phase)"; wt_load
   if [ -z "$phase" ]; then
+    project_setup   # the throwaway project: X7 runs its E2E flow there
     echo "== Part 1: checks without Orca"
     run_check X1 c_smoke_combo
     run_check X2 c_upgrade_no_roles
@@ -336,7 +369,6 @@ live_main() {
     run_check X7 c_e2e
     "${EXTRA_BEFORE:-:}"
     echo "== Part 2: a throwaway team in Orca"
-    project_setup
     run_check T1 c_fresh_worktree
     wt_load
     [ -n "$WT" ] && [ -n "$GD" ] || { echo "ERROR: no throwaway worktree (check T1 in the report)." >&2; return 1; }
@@ -344,8 +376,8 @@ live_main() {
     run_check T3 c_pty_file
     run_check T4 c_tester_nice
     run_check T5 c_handles_changed
-    run_check T6 c_switch_from_planner pr-reviewer "AUDITOR PLANNER "
-    run_check T7 c_switch_from_planner programmer "AUDITOR DEV PLANNER TESTER "
+    run_check T6 c_switch_from_planner pr-reviewer
+    run_check T7 c_switch_from_planner programmer
     "${EXTRA_TEAM:-:}"
     c_restart_prepare; st_set phase restarted
     echo; restart_instructions

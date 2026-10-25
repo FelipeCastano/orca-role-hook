@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live checks of the agents other than Claude Code (Codex, OpenCode): what the smoke tests cannot cover (see docs/live-checks.md).
 # For whoever has those agents installed and signed in; Claude Code is not needed.
-# Usage (from an Orca terminal of this checkout, with this checkout installed: ./install.sh):  tests/live/agents.sh
+# Usage (from any terminal, with Orca open and this checkout installed: ./install.sh):  tests/live/agents.sh
 # One run, no restart. Report: ~/orca-live-checks/report-agents.md. To start over: rm ~/orca-live-checks/state-agents
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"

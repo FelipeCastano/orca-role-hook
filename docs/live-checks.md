@@ -4,7 +4,10 @@ What the smoke tests (`tests/smoke.sh`) cannot cover, because it needs a real Or
 
 ## How to run them
 
-Install the checkout you want to check (`./install.sh`), then run the script from an Orca terminal of that checkout. Each script:
+To follow the same checks by hand instead, step by step, use [manual-checks.md](manual-checks.md).
+
+
+Install the checkout you want to check (`./install.sh`), then run the script from that checkout (`cd` into it) in any terminal, with Orca open. Each script:
 
 - works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (Planner, Dev, Tester and Auditor on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
 - asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca); type `skip` at a prompt to skip that check;

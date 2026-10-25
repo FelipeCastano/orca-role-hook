@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Live checks on Windows + WSL with Claude Code: what the smoke tests cannot cover (see docs/live-checks.md).
-# Usage (from an Orca terminal of this checkout, with this checkout installed: ./install.sh):  tests/live/wsl.sh
+# Usage (from any terminal, with Orca open and this checkout installed: ./install.sh):  tests/live/wsl.sh
 # Run it once; it ends asking for a real restart of Orca. Run the same command again after the restart to finish.
 # Report: ~/orca-live-checks/report-wsl.md. To start over: rm ~/orca-live-checks/state-wsl
 set -uo pipefail
