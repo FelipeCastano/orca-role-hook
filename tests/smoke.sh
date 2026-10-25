@@ -65,7 +65,7 @@ J
 }
 write_launch_config() {
 cat > "$KIT/config.json" <<'J'
-{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" },
              "tester": { "title": "Tester", "enabled": false }, "deployer": { "title": "Deployer" } } }
@@ -450,6 +450,45 @@ rule R26 "$ROOT/plugin/skills/team/SKILL.md" 'close-role.sh <role>' '`worker-sta
 [ -f "$ROOT/BACKLOG.md" ] || { echo "FAIL rules R26: BACKLOG.md is missing"; FAIL=1; }
 rule R26 "$ROOT/BACKLOG.md" 'stablyai/orca#32999' '^- \*\*Agent name in tab titles'
 grep -qxF '## Revert when Orca fixes it' "$ROOT/BACKLOG.md" 2>/dev/null || { echo "FAIL rules R26: BACKLOG.md lost its 'Revert when Orca fixes it' section"; FAIL=1; }
+# R27 choosing and switching the mode: the Planner prompts' section (right after "Managing the kit and the team", with the summary path, the command and the own-tab paragraph), the Limits exception, and the README and skill texts; the names match the code
+for m in programmer academic-research pr-reviewer; do
+  P27="$ROOT/prompts/$m/planner.md"
+  R27SEC="$(awk '/^## Choosing and switching the mode$/{s=1;next} /^## /{s=0} s' "$P27")"
+  r27() { grep -qF -- "$1" <<<"$(grep -E -- "$2" <<<"$R27SEC" || true)" || { echo "FAIL rules R27: $m/planner.md section 'Choosing and switching the mode' lost '$1'"; FAIL=1; }; }
+  [ "$(awk '/^## /{if (p) {print $0; exit}} $0 == "## Managing the kit and the team"{p=1}' "$P27")" = "## Choosing and switching the mode" ] || { echo "FAIL rules R27: $m/planner.md: 'Choosing and switching the mode' is not right after 'Managing the kit and the team'"; FAIL=1; }
+  r27 'run the command it gives' '^A new worktree may start'
+  r27 'only when the user asks for it and never while a task is in flight' '^To switch the mode later'
+  r27 'closes every worker of the current mode and clears your conversation, and ask whether to save a summary' '^1\. '
+  r27 '`<your scratchDir>/mode-switch-summary.md` (overwrite it)' '^2\. '
+  r27 'Run `~/.orca-roles/bin/launch.sh --mode <mode>` from the worktree and end your turn' '^3\. '
+  r27 'which tells you to read that summary first' '^3\. '
+  r27 'Only your own tab can switch the mode. If `launch.sh` refuses' '^Only your own tab'
+  rule R27 "$P27" 'Choosing or switching the mode with `~/.orca-roles/bin/launch.sh --mode <mode>` is also allowed, as "Choosing and switching the mode" says.' '^- Never create worktrees or terminals'
+done
+R27RM="$ROOT/README.md"; R27SK="$ROOT/plugin/skills/team/SKILL.md"
+R27TR='^\| `roles --mode` fails with "this worktree'"'"'s team is open in mode'
+rule R27 "$R27RM" 'the Planner opens and asks which mode you want (programmer, pr-reviewer or academic-research)' '^Create a worktree from the project'"'"'s .+In a few seconds'
+rule R27 "$R27RM" 'A worktree created from a Jira ticket starts directly in `programmer`, and an explicit `--mode` (or `settings.enableAskModeOnStart: false`)' '^Create a worktree from the project'"'"'s .+In a few seconds'
+rule R27 "$R27RM" "that is Orca's \`branchPrefix\` setting (\`\"git-username\"\`), not the kit" '^- \*\*Branch names:\*\*'
+rule R27 "$R27RM" 'which asks which mode to use and suggests the one `settings.mode` gives' '^\*\*Asking the mode\.\*\*'
+rule R27 "$R27RM" 'or with `settings.enableAskModeOnStart: false`' '^\*\*Asking the mode\.\*\*'
+rule R27 "$R27RM" '`roles --status` shows `Mode: not chosen yet`' '^\*\*Asking the mode\.\*\*'
+rule R27 "$R27RM" 'runs `launch.sh --mode <mode>` from its tab' '^\*\*Switching the mode:\*\*'
+rule R27 "$R27RM" 'stops with an error naming the open tabs and changes nothing' '^\*\*Switching the mode:\*\*'
+grep -qF '**Open team rule:**' "$R27RM" && { echo "FAIL rules R27: README.md still has the old 'Open team rule' paragraph"; FAIL=1; }
+rule R27 "$R27RM" '`true` (default): a new worktree opens only the Planner, which asks the mode.' '^\| `enableAskModeOnStart` \|'
+rule R27 "$R27RM" 'An explicit `--mode` or a Jira ticket never asks.' '^\| `enableAskModeOnStart` \|'
+rule R27 "$R27RM" 'A tab of the team is still open; the error names it. Ask the Planner to switch the mode' "$R27TR"
+rule R27 "$R27SK" 'A new worktree opens only the Planner, which asks the mode (the configured one is the suggestion)' '^\*\*Modes\.\*\*'
+rule R27 "$R27SK" 'or `settings.enableAskModeOnStart: false` skips the question' '^\*\*Modes\.\*\*'
+rule R27 "$R27SK" 'from another terminal a mode change with the team open stops with an error naming the open tabs' '^\*\*Modes\.\*\*'
+grep -qF 'close it first' "$R27SK" && { echo "FAIL rules R27: SKILL.md still has the old 'close it first' sentence"; FAIL=1; }
+rule R27 "$R27SK" '`mode`, `enableAskModeOnStart`' '^- `settings`:'
+rule R27 "$R27SK" 'A tab of the team is still open; the error names it.' "$R27TR"
+# the names the docs and prompts use are the ones the code uses
+rule R27 "$ROOT/bin/launch.sh" 'enableAskModeOnStart' '^if \[ "\$NEED" = 1 \]'
+rule R27 "$ROOT/bin/lib.sh" '/mode-switch-summary.md' 'WARNING: the mode was switched'
+rule R27 "$ROOT/bin/lib.sh" '.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn' 'When the user answers'
 # R2 an ambiguous answer is not a yes to the commits
 rule R2 "$PD/planner.md" 'neither is an ambiguous answer ("ok, continue"): ask again' '\*\*Set audit\.\*\*'
 # pr-reviewer: no worktrees or terminals, no git state changes, context cleaned only with the user's yes, no AI attribution, kit changes only with the user's yes
@@ -557,6 +596,12 @@ check "rcfg mcp all" "$(rcfg "$C" planner mcp)" '"all"'
 check "rcfg empty when there is no value" "$(rcfg "$C" dev command)" ""
 check "setting with default" "$(setting "$C" kickoffTimeoutSeconds 180)" "180"
 check "setting defined" "$(setting "$C" launchWaitSeconds 15)" "3"
+SV=""; for v in false true 0 '""' '"abc"' 42 1.5; do jq -c --argjson v "$v" '{settings: {k: $v}}' <<< '{}' > "$TMP/sv.json"; SV="${SV}[$(setting "$TMP/sv.json" k D)]"; done
+check "setting: a present value of any type is returned as text, false, true, 0 and \"\" included, never the default" "$SV" "[false][true][0][][abc][42][1.5]"
+SV=""; for c in '{"settings":{}}' '{"settings":{"k":null}}' '{}' '{"settings":null}' '{"settings":[]}' '{"settings":["k"]}' '{"settings":"k"}' '{"settings":5}' '{"settings":true}' '{"settings":{"other":false}}'; do printf '%s' "$c" > "$TMP/sv.json"; SV="${SV}[$(setting "$TMP/sv.json" k D)]"; done
+check "setting: the default for an absent key, a null value, no settings and settings that is not an object" "$SV" "[D][D][D][D][D][D][D][D][D][D]"
+echo '{"settings":{"launchWaitSeconds":7,"kickoffTimeoutSeconds":0,"language":"Spanish"}}' > "$TMP/sv.json"
+check "setting: numbers and strings as before" "$(setting "$TMP/sv.json" launchWaitSeconds 15):$(setting "$TMP/sv.json" kickoffTimeoutSeconds 180):$(setting "$TMP/sv.json" language auto):$(setting "$TMP/sv.json" composerAgentWindowSeconds 180)" "7:0:Spanish:180"
 check "title_of" "$(title_of "$C" dev)" "Dev"
 check "title_of without title" "$(title_of "$C" newone)" "newone"
 tt() { jq -n --arg t "$1" --arg a "$2" --arg c "$3" '{roles:{x:({agent:$a,command:$c} + (if $t == "-" then {} else {title:$t} end) | with_entries(select(.value != "")))}}' > "$TMP/tt.json"; tab_title_of "$TMP/tt.json" x; }
@@ -631,6 +676,12 @@ case "$M3" in (*"Handles: Dev=t2."*"conversation was cleared"*"After your conver
 jq '.settings.language = "Spanish"' "$KIT/config.json" > "$TMP/lang.json"
 case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in *"Always reply to the user in Spanish, whatever language they write in."*) echo "ok   planner_msg: settings.language";; *) echo "FAIL planner_msg language"; FAIL=1;; esac
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
+jq '.settings.cleanWorkersAfterStep = false' "$KIT/config.json" > "$TMP/cw.json"; jq '.settings.cleanWorkersAfterStep = true' "$KIT/config.json" > "$TMP/cw1.json"
+CW0="$(planner_msg "$TMP/cw.json" "planner dev" "$TMP/state.env" "" "" 0)"; CW1="$(planner_msg "$TMP/cw1.json" "planner dev" "$TMP/state.env" "" "" 0)"
+check "planner_msg: cleanWorkersAfterStep false -> only if the user asks; true -> proposed at each step" "$(printf '%s' "$CW0" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW0" | grep -cF "propose to the user cleaning"):$(printf '%s' "$CW1" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW1" | grep -cF "propose to the user cleaning")" "1:0:0:1"
+CE=""; for v in true false '"true"' 1 null '"x"' '{}'; do jq -c --argjson v "$v" '.settings.enableAskModeOnStart = $v' "$KIT/config.default.json" > "$TMP/ea.json"; CE="$CE$(check_config "$TMP/ea.json" | grep -cxF 'ERROR: invalid configuration: settings.enableAskModeOnStart must be true or false' || true)"; done
+jq -c 'del(.settings.enableAskModeOnStart)' "$KIT/config.default.json" > "$TMP/ea.json"
+check "settings.enableAskModeOnStart: true by default; true, false and an absent key pass; \"true\", 1, null, \"x\" and an object give the error" "$(jq -r '.settings.enableAskModeOnStart' "$ROOT/config.default.json"):$CE:$(check_config "$TMP/ea.json" | grep -c enableAskModeOnStart || true)" "true:0011111:0"
 # settings.artifacts in the Planner's message: only when something is set, in the fixed order, in every start mode
 AM() { jq -c --argjson a "$1" '.settings.artifacts = $a' "$KIT/config.json" > "$TMP/art.json"; planner_msg "$TMP/art.json" "planner dev" "$TMP/state.env" "" "" "${2:-0}"; }
 ASENT=" Artifact locations set for this worktree (they win over the project's conventions): "
@@ -639,6 +690,35 @@ AP2="$(AM '{}')"; AP3="$(AM '{"plans":"docs/plans"}')"; AP4="$(AM '{"deployment"
 AP6="$(AM '{"plans":"p"}' 2)"; AP7="$(AM '{"plans":"p"}' 3)"; AP8="$(AM '{"plans":"p"}' 1)"
 apc() { printf '%s' "$1" | grep -cF -- "$2" || true; }
 check "planner_msg artifacts: nothing without settings.artifacts or with an empty object; the exact sentence with one key; all four in the order plans, designs, research, deployment whatever the JSON order; a path with spaces is printed as is; present in the resumed, cleared and restart modes too" "$(apc "$AP1" 'Artifact locations'):$(apc "$AP2" 'Artifact locations'):$(apc "$AP3" "${ASENT}plans=docs/plans."):$(apc "$AP4" "${ASENT}plans=p, designs=s, research=r, deployment=d."):$(apc "$AP5" "${ASENT}research=my docs/res."):$(apc "$AP6" 'Artifact locations'):$(apc "$AP7" 'Artifact locations'):$(apc "$AP8" 'Artifact locations')" "0:0:1:1:1:1:1:1"
+# planner_ask_msg: the five sentences in order, the modes whose planner prompt exists in MODE_IDS order, the suggested mode, the language rule of planner_msg
+ASK1='You are the Planner of the orca-roles kit in this worktree, and no mode has been chosen yet.'
+ASK3='Ask the user, in one question, which mode to use: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers); academic-research (write a research paper: experiments first, then the writing phase). Suggested: programmer.'
+ASK45='Do not start any work before the answer. When the user answers, run `~/.orca-roles/bin/launch.sh --mode <mode>` from the worktree and end your turn: the kit opens that mode'"'"'s team and sends you your role message for it.'
+check "planner_ask_msg: exact message with every mode available and language auto, one line, no trailing newline" "$(planner_ask_msg "$KIT/config.default.json"; printf x)" "$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"x
+jq '.settings.language = "Spanish"' "$KIT/config.default.json" > "$TMP/askl.json"; jq '.settings.language = ""' "$KIT/config.default.json" > "$TMP/askl2.json"
+check "planner_ask_msg: settings.language names the language; an empty one is the user's language" "$(planner_ask_msg "$TMP/askl.json")|$(planner_ask_msg "$TMP/askl2.json")" "$ASK1 Always reply to the user in Spanish, whatever language they write in. $ASK3 $ASK45|$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"
+pk_setup
+mkdir -p "$PK/prompts/pr-reviewer"; echo "# planner" > "$PK/prompts/pr-reviewer/planner.md"
+AQ1="$(KIT="$PK" planner_ask_msg "$PKC")"
+rm "$PK/prompts/programmer/planner.md"
+AQ2="$(KIT="$PK" planner_ask_msg "$PKC")"
+check "planner_ask_msg: an unavailable mode is left out of the list, in MODE_IDS order; with settings.mode unavailable the suggestion is programmer" "$(printf '%s' "$AQ1" | grep -o 'which mode to use: .*Suggested: [a-z-]*\.'):$(printf '%s' "$AQ2" | grep -o 'which mode to use: .*Suggested: [a-z-]*\.')" "which mode to use: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer.:which mode to use: pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer."
+jq '.settings.mode = "pr-reviewer"' "$KIT/config.default.json" > "$TMP/askm.json"; jq '.settings.mode = "nope"' "$KIT/config.default.json" > "$TMP/askm2.json"
+check "planner_ask_msg: Suggested is the configuration's mode, programmer when it is invalid" "$(planner_ask_msg "$TMP/askm.json" | grep -o 'Suggested: [a-z-]*'):$(planner_ask_msg "$TMP/askm2.json" | grep -o 'Suggested: [a-z-]*')" "Suggested: pr-reviewer:Suggested: programmer"
+# planner_msg resume 4 (after a mode switch): both modes, the summary file, the still-there sentence only for a planner that cannot be cleared; 0-3 do not change
+R4="$(planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)"
+case "$R4" in *" WARNING: the mode was switched from pr-reviewer to programmer and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in "*"/planner/mode-switch-summary.md: read it first. Start with the startup.") R4A=ok;; *) R4A="bad: $R4";; esac
+case "$R4" in *"still there"*) R4A="$R4A still-there";; esac
+jq '.roles.planner.agent = "custom" | .roles.planner.command = "echo x"' "$KIT/config.json" > "$TMP/r4a.json"; jq '.roles.planner.clearCommand = "/reset"' "$TMP/r4a.json" > "$TMP/r4b.json"; jq '.roles.planner.agent = "codex"' "$KIT/config.json" > "$TMP/r4c.json"
+R4B="$(planner_msg "$TMP/r4a.json" "planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)"
+case "$R4B" in *"read it first. Your previous conversation is still there: follow only this mode's prompt from now on. Start with the startup.") R4B=ok;; *) R4B="bad: $R4B";; esac
+R4C=""; for c in r4b r4c; do case "$(planner_msg "$TMP/$c.json" "planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)" in *"still there"*) R4C="$R4C still-there";; *"read it first. Start with the startup.") R4C="${R4C}ok ";; *) R4C="${R4C}bad ";; esac; done
+check "planner_msg resume 4: the variant names both modes and the summary file; the still-there sentence only without a clear command (custom without clearCommand), not with clearCommand or codex" "$R4A:$R4B:$R4C" "ok:ok:ok ok "
+R0=""; for r in 0 1 2 3; do
+  PA="$(planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" $r)"; PB="$(planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" $r pr-reviewer)"
+  R0="$R0$(printf '%s' "$PA" | grep -c 'mode was switched' || true)$([ "$PA" = "$PB" ] && echo same)"
+done
+check "planner_msg: values 0-3 do not mention a switch and ignore the old-mode argument" "$R0" "0same0same0same0same"
 }
 
 sec_clean() {
@@ -793,6 +873,11 @@ check "jira: key after prefix" "$(jira_key feature/DEVGD-220 "" "")" "DEVGD-220"
 check "jira: fix-123 is not a ticket" "$(jira_key feature/fix-123 "" "")" ""
 check "jira: release-1.4 is not a ticket" "$(jira_key release-1.4 "" "")" ""
 check "jira: branch without key" "$(jira_key main "" "")" ""
+mkdir -p "$TMP/jbin"; printf '#!/bin/sh\necho '"'"'{"worktree":{"linkedWorkItem":{"provider":"jira","number":0,"url":"https://x.atlassian.net/browse/ABC-7","jiraIdentifier":"ABC-7"}}}'"'"'\n' > "$TMP/jbin/orca"; chmod +x "$TMP/jbin/orca"
+for v in true false; do jq -c --argjson v "$v" '{settings: {jiraHandoff: $v}}' <<< '{}' > "$TMP/jh-$v.json"; done
+echo '{}' > "$TMP/jh-none.json"
+jh() { (cd "$TMP" && PATH="$TMP/jbin:$PATH" worktree_jira "$TMP" "$1" | tr '\n' ' '); }
+check "worktree_jira: jiraHandoff false -> empty key (the url stays); true or unset -> the key" "[$(jh "$TMP/jh-false.json")][$(jh "$TMP/jh-true.json")][$(jh "$TMP/jh-none.json")]" "[ https://x.atlassian.net/browse/ABC-7 ][ABC-7 https://x.atlassian.net/browse/ABC-7 ][ABC-7 https://x.atlassian.net/browse/ABC-7 ]"
 JSON='{"worktree":{"branch":"x","linkedWorkItem":{"provider":"jira","type":"issue","number":0,"title":"t","url":"https://jira.company.com/browse/DEVGD-9","jiraIdentifier":"DEVGD-9"}}}'
 check "jira: jiraIdentifier in orca worktree show" "$(printf '%s' "$JSON" | jq -r '[.. | objects | select(.provider? == "jira") | .jiraIdentifier // empty] | first // empty')" "DEVGD-9"
 }
@@ -1285,7 +1370,7 @@ check "merge_overrides: the third argument (previous effective mode) is what the
 pk_setup
 mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
 cat > "$PK/config.json" <<'J'
-{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner", "modes": "all" }, "dev": { "title": "Dev" }, "tester": { "title": "Tester", "enabled": false },
              "deployer": { "title": "Deployer" }, "rv": { "title": "Rv", "modes": ["pr-reviewer"] } } }
@@ -1480,6 +1565,201 @@ try lkl active; R4="$(printf '%s' "$OUT" | grep -c '^Warning: this folder was la
 check "launch: a changed worktree id warns (and is saved), the same id or 'active' does not" "$R1:$R2:$R3:$R4" "0:0:0:0:1:id:BBB:0:id:BBB"
 lkreset
 sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
+# ask start and mode choice: the real kickoff.sh with a fake orca whose h-* tabs are alive; the tab 'restored' has the Planner's saved ptyId under another handle
+AK="$TMP/ak"; mkdir -p "$AK/bin" "$AK/proj" "$AK/nogit"; git -C "$AK/proj" init -q; AKG="$AK/proj/.git"; AKL="$AK/orca.log"; : > "$AKL"
+cat > "$AK/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$AKL"
+h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal list") echo '{"terminals":[]}';;
+  "terminal read") echo '{"text":""}';;
+  "terminal wait") [ -e "$AK/rmmark" ] && rm -f "$AKG/orca-roles.mode-pending";;
+  "terminal send") t=""; while [ \$# -gt 0 ]; do [ "\$1" = --text ] && t="\$2"; shift; done; printf '%s\037' "\$t" >> "$AK/sent.\$h";;
+  "terminal show") case "\$h" in
+    h-*) echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$h\",\"agentIdentity\":\"claude\"}}}";;
+    restored) echo '{"result":{"terminal":{"ptyId":"pty-h-Planner","agentIdentity":"claude"}}}';;
+    *) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; esac;;
+  "worktree show") cat "$AK/wt.json" 2>/dev/null;;
+  "orchestration run-list") echo '{"result":{"runs":[]}}';;
+esac
+exit 0
+EOS
+chmod +x "$AK/bin/orca"
+write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.auditor = {"title": "Auditor", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
+akl() { (cd "${AKDIR:-$AK/proj}" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$AK/bin:$PATH" ORCA_TERMINAL_HANDLE="${AKH:-}" ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 10s"; FAIL=1; }; sleep 0.3; }
+akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
+akrun() { try akl "$@"; akdrain; }
+akmark() { [ -e "$AKG/orca-roles.mode-pending" ] && printf marker || printf none; }
+akhandles() { cut -d= -f1 "$AKG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
+aksent() { { tr '\037' '\n' 2>/dev/null < "$AK/sent.h-Planner" | grep -cF -- "$1"; } || true; }
+akcnt() { grep -cE "^terminal $1" "$AKL" || true; }
+akasks() { local a; a="$(planner_ask_msg "$AKG/orca-roles.config.json")"; { tr '\037' '\n' 2>/dev/null < "$AK/sent.h-Planner" | grep -cxF -- "$a"; } || true; }
+akseed() { printf 'PLANNER=h-Planner\nDEV=h-Dev\n' > "$AKG/orca-roles.env"; printf 'PLANNER=pty-h-Planner\nDEV=pty-h-Dev\n' > "$AKG/orca-roles.pty"; cp "$KIT/config.json" "$AKG/orca-roles.config.json"; }
+akovr() { printf '%s' "$1" > "$AKG/orca-roles.overrides.json"; }
+aksetting() { jq "$1" "$AK/cfg.json" > "$KIT/config.json"; }
+JIRA_WT='{"result":{"worktree":{"linkedWorkItem":{"provider":"jira","number":0,"url":"https://x.atlassian.net/browse/ABC-7","jiraIdentifier":"ABC-7"}}}}'
+akcase() { local l="$1"; shift; akreset; "$1"; shift; akrun "$@"; printf '%s=%s:%s:%s;' "$l" "$RC" "$(akmark)" "$(akhandles)"; }
+ak_none() { :; }
+ak_link() { printf '%s' "$JIRA_WT" > "$AK/wt.json"; }
+ak_branch() { git -C "$AK/proj" symbolic-ref HEAD refs/heads/ABC-12-feature; }
+ak_mode() { akovr "$(overrides_from_args --mode programmer)"; }
+ak_setpath() { akovr '{"only":[],"enable":[],"disable":[],"set":[{"path":["settings","mode"],"value":"programmer"}]}'; }
+ak_linkoff() { ak_link; aksetting '.settings.jiraHandoff = false'; }
+ak_cfgfalse() { aksetting '.settings.enableAskModeOnStart = false'; }
+ak_prjfalse() { echo '{"settings":{"enableAskModeOnStart":false}}' > "$AK/proj/.orca-roles.json"; }
+akstart() { akreset; "$@"; akrun; }
+# a fresh worktree with nothing chosen opens only the Planner and asks
+akstart ak_none
+check "launch: no chosen mode on a fresh worktree -> only the Planner opens, the marker is written, the Planner gets the ask message and it is not recorded as its kickoff" "$RC:$(akmark):$(akhandles):$(akcnt create):$(akasks):$(grep -c '^PLANNER=' "$AKG/orca-roles.kicked" 2>/dev/null || true)" "0:marker:PLANNER :1:1:0"
+TEAM="PLANNER DEV DEPLOYER "
+B1="$(akcase mode ak_none --mode programmer)$(akcase mode-eq ak_none --mode=programmer)$(akcase set-mode ak_none --set settings.mode=programmer)$(akcase set-eq-mode ak_none --set=settings.mode=programmer)"
+B1="$B1$(akcase saved-team akseed)$(akcase saved-mode ak_mode)$(akcase saved-set-path ak_setpath)$(akcase jira-link ak_link)$(akcase jira-branch ak_branch)"
+B1="$B1$(akcase config-false ak_cfgfalse)$(akcase project-false ak_prjfalse)$(akcase set-false ak_none --set settings.enableAskModeOnStart=false)"
+check "launch: each condition false alone -> no ask and no marker (--mode and its = form, --set settings.mode, a saved team, a saved .mode, a saved settings.mode path, a Jira key from the link and from the branch, the setting off in config.json, .orca-roles.json and --set)" "$B1" "mode=0:none:$TEAM;mode-eq=0:none:$TEAM;set-mode=0:none:$TEAM;set-eq-mode=0:none:$TEAM;saved-team=0:none:$TEAM;saved-mode=0:none:$TEAM;saved-set-path=0:none:$TEAM;jira-link=0:none:$TEAM;jira-branch=0:none:$TEAM;config-false=0:none:$TEAM;project-false=0:none:$TEAM;set-false=0:none:$TEAM;"
+check "launch: a Jira link with jiraHandoff false is not a Jira ticket (B4 does not apply): the ask happens; with it on, the same link starts the programmer team" "$(akcase link-off ak_linkoff)$(akcase link-on ak_link)" "link-off=0:marker:PLANNER ;link-on=0:none:$TEAM;"
+# the choice, from the saved Planner's tab and from another terminal; the mode differs from the suggestion
+CH=""
+for H in h-Planner other; do
+  akstart ak_none; AKH="$H" akrun --mode pr-reviewer; CR="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c '^Mode chosen: pr-reviewer\.$'):$(printf '%s\n' "$OUT" | grep -ci 'team is open'):$(akhandles | grep -c AUDITOR):$(akcnt create):$(aksent 'adopt that role'):$(aksent 'Mode: pr-reviewer'):$(aksent 'no mode has been chosen yet')"
+  AKH="$H" akrun; CH="$CH$CR|$RC:$(akmark):$(aksent 'adopt that role'):$(aksent 'no mode has been chosen yet');"
+done
+check "launch: choosing a mode different from the suggestion (from the Planner's tab and from another terminal) -> no refusal, marker removed, that mode's workers opened, the live Planner gets its role message for it, and a later run does not ask again" "$CH" "0:none:1:0:1:2:1:1:1|0:none:1:1;0:none:1:0:1:2:1:1:1|0:none:1:1;"
+# C2: a live kickoff that lists the Planner does not stop its role message
+akstart ak_none; mkdir -p "$AKG/orca-roles.kickoff.d"; sleep 30 & KP=$!; echo planner > "$AKG/orca-roles.kickoff.d/$KP"
+AKH=h-Planner try akl --mode pr-reviewer; { kill "$KP"; wait "$KP"; } 2>/dev/null || true; rm -f "$AKG/orca-roles.kickoff.d/$KP"; akdrain
+check "launch: choosing the mode while a live kickoff lists the Planner -> the Planner still gets its role message" "$RC:$(akmark):$(aksent 'adopt that role'):$(aksent 'Mode: pr-reviewer')" "0:none:1:1"
+# a refused or failed choice keeps the marker and opens nothing
+akstart ak_none; C0="$(akcnt create)"; akrun --mode nope; R1="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c 'Mode chosen'):$(akcnt create):$(akhandles)"
+AKH=restored akrun --mode pr-reviewer; R2="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -cxF 'ERROR: your tab was restored by Orca after a restart: run roles (without options) first so the kit reopens you, then choose the mode. If it cannot reopen you, run roles from another terminal of this worktree. Nothing was changed.'):$(akcnt create):$(akhandles):$(aksent 'adopt that role')"
+check "launch: an invalid mode, and a choice from a Planner tab Orca restored (new handle, saved ptyId), fail with the marker kept and nothing opened or sent" "$([ "$C0" = 1 ] && echo c1):$R1|$R2" "c1:1:marker:0:1:PLANNER |1:marker:1:1:PLANNER :0"
+# a Jira ticket starts in programmer, whatever settings.mode says
+JR=""
+for V in ak_link ak_branch; do
+  akreset; aksetting '.settings.mode = "pr-reviewer"'; "$V"; akrun
+  JR="$JR$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c '^Jira ticket ABC-[0-9]*: this worktree starts in mode programmer (change it later from the Planner)\.$'):$(jq -r '.mode' "$AKG/orca-roles.overrides.json"):$(jq -r '.settings.mode' "$AKG/orca-roles.config.json"):$(akhandles);"
+done
+check "launch: the first launch with a Jira ticket (link and branch) saves programmer as the worktree's exception, prints the Jira line, writes no marker and opens the programmer team even when settings.mode is another mode" "$JR" "0:none:1:programmer:programmer:$TEAM;0:none:1:programmer:programmer:$TEAM;"
+# the setting off: a Jira ticket does not pick programmer, the configured mode's team opens as before the setting existed
+JF=""
+for V in ak_link ak_branch; do
+  for W in cfg prj set; do
+    akreset; aksetting '.settings.mode = "pr-reviewer"'; "$V"
+    case "$W" in cfg) aksetting '.settings.mode = "pr-reviewer" | .settings.enableAskModeOnStart = false'; akrun;; prj) echo '{"settings":{"enableAskModeOnStart":false}}' > "$AK/proj/.orca-roles.json"; akrun;; set) akrun --set settings.enableAskModeOnStart=false;; esac
+    JF="$JF$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c 'Jira ticket' || true):$(jq -r '.mode // "none"' "$AKG/orca-roles.overrides.json" 2>/dev/null || echo nofile):$(akhandles | grep -c AUDITOR || true);"
+  done
+done
+check "launch: enableAskModeOnStart false (config.json, .orca-roles.json, --set) with settings.mode pr-reviewer and a Jira key (link and branch) -> the pr-reviewer team opens, no Jira line, no saved mode (only --set saves its own setting), no marker" "$JF" "0:none:0:nofile:1;0:none:0:nofile:1;0:none:0:none:1;0:none:0:nofile:1;0:none:0:nofile:1;0:none:0:none:1;"
+# a kickoff that started asking and whose marker goes away while it waits for the Planner does not kick it
+akreset; : > "$AK/rmmark"; akstart ak_none; K1="$RC:$(akmark):$(aksent 'adopt that role'):$(aksent 'no mode has been chosen yet'):$(grep -c 'The mode was chosen while this kickoff waited' "$AKG/orca-roles-kickoff.log" 2>/dev/null || true)"; rm -f "$AK/rmmark"
+akstart ak_none; K2="$(aksent 'adopt that role'):$(aksent 'no mode has been chosen yet')"
+akstart ak_cfgfalse; K3="$(aksent 'adopt that role'):$(aksent 'no mode has been chosen yet')"
+check "kickoff: marker removed while it waits for the Planner -> no role and no ask message, and it says the choice's launch sends it; marker kept -> the ask message; no marker at the start -> the role message" "$K1|$K2|$K3" "0:none:0:0:1|0:1|1:0"
+
+# while the mode is pending, a rerun and --reopen with a lost Planner tab send the ask message again
+akstart ak_none; akrun; P1="$RC:$(akmark):$(akasks):$(akcnt create)"
+rm -f "$AK/sent.h-Planner"; printf 'PLANNER=gone\n' > "$AKG/orca-roles.env"; printf 'PLANNER=pty-gone\n' > "$AKG/orca-roles.pty"; akrun --reopen
+P2="$RC:$(akmark):$(akasks):$(aksent 'adopt that role'):$(aksent 'conversation was cleared'):$(grep -c '^PLANNER=' "$AKG/orca-roles.kicked" 2>/dev/null || true):$(printf '%s\n' "$OUT" | grep -cxF 'Mode: not chosen yet (suggested: programmer)' || true):$(printf '%s\n' "$OUT" | grep -c 'Mode chosen\|^Phase:' || true)"
+check "launch: marker present -> a rerun with the Planner alive and unkicked re-sends the ask message; --reopen with a lost Planner tab sends it too, not a role message, and never records it as kicked" "$P1|$P2" "0:marker:2:1|0:marker:1:0:0:0:1:0"
+# clean.sh --msg planner and --status while pending
+akstart aksetting '.settings.mode = "academic-research"'
+CM="$(cd "$AK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$AK/bin:$PATH" "$TMP/home/.orca-roles/bin/clean.sh" --msg planner 2>&1)"
+try akl --status
+check "launch: marker present -> clean.sh --msg planner prints the ask message; --status prints 'Mode: not chosen yet (suggested: <mode>)' and no Phase line (academic-research suggested)" "$([ "$(printf '%s' "$CM")" = "$(planner_ask_msg "$AKG/orca-roles.config.json")" ] && echo ask || echo "other: $CM"):$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Mode: not chosen yet (suggested: academic-research)'):$(printf '%s\n' "$OUT" | grep -c '^Phase:\|^Mode: academic-research')" "ask:0:1:0"
+# an academic-research suggestion outside a git repository asks (no git error); an explicit one keeps the error
+akreset; aksetting '.settings.mode = "academic-research"'; AKDIR="$AK/nogit" akrun; G1="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs the project to be a git repository'):$([ -e "$AK/nogit/orca-roles.mode-pending" ] && echo marker || echo none)"
+AKDIR="$AK/nogit" akrun --mode academic-research; G2="$RC:$(printf '%s\n' "$OUT" | grep -c 'ERROR: mode academic-research needs the project to be a git repository')"
+rm -rf "$AK/nogit"/orca-roles.*
+check "launch: an academic-research suggestion in a folder that is not a git repository asks without the git error; an explicit --mode academic-research keeps the error" "$G1|$G2" "0:0:marker|1:1"
+# asking creates nothing in the project: the academic-research folders wait for the choice
+akreset; aksetting '.settings.mode = "academic-research"'; akrun; S1="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -cxF 'Mode: not chosen yet (suggested: academic-research)' || true):$(printf '%s\n' "$OUT" | grep -c '^Mode: academic-research\|^Phase:' || true):$(find "$AK/proj" -mindepth 1 -maxdepth 1 -not -name .git | wc -l | tr -d ' ')"
+check "launch: an ask start with academic-research suggested does not create the academic folders in the project" "$S1" "0:marker:1:0:0"
+# mode switch from the Planner's tab (B5) and the refusal that names the open tabs (B6): the real kickoff.sh with a fake orca whose tab states are files
+SWD="$AK/sw"; mkdir -p "$SWD/bin"
+cat > "$SWD/bin/orca" <<'EOS'
+#!/bin/bash
+echo "$*" >> "$SWD/orca.log"
+h=""; pv=""; for x in "$@"; do [ "$pv" = --terminal ] && h="$x"; pv="$x"; done
+case "$1 $2" in
+  "terminal create") t=""; while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; echo "{\"handle\":\"h-$t-$(grep -c '^terminal create' "$SWD/orca.log")\"}";;
+  "terminal list") cat "$SWD/list.json" 2>/dev/null || echo '{"terminals":[]}';;
+  "terminal read") echo '{"text":""}';;
+  "terminal close") [ -e "$SWD/cf.$h" ] && exit 1; case " $* " in *" --tab "*) [ -e "$SWD/cft.$h" ] && exit 1;; esac; exit 0;;
+  "terminal send") t=""; while [ $# -gt 0 ]; do [ "$1" = --text ] && t="$2"; shift; done; printf '%s\037' "$t" >> "$SWD/sent.$h";;
+  "terminal show") st=""; [ -e "$SWD/st.$h" ] && st="$(cat "$SWD/st.$h")"
+    case "$st" in
+      stale) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+      rt) echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1;;
+      orphan) echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}';;
+      noagent) echo '{"result":{"terminal":{"handle":"x"}}}';;
+      *) case "$h" in
+           h-*|restored*) p="pty-$h"; [ -e "$SWD/pty.$h" ] && p="$(cat "$SWD/pty.$h")"; echo "{\"result\":{\"terminal\":{\"ptyId\":\"$p\",\"agentIdentity\":\"claude\"}}}";;
+           *) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; esac;;
+    esac;;
+  "orchestration run-list") echo '{"result":{"runs":[]}}';;
+esac
+exit 0
+EOS
+chmod +x "$SWD/bin/orca"
+jq '.roles.dev.modes = ["programmer", "academic-research"] | .roles.tester = {"title": "Tester"} | .roles["e2e-tester"] = {"title": "E2E-Tester"}' "$AK/cfg.json" > "$SWD/cfg.json"
+swl() { (cd "$AK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$SWD/bin:$PATH" SWD="$SWD" ORCA_TERMINAL_HANDLE="${SWH:-}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+swrun() { try swl "$@"; akdrain; }
+swseed() {
+  akreset; rm -rf "$SWD"/sent.* "$SWD"/st.* "$SWD"/cf.* "$SWD"/cft.* "$SWD"/pty.* "$SWD/orca.log" "$SWD/list.json"; : > "$SWD/orca.log"
+  cp "$SWD/cfg.json" "$KIT/config.json"; cp "$SWD/cfg.json" "$AKG/orca-roles.config.json"
+  printf 'PLANNER=h-Planner\nDEV=h-Dev\nTESTER=h-Tester\nDEPLOYER=h-Deployer\nE2E_TESTER=h-E2E-old\n' | tee "$AKG/orca-roles.env" > "$AKG/orca-roles.kicked"
+  printf 'PLANNER=pty-h-Planner\nDEV=pty-h-Dev\nTESTER=pty-h-Tester\nDEPLOYER=pty-h-Deployer\nE2E_TESTER=pty-h-E2E\n' > "$AKG/orca-roles.pty"
+  echo noagent > "$SWD/st.h-Tester"; echo orphan > "$SWD/st.h-Deployer"; echo stale > "$SWD/st.h-E2E-old"
+  echo '{"terminals":[{"handle":"restored-e2e","ptyId":"pty-h-E2E"}]}' > "$SWD/list.json"
+}
+swstate() { { cat "$AKG/orca-roles.env" "$AKG/orca-roles.pty" "$AKG/orca-roles.kicked" "$AKG/orca-roles.config.json" 2>/dev/null || true; } | cksum; { cat "$AKG/orca-roles.overrides.json" 2>/dev/null || true; } | cksum; }
+swclosed() { grep '^terminal close' "$SWD/orca.log" | sed 's/.*--terminal \([^ ]*\).*/\1/' | tr '\n' ' '; }
+swcnt() { grep -cE "^terminal $1" "$SWD/orca.log" || true; }
+swsent() { local f="$SWD/sent.${2:-h-Planner}"; { tr '\037' '\n' < "$f" 2>/dev/null | grep -cF -- "$1"; } || true; }
+swplanner() { local e; while IFS= read -r e; do case "$e" in $'\e') printf 'ESC,';; /clear) printf 'CLEAR,';; *"switched from "*) printf 'MSG,';; esac; done < <(tr '\037' '\n' 2>/dev/null < "$SWD/sent.h-Planner"); }
+swkept() { grep -c '^PLANNER=' "$AKG/orca-roles.env" "$AKG/orca-roles.pty" 2>/dev/null | tr '\n' ' ' | sed "s#$AKG/##g"; }
+SWOPEN="Planner (h-Planner), Dev (h-Dev), Tester (h-Tester), Deployer (h-Deployer), E2E-Tester (restored-e2e)"
+swerr() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
+# B5: the Planner's own tab switches the mode: every old worker closed whatever its state, the new team opened, the Planner cleared and told
+swseed; : > "$SWD/cft.h-Dev"; SWH=h-Planner swrun --mode pr-reviewer
+S1="$RC:$(swerr "Switching mode from programmer to pr-reviewer: closing Dev, Tester, Deployer, E2E-Tester; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared."):$(swclosed)"
+S2="$(grep -cE '^terminal close --terminal h-Dev --tab ' "$SWD/orca.log" || true)$(grep -cE '^terminal close --terminal h-Dev --json' "$SWD/orca.log" || true):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.pty" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.kicked" | tr '\n' ' ')"
+S3="$(swplanner):$(swsent 'switched from programmer to pr-reviewer'):$(swsent 'mode-switch-summary.md'):$(swsent 'Roles reopened'):$(swsent 'Role handles changed'):$(swsent 'Your previous conversation is still there'):$(swsent 'adopt that role' h-Auditor-1):$(swcnt create)"
+check "switch from the Planner's tab: every old worker is closed (alive with the --tab form refused, agent gone, orphaned, and the tab found by its saved ptyId, not the stale saved handle), the Planner's tab is not, only the Planner lines stay in the state files and the Auditor opens; the Planner gets Esc, /clear and then the variant-4 message naming both modes and the summary path, and no reopened/changed message" "$S1|$S2|$S3" "0:1:h-Dev h-Dev h-Tester h-Deployer restored-e2e |11:PLANNER AUDITOR :PLANNER AUDITOR :PLANNER AUDITOR |ESC,CLEAR,MSG,:1:1:0:0:0:1:1"
+# a role of both modes gets a new tab and its message for the new mode (C15)
+swseed; SWH=h-Planner swrun --mode academic-research
+D1="$RC:$(grep '^DEV=' "$AKG/orca-roles.env" | grep -cvx 'DEV=h-Dev'):$(swclosed | grep -c 'h-Dev '):$(swsent 'prompts/academic-research/dev.md' "$(grep '^DEV=' "$AKG/orca-roles.env" | cut -d= -f2)"):$(swsent 'prompts/programmer/dev.md' "$(grep '^DEV=' "$AKG/orca-roles.env" | cut -d= -f2)"):$(swplanner)"
+check "switch: a role the old and the new mode share (dev) gets a new tab, the old one is closed, and the new tab's message reads the new mode's prompt" "$D1" "0:1:1:1:0:ESC,CLEAR,MSG,"
+# a Planner without a clear command: no Esc, no /clear, and the message says the old conversation is still there
+swseed; jq '.roles.planner.agent = "custom" | .roles.planner.command = "true"' "$SWD/cfg.json" > "$KIT/config.json"; cp "$KIT/config.json" "$AKG/orca-roles.config.json"
+SWH=h-Planner swrun --mode pr-reviewer
+check "switch: a Planner whose agent has no clear command gets no Esc and no clear, and variant 4 tells it the previous conversation is still there" "$RC:$(swplanner):$(swsent 'Your previous conversation is still there: follow only this mode'"'"'s prompt from now on.'):$(swsent 'switched from programmer to pr-reviewer')" "0:MSG,:1:1"
+# B6: any other terminal is refused with every open tab named, and nothing changes
+R6=""
+for H in "" other; do
+  swseed; B="$(swstate)"; SWH="$H" swrun --mode pr-reviewer
+  R6="$R6$RC:$(swerr "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: $SWOPEN. Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED);"
+done
+check "B6: a mode change from another terminal or from none, with the team open, lists every open tab (the Planner too, the restored handle where one was found), closes and opens nothing and saves nothing" "$R6" "1:1:0:same;1:1:0:same;"
+# C6: the Planner's tab restored by Orca (new handle, saved ptyId)
+swseed; echo pty-h-Planner > "$SWD/pty.restored"; echo '{"terminals":[{"handle":"restored","ptyId":"pty-h-Planner"}]}' > "$SWD/list.json"; B="$(swstate)"; SWH=restored swrun --mode pr-reviewer
+check "C6: a mode change from a Planner tab Orca restored after a restart gets the restart error, nothing closed, opened or saved" "$RC:$(swerr 'ERROR: your tab was restored by Orca after a restart: run roles (without options) first so the kit reopens you, then switch the mode. If it cannot reopen you, run roles from another terminal of this worktree. Nothing was changed.'):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED)" "1:1:0:same"
+# C7: a kickoff of the previous launch is still running
+swseed; mkdir -p "$AKG/orca-roles.kickoff.d"; sleep 30 & KP=$!; echo planner > "$AKG/orca-roles.kickoff.d/$KP"; B="$(swstate)"
+SWH=h-Planner try swl --mode pr-reviewer; { kill "$KP"; wait "$KP"; } 2>/dev/null || true; rm -f "$AKG/orca-roles.kickoff.d/$KP"
+check "C7: a switch while a kickoff of the previous launch is alive is refused with its pid, nothing closed or saved" "$RC:$(swerr "ERROR: the previous launch's kickoff is still running (pid $KP): try again in a moment. Nothing was changed."):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED)" "1:1:0:same"
+# C12: Orca not ready for one tab -> nothing closed; a tab that cannot be closed in either form -> error naming it, the roles closed before stay removed
+swseed; echo rt > "$SWD/st.h-Tester"; B="$(swstate)"; SWH=h-Planner swrun --mode pr-reviewer
+N1="$RC:$(swerr 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree'"'"'s team is still open. Nothing was changed. Run roles again once Orca is ready.'):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED)"
+swseed; : > "$SWD/cf.h-Deployer"; SWH=h-Planner swrun --mode pr-reviewer
+N2="$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(swclosed):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.pty" | tr '\n' ' '):$(swcnt create)"
+check "C12: a tab the kit cannot tell about stops the switch before anything is closed; a tab that fails to close in both forms stops it naming that tab, with the roles closed before it already removed from the state files and nothing opened" "$N1|$N2" "1:1:0:same|1:1:h-Dev h-Tester h-Deployer h-Deployer :PLANNER DEPLOYER E2E_TESTER :PLANNER DEPLOYER E2E_TESTER :0"
+# no saved tab is open: the mode change is a normal launch
+swseed; for h in Planner Dev Tester Deployer; do echo stale > "$SWD/st.h-$h"; done; echo '{"terminals":[]}' > "$SWD/list.json"; SWH=other swrun --mode pr-reviewer
+check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new Planner and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:PLANNER AUDITOR :"
+akreset; write_launch_config
 }
 
 sec_status() {
@@ -1565,7 +1845,7 @@ pk_setup
 mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
 : > "$PK/prompts/programmer/allrole.md"
 cat > "$PK/config.json" <<'J'
-{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner", "modes": "all" },
              "dev": { "title": "Dev", "modes": ["programmer"] },
@@ -1782,7 +2062,7 @@ jq 'del(.settings.mode)' "$MC" > "$TMP/m-nokey.json"; check "mode_of: missing se
 # an open team blocks a mode change
 ml --reset >/dev/null; : > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
 try ml --mode pr-reviewer; check "open team: a mode change is rejected, nothing changes" "$RC:$(mcreates):$(mstate):$(mmode)" "1:$N:$B:programmer"
-case "$OUT" in *"Close the team first"*"mode 'programmer'"*"'pr-reviewer'"*|*"mode 'programmer'"*"'pr-reviewer'"*"Close the team first"*) echo "ok   open team: the error explains it";; *) echo "FAIL open team message: $OUT"; FAIL=1;; esac
+check "open team: the error is B6's, naming every open tab" "$(printf '%s\n' "$OUT" | grep -cxF "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: Planner (h-Planner), Dev (h-Dev), Allrole (h-Allrole). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed.")" "1"
 check "open team: the overrides were not saved" "$(ls "$MG/orca-roles.overrides.json" 2>/dev/null | wc -l | tr -d ' ')" "0"
 try ml --mode programmer; check "open team: the same mode proceeds" "$RC:$(mmode)" "0:programmer"
 check "open team: the same mode is saved" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "programmer"
@@ -1801,7 +2081,7 @@ rm -f "$TMP/m-rt"
 # a tab that still exists but is orphaned, or whose agent is gone, is still an open team: the mode change is refused
 for st in orphan noagent; do
   : > "$TMP/m-$st"; B="$(mstate)"; N="$(mcreates)"
-  try ml --mode pr-reviewer; check "open team: a tab that is $st still blocks a mode change; nothing changes" "$RC:$(printf '%s' "$OUT" | grep -c 'Close the team first'):$(mcreates):$(mstate)" "1:1:$N:$B"
+  try ml --mode pr-reviewer; check "open team: a tab that is $st still blocks a mode change; nothing changes" "$RC:$(printf '%s' "$OUT" | grep -cxF "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: Planner (h-Planner), Dev (h-Dev), Allrole (h-Allrole). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$(mcreates):$(mstate)" "1:1:$N:$B"
   rm -f "$TMP/m-$st"
 done
 rm -f "$TMP/m-alive"
@@ -1815,7 +2095,7 @@ done
 rm -f "$TMP/m-alive"
 # a user config.json from before modes (no settings.mode, no modes) launches the same programmer team as before
 SAME="PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
-jq 'del(.settings.mode) | del(.roles[].modes) | .settings += {kickoffTimeoutSeconds: 1, launchWaitSeconds: 1, closeComposerAgent: false, jiraHandoff: false}' "$PKC" > "$TMP/m-legacy.json"
+jq 'del(.settings.mode) | del(.roles[].modes) | .settings += {kickoffTimeoutSeconds: 1, launchWaitSeconds: 1, closeComposerAgent: false, jiraHandoff: false, enableAskModeOnStart: false}' "$PKC" > "$TMP/m-legacy.json"
 check "legacy config: has neither settings.mode nor modes" "$(jq -c '[.settings.mode, ([.roles[].modes] | map(select(. != null)) | length)]' "$TMP/m-legacy.json")" "[null,0]"
 rm -f "$MG/orca-roles.env"; cp "$TMP/m-legacy.json" "$MC"
 try ml --reset; check "legacy config: the same programmer team as before" "$RC:$(mh):$(mmode)" "0:$SAME:programmer"
@@ -1828,7 +2108,7 @@ rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config
 PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
 rm -rf "$PRK/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
 ln -sfn "$PRK" "$PRH/.orca-roles"
-jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
+jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
 check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
 check "mode_error: academic-research is still not available" "$(KIT="$PRK" mode_error academic-research)" "mode 'academic-research' is not available yet"
 check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
@@ -2248,6 +2528,12 @@ check "composer: never touches a shell with the same title" "$(grep -c 'terminal
 claunch
 for _ in 1 2 3 4 5; do grep -q "Not a new worktree" "$CP/.git/orca-roles-kickoff.log" 2>/dev/null && break; sleep 1; done
 check "composer: not looked for when resuming" "$(grep -c 'Not a new worktree' "$CP/.git/orca-roles-kickoff.log")" "1"
+CP2="$TMP/cproj2"; mkdir -p "$CP2"; git -C "$CP2" init -q -b feat-x; rm -f "$TMP/clist.seen"; : > "$COLOG"
+jq '.settings.closeComposerAgent = false' "$KIT/config.json" > "$KIT/config.json.new" && mv "$KIT/config.json.new" "$KIT/config.json"
+(cd "$CP2" && HOME="$TMP/home" PATH="$TMP/cbin:$PATH" "$TMP/home/.orca-roles/bin/launch.sh" >/dev/null 2>&1)
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -z "$(ls -A "$CP2/.git/orca-roles.kickoff.d" 2>/dev/null)" ] && [ -s "$CP2/.git/orca-roles-kickoff.log" ] && break; sleep 0.5; done
+sleep 1
+check "composer: closeComposerAgent false -> a new worktree's extra session is not looked for or closed" "$([ -f "$CP2/.git/orca-roles.preexisting.json" ] && echo fresh):$(grep -c 'terminal close --terminal x1' "$COLOG" || true):$(grep -c 'Composer extra session\|Closed x1\|Not a new worktree\|No Jira key and no branch' "$CP2/.git/orca-roles-kickoff.log" || true)" "fresh:0:0"
 }
 
 sec_orca_alias() {
@@ -2561,7 +2847,7 @@ mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"; 
 HB="$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" 2>/dev/null | cksum || true)"; : > "$RLOG"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode pr-reviewer 2>&1)" && RC=0 || RC=$?
 check "restart: restored tabs block a mode change; nothing saved, closed or opened" "$RC:$(grep -cE 'terminal (close|create)' "$RLOG" || true):$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum):$([ -e "$RP/.git/orca-roles.overrides.json" ] && echo ovr)" "1:0:$HB:"
-case "$OUT" in *"Close the team first"*) echo "ok   restart: the mode change error explains it";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
+case "$OUT" in *"ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: Planner (rs-pl), Dev (rs-dev). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."*) echo "ok   restart: the mode change error names the restored tabs";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$PRB" ] || cp -R "$PRB" "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"Orca restored the tab of Planner after a restart (rs-pl) without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
@@ -4096,7 +4382,7 @@ sec_relaunch() {
 # relaunch-role.sh with a fake orca, claude and kickoff, in an own kit (never the clone)
 pk_setup
 cat > "$PK/config.json" <<'J'
-{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
   "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev", "model": "m-dev" }, "deployer": { "title": "Deployer" } } }
 J
@@ -4328,7 +4614,7 @@ check "legacy id: saved options with the old mode id still select the same team,
 jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
 printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; touch "$TMP/aw-alive"
 try aln --mode academic-research
-check "legacy id: a team open under the old id is the same mode: no 'Close the team first', no dropped role selection" "$RC:$(printf '%s\n' "$OUT" | grep -c 'Close the team first\|Mode changed'):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:0:[\"academic-research\",[\"exp\"]]:academic-research"
+check "legacy id: a team open under the old id is the same mode: no open-team refusal, no dropped role selection" "$RC:$(printf '%s\n' "$OUT" | grep -c 'team is open in mode\|Mode changed'):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:0:[\"academic-research\",[\"exp\"]]:academic-research"
 # a failed launch changes nothing; --status reads the old id
 printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
 LB="$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" 2>/dev/null | cksum || true)"

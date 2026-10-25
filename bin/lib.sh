@@ -50,7 +50,8 @@ model_error_regex() {
     custom) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
   esac
 }
-setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
+# A setting's value as text, or the default when it is absent or null (false is a value: jq's // would drop it).
+setting() { jq -r --arg k "$2" --arg d "$3" '(if (.settings | type) == "object" and (.settings | has($k)) and .settings[$k] != null then .settings[$k] else $d end) | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
 MODE_IDS="programmer pr-reviewer academic-research"
 MODES_JSON='["programmer","pr-reviewer","academic-research"]'
@@ -279,6 +280,9 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("superpowers") then (.superpowers | select(. != true and . != false) | "ERROR: invalid configuration: settings.superpowers must be true or false") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.superpowers must be true or false"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("enableAskModeOnStart") then (.enableAskModeOnStart | select(. != true and . != false) | "ERROR: invalid configuration: settings.enableAskModeOnStart must be true or false") else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.enableAskModeOnStart must be true or false"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("artifacts") then (.artifacts
       | if type != "object" or ((keys - ["plans", "designs", "research", "deployment"]) | length) > 0 then "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"
         else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-") or . == ".git") or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
@@ -371,7 +375,7 @@ preexisting_agents() {
 }
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note art
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang legacy_note art
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -400,12 +404,39 @@ planner_msg() {
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
   elif [ "$resume" = 3 ]; then
     msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
+  elif [ "$resume" = 4 ]; then
+    msg="$msg WARNING: the mode was switched from $oldmode to $(mode_of "$cfg") and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in $(scratch_dir planner)/mode-switch-summary.md: read it first."
+    [ -n "$(clear_command "$cfg" planner)" ] || msg="$msg Your previous conversation is still there: follow only this mode's prompt from now on."
+    msg="$msg Start with the startup."
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
     [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && msg="$msg You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit's settings)."
   else
     msg="$msg Start with the startup."
   fi
+  printf '%s' "$msg"
+}
+# The Planner's first message while the worktree has no mode yet: ask the user which mode to use.  planner_ask_msg <config>
+planner_ask_msg() {
+  local cfg="$1" lang id one list="" sug msg
+  msg="You are the Planner of the orca-roles kit in this worktree, and no mode has been chosen yet."
+  lang="$(setting "$cfg" language auto)"
+  if [ "$lang" != auto ] && [ -n "$lang" ]; then msg="$msg Always reply to the user in $lang, whatever language they write in."
+  else msg="$msg Reply to the user in the language they write in."; fi
+  for id in $MODE_IDS; do
+    [ -z "$(mode_error "$id")" ] || continue
+    case "$id" in
+      programmer) one="plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)";;
+      academic-research) one="write a research paper: experiments first, then the writing phase";;
+      pr-reviewer) one="review a pull request with a team of reviewers";;
+      *) one="";;
+    esac
+    list="${list:+$list; }$id ($one)"
+  done
+  sug="$(mode_of "$cfg" 2>/dev/null)" || sug=programmer
+  msg="$msg Ask the user, in one question, which mode to use: $list. Suggested: $sug."
+  msg="$msg Do not start any work before the answer."
+  msg="$msg When the user answers, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn: the kit opens that mode's team and sends you your role message for it."
   printf '%s' "$msg"
 }
 # Every handle the Planner's tab has had in this worktree: <git dir>/orca-roles.planner-handles, one per line, no duplicates, atomic.

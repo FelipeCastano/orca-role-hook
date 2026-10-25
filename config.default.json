@@ -8,6 +8,7 @@
     "cleanWorkersAfterStep": true,
     "language": "auto",
     "mode": "programmer",
+    "enableAskModeOnStart": true,
     "superpowers": true,
     "prReviewer": { "marketplace": "romerox3/lens-review", "plugin": "lens-review@lens-review", "skill": "skills/lens-review/SKILL.md" }
   },
