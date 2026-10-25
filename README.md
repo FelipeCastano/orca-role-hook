@@ -240,6 +240,7 @@ If you shut down the computer or close Orca, the roles' tabs die, but the state 
 To resume, run `roles` in a workspace terminal (the hook does not fire in existing worktrees). What happens depends on what Orca kept:
 
 - **Orca restored the tabs** (it does so when you reopen it after a restart, relaunching each Claude session with `--resume` but without the kit's settings: no auto mode, no plugin, no per-role MCP, default model). The kit recognizes each restored tab by its terminal identity (`orca-roles.pty` in the worktree's git dir; the handles change, the identity does not), reads the Claude session Orca resumed in it, closes it and reopens the role with that same session plus the kit's settings. Every role comes back **with its memory**: the Planner remembers the plan and the decisions, and each worker what it was doing. The Planner then rebinds the Run, abandons the dispatches that pointed to the old terminals, tells you where it was and what was interrupted, and re-dispatches only when you confirm. If the Planner itself runs the launch from the tab Orca restored (it does so when it finds its workers gone), the kit keeps that tab, reopens the workers and starts a small detached process that waits until the Planner's turn ends and then reopens the Planner the same way, with its conversation and the kit's settings; that Planner re-dispatches without waiting for you, since it reopened itself. The process logs to `orca-roles-relaunch.log` in the worktree's git dir; it needs a worktree id (`ORCA_WORKTREE_ID`, set in Orca's terminals) and `setsid` or `/usr/bin/perl`, and otherwise the Planner asks you to run `roles` from another terminal. This needs the native Claude Code installer: the kit reads the resumed session from the `--resume` argument of the `claude` process, and an npm install runs under `node` and renames its process to `claude`, which overwrites those arguments, so the roles reopen without memory (everything else still works).
+- **Orca kept the tabs asleep** (after a restart Orca brings back at once only each worktree's shell tabs and its active tab; the others stay in the tab bar, asleep and without a terminal, until you click them, and then Orca resumes their session itself): `roles` wakes each role's asleep tab before deciding anything (the kit saves each tab's identity in `orca-roles.tabs` in the worktree's git dir), waits until its conversation is running and then reopens it as above, with its memory and the kit's settings, so no role is left with two tabs. Waking uses an internal call of the Orca app (Orca has no command for it yet) and works only on macOS; elsewhere `roles` says it cannot wake them and opens new tabs: close the old ones without opening them.
 - **The tabs are gone** (closed before the restart, or a session Orca could not resume): the kit opens new tabs and starts the Planner in **resume mode**: before talking to you, it recovers the Run with `run-use`, reads the task list and the team's latest communications, closes the dispatches that pointed to dead tabs, reviews `git status`, `git diff` and the log, and gives you a summary: what was closed, what was in progress, which questions were left unanswered and what it proposes to do. The workers come back clean; they do not need memory because each task comes with its full spec (the same principle as [context cleanup](#cleaning-the-workers-context)). The Deployer detects that the previous API died and starts it again if asked.
 
 If Orca cannot say whether the saved tabs are still open (its window is not ready, or `orca terminal list` keeps failing), `roles` stops with "Orca is not ready (<code>)" before closing or opening anything, and leaves the saved team as it was: run `roles` again once Orca is ready. Only one `roles` runs per worktree at a time (`orca-roles.lock` in its git dir): a second one waits up to 60 seconds for the first, and takes over a lock whose process is gone.
@@ -730,8 +731,12 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   └── academic-research/       # each mode's folder holds:
 │       ├── common-workers.md    # rules common to the mode's workers
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
+├── docs/
+│   ├── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
+│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand
 ├── tests/
-│   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
+│   ├── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
+│   └── live/                    # live checks: mac.sh, wsl.sh, agents.sh (see docs/live-checks.md)
 └── .github/workflows/ci.yml     # shellcheck + smoke on every push to main and every PR
 ```
 
@@ -784,10 +789,10 @@ The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshr
 tests/smoke.sh                                   # does not touch ~/.orca-roles
 tests/smoke.sh --list                            # section names
 tests/smoke.sh roles-yaml mcp                    # only those sections, in that order
-shellcheck -S warning install.sh bin/*.sh tests/*.sh
+shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
-The GitHub Actions workflow runs the same on every push to main and every pull request.
+The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
 
 ## Troubleshooting
 
@@ -817,6 +822,8 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | `roles` says "another roles is still running" | Another `roles` held `orca-roles.lock` (git dir) for more than 60 seconds. Wait for it to finish and run `roles` again; a lock left by a process that died is taken over on its own |
 | `roles` warns "this folder was launched before as worktree <old> and now as <new>" | Orca knows the same folder under two worktree ids (`orca-roles.wtid` in the git dir holds the last one), so its tabs may be duplicated. Close the extra tabs and launch from one id |
 | After a restart there are two teams in the worktree | A kit older than `orca-roles.pty`: close the tabs that are not in `orca-roles.env` and update the kit. With the current kit, `orca-roles-launch.log` says which restored tabs it reopened with their conversation |
+| After a restart `roles` says "Orca woke the tab of X but its conversation has not started yet" | The woken tab is still starting its agent: run `roles` again in a moment. No tab was opened |
+| After a restart a role's old tab comes back when you click it, next to a new one | `roles` could not wake it (not macOS, or the call failed: `orca-roles-launch.log` says why) and opened a new tab. Close the old one |
 | Tabs in another workspace | `launch.sh` uses `ORCA_WORKTREE_ID`; you can force it with `launch.sh id:<ORCA_WORKTREE_ID>` |
 | `roles` says "All roles are already open" but a tab has no agent | The agent stopped in a tab Orca does not recognize as an agent's (a `custom` agent): close that tab and run `roles` |
 | After a restart, the Planner does not recover the state | `orca-roles-launch.log` must say "Resuming workspace". If not, the `orca-roles.env` file in the worktree's git dir did not exist or was empty |

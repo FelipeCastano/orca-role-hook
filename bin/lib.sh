@@ -285,7 +285,7 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("artifacts") then (.artifacts
       | if type != "object" or ((keys - ["plans", "designs", "research", "deployment"]) | length) > 0 then "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"
-        else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-") or . == ".git") or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
+        else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-")) or (split("/") | any(ascii_downcase == ".git")) or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
           | "ERROR: invalid configuration: settings.artifacts.\(.key) must be a relative path inside the worktree") end) else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
@@ -713,5 +713,40 @@ trust_custom_roles() {
       1|2) echo "Warning: could not mark $d as trusted in $file (role $id; $([ "$rc" = 2 ] && echo 'the file kept changing' || echo 'invalid file or filter, or no permission')); the file was left untouched." >&2;;
     esac
   done
+  return 0
+}
+
+# Orca's own binary (in node mode) and its runtime client, from the 'orca' on the PATH: "<binary>|<runtime-client.js>" (macOS app only), else nothing and 1.
+orca_app_node() {
+  local p l d app
+  p="$(command -v orca 2>/dev/null)" || return 1
+  case "$p" in /*) ;; *) return 1;; esac
+  while [ -L "$p" ]; do
+    l="$(readlink "$p")" || return 1
+    case "$l" in /*) p="$l";; *) d="$(dirname "$p")"; p="$d/$l";; esac
+  done
+  case "$p" in *.app/Contents/Resources/bin/orca) ;; *) return 1;; esac
+  app="${p%/Contents/Resources/bin/orca}"
+  [ -x "$app/Contents/MacOS/Orca" ] && [ -f "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js" ] || return 1
+  printf '%s|%s\n' "$app/Contents/MacOS/Orca" "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+}
+
+# Wakes a tab Orca keeps asleep after a restart: wake_tab <worktreeId> <tabId> <leafId>. Returns 0 woken (stdout empty), 1 failed (stdout: the reason), 2 unavailable here.
+wake_tab() {
+  local n bin rc rcl err
+  if [ -n "${ORCA_ROLES_WAKE:-}" ]; then
+    "$ORCA_ROLES_WAKE" "$@"; rc=$?
+    case "$rc" in 0) return 0;; 2) return 2;; *) return 1;; esac
+  fi
+  n="$(orca_app_node)" || return 2
+  bin="${n%%|*}"; rcl="${n#*|}"
+  err="$(ELECTRON_RUN_AS_NODE=1 "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+  printf '%s\n' "$err" | head -1
+  return 1
+}
+
+# The tab and pane ids of a terminal handle, "<tabId> <leafId>" (what Orca restores); nothing if either is missing or the call fails.
+tabs_of_handle() {
+  orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select((.tabId // "") != "" and (.leafId // "") != "")] | first | select(. != null) | "\(.tabId) \(.leafId)"' 2>/dev/null
   return 0
 }

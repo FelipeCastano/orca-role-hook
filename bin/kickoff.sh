@@ -53,7 +53,7 @@ check_model() {  # $1 handle, $2 role, $3 model errors on screen before the mess
 
 kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds it), atomically
   local f tmp v; f="$(dirname "$STATE")/orca-roles.kicked"; tmp="$f.tmp.$$"; v="$(var_of "$1")"; [ -f "$f" ] || : > "$f"
-  awk -v k="$v" -v h="$2" 'index($0, k "=") == 1 { if (!d) print k "=" h; d = 1; next } { print } END { if (!d) print k "=" h }' "$f" > "$tmp" && mv "$tmp" "$f"
+  k="$v" h="$2" awk 'index($0, ENVIRON["k"] "=") == 1 { if (!d) print ENVIRON["k"] "=" ENVIRON["h"]; d = 1; next } { print } END { if (!d) print ENVIRON["k"] "=" ENVIRON["h"] }' "$f" > "$tmp" && mv "$tmp" "$f"
 }
 kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not recorded as the role's kickoff]
   for _ in 1 2 3; do
@@ -149,6 +149,7 @@ if is_new planner; then
   if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "$PLANNER" planner "$(planner_ask_msg "$CFG")" nokick
   elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends the Planner its role message."
   else kick "$PLANNER" planner "$PLANNER_MSG"; fi
+  rm -f "$GITDIR/orca-roles.switch-from"
 fi
 OPENED_WORKERS=""; OPENED_IDS=""
 for id in $ROLES; do
