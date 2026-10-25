@@ -149,6 +149,7 @@ if is_new planner; then
   if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "$PLANNER" planner "$(planner_ask_msg "$CFG")" nokick
   elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends the Planner its role message."
   else kick "$PLANNER" planner "$PLANNER_MSG"; fi
+  rm -f "$GITDIR/orca-roles.switch-from"
 fi
 OPENED_WORKERS=""; OPENED_IDS=""
 for id in $ROLES; do

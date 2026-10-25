@@ -40,6 +40,20 @@ if [ "$REOPEN" = 1 ]; then
   [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
   [ -z "$OTHERS" ] || { echo "ERROR: --reopen takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
 fi
+# a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
+if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  A="${ORCA_WORKTREE_ID#*::}"; A="${A%%::workspace:*}"
+  if [ "$(cd "$A" 2>/dev/null && pwd -P)" != "$(cd "$TOP" && pwd -P)" ]; then
+    CUR_ID="$(orca worktree current --json 2>/dev/null | jq -r '.result.worktree.id // empty' 2>/dev/null)"
+    if [ -n "$CUR_ID" ]; then
+      WT="id:$CUR_ID"
+      echo "This terminal belongs to worktree $A; using the worktree of the current folder ($TOP)."
+    else
+      echo "ERROR: this terminal belongs to worktree $A but the current folder ($TOP) is not an Orca worktree. Run roles from a terminal of that worktree. Nothing was changed."
+      exit 1
+    fi
+  fi
+fi
 WT="${WT:-${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}}"; WT="${WT:-active}"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 OVR="$GITDIR/orca-roles.overrides.json"  # this worktree's exceptions
@@ -50,6 +64,7 @@ KICKOFF="${ORCA_ROLES_KICKOFF:-$KIT/bin/kickoff.sh}"
 CFG="$GITDIR/orca-roles.config.json"     # copy of the effective config for this worktree
 LOG="$GITDIR/orca-roles-launch.log"
 MARKER="$GITDIR/orca-roles.mode-pending"  # exists while the worktree has no chosen mode yet (the Planner asks the user)
+SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has closed the old workers but the Planner has not had its new role message yet
 # Whether a role's tab is still working: 0 alive, 1 no tab (no handle, or Orca says the handle is stale), 2 the tab exists but its agent
 # is gone (e.g. after Ctrl+C), 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned"),
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
@@ -133,7 +148,9 @@ echo "== $(date '+%F %T') launch.sh in $WT"
 
 # The new configuration and exceptions are prepared aside and only replace the saved ones once every check has passed
 NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
-fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; echo "$1"; exit 1; }
+fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; sw="${SWITCH_FROM:-}"; [ -n "$sw" ] || sw="$(cat "$SWITCH_FILE" 2>/dev/null)"
+  m="$1"; [ -z "$sw" ] || { case "$m" in *.) ;; *) m="$m.";; esac; m="$m The workers of mode $sw were already closed: run roles again to finish the switch."; }
+  echo "$m"; exit 1; }
 merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
 PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
 [ -z "$PREV_MODE" ] || PREV_MODE="$(canon_mode "$PREV_MODE")"   # a team open under an old mode id is the same mode
@@ -315,7 +332,12 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
 $SW_RECORDS
 EOF2
     SWITCH_FROM="$PREV_MODE"
+    printf '%s\n' "$PREV_MODE" > "$SWITCH_FILE.tmp.$$"; mv "$SWITCH_FILE.tmp.$$" "$SWITCH_FILE"
   fi
+fi
+if [ -z "$SWITCH_FROM" ] && [ -s "$SWITCH_FILE" ]; then
+  SWITCH_FROM="$(cat "$SWITCH_FILE")"
+  echo "Finishing the mode switch from $SWITCH_FROM to $NEWMODE that a previous launch left unfinished."
 fi
 # The phase cannot change under an open team either: a role of the old phase that the new one does not have must be closed first (phase.sh does it).
 if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ -s "$STATE" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
@@ -508,7 +530,11 @@ for id in $ROLES; do
     [ -n "$h" ] && break
     echo "Retrying $t ($try/3)..."; sleep 2
   done
-  [ -n "$h" ] || { echo "ERROR: could not open $t. Check $LOG" >&2; exit 1; }
+  if [ -z "$h" ]; then
+    sw="${SWITCH_FROM:-}"; [ -n "$sw" ] || sw="$(cat "$SWITCH_FILE" 2>/dev/null)"
+    m="ERROR: could not open $t. Check $LOG"; [ -z "$sw" ] || { case "$m" in *.) ;; *) m="$m.";; esac; m="$m The workers of mode $sw were already closed: run roles again to finish the switch."; }
+    echo "$m" >&2; exit 1
+  fi
   printf -v "$v" '%s' "$h"; NEW="$NEW $id"
   state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$(pty_of_handle "$h")"   # an interrupted launch still remembers the tabs it opened
 done

@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill project-plugins relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen worktree-select trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill project-plugins relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -1683,11 +1683,11 @@ cat > "$SWD/bin/orca" <<'EOS'
 echo "$*" >> "$SWD/orca.log"
 h=""; pv=""; for x in "$@"; do [ "$pv" = --terminal ] && h="$x"; pv="$x"; done
 case "$1 $2" in
-  "terminal create") t=""; while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; echo "{\"handle\":\"h-$t-$(grep -c '^terminal create' "$SWD/orca.log")\"}";;
+  "terminal create") t=""; while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; [ -e "$SWD/cc.$t" ] && exit 1; echo "{\"handle\":\"h-$t-$(grep -c '^terminal create' "$SWD/orca.log")\"}";;
   "terminal list") cat "$SWD/list.json" 2>/dev/null || echo '{"terminals":[]}';;
   "terminal read") echo '{"text":""}';;
   "terminal close") [ -e "$SWD/cf.$h" ] && exit 1; case " $* " in *" --tab "*) [ -e "$SWD/cft.$h" ] && exit 1;; esac; exit 0;;
-  "terminal send") t=""; while [ $# -gt 0 ]; do [ "$1" = --text ] && t="$2"; shift; done; printf '%s\037' "$t" >> "$SWD/sent.$h";;
+  "terminal send") [ -e "$SWD/sf.$h" ] && exit 1; t=""; while [ $# -gt 0 ]; do [ "$1" = --text ] && t="$2"; shift; done; printf '%s\037' "$t" >> "$SWD/sent.$h";;
   "terminal show") st=""; [ -e "$SWD/st.$h" ] && st="$(cat "$SWD/st.$h")"
     case "$st" in
       stale) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
@@ -1707,7 +1707,7 @@ jq '.roles.dev.modes = ["programmer", "academic-research"] | .roles.tester = {"t
 swl() { (cd "$AK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$SWD/bin:$PATH" SWD="$SWD" ORCA_TERMINAL_HANDLE="${SWH:-}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 swrun() { try swl "$@"; akdrain; }
 swseed() {
-  akreset; rm -rf "$SWD"/sent.* "$SWD"/st.* "$SWD"/cf.* "$SWD"/cft.* "$SWD"/pty.* "$SWD/orca.log" "$SWD/list.json"; : > "$SWD/orca.log"
+  akreset; rm -rf "$SWD"/sent.* "$SWD"/st.* "$SWD"/cf.* "$SWD"/cc.* "$SWD"/sf.* "$SWD"/cft.* "$SWD"/pty.* "$SWD/orca.log" "$SWD/list.json"; : > "$SWD/orca.log"
   cp "$SWD/cfg.json" "$KIT/config.json"; cp "$SWD/cfg.json" "$AKG/orca-roles.config.json"
   printf 'PLANNER=h-Planner\nDEV=h-Dev\nTESTER=h-Tester\nDEPLOYER=h-Deployer\nE2E_TESTER=h-E2E-old\n' | tee "$AKG/orca-roles.env" > "$AKG/orca-roles.kicked"
   printf 'PLANNER=pty-h-Planner\nDEV=pty-h-Dev\nTESTER=pty-h-Tester\nDEPLOYER=pty-h-Deployer\nE2E_TESTER=pty-h-E2E\n' > "$AKG/orca-roles.pty"
@@ -1759,6 +1759,39 @@ check "C12: a tab the kit cannot tell about stops the switch before anything is 
 # no saved tab is open: the mode change is a normal launch
 swseed; for h in Planner Dev Tester Deployer; do echo stale > "$SWD/st.h-$h"; done; echo '{"terminals":[]}' > "$SWD/list.json"; SWH=other swrun --mode pr-reviewer
 check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new Planner and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:PLANNER AUDITOR :"
+# C2/C10/C11: a switch that fails once the old workers are closed leaves orca-roles.switch-from (the old mode) and every failure after that says to run roles again; the rerun finishes the switch, kickoff.sh removes the file
+SWF="$AKG/orca-roles.switch-from"; SWDONE="The workers of mode programmer were already closed: run roles again to finish the switch."
+swfin() { printf '%s\n' "$OUT" | grep -cxF 'Finishing the mode switch from programmer to pr-reviewer that a previous launch left unfinished.' || true; }
+swfinany() { printf '%s\n' "$OUT" | grep -c 'Finishing the mode switch' || true; }
+swfile() { cat "$SWF" 2>/dev/null || echo none; }
+swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+SWV1="$RC:$(swerr "ERROR: could not open Auditor. Check $AKG/orca-roles-launch.log. $SWDONE"):$(swfile):$(swplanner):$(swfin):$(swclosed)"
+rm -f "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+SWV2="$RC:$(swfin):$(swfile):$(swplanner):$(swsent 'switched from programmer to pr-reviewer')"
+: > "$SWF"; SWH=h-Planner swrun --mode pr-reviewer
+SWV3="$RC:$(swfinany):$(swplanner)"
+rm -f "$SWF"; SWH=h-Planner swrun --mode pr-reviewer
+SWV3="$SWV3:$(swfinany):$(swplanner)"
+check "switch interrupted after the old workers were closed (the new team's Auditor cannot be opened): the failure carries the 'already closed: run roles again' sentence, orca-roles.switch-from holds the old mode and the Planner is untouched; the rerun prints the 'Finishing the mode switch' line, clears the Planner and sends the new-mode message once, and kickoff.sh removes the file; an empty file or no file is not a switch to finish (no line, no second clear)" "$SWV1|$SWV2|$SWV3" "1:1:programmer::0:h-Dev h-Tester h-Deployer restored-e2e |0:1:none:ESC,CLEAR,MSG,:1|0:0:ESC,CLEAR,MSG,:0:ESC,CLEAR,MSG,"
+# kickoff.sh removes the file whatever the result of sending to the Planner
+swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"; : > "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
+V4="$RC:$(swfin):$(swfile):$(swplanner)"
+rm -f "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
+V4="$V4:$RC:$(swfin):$(swfile):$(swplanner)"
+check "switch rerun with the Planner's tab refusing every send: kickoff.sh still removes orca-roles.switch-from, so the next run does not clear the Planner again" "$V4" "0:1:none::0:0:none:"
+# the sentence also follows a failure that happens before the switch block of a later run, and only while the file holds a mode
+swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
+SWH=h-Planner swrun --enable nobody; V5="$RC:$(printf '%s\n' "$OUT" | grep -c "^ERROR: unknown roles: nobody\..* $SWDONE\$" || true)"
+: > "$SWF"; SWH=h-Planner swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
+rm -f "$SWF"; SWH=h-Planner swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
+swseed; : > "$SWD/cf.h-Deployer"; SWH=h-Planner swrun --mode pr-reviewer; V5="$V5:$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(printf '%s\n' "$OUT" | grep -c 'already closed' || true):$(swfile)"
+# the appended sentence follows exactly one period: a message that already ends with one (Orca not ready on a rerun) and one that does not (the log pointer, in the V1 check above)
+swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
+echo rt > "$SWD/st.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer; P1="$RC:$(swerr "ERROR: Orca is not ready (runtime_unavailable) for Planner: no tab was closed or opened. Run roles again once Orca is ready. $SWDONE"):$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true)"
+swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+P1="$P1:$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true):$(printf '%s\n' "$OUT" | grep -c 'orca-roles-launch\.log\. The workers of mode programmer were already closed' || true)"; rm -f "$SWD/cc.Auditor"
+check "the 'already closed' sentence is joined with exactly one period whether the message ends with a period or not (never '..' or a run-on without one)" "$P1" "1:1:0:0:1"
+check "the 'already closed' sentence ends a failure of a later run while orca-roles.switch-from holds a mode (also one raised before the switch block), not with an empty or missing file; the failure to close an old worker, which comes before the file is written, keeps its message and writes no file" "$V5" "1:1:0:0:1:1:0:none"
 akreset; write_launch_config
 }
 
@@ -3021,6 +3054,61 @@ check "planner_msg: the self-relaunch sentence only in the BACK message of a rel
 rm -f "$KIT/prompts/programmer/tst.md" "$TMP/owaitfail"
 }
 
+sec_worktree_select() {
+# Which Orca worktree launch.sh uses: ORCA_WORKTREE_ID of the terminal, or the worktree of the current folder when the terminal belongs to another one (fake orca; its 'worktree current' answer is a file)
+write_launch_config
+WS="$TMP/wsel"; rm -rf "$WS"; mkdir -p "$WS/bin" "$WS/other"; git -C "$WS" init -q -b main; WSG="$WS/.git"; WSL="$WS/orca.log"; : > "$WSL"
+mkdir -p "$WS/sub/deep"; WSP="$(cd "$WS" && pwd -P)"; ln -s "$WS" "$TMP/wsel-link"; git init -q "$WS/other/repo2"
+cat > "$WS/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$WSL"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+  "terminal list") echo '{"terminals":[]}';;
+  "worktree current") [ ! -e "$WS/curfail" ] || { echo '{"ok":false,"error":{"code":"selector_not_found"}}'; exit 1; }; cat "$WS/cur.json";;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\nexit 0\n' > "$WS/bin/kickoff"; chmod +x "$WS/bin/orca" "$WS/bin/kickoff"
+wsl() {  # wsl <dir> <ORCA_WORKTREE_ID, empty = unset> <launch.sh args...>
+  local d="$1" id="$2"; shift 2; : > "$WSL"
+  OUT="$(cd "$d" && env ${id:+ORCA_WORKTREE_ID="$id"} HOME="$TMP/home" PATH="$WS/bin:$PATH" ORCA_ROLES_KICKOFF="$WS/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
+}
+wsreset() { rm -rf "$WSG"/orca-roles.* "$WSG"/orca-roles-*.log "$WS/curfail"; echo '{"ok":true,"result":{"worktree":{"id":"repo1::'"$WSP"'","path":"'"$WSP"'"}}}' > "$WS/cur.json"; }
+wscur() { grep -c '^worktree current' "$WSL" || true; }
+wsid() { cat "$WSG/orca-roles.wtid" 2>/dev/null; }
+wsmsg() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
+wsout() { find "$WSG" -maxdepth 1 -name 'orca-roles*' | wc -l | tr -d ' '; }   # every state file and log launch.sh writes
+# the terminal's worktree is the current folder's: nothing changes and Orca is not asked (the folder itself, a subfolder, a '::workspace:' suffix, a symlink to the folder)
+E=""
+for c in "$WSP|$WS" "$WSP|$WS/sub/deep" "$WSP::workspace:abc|$WS" "$TMP/wsel-link|$WS" "$WSP/|$WS"; do
+  wsreset; wsl "${c#*|}" "repo1::${c%%|*}"; E="$E $RC:$(wsid):$(wscur):$(wsmsg "This terminal belongs to worktree ${c%%|*}; using the worktree of the current folder ($WSP).")"
+done
+check "worktree: ORCA_WORKTREE_ID with the folder's own path (also from a subfolder, with a ::workspace: suffix, through a symlink, with a trailing slash) keeps the terminal's worktree: no message and no 'orca worktree current'" "$E" " 0:id:repo1::$WSP:0:0 0:id:repo1::$WSP:0:0 0:id:repo1::$WSP::workspace:abc:0:0 0:id:repo1::$TMP/wsel-link:0:0 0:id:repo1::$WSP/:0:0"
+# another worktree's terminal in this folder: the worktree of the folder wins, the message names the terminal's path without the suffix and the folder's top level; the old 'launched before as' warning still shows
+wsreset; wsl "$WS" "repo1::$WSP"; echo '{"ok":true,"result":{"worktree":{"id":"repo2::'"$WSP"'"}}}' > "$WS/cur.json"
+wsl "$WS/sub" "repo0::$WS/other/repo2::workspace:zz"
+W1="$RC:$(wsid):$(wscur):$(wsmsg "This terminal belongs to worktree $WS/other/repo2; using the worktree of the current folder ($WSP)."):$(wsmsg 'Warning: this folder was launched before as worktree id:repo1::'"$WSP"' and now as id:repo2::'"$WSP"'; if Orca lists it twice, its tabs may be duplicated.')"
+wsreset; wsl "$WS" "repo0::/nonexistent/wsel-x"; W2="$RC:$(wsid):$(wscur):$(wsmsg "This terminal belongs to worktree /nonexistent/wsel-x; using the worktree of the current folder ($WSP).")"
+check "worktree: a terminal of another worktree (a path that exists or not, a suffix to ignore, the folder given as a subfolder) uses the id from 'orca worktree current' asked once, prints the message with the terminal's path (no suffix) and the folder's top level, and keeps the 'launched before' warning" "$W1|$W2" "0:id:repo2::$WSP:1:1:1|0:id:repo1::$WSP:1:1"
+# the folder is not an Orca worktree: stop before writing anything
+F=""
+for m in fail empty noid; do
+  wsreset; case "$m" in fail) : > "$WS/curfail";; empty) echo '{"ok":true,"result":{}}' > "$WS/cur.json";; noid) echo '{"ok":true,"result":{"worktree":{"id":""}}}' > "$WS/cur.json";; esac
+  wsl "$WS" "repo0::$WS/other/repo2"; F="$F $m:$RC:$(wsmsg "ERROR: this terminal belongs to worktree $WS/other/repo2 but the current folder ($WSP) is not an Orca worktree. Run roles from a terminal of that worktree. Nothing was changed."):$(wsout):$(grep -cE '^terminal (create|close)' "$WSL" || true)"
+done
+check "worktree: when 'orca worktree current' fails, has no worktree or an empty id, launch stops with the 'not an Orca worktree' error, exit 1, no state file written and no tab opened or closed" "$F" " fail:1:1:0:0 empty:1:1:0:0 noid:1:1:0:0"
+# the cases that keep today's behaviour: an explicit argument, an id without '::', no id, a folder that is not a git work tree
+wsreset; G=""
+wsl "$WS" "repo0::$WS/other/repo2" id:EXPLICIT; G="$RC:$(wsid):$(wscur):$(wsmsg "This terminal belongs to worktree $WS/other/repo2; using the worktree of the current folder ($WSP).")"
+wsreset; wsl "$WS" "wt-plain"; G="$G|$RC:$(wsid):$(wscur)"
+wsreset; wsl "$WS" ""; G="$G|$RC:$(wsid):$(wscur)"
+wsreset; wsl "$WS" "repo0::$WS/other/repo2" active; G="$G|$RC:$(wsid):$(wscur)"
+wsreset; mkdir -p "$TMP/wsel-nogit"; wsl "$TMP/wsel-nogit" "repo0::$WS/other/repo2"; G="$G|$(wscur):$(wsmsg "This terminal belongs to worktree $WS/other/repo2; using the worktree of the current folder ($WSP)."):$(printf '%s\n' "$OUT" | grep -c 'is not an Orca worktree' || true)"
+check "worktree: an explicit worktree argument (id:... or active) wins over a terminal of another worktree with no message and no 'worktree current'; an ORCA_WORKTREE_ID without '::' or no id keeps today's selection (id:<id> or active); a folder that is not a git work tree is not checked" "$G" "0:id:EXPLICIT:0:0|0:id:wt-plain:0|0::0|0::0|0:0:0"
+rm -rf "$WS" "$TMP/wsel-link" "$TMP/wsel-nogit"
+}
 sec_trust_folder() {
 # trust_folder: edits ~/.claude.json without widening its mode, keeping links, losing concurrent writes or leaving files behind
 tf_setup
