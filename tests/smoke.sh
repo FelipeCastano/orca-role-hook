@@ -113,7 +113,7 @@ TFJ='{"oauthAccount":{"email":"a@b"},"projects":{"/other":{"hasTrustDialogAccept
 
 sec_syntax() {
 # Syntax and JSON
-for f in "$ROOT"/install.sh "$ROOT"/bin/*.sh "$ROOT"/tests/*.sh; do bash -n "$f"; done; echo "ok   bash syntax"
+for f in "$ROOT"/install.sh "$ROOT"/bin/*.sh "$ROOT"/tests/*.sh "$ROOT"/tests/live/*.sh; do bash -n "$f"; done; echo "ok   bash syntax"
 jq empty "$ROOT/config.default.json"; echo "ok   config.default.json is JSON"
 }
 

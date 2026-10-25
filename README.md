@@ -731,8 +731,11 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   └── academic-research/       # each mode's folder holds:
 │       ├── common-workers.md    # rules common to the mode's workers
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
+├── docs/
+│   └── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
 ├── tests/
-│   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
+│   ├── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
+│   └── live/                    # live checks: mac.sh, wsl.sh, agents.sh (see docs/live-checks.md)
 └── .github/workflows/ci.yml     # shellcheck + smoke on every push to main and every PR
 ```
 
@@ -785,10 +788,10 @@ The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshr
 tests/smoke.sh                                   # does not touch ~/.orca-roles
 tests/smoke.sh --list                            # section names
 tests/smoke.sh roles-yaml mcp                    # only those sections, in that order
-shellcheck -S warning install.sh bin/*.sh tests/*.sh
+shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
-The GitHub Actions workflow runs the same on every push to main and every pull request.
+The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
 
 ## Troubleshooting
 
