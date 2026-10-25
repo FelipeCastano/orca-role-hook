@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen worktree-select trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill project-plugins relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder codex-custom prompt-paths new-role-repo install-flat install-migration e2e-browser browser-login e2e-run checkpoint guard model-check models review-skill project-plugins relaunch scholar cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -489,6 +489,30 @@ rule R27 "$R27SK" 'A tab of the team is still open; the error names it.' "$R27TR
 rule R27 "$ROOT/bin/launch.sh" 'enableAskModeOnStart' '^if \[ "\$NEED" = 1 \]'
 rule R27 "$ROOT/bin/lib.sh" '/mode-switch-summary.md' 'WARNING: the mode was switched'
 rule R27 "$ROOT/bin/lib.sh" '.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn' 'When the user answers'
+# R28 waking the tabs Orca keeps asleep after a restart: the README paragraph, the troubleshooting rows (README and skill), the backlog entries to revert and to verify; the messages the rows quote are the ones the code prints
+R28RM="$ROOT/README.md"; R28SK="$ROOT/plugin/skills/team/SKILL.md"; R28BL="$ROOT/BACKLOG.md"
+R28B='^- \*\*Orca kept the tabs asleep\*\*'
+rule R28 "$R28RM" 'only each worktree'"'"'s shell tabs and its active tab' "$R28B"
+rule R28 "$R28RM" '`roles` wakes each role'"'"'s asleep tab before deciding anything' "$R28B"
+rule R28 "$R28RM" '`orca-roles.tabs` in the worktree'"'"'s git dir' "$R28B"
+rule R28 "$R28RM" 'waits until its conversation is running and then reopens it as above' "$R28B"
+rule R28 "$R28RM" 'so no role is left with two tabs' "$R28B"
+rule R28 "$R28RM" 'Waking uses an internal call of the Orca app (Orca has no command for it yet) and works only on macOS' "$R28B"
+rule R28 "$R28RM" 'elsewhere `roles` says it cannot wake them and opens new tabs: close the old ones without opening them' "$R28B"
+[ "$(awk '/^- \*\*Orca restored the tabs\*\*/{p=1; next} p{print; exit}' "$R28RM" | cut -c1-31)" = '- **Orca kept the tabs asleep**' ] || { echo "FAIL rules R28: README.md: the 'Orca kept the tabs asleep' bullet is not right after 'Orca restored the tabs'"; FAIL=1; }
+for f in "$R28RM" "$R28SK"; do
+  rule R28 "$f" 'The woken tab is still starting its agent: run `roles` again in a moment. No tab was opened' '^\| After a restart `roles` says "Orca woke the tab of X but its conversation has not started yet"'
+  rule R28 "$f" '`roles` could not wake it (not macOS, or the call failed: `orca-roles-launch.log` says why) and opened a new tab. Close the old one' '^\| After a restart a role'"'"'s old tab comes back when you click it, next to a new one'
+done
+case "$(awk '/^\| `worker-start` fails with `terminal_handle_stale`/{p=1; next} p{print; exit}' "$R28SK")" in '| After a restart `roles` says "Orca woke the tab of X but its conversation has not started yet" |'*) ;; *) echo "FAIL rules R28: SKILL.md: the 'Orca woke the tab' row is not right after the terminal_handle_stale row"; FAIL=1;; esac
+R28BLS="$(awk '/^## /{s=$0} s == "## Revert when Orca fixes it" && /^- /{l=$0} END{print l}' "$R28BL")"
+grep -qF -- "Waking asleep tabs through Orca's internal \`terminal.reveal\`" <<<"$R28BLS" && grep -qF 'remove `bin/wake-tab.cjs` and the macOS-only limit in the README' <<<"$R28BLS" || { echo "FAIL rules R28: BACKLOG.md: the last entry of 'Revert when Orca fixes it' is not the one for Orca's internal terminal.reveal"; FAIL=1; }
+R28BLP="$(awk '/^## /{s=$0} s == "## Pending verification" && /^- /{l=$0} END{print l}' "$R28BL")"
+grep -qF '**Asleep tabs on Linux and WSL.**' <<<"$R28BLP" && grep -qF '`roles` treats them as closed and opens new tabs' <<<"$R28BLP" || { echo "FAIL rules R28: BACKLOG.md: the last entry of 'Pending verification' is not the one for asleep tabs on Linux and WSL"; FAIL=1; }
+rule R28 "$ROOT/bin/launch.sh" 'but its conversation has not started yet; run roles again in a moment. No tab was opened.' 'Orca woke the tab of'
+rule R28 "$ROOT/bin/lib.sh" 'wake_tab()' '^wake_tab\(\)'
+rule R28 "$ROOT/bin/launch.sh" 'orca-roles.tabs' '^TABS='
+rule R28 "$ROOT/bin/close-role.sh" 'orca-roles.tabs' 'TABSF='
 # R2 an ambiguous answer is not a yes to the commits
 rule R2 "$PD/planner.md" 'neither is an ambiguous answer ("ok, continue"): ask again' '\*\*Set audit\.\*\*'
 # pr-reviewer: no worktrees or terminals, no git state changes, context cleaned only with the user's yes, no AI attribution, kit changes only with the user's yes
@@ -3052,6 +3076,231 @@ check "logs: launched by the relauncher it appends to orca-roles-relaunch.log an
 M6="$(for v in 1 ""; do for r in 2 1 0; do (export ORCA_ROLES_RELAUNCH=$v; planner_msg "$KIT/config.json" "planner dev" "$OG/orca-roles.env" "" "" $r | grep -c 'You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit.s settings)' || true); done; done | tr '\n' ' ')"
 check "planner_msg: the self-relaunch sentence only in the BACK message of a relaunched Planner" "$M6" "1 0 0 0 0 0 "
 rm -f "$KIT/prompts/programmer/tst.md" "$TMP/owaitfail"
+}
+
+sec_wake() {
+# Waking the role tabs Orca keeps asleep after a restart: wake-tab.cjs against a fake runtime client, the lib helpers against a fake app folder, and launch.sh with ORCA_ROLES_WAKE and a fake orca (never Orca itself)
+WP="$TMP/wproj"; rm -rf "$WP" "$TMP/wbin" "$TMP/wapp"; mkdir -p "$WP" "$TMP/wbin" "$TMP/wapp"; git -C "$WP" init -q -b main
+WG="$(cd "$WP/.git" && pwd)"; WOLOG="$TMP/worca.log"; : > "$WOLOG"
+# 1. wake-tab.cjs: the one call it makes, its exit codes and its one-line errors
+cat > "$TMP/wbin/rc.js" <<'J'
+const fs = require('fs');
+class RuntimeClient {
+  constructor(...a) { fs.appendFileSync(process.env.WLOG, 'new ' + JSON.stringify(a) + '\n'); }
+  async call(m, p) {
+    fs.appendFileSync(process.env.WLOG, 'call ' + m + ' ' + JSON.stringify(p) + '\n');
+    if (process.env.WMODE === 'throw') { const e = new Error('boom\nsecond'); e.code = 'runtime_unavailable'; throw e; }
+    if (process.env.WMODE === 'false') return { result: { reveal: { navigated: false } } };
+    if (process.env.WMODE === 'empty') return {};
+    return { result: { reveal: { navigated: true } } };
+  }
+}
+module.exports = { RuntimeClient, getDefaultUserDataPath: () => '/ud' };
+J
+wk() {  # wk <WMODE> <args...>: prints exit code:stdout bytes:stderr
+  : > "$WOLOG"; local rc=0; WLOG="$WOLOG" WMODE="$1" node "$KIT/bin/wake-tab.cjs" "${@:2}" > "$TMP/wout" 2> "$TMP/werr" || rc=$?
+  printf '%s:%s:%s' "$rc" "$(wc -c < "$TMP/wout" | tr -d ' ')" "$(tr '\n' '|' < "$TMP/werr")"
+}
+if command -v node >/dev/null 2>&1; then
+  W1="$(wk ok "$TMP/wbin/rc.js" wt tab leaf)|$(tr '\n' ' ' < "$WOLOG")"
+  W1="$W1|$(wk false "$TMP/wbin/rc.js" wt tab leaf)|$(wk empty "$TMP/wbin/rc.js" wt tab leaf)|$(wk throw "$TMP/wbin/rc.js" wt tab leaf)"
+  W1="$W1|$(wk ok "$TMP/wbin/rc.js" wt tab)|$(wk ok "$TMP/wbin/rc.js" wt tab leaf extra)|$(wk ok)|$(wk ok "$TMP/wbin/none.js" wt tab leaf | cut -c1-30)"
+  check "wake-tab.cjs: reveal is called once with exactly worktreeId, tabId and leafId and exit 0 prints nothing; navigated false or no result -> 1 with 'Orca did not wake the tab'; a throw -> 1 with its code and message on one line; 3 or 5 arguments or none -> 1 with the usage; a client that cannot be loaded -> 1, one line" "$W1" \
+"0:0:|new [\"/ud\",null,null,null] call terminal.reveal {\"worktreeId\":\"wt\",\"tabId\":\"tab\",\"leafId\":\"leaf\"} |1:0:Orca did not wake the tab||1:0:Orca did not wake the tab||1:0:runtime_unavailable boom second||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:MODULE_NOT_FOUND Cannot fi"
+else echo "ok   wake-tab.cjs: skipped (no node on this machine)"; fi
+# 2. the lib helpers: the app binary found from the 'orca' on the PATH, wake_tab's exit codes and stdout contract, tabs_of_handle
+A="$TMP/wapp"
+mkdir_app() {  # mkdir_app <name>: <name>.app with the CLI, the binary (a script that logs how it was run) and the runtime client
+  mkdir -p "$A/$1.app/Contents/Resources/bin" "$A/$1.app/Contents/MacOS" "$A/$1.app/Contents/Resources/app.asar.unpacked/out/cli"
+  printf '#!/bin/sh\necho real-cli\n' > "$A/$1.app/Contents/Resources/bin/orca"; chmod +x "$A/$1.app/Contents/Resources/bin/orca"
+  printf '#!/bin/sh\necho "NODE=$ELECTRON_RUN_AS_NODE $*" >> "%s"\necho noise\n[ "${WFAKE_RC:-0}" = 0 ] || { printf "first line\\nsecond line\\n" >&2; exit "$WFAKE_RC"; }\n' "$WOLOG" > "$A/$1.app/Contents/MacOS/Orca"; chmod +x "$A/$1.app/Contents/MacOS/Orca"
+  : > "$A/$1.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+}
+XBIN="$A/X.app/Contents/MacOS/Orca"; XJS="$A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+mkdir_app X; mkdir_app Y; mkdir_app Z; rm "$A/Y.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"; chmod -x "$A/Z.app/Contents/MacOS/Orca"
+mkdir -p "$A/rel" "$A/abs" "$A/chain" "$A/plain" "$A/norc" "$A/noexe"
+ln -s ../X.app/Contents/Resources/bin/orca "$A/rel/orca"; ln -s "$A/X.app/Contents/Resources/bin/orca" "$A/abs/orca"; ln -s ../rel/orca "$A/chain/orca"
+printf '#!/bin/sh\necho plain\n' > "$A/plain/orca"; chmod +x "$A/plain/orca"
+ln -s ../Y.app/Contents/Resources/bin/orca "$A/norc/orca"; ln -s ../Z.app/Contents/Resources/bin/orca "$A/noexe/orca"
+same_file() { [ "$1" -ef "$2" ]; }
+an() {  # an <dir on the PATH>: orca_app_node's output and status
+  local o r=0 ob orcjs; o="$(PATH="$A/$1:$PATH" orca_app_node)" || r=$?
+  ob="${o%%|*}"; orcjs="${o##*|}"
+  if [ -n "$o" ] && same_file "$ob" "$XBIN" && same_file "$orcjs" "$XJS"; then o="X-app"; fi
+  printf '%s:%s' "$r" "$o"
+}
+AN="$(an rel) $(an abs) $(an chain) $(an plain) $(an norc) $(an noexe) $(ORCA_CLI_BIN_DIR="$A/rel" an plain) $(orca() { :; }; an rel)"
+check "orca_app_node: a relative link, an absolute one and a chain resolve to the app's binary and runtime client; a plain script, an app without its runtime client, one with a non-executable binary, ORCA_CLI_BIN_DIR and a shell function named orca give nothing and 1" "$AN" "0:X-app 0:X-app 0:X-app 1: 1: 1: 1: 1:"
+wt() {  # wt <PATH dir> [VAR=value...]: wake_tab wt-1 tab-1 leaf-1 with the real path; prints status:stdout:the line the fake binary logged
+  local d="$1" o r=0; shift; : > "$WOLOG"; o="$( (export PATH="$A/$d:$PATH" ${1+"$@"}; wake_tab wt-1 tab-1 leaf-1) 2>/dev/null)" || r=$?
+  printf '%s:%s:%s' "$r" "$o" "$(sed "s#$KIT#KIT#; s#$A/[a-z]*/\.\./#A/#; s#$A#A#" "$WOLOG" | tr '\n' ' ')"
+}
+printf '#!/bin/sh\necho "H:$*"; exit "${HRC:-0}"\n' > "$TMP/wbin/hook"; chmod +x "$TMP/wbin/hook"
+WH="$(for c in 0 1 2 7; do wt plain ORCA_ROLES_WAKE="$TMP/wbin/hook" HRC=$c; echo; done | tr '\n' ' ')"
+cat > "$TMP/wbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$WOLOG"
+case "\$1 \$2" in
+  "terminal list") jq -sc '{terminals: .}' "$TMP/wbase" "$TMP/wwoken" 2>/dev/null; [ ! -e "$TMP/wlistfail" ] || exit 1;;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
+  "terminal show") h=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; shift; done
+    case "\$h" in
+      old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+      h-ok) echo '{"result":{"terminal":{"handle":"h-ok","tabId":"T1","leafId":"L1"}}}';;
+      h-split) echo '{"a":{"tabId":"X"},"b":{"tabId":"T2","leafId":"L2"},"c":{"tabId":"T3","leafId":"L3"}}';;
+      h-noleaf) echo '{"result":{"terminal":{"tabId":"T1"}}}';;
+      h-emptyleaf) echo '{"result":{"terminal":{"tabId":"T1","leafId":""}}}';;
+      h-fail) exit 1;;
+      new-*) if [ -e "$TMP/wnoleaf" ]; then echo "{\"result\":{\"terminal\":{\"tabId\":\"tab-\$h\",\"ptyId\":\"wt@@n-\$h\",\"agentIdentity\":\"claude\"}}}"; else echo "{\"result\":{\"terminal\":{\"tabId\":\"tab-\$h\",\"leafId\":\"leaf-\$h\",\"ptyId\":\"wt@@n-\$h\",\"agentIdentity\":\"claude\"}}}"; fi;;
+      *) echo "{\"result\":{\"terminal\":{\"tabId\":\"tab-\$h\",\"leafId\":\"leaf-\$h\",\"ptyId\":\"wt@@x-\$h\",\"agentIdentity\":\"claude\"}}}";;
+    esac;;
+  "terminal wait") [ ! -e "$TMP/wwaitfail" ] || { echo '{"ok":false}'; exit 1; };;
+esac
+exit 0
+EOS
+chmod +x "$TMP/wbin/orca"
+TH="$(for h in h-ok h-split h-noleaf h-emptyleaf h-fail; do (PATH="$TMP/wbin:$PATH"; r=0; o="$(tabs_of_handle "$h")" || r=$?; echo "$r:$o"); done | tr '\n' ' ')"
+check "wake_tab: the hook replaces the helper with the same arguments, 0 -> 0, 2 -> 2, any other code -> 1, stdout passed through; without the hook the app binary runs in node mode (ELECTRON_RUN_AS_NODE=1) with wake-tab.cjs, the runtime client and the three ids, its stdout is dropped on success and only the first stderr line is the reason on failure; without an app it is 2 with no output. tabs_of_handle prints the first object with both ids, nothing when either is missing or empty or the call fails, always status 0" \
+  "$WH|$(wt rel WFAKE_RC=0)|$(wt rel WFAKE_RC=3)|$(wt plain)|$TH" \
+  "0:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: 2:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: |0::NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js wt-1 tab-1 leaf-1 |1:first line:NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js wt-1 tab-1 leaf-1 |2::|0:T1 L1 0:T2 L2 0: 0: 0: "
+# 3. launch.sh against the fake orca and the fake wake hook (it appends the woken tab to the terminal list, as Orca does)
+cat > "$TMP/wbin/wake" <<EOS
+#!/bin/sh
+echo "WAKE \$*" >> "$WOLOG"
+[ ! -e "$TMP/wmsg.\$2" ] || cat "$TMP/wmsg.\$2"
+rc=0; [ ! -e "$TMP/wrc.\$2" ] || rc="\$(cat "$TMP/wrc.\$2")"
+[ "\$rc" != 0 ] || [ ! -e "$TMP/wadd.\$2" ] || cat "$TMP/wadd.\$2" >> "$TMP/wwoken"
+exit "\$rc"
+EOS
+printf '#!/bin/sh\n[ ! -e "%s/wsess.$1" ] || echo 11111111-2222-3333-4444-555555555555\nexit 0\n' "$TMP" > "$TMP/wbin/session-of"
+printf '#!/bin/sh\necho "$*" > "%s/wkick.args"\n' "$TMP" > "$TMP/wbin/kickoff"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/wbin/relauncher"
+chmod +x "$TMP/wbin/wake" "$TMP/wbin/session-of" "$TMP/wbin/kickoff" "$TMP/wbin/relauncher"
+wcfg() {  # wcfg [extra roles json]: the configuration the saved copy is made from
+  cat > "$KIT/config.json" <<J
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" }${1:-} } }
+J
+}
+wst() {  # wst <env> <pty> <tabs>: the saved state of the team, an empty terminal list and no wake outcomes configured
+  printf '%s' "$1" > "$WG/orca-roles.env"; printf '%s' "$2" > "$WG/orca-roles.pty"; printf '%s' "$3" > "$WG/orca-roles.tabs"
+  printf 'PLANNER=old-pl\n' > "$WG/orca-roles.kicked"; cp "$KIT/config.json" "$WG/orca-roles.config.json"
+  rm -rf "$WG/orca-roles.lock" "$WG/orca-roles.overrides.json" "$WG/orca-roles.planner-handles" "$WG/orca-roles.mode-pending" "$WG/orca-roles.switch-from"
+  rm -f "$TMP"/wrc.* "$TMP"/wmsg.* "$TMP"/wadd.* "$TMP"/wsess.* "$TMP/wwaitfail" "$TMP/wlistfail" "$TMP/wnoleaf"
+  : > "$TMP/wbase"; : > "$TMP/wwoken"; : > "$WOLOG"
+}
+wadd() {  # wadd <tab> <handle> <pty> [nosession]: waking <tab> makes <handle> appear in the list with that ptyId, and (unless nosession) its Claude session readable
+  printf '{"handle":"%s","ptyId":"%s","title":"x"}\n' "$2" "$3" > "$TMP/wadd.$1"; [ "${4:-}" = nosession ] || : > "$TMP/wsess.$2"
+}
+wl() {  # wl <launch.sh args...>; env: OTH (ORCA_TERMINAL_HANDLE), OWT (ORCA_WORKTREE_ID), WHOOK (ORCA_ROLES_WAKE), WB (budget)
+  : > "$WOLOG"
+  OUT="$(cd "$WP" && HOME="$TMP/home" PATH="$TMP/wbin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" ORCA_WORKTREE_ID="${OWT-wt-fix}" ORCA_ROLES_WAKE="${WHOOK-$TMP/wbin/wake}" ORCA_ROLES_WAKE_BUDGET="${WB:-3}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/wbin/session-of" ORCA_ROLES_KICKOFF="$TMP/wbin/kickoff" ORCA_ROLES_RELAUNCHER="$TMP/wbin/relauncher" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
+}
+wev() {  # the wake calls, switches, closes and creates, in order
+  awk '/^WAKE /{print "W:"$3; next} /^terminal switch/{print "switch:"$4; next} /^terminal close/{print "close:"$4; next} /^terminal create/{if (match($0,/--title [A-Za-z0-9]+/)) print "create:" substr($0,RSTART+8,RLENGTH-8)}' "$WOLOG" | tr '\n' ' '
+}
+wn() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }   # how many output lines are exactly this
+wsum() { cat "$WG/orca-roles.env" "$WG/orca-roles.pty" "$WG/orca-roles.tabs" 2>/dev/null | cksum; }
+WALL_E=$'PLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n'; WALL_P=$'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'
+WPD_T=$'PLANNER=tab-pl leaf-pl\nDEV=tab-dev leaf-dev\n'; WALL_T=$'PLANNER=tab-pl leaf-pl\nDEV=tab-dev leaf-dev\nTST=tab-tst leaf-tst\n'
+WOTHER='{"handle":"other","ptyId":"wt@@p9","title":"z"}'
+: > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
+wcfg
+# the team after a restart: the Planner's and Dev's tabs asleep (they have a saved tab, no terminal), Tst has no saved tab. The tabs are woken before anything is decided, one switch back to the user's tab follows, and then each restored tab is reopened once
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2
+OTH=other wl
+check "wake: asleep tabs are woken in the saved order before any close or open, the user's tab is switched back to once after the wakes, each woken role is announced and then reopened once (no second tab); Tst has no saved tab and is not woken; the new tabs' ids are saved" \
+  "$RC:$(wev):$(wn 'Orca kept the tab of Planner asleep after a restart; woke it.'):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(find "$WG" -name 'orca-roles.tabs.tmp*' | wc -l | tr -d ' ')" \
+  "0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner close:rs-dev create:Dev create:Tst :1:1:PLANNER=tab-new-Planner leaf-new-Planner|DEV=tab-new-Dev leaf-new-Dev|TST=tab-new-Tst leaf-new-Tst|:0"
+# 4. what is not woken
+wm() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c '^terminal switch' "$WOLOG" || true)"; }
+M=""
+wst "$WALL_E" "$WALL_P" "$WALL_T"; printf '%s\n%s\n' "$WOTHER" '{"handle":"rs-pl","ptyId":"wt@@p1"}{"handle":"rs-dev","ptyId":"wt@@p2"}{"handle":"rs-tst","ptyId":"wt@@p3"}' | sed 's/}{/}\n{/g' > "$TMP/wbase"
+OTH=other wl; M="$M a:$(wm)"
+wst "$WALL_E" "$WALL_P" ""; OTH=other wl; M="$M b:$(wm)"
+wst "$WALL_E" "$WALL_P" $'PLANNER=tab-pl leaf-pl\nDEV=tab-dev\nTST=\n'; wadd tab-pl rs-pl wt@@p1; OTH=other wl; M="$M c:$(wm)"
+wst $'PLANNER=old-pl\nDEV=old-dev\nTST=\n' $'PLANNER=wt@@p1\nTST=wt@@p3\n' "$WALL_T"; wadd tab-pl rs-pl wt@@p1; OTH=other wl; M="$M d:$(wm)"
+wst "" "$WALL_P" "$WALL_T"; OTH=other wl; M="$M e:$(wm)"
+wst "$WALL_E" "$WALL_P" "$WALL_T"; printf '%s\n%s\n%s\n' '{"handle":"rs-pl","ptyId":"wt@@p1"}' '{"handle":"rs-dev","ptyId":"wt@@p2"}' "$WOTHER" > "$TMP/wbase"; OTH=other wl --disable tst; M="$M f:$(wm)"
+wst "$WALL_E" "$WALL_P" "$WALL_T"; : > "$TMP/wlistfail"; OTH=other wl; M="$M g:$(wm)"
+check "wake: nothing is woken (no hook call, no switch back) when every saved tab is already in the list, there are no saved tab ids, a role's line has no leaf, no saved ptyId, no handle in the state, the state file is empty, the role is disabled in a launch that does not change the mode, or the terminal list could not be read; only the role with the full line and ptyId is woken" "$M" " a:0:0 b:0:0 c:1:1 d:1:1 e:0:0 f:0:0 g:0:0"
+# 5. a wake that fails, or that is unavailable: the role is treated as closed and a new tab opened as before; the sentence for "unavailable" prints once
+WNOWAKE='Cannot wake tabs Orca kept asleep on this system; their roles are treated as closed.'
+WNOID='Cannot wake tabs Orca kept asleep: this launch has no worktree id (ORCA_WORKTREE_ID is not set); their roles are treated as closed.'
+F=""
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 1 > "$TMP/wrc.tab-dev"; echo 'no such tab' > "$TMP/wmsg.tab-dev"
+OTH=other wl; F="a:$RC:$(wev):$(wn 'Could not wake the tab of Dev (no such tab); it is treated as closed.'):$(wn "$WNOWAKE")"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 2 > "$TMP/wrc.tab-pl"
+OTH=other wl; F="$F b:$RC:$(wev):$(wn "$WNOWAKE")"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 2 > "$TMP/wrc.tab-dev"
+OTH=other wl; F="$F c:$RC:$(wev):$(wn "$WNOWAKE")"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1
+OWT='' OTH=other wl; F="$F d:$RC:$(wev):$(wn "$WNOWAKE"):$(wn "$WNOID")"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"
+WHOOK='' OTH=other wl; F="$F e:$RC:$(wev):$(wn "$WNOWAKE")"
+check "wake failures: a hook failure for one role -> 'Could not wake the tab of <Title> (<reason>); it is treated as closed.', the others still woken, a new tab opened for it, the switch back made; unavailable (2) on the first role or on the second, a worktree that is not 'id:...' -> its own sentence naming ORCA_WORKTREE_ID (and not the 'on this system' one), or no app to call -> the sentence once, the remaining roles left alone (no more hook calls), every role opened new, and the switch back only when a tab was woken" "$F" \
+"a:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1:0 b:0:W:tab-pl create:Planner create:Dev create:Tst :1 c:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1 d:0:create:Planner create:Dev create:Tst :0:1 e:0:create:Planner create:Dev create:Tst :1"
+# 6. waiting for the woken tabs: the list must show the tab, its session must be readable (claude), it must be idle (claude, codex); a tab that never shows up is treated as closed, one that shows up but is not ready stops the launch with nothing opened
+WB=1; R=""
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1
+OTH=other wl; R="a:$RC:$(wev):$(wn "Could not wake the tab of Dev (it did not appear in Orca's terminal list); it is treated as closed."):$(wn 'Orca kept the tab of Planner asleep after a restart; woke it.')"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2 nosession; S0="$(wsum)"
+OTH=other wl; R="$R b:$RC:$(wev):$(wn 'ERROR: Orca woke the tab of Dev but its conversation has not started yet; run roles again in a moment. No tab was opened.'):$([ "$(wsum)" = "$S0" ] && echo same)"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2; : > "$TMP/wwaitfail"; S0="$(wsum)"
+OTH=other wl; R="$R c:$RC:$(wev):$(wn 'ERROR: Orca woke the tab of Planner but its conversation has not started yet; run roles again in a moment. No tab was opened.'):$(grep -c -- 'terminal wait --terminal rs-pl --for tui-idle --timeout-ms 2000 --json' "$WOLOG" | awk '{print ($1 > 0)}'):$([ "$(wsum)" = "$S0" ] && echo same)"
+# a custom agent needs only its handle, a codex one also to be idle but no session; claude needs both
+wcfg ', "cx": { "title": "Cx", "agent": "codex" }, "cu": { "title": "Cu", "agent": "custom", "command": "x" }'; : > "$KIT/prompts/programmer/cx.md"; : > "$KIT/prompts/programmer/cu.md"
+CXE=$'CX=old-cx\nCU=old-cu\n'; CXP=$'CX=wt@@p4\nCU=wt@@p5\n'; CXT=$'CX=tab-cx leaf-cx\nCU=tab-cu leaf-cu\n'
+wst "$CXE" "$CXP" "$CXT"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-cx rs-cx wt@@p4 nosession; wadd tab-cu rs-cu wt@@p5 nosession
+OTH=other wl; R="$R d:$RC:$(wev | sed 's/create:[A-Za-z]* //g'):$(wn 'Orca kept the tab of Cx asleep after a restart; woke it.'):$(wn 'Orca kept the tab of Cu asleep after a restart; woke it.')"
+wst "$CXE" "$CXP" "$CXT"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-cx rs-cx wt@@p4 nosession; wadd tab-cu rs-cu wt@@p5 nosession; : > "$TMP/wwaitfail"
+OTH=other wl; R="$R e:$RC:$(wev):$(wn 'ERROR: Orca woke the tab of Cx but its conversation has not started yet; run roles again in a moment. No tab was opened.'):$(grep -c 'terminal wait --terminal rs-cu' "$WOLOG" || true)"
+rm -f "$KIT/prompts/programmer/cx.md" "$KIT/prompts/programmer/cu.md"; wcfg; unset WB
+check "wake readiness: a woken tab that never reaches the list -> 'did not appear in Orca's terminal list', treated as closed, the others go on; one that appears without a readable session (claude), or that is never idle (2 s idle waits on its handle), stops the launch with the 'conversation has not started yet' error naming the first such role, after the switch back, with nothing closed or opened and the saved state untouched; a custom agent needs only its handle (no idle wait), a codex one the idle wait but no session" "$R" \
+"a:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1:1 b:1:W:tab-pl W:tab-dev switch:other :1:same c:1:W:tab-pl W:tab-dev switch:other :1:1:same d:0:W:tab-cx W:tab-cu switch:other close:rs-cx close:rs-cu :1:1 e:1:W:tab-cx W:tab-cu switch:other :1:0"
+# 7. a mode switch after a restart: every saved role's tab is woken first (also the ones the new mode does not have), so the switch sees the tabs that exist and closes the workers' tabs, or refuses from another terminal; without the wake they would be left open next to the new team
+WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+WSE=$'PLANNER=pl\nDEV=old-dev\n'; WSP=$'PLANNER=wt@@p1\nDEV=wt@@p2\n'
+wst "$WSE" "$WSP" "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wadd tab-dev rs-dev wt@@p2
+OTH=pl wl --mode pr-reviewer; X="a:$RC:$(wev):$(wn 'Switching mode from programmer to pr-reviewer: closing Dev; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(cat "$WG/orca-roles.switch-from" 2>/dev/null)"
+wst "$WSE" "$WSP" "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wadd tab-dev rs-dev wt@@p2; S0="$(wsum)"
+OTH=other wl --mode pr-reviewer; X="$X b:$RC:$(wev):$(wn "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: Planner (pl), Dev (rs-dev). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)"
+rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"
+check "wake before a mode switch: from the Planner's tab the woken worker is closed by the switch (no refusal, no new Dev, its tab ids dropped, the stub kickoff leaves the switch-from file with the old mode); from another terminal the woken tab counts as open: the usual refusal names it and nothing is changed" "$X" \
+"a:0:W:tab-dev switch:pl close:rs-dev :1:PLANNER=tab-pl leaf-pl|:programmer b:1:W:tab-dev switch:other :1:same"
+# 8. --reopen: only roles that are lost and had a tab are reopened; an asleep one is woken first, so it comes back once, with its conversation
+wst "$WALL_E" $'PLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; printf 'PLANNER=pl\nDEV=old-dev\nTST=old-tst\n' > "$WG/orca-roles.env"; wadd tab-dev rs-dev wt@@p2
+OTH=other wl --reopen; check "wake with --reopen: the asleep Dev is woken, then closed and reopened once; the live Planner is not touched; Tst, with no saved tab ids, is not woken and is opened new" "$RC:$(wev):$(printf '%s\n' "$OUT" | grep -c 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-dev switch:other close:rs-dev create:Dev create:Tst :1"
+# 8b. an academic-research phase change wakes every saved role, also the ones the new phase does not have: the asleep old-phase role is seen by the phase guard (refusal naming it, nothing changed), not left asleep to come back next to the new team
+wcfgp() {  # wcfgp <phase>: academic-research with one role per phase
+  cat > "$KIT/config.json" <<J
+{ "settings": { "mode": "academic-research", "phase": "$1", "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "expr": { "title": "Expr", "modes": ["academic-research"], "phases": ["experiment"] }, "wrt": { "title": "Wrt", "modes": ["academic-research"], "phases": ["writing"] } } }
+J
+}
+mkdir -p "$KIT/prompts/academic-research"; : > "$KIT/prompts/academic-research/expr.md"; : > "$KIT/prompts/academic-research/wrt.md"
+wcfgp experiment; wst $'EXPR=old-expr
+' $'EXPR=wt@@p7
+' $'EXPR=tab-expr leaf-expr
+'; wcfgp writing; wadd tab-expr rs-expr wt@@p7; S0="$(wsum)"
+OTH=other wl; check "wake on an academic-research phase change: the asleep role of the old phase is woken although the new phase does not have it, so the phase guard refuses naming it, with nothing closed or opened and the saved state untouched" "$RC:$(wev):$(wn "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Expr is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)" "1:W:tab-expr switch:other :1:same"
+rm -rf "$KIT/prompts/academic-research"; wcfg
+# 9. orca-roles.tabs upkeep: close-role.sh forgets a role's line (and works with no file), a Planner that keeps its restored tab keeps its previous line (and none if it had none), a tab whose ids Orca does not give is not written
+wst $'PLANNER=a\nDEV=b\n' $'PLANNER=wt@@a\nDEV=wt@@b\n' "$WPD_T"
+(cd "$WP" && HOME="$TMP/home" PATH="$TMP/wbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1) || true; U="a:$(tr '\n' '|' < "$WG/orca-roles.tabs")"
+wst $'PLANNER=a\nDEV=b\n' $'PLANNER=wt@@a\nDEV=wt@@b\n' ""; rm -f "$WG/orca-roles.tabs"
+U="$U:$( (cd "$WP" && HOME="$TMP/home" PATH="$TMP/wbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1; echo $?) ):$([ -e "$WG/orca-roles.tabs" ] && echo created || echo none)"
+for pt in "$WPD_T" $'DEV=tab-dev leaf-dev\n'; do
+  wst $'PLANNER=old-pl\nDEV=old-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$pt"; printf '%s\n' "$WOTHER" '{"handle":"rs-pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; : > "$TMP/wsess.rs-pl"; wadd tab-dev rs-dev wt@@p2
+  OTH=rs-pl wl; U="$U b:$RC:$(grep -c 'terminal close --terminal rs-pl' "$WOLOG" || true):$(tr '\n' '|' < "$WG/orca-roles.tabs")"
+done
+wst "" "" ""; : > "$TMP/wnoleaf"; OTH=other wl; U="$U c:$RC:$([ -e "$WG/orca-roles.tabs" ] && wc -c < "$WG/orca-roles.tabs" | tr -d ' ')"
+check "orca-roles.tabs upkeep: close-role.sh drops the closed role's line and does not create the file; a Planner that keeps its restored tab keeps its previous line, not the one Orca reports now, and gets none when it had none, the new tabs are written; tabs Orca gives no leaf id for are not written (the file is left empty)" "$U" \
+"a:PLANNER=tab-pl leaf-pl|:0:none b:0:0:PLANNER=tab-pl leaf-pl|DEV=tab-new-Dev leaf-new-Dev|TST=tab-new-Tst leaf-new-Tst| b:0:0:DEV=tab-new-Dev leaf-new-Dev|TST=tab-new-Tst leaf-new-Tst| c:0:0"
+rm -f "$KIT/prompts/programmer/tst.md"
 }
 
 sec_worktree_select() {
