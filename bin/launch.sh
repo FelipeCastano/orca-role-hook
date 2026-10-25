@@ -508,7 +508,7 @@ for id in $ROLES; do case "$(rstr "$CFG" "$id" agent)" in claude|"") trust_folde
 trust_custom_roles "$CFG" "$ROLES"   # custom agents that define how to trust the folder (role field "trust")
 state_set() {  # state_set <file> <VAR> <value>: replaces that line (or adds it), keeps the others, atomically
   local tmp="$1.tmp.$$"; [ -f "$1" ] || : > "$1"
-  awk -v k="$2" -v v="$3" 'index($0, k "=") == 1 { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$1" > "$tmp" && mv "$tmp" "$1"
+  k="$2" v="$3" awk 'index($0, ENVIRON["k"] "=") == 1 { if (!d) print ENVIRON["k"] "=" ENVIRON["v"]; d = 1; next } { print } END { if (!d) print ENVIRON["k"] "=" ENVIRON["v"] }' "$1" > "$tmp" && mv "$tmp" "$1"
 }
 # A team saved by an older kit has no marker file: all its tabs were kicked. Otherwise the file starts empty, before any tab is saved.
 if [ ! -f "$KICKED" ]; then if [ -s "$STATE" ]; then cp "$STATE" "$KICKED"; else : > "$KICKED"; fi; fi

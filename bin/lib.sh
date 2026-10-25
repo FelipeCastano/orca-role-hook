@@ -285,7 +285,7 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("artifacts") then (.artifacts
       | if type != "object" or ((keys - ["plans", "designs", "research", "deployment"]) | length) > 0 then "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"
-        else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-") or . == ".git") or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
+        else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-")) or (split("/") | any(ascii_downcase == ".git")) or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
           | "ERROR: invalid configuration: settings.artifacts.\(.key) must be a relative path inside the worktree") end) else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
