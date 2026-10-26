@@ -4641,12 +4641,12 @@ exit 0
 EOS
 chmod +x "$TK/bin/orca"
 tk() {  # <extra settings json fragment> <reads before the dialog clears, or none>
-  printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false%s }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" } } }' "$1" > "$TK/cfg.json"
+  printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false%s }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "planner": { "title": "Planner"%s }, "dev": { "title": "Dev" } } }' "$1" "${TK_PAGENT:+, \"agent\": \"$TK_PAGENT\"}" > "$TK/cfg.json"
   rm -f "$TK/orca.log" "$TK/reads" "$TK/clear_after" "$TK/gd/orca-roles.kicked"; : > "$TK/orca.log"; echo "Do you trust the files in this folder?" > "$TK/screen"
   rm -f "$TK/shows"; [ -n "${TK_IDENT_AFTER:-}" ] && echo "$TK_IDENT_AFTER" > "$TK/ident_after" || rm -f "$TK/ident_after"
   [ "$2" = none ] || echo "$2" > "$TK/clear_after"
   printf 'PLANNER=hp\nDEV=hd\n' > "$TK/gd/orca-roles.env"
-  (cd "$TK/wt" && env TK="$TK" HOME="$TMP/home" PATH="$TK/bin:$PATH" ORCA_ROLES_KICK_SETTLE=0 ORCA_ROLES_TRUST_POLL=0.1 "$TMP/home/.orca-roles/bin/kickoff.sh" "$TK/wt" "$TK/gd/orca-roles.env" "$TK/cfg.json" "dev" "" "" "" > "$TK/out.log" 2>&1)
+  (cd "$TK/wt" && env TK="$TK" HOME="$TMP/home" PATH="$TK/bin:$PATH" ORCA_ROLES_KICK_SETTLE=0 ORCA_ROLES_TRUST_POLL=0.1 "$TMP/home/.orca-roles/bin/kickoff.sh" "$TK/wt" "$TK/gd/orca-roles.env" "$TK/cfg.json" "${TK_ROLES:-dev}" "" "" "" > "$TK/out.log" 2>&1)
 }
 tkenter() { grep -c -- '^SEND terminal send --terminal [^ ]* --enter --json$' "$TK/orca.log" || true; }
 tkrole() { grep -c -- '--text' "$TK/orca.log" || true; }
@@ -4655,6 +4655,12 @@ TK_IDENT_AFTER=3 tk ', "trust": "never"' none
 check "kickoff trust never: the agent shows up after the user trusts the folder -> no Enter, waiting line once, role sent after it and marked kicked" "$(tkenter) $(grep -c 'Dev: waiting for you to answer the trust dialog in its tab' "$TK/out.log") $(tkrole) $(tr '\n' ' ' < "$TK/gd/orca-roles.kicked" 2>/dev/null) $(grep -n -e '^IDENT' -e '--text' "$TK/orca.log" | head -1 | grep -c IDENT)" "0 1 1 DEV=hd  1"
 tk ', "trust": "never"' none
 check "kickoff trust never: the agent never shows up -> no Enter, role NOT sent, not marked, resend hint" "$(tkenter) $(tkrole) [$(cat "$TK/gd/orca-roles.kicked" 2>/dev/null)] $(grep -c 'role was NOT sent.*run roles again' "$TK/out.log") $(grep -c 'waiting for you to answer' "$TK/out.log")" "0 0 [] 1 1"
+TKC="$TK/wt/.git/orca-roles.coordinated/wt"; mkdir -p "${TKC%/*}"; : > "$TKC"
+TK_ROLES=planner tk ', "trust": "never"' none
+check "kickoff trust never: the Planner's role not sent (agent never trusted) keeps the coordinator's marker" "$([ -f "$TKC" ] && echo kept || echo gone) $(tkrole) $(grep -c "Kept the coordinator's marker" "$TK/out.log")" "kept 0 1"
+TK_PAGENT=codex TK_ROLES=planner tk ', "trust": "never"' none
+check "kickoff trust never: the Planner's role not sent (trust dialog left open) keeps the coordinator's marker" "$([ -f "$TKC" ] && echo kept || echo gone) $(tkrole) $(grep -c "Kept the coordinator's marker" "$TK/out.log") $(grep -c 'the trust dialog was still open' "$TK/out.log")" "kept 0 1 1"
+rm -rf "${TKC%/*}"
 TK_IDENT_AFTER=0 tk ', "trust": "never"' none
 check "kickoff trust never: an already trusted agent with old dialog text on screen -> no wait, no Enter, role sent" "$(tkenter) $(grep -c 'waiting for you' "$TK/out.log") $(tkrole)" "0 0 1"
 tk ', "mode": "pr-reviewer"' 1
@@ -5316,6 +5322,7 @@ co --model opus; check "coordinator.sh: --model wins" "$(sed -n 3p "$CO/argv")" 
 check "coordinator.sh: unknown option -> exit 1" "$(co --nope; echo $?)" "1"
 check "coordinator prompt: marks the worktree before creating it, checks the Planner's tab beyond tui-idle, and recovers agent_prompt_blocked without cancelling, delegating or leaving the dispatch" "$(grep -c 'orca-roles.coordinated"; mkdir -p "$d" && printf .%s\\n. <run_id> > "$d/<name>"`, with your Run.s id' "$ROOT/prompts/coordinator.md") $(grep -c '`tui-idle` alone is not enough' "$ROOT/prompts/coordinator.md") $(grep -c 'fails with `agent_prompt_blocked`.*Never press Esc.*never ask the user to type in a tab for you.*retry `worker-start` once with `--retry-of <dispatch_id>`.*do not poll its tab in place of `check --wait`' "$ROOT/prompts/coordinator.md")" "1 1 1"
 check "coordinator prompt: the task is created before the worktree, the marker before orca worktree create" "$(awk '/task-create --spec/{t=NR} /> "\$d\/<name>"/{m=NR} /^   Then `orca worktree create/{c=NR} END{print (t && m && c && t < m && m < c) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "ordered"
+check "coordinator prompt: the worktree name is restricted, its basename is checked after creation, the marker goes once the role is sent" "$(grep -c '\^\[a-z0-9\]\[a-z0-9-\]{0,39}\$' "$ROOT/prompts/coordinator.md") $(grep -c 'basename of that path equals `<name>`; if not, tell the user.*do not rename anything' "$ROOT/prompts/coordinator.md") $(grep -c 'removes the marker once it has sent the Planner its role message' "$ROOT/prompts/coordinator.md")" "1 1 1"
 check "coordinator prompt: dispatches to the Planner's existing tab, never a second agent, and never talks to workers" "$(grep -c 'worker-start --task <task_id> --terminal <planner> --worktree id:<worktree id>' "$ROOT/prompts/coordinator.md") $(grep -c 'Do not use `worker-start --worktree new-\*`' "$ROOT/prompts/coordinator.md") $(grep -c 'never talk to the workers below a Planner' "$ROOT/prompts/coordinator.md")" "1 1 1"
 check "coordinator prompt: waits on its Run's mailbox (status included), answers sends with reply, never reads tabs for questions, checks again after asking the user, forgets a released worktree" "$(grep -c 'check --wait --types "worker_done,escalation,question,status".*never read its tab to find a question' "$ROOT/prompts/coordinator.md") $(grep -c 'writes to your Run with `send`: a `question` is handled like an `ask`, and a `status` that closes its task like a `worker_done`. Answer either with `orca orchestration reply --id <msg_id>' "$ROOT/prompts/coordinator.md") $(grep -c 'As soon as the user answers, `check` again before anything else' "$ROOT/prompts/coordinator.md") $(grep -c 'Otherwise `worker-release`.*remove `orca-roles.coordinator` from the worktree.s git dir' "$ROOT/prompts/coordinator.md")" "1 1 1 1"
 for m in programmer pr-reviewer academic-research; do
@@ -5820,6 +5827,13 @@ mf "$(mfc "$DEVOK")" clean "planner"; check "kickoff.sh: the Planner's first sta
 check "kickoff.sh: an empty marker leaves no coordinator Run behind" "$([ -f "$MF/gd/orca-roles.coordinator" ] && echo kept || echo none)" "none"
 printf 'run_c0ffee12\n' > "$CM"; mf "$(mfc "$DEVOK")" clean "planner"
 check "kickoff.sh: the Planner's first start keeps the marker's Run beside the state" "$([ -f "$CM" ] && echo kept || echo gone)|$(cat "$MF/gd/orca-roles.coordinator" 2>/dev/null)" "gone|run_c0ffee12"
+rm -rf "${CM%/*}" "$MF/gd/orca-roles.coordinator"
+# the marker outlives a Planner message that was not sent, and the next start sends the hold sentence and removes it
+mkdir -p "${CM%/*}"; printf 'run_c0ffee12\n' > "$CM"; rm -f "$MF/gd/orca-roles.coordinator"
+SENDFAIL=hp mf "$(mfc "$DEVOK")" clean "planner"
+check "kickoff.sh: the Planner's send failing keeps the marker, says so and still keeps the Run beside the state" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c "^Kept the coordinator's marker: the Planner's role was not sent yet.$" "$MF/out.log")|$(cat "$MF/gd/orca-roles.coordinator" 2>/dev/null)" "kept|1|run_c0ffee12"
+mf "$(mfc "$DEVOK")" clean "planner"
+check "kickoff.sh: the next start's send carries the wait for the coordinator and removes the marker" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c 'opened by a coordinator' "$MF/text.hp")|$(grep -c 'Kept the coordinator' "$MF/out.log" || true)" "gone|1|0"
 rm -rf "${CM%/*}" "$MF/gd/orca-roles.coordinator"
 mf "$(mfc "$DEVOK")" clean "dev"
 check "model-check: good model recorded, no escalation" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"

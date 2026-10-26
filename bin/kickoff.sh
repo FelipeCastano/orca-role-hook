@@ -98,14 +98,14 @@ agent_trusted() {
     sleep "${ORCA_ROLES_TRUST_POLL:-2}"
   done
 }
-kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not recorded as the role's kickoff]
-  local screen_trust=1
+kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not recorded as the role's kickoff]; 0 only when the message was sent
+  local screen_trust=1 sent=1
   if [ "$TRUST" = never ]; then
     case "$(rstr "$CFG" "$2" agent)" in
       claude|"")
         agent_trusted "$1" "$(title_of "$CFG" "$2")" || {
           echo "$(title_of "$CFG" "$2"): its agent was not running in a trusted folder after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the trust dialog, then run roles again: it sends the role to tabs that never got it."
-          return 0; }
+          return 1; }
         screen_trust=0;;   # trusted: old dialog text still in the screen history must not be taken for an open dialog
     esac
   fi
@@ -117,7 +117,7 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
         # Never press Enter or type the role here: it would accept the dialog. The role stays unmarked in orca-roles.kicked, so the next `roles` sends it.
         wait_trust "$1" "$(title_of "$CFG" "$2")" || {
           echo "$(title_of "$CFG" "$2"): the trust dialog was still open after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the dialog, then run roles again: it sends the role to tabs that never got it."
-          return 0; }
+          return 1; }
       else
         press_enter "$1"; echo "Trust dialog accepted in $1"; pace 3
       fi
@@ -129,12 +129,15 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
     [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
   fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
-  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; }
+  if orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null; then
+    echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0
+  fi
   case "$ocm" in
     present) record_model "$2" "$model";;
     missing) model_failed "$2" "$model" "not in opencode models";;
   esac
   [ -z "$rx" ] || { check_model "$1" "$2" "$before" "$rx" & CHECK_PIDS="$CHECK_PIDS $!"; }
+  return "$sent"
 }
 is_new() { case " $NEW " in *" $1 "*) return 0;; *) return 1;; esac; }
 remembers() { case " $REMEMBERED " in *" $1 "*) return 0;; *) return 1;; esac; }
@@ -218,11 +221,11 @@ if is_new planner; then
   if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "$PLANNER" planner "$(planner_ask_msg "$CFG")" nokick
   elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends the Planner its role message."
   else
-    kick "$PLANNER" planner "$PLANNER_MSG"
-    # a coordinator's marker covers only this first start: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
+    if kick "$PLANNER" planner "$PLANNER_MSG"; then PSENT=1; else PSENT=0; fi
+    # a coordinator's marker covers only this first start and is removed once the Planner's role message is sent: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
     if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
       if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
-      rm -f "$CM"
+      if [ "$PSENT" = 1 ]; then rm -f "$CM"; else echo "Kept the coordinator's marker: the Planner's role was not sent yet."; fi
     fi
   fi
   rm -f "$GITDIR/orca-roles.switch-from"
