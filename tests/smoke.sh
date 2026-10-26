@@ -334,6 +334,10 @@ rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other w
 rule R11 "$PD/tester.md" 'crosscheck.sh tree <scratchDir>/base' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'report the base check as not run for that reason' '^7\. \*\*Base check'
+rule R11 "$PD/tester.md" 'Fails on the base before its body runs' '^   - \*\*Fails on the base before'
+rule R11 "$PD/tester.md" 'it does not count' '^   - \*\*Fails on the base before'
+rule R11 "$PD/cross-dev.md" 'fails on the base only at import or collection' '^5\. Check that your tests fail'
+check "rules R11: tester.md no longer counts a missing name as testing the change" "$(grep -c 'does not exist yet counts' "$PD/tester.md" || true)" "0"
 rule R11 "$PD/tester.md" 'each test set in its own copy outside the worktree' '^8\. \*\*Cross-check matrix'
 rule R11 "$PD/planner.md" 'its patch never goes into the worktree' '^Cross-Dev writes an independent candidate'
 rule R11 "$PD/planner.md" "every Tester brief names the step's base ref" '\*\*Briefed rounds\.\*\*'

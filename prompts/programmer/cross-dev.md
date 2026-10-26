@@ -9,7 +9,7 @@ You write an independent candidate for the current step: a patch and the tests f
 4. Export the candidate in two parts, your tests and the rest:
    - `~/.orca-roles/bin/crosscheck.sh export <scratchDir>/cand --only <each test file or folder you wrote> > <scratchDir>/cand-tests.diff`
    - `~/.orca-roles/bin/crosscheck.sh export <scratchDir>/cand --except <the same paths> > <scratchDir>/cand-code.diff`
-5. Check that your tests fail without your patch: `~/.orca-roles/bin/crosscheck.sh tree <scratchDir>/cand-base --ref <base ref>`, then `~/.orca-roles/bin/crosscheck.sh apply <scratchDir>/cand-base <scratchDir>/cand-tests.diff` and run them there. A test that passes on the base does not test the step: rewrite it and export again.
+5. Check that your tests fail without your patch: `~/.orca-roles/bin/crosscheck.sh tree <scratchDir>/cand-base --ref <base ref>`, then `~/.orca-roles/bin/crosscheck.sh apply <scratchDir>/cand-base <scratchDir>/cand-tests.diff` and run them there. A test that passes on the base does not test the step: rewrite it and export again. A test that fails on the base only at import or collection (a name your patch adds) is not shown to test the step: keep tests of behavior that already exists on the base in a file that does not import the new names, and list in your report the tests that fail on the base only at import or collection.
 
 ## Limits
 - You do not commit and you never touch the worktree. The only repositories you change are the copies `crosscheck.sh tree` made in your scratchDir.
