@@ -9,7 +9,7 @@ KIT="${KIT:-$HOME/.orca-roles}"
 orca_ide_path() {
   local c="${ORCA_CLI_COMMAND:-}" p line
   if [ -n "$c" ] && [ "$c" != orca ]; then
-    p="$(command -v "$c" 2>/dev/null)"
+    p="$(command -v "$c" 2>/dev/null)" || p=""
     case "$p" in /*) [ -x "$p" ] && { printf '%s\n' "$p"; return 0; };; esac
   fi
   if [ -n "${ORCA_WSL_CLI_DIR:-}" ] && [ -x "$ORCA_WSL_CLI_DIR/orca-ide" ]; then printf '%s\n' "$ORCA_WSL_CLI_DIR/orca-ide"; return 0; fi
@@ -22,7 +22,7 @@ orca_ide_path() {
 }
 orca_shim() {
   local dir="$KIT/shim" tmp ide cur
-  cur="$(type -P orca 2>/dev/null)"
+  cur="$(type -P orca 2>/dev/null)" || cur=""
   [ -z "$cur" ] || [ "$cur" = "$dir/orca" ] || return 0
   if ide="$(orca_ide_path)"; then
     mkdir -p "$dir" && tmp="$(mktemp "$dir/.orca.XXXXXX")" || return 0

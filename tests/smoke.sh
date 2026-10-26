@@ -1037,6 +1037,10 @@ chmod -x "$IDE/b/orca-ide"; I4="$(ip '' "$IDE/b" "$IDE/a")"; rm -rf "$KIT/shim";
 I5="$(ip orca-ide '' "$IDE/a")"; I6="$(ip '' '' "$IDE/a")"; mv "$IDE/a/orca-ide" "$IDE/a/orca-ide.off"; I7="$(ip '' '' "$IDE/a")"; mv "$IDE/a/orca-ide.off" "$IDE/a/orca-ide"
 printf '#!/usr/bin/env bash\nexec orca-ide "$@"\n' > "$KIT/shim/orca"; I8="$(ip '' '' "$IDE/a")"; rm -rf "$KIT/shim"
 check "orca_ide_path: ORCA_CLI_COMMAND first, then ORCA_WSL_CLI_DIR (not executable, or ORCA_CLI_COMMAND=orca, is skipped), then the target the shim recorded; a gone target and an old-format shim give nothing and 1" "$I1|$I2|$I3|$I4|$I5|$I6|$I7|$I8" "$IDE/a/orca-ide rc0 |$IDE/b/orca-ide rc0 |$IDE/a/orca-ide rc0 |rc1 |$IDE/a/orca-ide rc0 |$IDE/a/orca-ide rc0 |rc1 |rc1 "
+# sourced under set -e with no orca on the PATH (CI runners): it goes on and creates no shim
+NOO="$TMP/noorca"; mkdir -p "$NOO/kit" "$NOO/bin" "$NOO/home"
+NO1="$(env -i HOME="$NOO/home" PATH="$NOO/bin" "$(command -v bash)" -c 'set -e; KIT="$1"; . "$2/bin/lib.sh"; echo reached' x "$NOO/kit" "$ROOT" </dev/null 2>&1):$?:$([ -e "$NOO/kit/shim" ] && echo shim || echo noshim)"
+check "lib.sh: sourcing it under set -e with no orca on the PATH goes on (CI runners have none)" "$NO1" "reached:0:noshim"
 # the shim: exact content, a path with a space, rewritten only when it changes, the fallbacks at run time, one PATH entry, a real 'orca' is left alone
 sh1() { env -u ORCA_CLI_COMMAND -u ORCA_WSL_CLI_DIR PATH="$2:/usr/bin:/bin" ORCA_CLI_COMMAND="$1" ORCA_WSL_CLI_DIR="${3:-}" bash -c '. "$KIT/bin/lib.sh"; . "$KIT/bin/lib.sh"; echo "$PATH" | tr ":" "\n" | grep -cx "$KIT/shim"'; }
 rm -rf "$KIT/shim"; S1="$(sh1 orca-ide "$IDE/c d")"; SHF="$KIT/shim/orca"
