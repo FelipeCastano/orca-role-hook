@@ -8,7 +8,7 @@
 # 'roles --reset' forgets it and the team starts again in experiment.
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,8p "$0"; exit 0;; esac
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 [ $# -eq 1 ] && { [ "$1" = experiment ] || [ "$1" = writing ]; } || { echo "phase.sh: usage: phase.sh <experiment|writing>" >&2; exit 1; }
 TARGET="$1"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"

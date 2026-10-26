@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # Shared functions. Requires jq. Compatible with bash 3.2 (macOS) and with GNU/BSD tools.
 KIT="${KIT:-$HOME/.orca-roles}"
+# "KIT=<path> " to put in front of a command that runs later in another process (a tab, a message) when this kit is not the
+# installed one, so that process uses this kit too; empty for the installed kit (same folder, even through a link), so those
+# commands stay as they always were.
+kit_env() {
+  [ "$KIT" = "$HOME/.orca-roles" ] && return 0
+  [ -d "$KIT" ] && [ "$(cd "$KIT" && pwd -P)" = "$(cd "$HOME/.orca-roles" 2>/dev/null && pwd -P)" ] && return 0
+  printf 'KIT=%q ' "$KIT"
+}
 
 # Orca's CLI is not always called 'orca': in the WSL terminals Orca manages on Windows it is $ORCA_CLI_COMMAND
 # (e.g. orca-ide). If 'orca' is not on the PATH but orca-ide is found, the $KIT/shim/orca wrapper is created and
@@ -88,6 +96,73 @@ close_unconfirmed() {  # close_unconfirmed <handle> <title>
   echo "Orca did not confirm closing the tab of $2 ($1)."; return 1
 }
 
+# OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id in the worktree's git dir; the kit
+# deletes that session when the role is closed or replaced (a closed `mini` tab does not stop the turn: it runs in OpenCode's service).
+# File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
+oc_session_file() {
+  local gd="${2:-}"
+  [ -n "$gd" ] || gd="$(git rev-parse --git-dir 2>/dev/null)" || return 1
+  gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
+  printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
+}
+# Runs `opencode <args>` in the current worktree (OpenCode scopes sessions to the directory), stdin closed, output in <file>, cut after
+# <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
+oc_bounded() {
+  local to="$1" out="$2" pid sl wt stop; shift 2
+  wt="$(git rev-parse --show-toplevel 2>/dev/null)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  stop="$out.stop"; rm -f "$stop" "$out.to"
+  ( cd "$wt" && exec opencode "$@" ) > "$out" 2>&1 < /dev/null & pid=$!
+  ( n=0; while [ ! -e "$stop" ] && [ "$n" -lt $((to * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$stop" ] || { : > "$out.to"; kill_tree "$pid"; } ) > /dev/null 2>&1 & sl=$!
+  OC_RC=0; wait "$pid" 2>/dev/null || OC_RC=$?
+  : > "$stop"; wait "$sl" 2>/dev/null
+  [ -f "$out.to" ] && OC_RC=124
+  rm -f "$stop" "$out.to"
+  return 0
+}
+# Best-effort delete of one OpenCode session of this worktree (it interrupts a running turn).  oc_delete_id <id>
+# Never fails; prints one line when it could not. ORCA_ROLES_OC_DELETE_TIMEOUT: seconds before it is cut (default 20).
+oc_delete_id() {
+  local tmp to="${ORCA_ROLES_OC_DELETE_TIMEOUT:-20}"
+  case "$to" in ''|*[!0-9]*|0*) to=20;; esac
+  [ -n "$1" ] || return 0
+  command -v opencode >/dev/null 2>&1 || { echo "Could not delete OpenCode session $1: opencode is not in the PATH."; return 0; }
+  tmp="$(mktemp)" || return 0
+  oc_bounded "$to" "$tmp" session delete "$1"
+  if [ "$OC_RC" = 124 ]; then echo "Could not delete OpenCode session $1: timed out after $to s."
+  elif [ "$OC_RC" != 0 ]; then echo "Could not delete OpenCode session $1: opencode exited with $OC_RC."; fi
+  rm -f "$tmp"; return 0
+}
+# After /new in an OpenCode tab: saves the newest session of this worktree created since <ms epoch> as the role's session and deletes the
+# old one; with none found it says so and deletes the old one anyway.  oc_retrack <role> <since ms> [<git dir>]
+oc_retrack() {
+  local f old new tmp wt
+  f="$(oc_session_file "$1" "${3:-}")" || return 0
+  [ -f "$f" ] || return 0
+  old="$(head -1 "$f" 2>/dev/null)"; new=""
+  wt="$(git rev-parse --show-toplevel 2>/dev/null)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  if command -v opencode >/dev/null 2>&1 && tmp="$(mktemp)"; then
+    oc_bounded 20 "$tmp" session list --format json
+    [ "$OC_RC" != 0 ] || new="$(jq -r --arg d "$wt" --argjson s "$2" '[.[]? | select(.directory == $d and (.created // 0) >= $s)] | sort_by(.created) | reverse | .[0].id // empty' "$tmp" 2>/dev/null)"
+    rm -f "$tmp"
+  fi
+  if [ -z "$new" ]; then
+    echo "Could not track the new OpenCode session of $1 after /new; its old session is deleted and the role has no tracked session."
+    oc_session_delete "$1" "${3:-}"; return 0
+  fi
+  [ "$new" != "$old" ] || return 0
+  printf '%s\n' "$new" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+  oc_delete_id "$old"; return 0
+}
+# Deletes the session saved for a role and forgets the file.  oc_session_delete <role> [<git dir>]
+oc_session_delete() {
+  local f id
+  f="$(oc_session_file "$1" "${2:-}")" || return 0
+  [ -f "$f" ] || return 0
+  id="$(head -1 "$f" 2>/dev/null)"
+  oc_delete_id "$id"
+  rm -f "$f"; return 0
+}
+
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
 merged_config() {  # $1 = project/worktree folder
@@ -110,14 +185,16 @@ project_config() {
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 # The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
-# claude: Claude Code's own texts; codex: the API error naming the model; custom: the role's modelError with {model} as the escaped model id.
+# claude: Claude Code's own texts; codex: the API error naming the model; custom and opencode: the role's modelError with {model} as the
+# escaped model id. For opencode the screen check only runs with the role's own modelError: `mini` prints nothing for a missing model,
+# so the kickoff looks the model up in `opencode models` instead (see oc_model_state in kickoff.sh).
 model_error_regex() {
   local agent esc; [ -n "$3" ] || return 0
   agent="$(rstr "$1" "$2" agent)"; esc="$(regex_escape "$3")"
   case "${agent:-claude}" in
     claude) printf '%s\n' "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]";;
     codex) printf '%s\n' "(unexpected status|ERROR:)[^E]{0,200}${esc}[^E]{0,200}(does not exist|not supported|model_not_found)";;
-    custom) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
+    custom|opencode) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
   esac
 }
 # A setting's value as text, or the default when it is absent or null (false is a value: jq's // would drop it).
@@ -197,13 +274,13 @@ tab_title_of() {
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # The kit's prompts folder for the configuration's mode
 prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
-# A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~), or the mode's prompts/<mode>/<role>.md
+# A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~, {kit} and {home}), or the mode's prompts/<mode>/<role>.md
 prompt_of() {
   local m p; m="$(mode_of "$1" 2>/dev/null)" || return 1
   p="$(jq -r --arg r "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '.roles[$r].prompt as $p
     | if ($p | type) == "string" then (if $m == "programmer" then $p else empty end)
       elif ($p | type) == "object" then (($p[$m] // ([$p | to_entries[] | select(($lm[.key] // .key) == $m) | .value] | first)) // empty | strings) else empty end' "$1")"
-  p="${p/#\~/$HOME}"; echo "${p:-$KIT/prompts/$m/$2.md}"
+  p="$(expand_path "$p")"; echo "${p:-$KIT/prompts/$m/$2.md}"   # accepts ~, {kit} and {home}
 }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
@@ -362,6 +439,36 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r 'def P: "ERROR: invalid configuration: ";
+      def pint: type == "number" and . == floor and . >= 1;
+      def nn: (type == "number" and . >= 0) or (type == "string" and test("^([0-9]+\\.?[0-9]*|\\.[0-9]+)\\z"));
+      def got($k): has($k) and .[$k] != null;
+      def objs($k; $path; f): if got($k) then (.[$k] | if type == "object" then f else P + "\($path) must be an object" end) else empty end;
+      (.settings // {}) as $s | ($s | if type == "object" then . else {} end) as $s
+      | ($s | objs("flow"; "settings.flow";
+          (if got("roundCap") and (.roundCap | pint | not) then P + "settings.flow.roundCap must be a positive integer" else empty end),
+          (if got("maxStepsPerWorker") and (.maxStepsPerWorker | pint | not) then P + "settings.flow.maxStepsPerWorker must be a positive integer" else empty end),
+          (if got("workerReportBody") and (.workerReportBody != "full" and .workerReportBody != "short") then P + "settings.flow.workerReportBody must be \"full\" or \"short\"" else empty end),
+          (if got("crossCheck") and (.crossCheck != true and .crossCheck != false) then P + "settings.flow.crossCheck must be true or false" else empty end),
+          (if got("recordRounds") and (.recordRounds != true and .recordRounds != false) then P + "settings.flow.recordRounds must be true or false" else empty end),
+          objs("escalation"; "settings.flow.escalation";
+            (to_entries[] | select(.value != null) | .key as $r | .value as $v
+              | if $r == "planner" then P + "settings.flow.escalation.planner is not allowed (the Planner is never relaunched)"
+                elif ($v | type == "object" and ((.to | type == "string" and . != "" and (test("\\s") | not))) and ((got("after") | not) or (.after | pint))) then empty
+                else P + "settings.flow.escalation.\($r) must be {\"to\": \"<model>\", \"after\": <positive integer>}" end)))),
+        ($s | objs("oracle"; "settings.oracle";
+          (if got("enabled") and (.enabled != true and .enabled != false) then P + "settings.oracle.enabled must be true or false" else empty end),
+          (. as $o | ("maxLoad", "waitMax", "timeout", "retries") as $k | select($o | got($k) and (.[$k] | nn | not)) | P + "settings.oracle.\($k) must be a non-negative number"))),
+        ($s | objs("telemetry"; "settings.telemetry";
+          (if got("roleAttribute") and (.roleAttribute != true and .roleAttribute != false) then P + "settings.telemetry.roleAttribute must be true or false" else empty end))),
+        ($s | if got("trust") and (.trust != "worktree" and .trust != "never") then P + "settings.trust must be \"worktree\" or \"never\"" else empty end),
+        ((.roles // {}) | to_entries[] | .key as $r | select(.value | type == "object" and got("opencode")) | .value.opencode
+          | if type != "object" then "ERROR: invalid configuration: role \($r): opencode must be an object"
+            else (if got("steps") and (.steps | pint | not) then "ERROR: invalid configuration: role \($r): opencode.steps must be a positive integer" else empty end),
+              (if got("permissions") and (.permissions | type != "array" or any(.[]; type != "object" or (.action | type) != "string" or (.resource | type) != "string" or (.effect | IN("allow", "ask", "deny") | not)))
+                then "ERROR: invalid configuration: role \($r): opencode.permissions must be a list of {\"action\", \"resource\", \"effect\": \"allow\"|\"ask\"|\"deny\"}" else empty end) end)' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.flow, settings.oracle, settings.telemetry, settings.trust and roles.<role>.opencode must be valid (see README)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
   out="$(jq -r --slurpfile o "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
@@ -443,9 +550,95 @@ preexisting_agents() {
   [ -s "$1" ] || return 0
   jq -r --argjson ours "$2" '.[] | select(.handle as $h | $ours | index($h) | not) | select((.agentIdentity // "") != "") | .handle' "$1"
 }
+# settings.flow: optional per-worktree tuning of the flow that the prompts describe in prose.  Unset = the prompts' own values and
+# the messages are byte-identical to a config without the key; an invalid value is ignored with a warning on stderr.
+#   roundCap: positive integer (rejected rounds of a step before the Planner checks with the user; the prompt says 3). programmer mode only
+#   maxStepsPerWorker: positive integer, the default `steps` of an OpenCode role (roles.<r>.opencode.steps wins). OpenCode roles only
+#   workerReportBody: "full" (default) or "short" (worker_done body of a few lines, the detail in a file in scratchDir)
+#   crossCheck: true turns on the cross-check (Cross-Dev writes an independent candidate the Tester checks against). programmer mode,
+#   with the cross-dev role active, only
+# flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.   flow_max_steps <config> → stdout: the number, or nothing.
+flow_round_cap() {
+  local r; r="$(jq -r '(.settings.flow? | objects | .roundCap?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    "ok "*) printf '%s' "${r#ok }";;
+    "bad "*) echo "orca-roles: settings.flow.roundCap must be a positive integer (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
+flow_report_body() {
+  local r; r="$(jq -r '(.settings.flow? | objects | .workerReportBody?) // empty | if . == "full" then "" elif . == "short" then "short" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    short) printf 'short';;
+    "bad "*) echo "orca-roles: settings.flow.workerReportBody must be \"full\" or \"short\" (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
+flow_max_steps() {
+  local r; r="$(jq -r '(.settings.flow? | objects | .maxStepsPerWorker?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    "ok "*) printf '%s' "${r#ok }";;
+    "bad "*) echo "orca-roles: settings.flow.maxStepsPerWorker must be a positive integer (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
+# flow_cross_check <config> <active roles> → status 0 when the cross-check applies; warnings on stderr when it is set but cannot apply
+flow_cross_check() {
+  local v; v="$(jq -r '(.settings.flow? | objects | .crossCheck?) // empty | if type == "boolean" then tostring else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$v" in
+    true) ;;
+    "bad "*) echo "orca-roles: settings.flow.crossCheck must be true or false (got ${v#bad }); ignoring it" >&2; return 1;;
+    *) return 1;;
+  esac
+  [ "$(mode_of "$1")" = programmer ] || return 1
+  case " $2 " in *" cross-dev "*) ;; *) echo "orca-roles: settings.flow.crossCheck needs the cross-dev role enabled in this worktree; ignoring it" >&2; return 1;; esac
+  if [ "$(rstr "$1" cross-dev agent)" = "$(rstr "$1" dev agent)" ] && [ "$(rstr "$1" cross-dev model)" = "$(rstr "$1" dev model)" ]; then
+    echo "orca-roles: cross-dev runs the same agent and model as dev, so their mistakes will tend to match; a different model family makes the cross-check stronger" >&2
+  fi
+  return 0
+}
+# settings.flow.escalation.<role> = {"to": "<model>", "after": N}: round.sh relaunches that role on "to" once a step has N (default 1)
+# rejected rounds and back on its own model when the step is accepted. The Planner cannot be escalated (it is never relaunched).
+# flow_escalation <config> <role> → stdout: "<model> <after>", or nothing (unset, or invalid with a warning on stderr).
+flow_escalation() {
+  local r; r="$(jq -r --arg r "$2" '(.settings.flow? | objects | .escalation? | objects | .[$r]?) // empty
+    | if type == "object" and (.to | type) == "string" and (.to | test("^[^[:space:]]+$")) and $r != "planner"
+         and ((.after // 1) | type == "number" and . == floor and . > 0)
+      then "ok \(.to) \(.after // 1)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
+  case "$r" in
+    "ok "*) printf '%s' "${r#ok }";;
+    "bad "*) echo "orca-roles: settings.flow.escalation.$2 must be {\"to\": \"<model>\", \"after\": <positive integer>} and not the Planner (got ${r#bad }); ignoring it" >&2;;
+  esac
+  return 0
+}
+# settings.flow.recordRounds is true: the Planner records every worker round with round.sh (see README, Round log).  flow_record_rounds <config>
+flow_record_rounds() { [ "$(jq -r '(.settings.flow? | objects | .recordRounds?) == true' "$1" 2>/dev/null)" = true ]; }
+# settings.oracle.enabled is true: the Planner runs the executable oracle (bin/oracle.sh) on Dev's work.  oracle_enabled <config>
+oracle_enabled() { [ "$(jq -r '(.settings.oracle? | objects | .enabled?) == true' "$1" 2>/dev/null)" = true ]; }
+# settings.telemetry.roleAttribute: agent.sh tags the agent's OpenTelemetry data with orca_roles.role=<role>
+telemetry_role_attribute() { [ "$(jq -r '(.settings.telemetry? | objects | .roleAttribute?) == true' "$1" 2>/dev/null)" = true ]; }
+# The marker a coordinator leaves before it creates a worktree (prompts/coordinator.md), read from inside that worktree:
+# <git common dir>/orca-roles.coordinated/<worktree folder name>. Only the Planner's first start reads it, and kickoff.sh removes it then.
+coordinated_marker() {
+  local common top
+  common="$(git rev-parse --git-common-dir 2>/dev/null)" && top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  printf '%s/orca-roles.coordinated/%s' "$(cd "$common" && pwd)" "${top##*/}"
+}
+# The Run of the coordinator that opened this worktree: the id it wrote in its marker, or the copy kickoff.sh keeps beside the state
+# (<git dir>/orca-roles.coordinator) so it outlives the marker, the Planner's restarts and its cleared conversations. Fails if none.
+coordinator_run() {
+  local f r
+  for f in "$(coordinated_marker)" "$(dirname "$1")/orca-roles.coordinator"; do
+    [ -f "$f" ] || continue
+    r="$(head -n 1 "$f")"
+    case "$r" in run_*[!A-Za-z0-9_]*) ;; run_?*) printf '%s' "$r"; return 0;; esac
+  done
+  return 1
+}
+
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang legacy_note art
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang legacy_note art cap oc esc e cm cr xc
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -469,7 +662,34 @@ planner_msg() {
   [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
   if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
+  cap=""; [ "$(mode_of "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
+  [ -n "$cap" ] && msg="$msg Flow override: stop and check with the user when a step piles up $cap rejected rounds (this replaces the 3 in your prompt)."
+  [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
+  xc=""; flow_cross_check "$cfg" "$roles" && xc=1
+  [ -n "$xc" ] && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
+  esc=""; if [ "$(mode_of "$cfg")" = programmer ]; then   # settings.flow.escalation (see README, Escalation): the active roles with a valid one
+    for id in $roles; do e="$(flow_escalation "$cfg" "$id" 2>/dev/null)"; [ -n "$e" ] && esc="$esc, $(title_of "$cfg" "$id") to ${e% *} after ${e#* } rejected round(s) of a step"; done
+  fi
+  if [ "$(mode_of "$cfg")" = programmer ] && { flow_record_rounds "$cfg" || [ -n "$esc" ]; }; then   # settings.flow.recordRounds (see README, Round log); off = byte-identical message
+    if [ -z "$esc" ]; then
+      msg="$msg Round log: after each Dev round, once you have its verdict (the Tester's ACCEPTED or REJECTED, or the oracle's red) and before the next dispatch, run \`$(kit_env)$KIT/bin/round.sh dev --step <step> --round <n> --outcome accepted|rejected|oracle-red --task <task id>\` from the worktree (oracle-red when the oracle is red, whatever the Tester says). It only appends a line to a local file; never call it with a dispatch to Dev in flight."
+    else
+      msg="$msg Round log and escalation: after each round of a worker that writes code (Dev, or the role you gave the step to), once you have its verdict (the Tester's ACCEPTED or REJECTED, or the oracle's red) and before the next dispatch, run \`$(kit_env)$KIT/bin/round.sh <role> --step <step> --round <n> --outcome accepted|rejected|oracle-red --task <task id>\` from the worktree (oracle-red when the oracle is red, whatever the Tester says). Never call it with a dispatch to that role in flight. It escalates${esc#,}: it relaunches the role on that model, and on the step's accepted round it brings it back to its own model. This is configured, so it does not need the user's confirmation; when it relaunches a role, tell the user in one line (not as a question) and use the new handle it prints for the next dispatch. The rejected rounds keep counting toward the step's limit across models."
+    fi
+    [ -n "$xc" ] && msg="$msg With the cross-check on, add \`--cross agree|disagree|none\` to each of those round.sh calls: the Tester's Cross-check result for that round, none when Cross-Dev left no candidate."
+  fi
+  if [ "$(mode_of "$cfg")" = programmer ] && oracle_enabled "$cfg"; then   # settings.oracle (see README, Optional oracle); off = byte-identical message
+    msg="$msg Oracle: every Dev task spec gets a section \`## Acceptance command\` with a fenced block of commands from the allowlist (pytest, ruff, mypy, npm/pnpm/yarn test|lint|build|typecheck, vitest, jest, tsc, eslint, playwright test, make, go test|vet|build, cargo test|check|clippy|build, bash <file>.sh; joined only with &&, no pipes or redirections). Save each Dev spec to <your scratchDir>/spec-<task_id>.md; after each Dev worker_done, before briefing the Tester, run \`$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file> --base <the step's base ref: the previous step's last checkpoint ref, or HEAD for the first step of the set>\`: pass or pass_flaky means go on to the Tester (a non-empty runner_config_changed in its integrity goes into the Tester's brief as state); fail, a cheat, command_not_allowed, env_not_runnable or no_acceptance_command means back to Dev with the oracle's output (a rejected round). The Tester's VERDICT stays, but the oracle decides whether the step's code is accepted."
+  fi
+  # Orca's worker-start --terminal never sees an `opencode mini` tab as ready (its agent_readiness stage times out, seen with Orca 1.4.218):
+  # those roles get their tasks through dispatch --inject, which Orca documents for processes an operator started
+  oc=""; for id in $roles; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
+  [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): Orca's worker-start --terminal times out on their tabs, so dispatch their tasks with \`orca orchestration dispatch --task <task_id> --to <handle> --inject --json\` instead (create the task first, as for worker-start). They are unsupervised for Orca: worker-show, worker-stop and worker-abandon do not apply to them; their worker_done reaches you as usual."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
+  # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the Planner asking in the tab
+  if cr="$(coordinator_run "$state")"; then
+    msg="$msg This worktree works under a coordinator whose Run is $cr, and it does not read this tab. Outside a dispatch from it (for example when it typed your task here), everything your prompt has you ask, propose or report to the user goes to it as an Orca message: bind your own Run first (create it with the task's objective if you have none yet), then \`orca orchestration send --to run:$cr --type question --subject \"<branch>: <topic>\" --body \"<text>\" --json\`, with \`--type status\` for a report or the end of the task and the absolute path of the file that holds it. Its answers reach your Run's mailbox like your workers' messages. Never ask it in this tab or in a question dialog. Inside a dispatch from it, use the preamble's commands. If the user writes in this tab, the user takes precedence."
+  fi
   if [ "$resume" = 1 ]; then
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
   elif [ "$resume" = 3 ]; then
@@ -481,6 +701,8 @@ planner_msg() {
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
     [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && msg="$msg You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit's settings)."
+  elif cm="$(coordinated_marker)" && [ -f "$cm" ]; then   # a coordinator will dispatch the task: an idle Planner with no dialog open is what lets it in
+    msg="$msg This worktree was opened by a coordinator that will send you its task as an Orca dispatch (see your section \"Working under a coordinator\"). Do the startup and stop there: do not start phase 1, do not infer a goal from the branch, a linked issue or the Runs, and open no question dialog, because an open dialog blocks the dispatch. End your turn with one line saying you are waiting for the coordinator's task. If the user writes in this tab first, the user takes precedence."
   else
     msg="$msg Start with the startup."
   fi
@@ -546,7 +768,7 @@ stale_run() {
 role_anchor() {
   local en=""
   [ "$2" != planner ] && en=" Always write in English (screen, worker_done, ask, escalation), whatever language the task, the repo or your settings use; repo artifacts (code, commits, docs) follow the repo's own language."
-  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you.$en"
+  printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$(kit_env)$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you.$en"
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
@@ -564,19 +786,50 @@ scratch_dir() {
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
 }
+# The kit's own files a worker must not edit (paths relative to $KIT), one per line; tmp/ and backup/ stay writable.
+kit_protected_paths() {
+  printf '%s\n' 'prompts/**' 'roles/**' 'bin/**' 'plugin/**' 'plugins/**' 'shim/**' 'pw/**' 'mcp/**' 'browsers/**' 'browser/**' \
+    config.json config.default.json trusted.list .manifest .installed VERSION
+}
+# Claude Code deny rules that keep a worker from editing the kit itself: its prompts, scripts, plugin, roles and configuration.
+# --add-dir gives write access in auto mode (additional directories follow the permission mode), and every future worker
+# reads these files.  Not the whole $KIT: scratch folders live in $KIT/tmp and must stay writable (a deny cannot be undone by an allow).
+# "//" anchors the pattern at the filesystem root; Claude Code applies a rule written through a symlinked directory at its real location too.
+kit_deny_rules() {
+  local k="${KIT#/}" d
+  while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done < <(kit_protected_paths)
+}
 # A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
   printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
+}
+# A role's common-rules file: its "common" field (accepts ~, {kit}, {home}) if the file exists (else a warning), else the mode's common-workers.md
+common_of() {
+  local cm; cm="$(rstr "$1" "$2" common)"
+  if [ -n "$cm" ]; then
+    cm="$(expand_path "$cm")"
+    [ -f "$cm" ] || { echo "orca-roles: the common file of role '$2' does not exist ($cm); using common-workers.md" >&2; cm=""; }
+  fi
+  [ -n "$cm" ] || cm="$(prompts_dir_of "$1")/common-workers.md"
+  printf '%s' "$cm"
 }
 # A worker's startup message.  worker_msg <config> <role>
 # If the role has instructions for this worktree, they go inside the message: that way they survive context cleanup.
 # Agents other than Claude are also told to run Orca's commands in the foreground: an Antigravity worker ran its worker_done as a
 # background subagent task that never finished, so Orca never got its report.
+# The role's "common" field (a path; accepts ~, {kit} and {home}) replaces the mode's common-workers.md, e.g. with the compact common-peon.md
+# for small models; if that file does not exist, the standard one is used and a warning goes to stderr.
 worker_msg() {
-  local p n notes="" fg=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
+  local p n notes="" fg="" cm short=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
-  printf '%s' "Read $(prompts_dir_of "$1")/common-workers.md and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$notes"
+  cm="$(common_of "$1" "$2")"
+  [ "$(flow_report_body "$1")" = short ] && short=" Flow override, for the body of your worker_done only (this replaces the \"complete, self-contained, never point to scratchDir\" rule of your common prompt): keep the body to at most ~8 lines with the outcome, the files changed, how you verified it and its result, and the open issues; write the full detail to a file in your scratchDir and name its absolute path in the body. Your ask and escalation messages stay full sentences."
+  if [ "$(rstr "$1" "$2" agent)" = opencode ]; then   # the role and the common rules are the agent's system prompt (opencode-prepare.sh)
+    printf '%s' "Your role ($(title_of "$1" "$2")) and its rules are in your system prompt (agent orca-$2); follow them to the letter.${p:+ Configuration parameters: $p.}$fg$short$notes"
+    return
+  fi
+  printf '%s' "Read $cm and $(prompt_of "$1" "$2") and adopt that role from now on. Follow its instructions to the letter.${p:+ Configuration parameters: $p.}$fg$short$notes"
 }
 # A path with ~, {kit} or {home} expanded
 # What the kit never lets the Planner do while its superpowers folder is loaded: the kit's Planner coordinates through Orca (no worktrees,
@@ -595,7 +848,7 @@ expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "$
 clear_command() {
   local c; c="$(rstr "$1" "$2" clearCommand)"
   if [ -n "$c" ]; then echo "$c"; return; fi
-  case "$(rstr "$1" "$2" agent)" in claude|"") echo "/clear";; codex) echo "/new";; *) ;; esac
+  case "$(rstr "$1" "$2" agent)" in claude|"") echo "/clear";; codex|opencode) echo "/new";; *) ;; esac
 }
 # A role's MCP servers as a {"mcpServers": {...}} file (the format of Claude Code, Cursor and Gemini CLI).  mcp_file <config> <role>
 # The placeholders {worktree}, {project}, {evidenceDir}, {browserState}, {kit} and {home} are expanded in the servers' args, env and url
@@ -752,6 +1005,26 @@ safe_json_edit() (
   fi
   exit "$status"
 )
+# Whether the kit marks the worktree as trusted: "worktree" (it does) or "never" (the agents ask the user). settings.trust if set; without it,
+# "worktree" in every mode, as before settings.trust existed ("never" is opt-in, e.g. for other people's branches in pr-reviewer).
+# An invalid value is a warning on stderr and counts as "never".  trust_of <config>
+trust_of() {
+  local t
+  t="$(jq -r '(.settings // {}) | (.trust // "") | if type == "string" then . else tojson end' "$1" 2>/dev/null)" || t=""
+  case "$t" in
+    worktree|never) printf '%s\n' "$t";;
+    "") echo worktree;;
+    *) echo "Warning: settings.trust must be \"worktree\" or \"never\" (got '$t'); using \"never\"." >&2; echo never;;
+  esac
+}
+# The folders the kit marked as trusted in ~/.claude.json, one physical path per line (forget-trust.sh removes them).
+trusted_list() { echo "$KIT/trusted.list"; }
+trust_record() {  # trust_record <dir>: adds it once; never fatal
+  local f; f="$(trusted_list)"
+  { mkdir -p "$(dirname "$f")" && { grep -qxF -- "$1" "$f" 2>/dev/null || printf '%s\n' "$1" >> "$f"; }; } 2>/dev/null \
+    || echo "Warning: could not record $1 in $f; forget-trust.sh will not find it." >&2
+  return 0
+}
 # Claude Code asks "Do you trust the files in this folder?" the first time it starts in a folder, and a tab stuck in that dialog never
 # gets its role. Registering the kit in the project is that answer, so the worktree is marked as trusted before the agents start.
 # Never fatal: on a failure ~/.claude.json is left as it was and a warning is printed.
@@ -759,7 +1032,7 @@ trust_folder() {
   local link="$HOME/.claude.json" d rc=0; d="$(pwd -P)"
   safe_json_edit "$link" '.projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true})' "$d" "$link.lock" || rc=$?
   case "$rc" in
-    0) echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents.";;
+    0) trust_record "$d"; echo "Marked $d as trusted for Claude Code, so the trust dialog does not stop the agents.";;
     1|2) echo "Warning: could not mark $d as trusted for Claude Code ($([ "$rc" = 2 ] && echo 'the file kept changing' || echo 'it could not be read or written')); $link was left untouched and the agent will show the trust dialog." >&2;;
   esac
   return 0

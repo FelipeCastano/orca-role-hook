@@ -9,7 +9,7 @@ set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,7p "$0"; exit 0;; esac
 [ $# -ge 4 ] || { sed -n 2,4p "$0" >&2; exit 1; }
 WT="$1"; GITDIR="$2"; HANDLE="$3"; TOP="$4"
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 CFG="$GITDIR/orca-roles.config.json"; STATE="$GITDIR/orca-roles.env"
 SECS="$(setting "$CFG" kickoffTimeoutSeconds 180 2>/dev/null)"; case "$SECS" in ''|*[!0-9]*) SECS=180;; esac
 TIMEOUT_MS=$((SECS * 1000))

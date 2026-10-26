@@ -7,7 +7,7 @@
 # Each role's handle is recorded in orca-roles.kicked (next to <state>) once its message is sent.
 set -uo pipefail
 WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"; REMEMBERED="${6:-}"; REUSED="${7:-}"
-KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
+KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 # shellcheck source=/dev/null
 . "$STATE"
 ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
@@ -40,32 +40,104 @@ tell_planner() {  # $1 subject, $2 body
   orca orchestration send --to "$PLANNER" --type escalation --subject "$1" --body "$2" --json >/dev/null 2>&1 || echo "Could not tell the Planner: $1"
 }
 # A role whose model does not exist answers its first message with an error (see model_error_regex): the kit only detects it and tells the Planner.
+model_failed() {  # $1 role, $2 model, $3 what showed it (the error text, or why the model is not available)
+  local title; title="$(title_of "$CFG" "$1")"
+  echo "$1: model $2 is not available ($3)"; record_model "$1" "FAILED:$2"
+  [ "$1" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $2 is not available ($3). config.json is unchanged. To fix it yourself: set roles.$1.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $1 and run roles (without options, so this worktree's saved options are kept)."
+}
 check_model() {  # $1 handle, $2 role, $3 model errors on screen before the message was sent, $4 error regex
-  local model title now text
-  model="$(rstr "$CFG" "$2" model)"; title="$(title_of "$CFG" "$2")"
+  local model now text
+  model="$(rstr "$CFG" "$2" model)"
   sleep "$SETTLE"; orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   now="$(err_count "$1" "$4")"
   if [ "$now" -le "$3" ]; then record_model "$2" "$model"; return 0; fi
   text="$(screen_of "$1" | tr -s ' \n\t' ' ' | grep -oE "$4" | tail -n 1 | cut -c1-200 | sed 's/^ *//; s/ *$//')"
-  echo "$2: model $model is not available ($text)"; record_model "$2" "FAILED:$model"
-  [ "$2" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $model is not available ($text). config.json is unchanged. To fix it yourself: set roles.$2.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $2 and run roles (without options, so this worktree's saved options are kept)."
+  model_failed "$2" "$model" "$text"
+}
+# `opencode mini` prints nothing for a model that does not exist, so for OpenCode the model is looked up in `opencode models`, run in
+# the worktree (oc_bounded runs it at the top of the current one; $WT is an Orca selector, not a path). The first call after OpenCode's
+# service starts can omit models while it warms up: one retry after a pause.
+# Prints present, missing or unknown (the list could not be read twice).  oc_model_state <model, with or without #variant>
+oc_model_state() {
+  local m="${1%%#*}" out n rc=1
+  out="$(mktemp)" || { echo unknown; return 0; }
+  for n in 1 2; do
+    oc_bounded "${ORCA_ROLES_OC_MODELS_TIMEOUT:-20}" "$out" models; rc="$OC_RC"
+    if [ "$rc" = 0 ] && grep -qxF -- "$m" "$out"; then rm -f "$out"; echo present; return 0; fi
+    [ "$n" = 1 ] && sleep "${ORCA_ROLES_OC_MODELS_RETRY:-3}"
+  done
+  rm -f "$out"
+  if [ "$rc" = 0 ]; then echo missing; else echo unknown; fi
 }
 
 kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds it), atomically
   local f tmp v; f="$(dirname "$STATE")/orca-roles.kicked"; tmp="$f.tmp.$$"; v="$(var_of "$1")"; [ -f "$f" ] || : > "$f"
   k="$v" h="$2" awk 'index($0, ENVIRON["k"] "=") == 1 { if (!d) print ENVIRON["k"] "=" ENVIRON["h"]; d = 1; next } { print } END { if (!d) print ENVIRON["k"] "=" ENVIRON["h"] }' "$f" > "$tmp" && mv "$tmp" "$f"
 }
-kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not recorded as the role's kickoff]
+TRUST="$(trust_of "$CFG")"
+TRUST_RX='trust the files|trust this folder|do you trust|safety check|confías|confiar'   # confías/confiar: the Spanish-localized dialog
+# With settings.trust "never" the user answers the dialog: wait (up to kickoffTimeoutSeconds) until it is gone. 1 if it never was.  wait_trust <handle> <title>
+wait_trust() {
+  local end; end=$(( $(date +%s) + (TIMEOUT_MS + 999) / 1000 + 1 ))   # whole seconds, so at least the full timeout
+  echo "$2: waiting for you to answer the trust dialog in its tab"
+  while { screen_of "$1" || true; } | grep -qiE "$TRUST_RX"; do
+    [ "$(date +%s)" -lt "$end" ] || return 1
+    sleep "${ORCA_ROLES_TRUST_POLL:-2}"
+  done
+}
+# trust "never", Claude Code only. Text typed before the agent is past its trust dialog lands in that dialog and answers it (Claude
+# Code exits), and Orca's screen text does not reliably show the dialog. Orca reports the agent (agentIdentity) only once the folder is
+# trusted, so wait for that and type nothing before. 1 on timeout.  agent_trusted <handle> <title>
+agent_of_tab() { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
+agent_trusted() {
+  local end; end=$(( $(date +%s) + (TIMEOUT_MS + 999) / 1000 + 1 ))
+  [ -n "$(agent_of_tab "$1")" ] && return 0
+  echo "$2: waiting for you to answer the trust dialog in its tab"
+  while [ -z "$(agent_of_tab "$1")" ]; do
+    [ "$(date +%s)" -lt "$end" ] || return 1
+    sleep "${ORCA_ROLES_TRUST_POLL:-2}"
+  done
+}
+kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not recorded as the role's kickoff]; 0 only when the message was sent
+  local screen_trust=1 sent=1
+  if [ "$TRUST" = never ]; then
+    case "$(rstr "$CFG" "$2" agent)" in
+      claude|"")
+        agent_trusted "$1" "$(title_of "$CFG" "$2")" || {
+          echo "$(title_of "$CFG" "$2"): its agent was not running in a trusted folder after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the trust dialog, then run roles again: it sends the role to tabs that never got it."
+          return 1; }
+        screen_trust=0;;   # trusted: old dialog text still in the screen history must not be taken for an open dialog
+    esac
+  fi
   for _ in 1 2 3; do
+    [ "$screen_trust" = 1 ] || { orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true; break; }
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-    if { screen_of "$1" || true; } | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
-      press_enter "$1"; echo "Trust dialog accepted in $1"; pace 3
+    if { screen_of "$1" || true; } | grep -qiE "$TRUST_RX"; then
+      if [ "$TRUST" = never ]; then
+        # Never press Enter or type the role here: it would accept the dialog. The role stays unmarked in orca-roles.kicked, so the next `roles` sends it.
+        wait_trust "$1" "$(title_of "$CFG" "$2")" || {
+          echo "$(title_of "$CFG" "$2"): the trust dialog was still open after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the dialog, then run roles again: it sends the role to tabs that never got it."
+          return 1; }
+      else
+        press_enter "$1"; echo "Trust dialog accepted in $1"; pace 3
+      fi
     else break; fi
   done
-  local before rx; rx="$(model_error_regex "$CFG" "$2" "$(rstr "$CFG" "$2" model)")"
+  local before rx ocm="" model; model="$(rstr "$CFG" "$2" model)"; rx="$(model_error_regex "$CFG" "$2" "$model")"
+  if [ -n "$model" ] && [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then
+    ocm="$(oc_model_state "$model")"
+    [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
+  fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
-  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; }
+  if orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null; then
+    echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0
+  fi
+  case "$ocm" in
+    present) record_model "$2" "$model";;
+    missing) model_failed "$2" "$model" "not in opencode models";;
+  esac
   [ -z "$rx" ] || { check_model "$1" "$2" "$before" "$rx" & CHECK_PIDS="$CHECK_PIDS $!"; }
+  return "$sent"
 }
 is_new() { case " $NEW " in *" $1 "*) return 0;; *) return 1;; esac; }
 remembers() { case " $REMEMBERED " in *" $1 "*) return 0;; *) return 1;; esac; }
@@ -148,7 +220,14 @@ if is_new planner; then
   orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "$PLANNER" planner "$(planner_ask_msg "$CFG")" nokick
   elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends the Planner its role message."
-  else kick "$PLANNER" planner "$PLANNER_MSG"; fi
+  else
+    if kick "$PLANNER" planner "$PLANNER_MSG"; then PSENT=1; else PSENT=0; fi
+    # a coordinator's marker covers only this first start and is removed once the Planner's role message is sent: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
+    if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
+      if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
+      if [ "$PSENT" = 1 ]; then rm -f "$CM"; else echo "Kept the coordinator's marker: the Planner's role was not sent yet."; fi
+    fi
+  fi
   rm -f "$GITDIR/orca-roles.switch-from"
 fi
 OPENED_WORKERS=""; OPENED_IDS=""
