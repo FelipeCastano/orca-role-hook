@@ -13,6 +13,9 @@ MODEL="$(rstr "$CFG" "$ROLE" model)"
 NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester and the Auditor run lowered
 RUN=(); if [ -n "$NICE" ] && [ "$NICE" != 0 ] && command -v nice >/dev/null; then RUN=(nice -n "$NICE"); fi
 [ -n "$RESUME" ] && [ "$AGENT" != claude ] && [ "$AGENT" != opencode ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
+# The tab's title, with the agent's name, is what lets Orca dispatch to it (stablyai/orca#32090), and a shell profile may have
+# replaced it before this script runs (Ubuntu's .bashrc titles the tab "user@host: dir" at each prompt): set it again, last.
+if [ -t 1 ]; then printf '\033]0;%s\007' "$(tab_title_of "$CFG" "$ROLE" | tr -d '\000-\037\177')"; fi
 PERM="$(rstr "$CFG" "$ROLE" permissionMode)"
 PROMPT="$(prompt_of "$CFG" "$ROLE")"
 
@@ -101,6 +104,11 @@ case "$AGENT" in
       DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(superpowers_deny)
       ARGS+=(--disallowedTools "${DENY[@]}")
     fi
+    # The auditor never dispatches subagents (a kit list, like the Planner's superpowers one): the role's own disallowedTools only add to it
+    if [ "$ROLE" = auditor ]; then
+      ADENY=(); while IFS= read -r t; do ADENY+=("$t"); done < <(auditor_deny)
+      ARGS+=(--disallowedTools "${ADENY[@]}")
+    fi
     # Nobody answers a dialog in a worker's tab (the Planner is the only one that talks to the user): workers cannot open one. In permissionMode
     # plan the plan tools stay, they are how that mode works. A --disallowedTools in extraArgs adds to this list.
     if [ "$ROLE" != planner ]; then
@@ -120,6 +128,9 @@ case "$AGENT" in
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
     record_provenance claude || true
+    # Claude Code keeps the kit's tab title (workers only): its session-summary titles hide the agent's name, and Orca then refuses
+    # dispatches to the tab (stablyai/orca#32090). A value set in defaults.env or roles.<id>.env (exported above) wins.
+    if [ "$ROLE" != planner ]; then export CLAUDE_CODE_DISABLE_TERMINAL_TITLE="${CLAUDE_CODE_DISABLE_TERMINAL_TITLE:-1}"; fi
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"
     ;;
   codex)

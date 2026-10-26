@@ -164,10 +164,11 @@ A single-project run ends with a last line `ROLES_YAML_RESULT=<created|updated|u
 
 ## Usage
 
-Create a worktree from the project's **"+"**. In a few seconds you will have your roles' tabs and the Planner will start planning with you.
+Create a worktree from the project's **"+"**. In a few seconds the Planner opens and asks which mode you want (programmer, pr-reviewer or academic-research); on your answer it opens that mode's team. A worktree created from a Jira ticket starts directly in `programmer`, and an explicit `--mode` (or `settings.enableAskModeOnStart: false`) opens the mode without asking (see [Modes](#modes)).
 
 - **From a Jira ticket:** the kit reads the ticket Orca links to the worktree (`linkedWorkItem` in `orca worktree show`) and passes it to the Planner, which reads it and plans from there. If the worktree is not linked, it tries the branch, but only when the uppercase key starts the branch or one of its segments (`DEVGD-220-new-api`, `feature/DEVGD-220`), so `fix-123` or `release-1.4` are not taken for tickets. The session Orca creates by default with the ticket's name is interrupted and closes by itself.
 - **Where the hook does not run** (main checkout, folder projects, existing worktrees): run `roles` in a workspace terminal. It does not duplicate open tabs.
+- **Branch names:** if Orca names a new worktree's branch after your user, that is Orca's `branchPrefix` setting (`"git-username"`), not the kit; change it in Orca's settings.
 
 ### Connecting Jira
 
@@ -251,6 +252,7 @@ If you shut down the computer or close Orca, the roles' tabs die, but the state 
 To resume, run `roles` in a workspace terminal (the hook does not fire in existing worktrees). What happens depends on what Orca kept:
 
 - **Orca restored the tabs** (it does so when you reopen it after a restart, relaunching each Claude session with `--resume` but without the kit's settings: no auto mode, no plugin, no per-role MCP, default model). The kit recognizes each restored tab by its terminal identity (`orca-roles.pty` in the worktree's git dir; the handles change, the identity does not), reads the Claude session Orca resumed in it, closes it and reopens the role with that same session plus the kit's settings. Every role comes back **with its memory**: the Planner remembers the plan and the decisions, and each worker what it was doing. The Planner then rebinds the Run, abandons the dispatches that pointed to the old terminals, tells you where it was and what was interrupted, and re-dispatches only when you confirm. If the Planner itself runs the launch from the tab Orca restored (it does so when it finds its workers gone), the kit keeps that tab, reopens the workers and starts a small detached process that waits until the Planner's turn ends and then reopens the Planner the same way, with its conversation and the kit's settings; that Planner re-dispatches without waiting for you, since it reopened itself. The process logs to `orca-roles-relaunch.log` in the worktree's git dir; it needs a worktree id (`ORCA_WORKTREE_ID`, set in Orca's terminals) and `setsid` or `/usr/bin/perl`, and otherwise the Planner asks you to run `roles` from another terminal. This needs the native Claude Code installer: the kit reads the resumed session from the `--resume` argument of the `claude` process, and an npm install runs under `node` and renames its process to `claude`, which overwrites those arguments, so the roles reopen without memory (everything else still works).
+- **Orca kept the tabs asleep** (after a restart Orca brings back at once only each worktree's shell tabs and its active tab; the others stay in the tab bar, asleep and without a terminal, until you click them, and then Orca resumes their session itself): `roles` wakes each role's asleep tab before deciding anything (the kit saves each tab's identity in `orca-roles.tabs` in the worktree's git dir), waits until its conversation is running and then reopens it as above, with its memory and the kit's settings, so no role is left with two tabs. Waking uses an internal call of the Orca app (Orca has no command for it yet) and works on macOS and on Orca for Windows with WSL terminals ([Windows with WSL2](#windows-with-wsl2)); on other systems `roles` says it cannot wake them and opens new tabs: close the old ones without opening them.
 - **The tabs are gone** (closed before the restart, or a session Orca could not resume): the kit opens new tabs and starts the Planner in **resume mode**: before talking to you, it recovers the Run with `run-use`, reads the task list and the team's latest communications, closes the dispatches that pointed to dead tabs, reviews `git status`, `git diff` and the log, and gives you a summary: what was closed, what was in progress, which questions were left unanswered and what it proposes to do. The workers come back clean; they do not need memory because each task comes with its full spec (the same principle as [context cleanup](#cleaning-the-workers-context)). The Deployer detects that the previous API died and starts it again if asked.
 
 If Orca cannot say whether the saved tabs are still open (its window is not ready, or `orca terminal list` keeps failing), `roles` stops with "Orca is not ready (<code>)" before closing or opening anything, and leaves the saved team as it was: run `roles` again once Orca is ready. Only one `roles` runs per worktree at a time (`orca-roles.lock` in its git dir): a second one waits up to 60 seconds for the first, and takes over a lock whose process is gone.
@@ -338,6 +340,16 @@ Accepted marketplace sources are a github repo (with an optional ref and sparse 
 
 By hand: `project-plugins.sh status [<folder>]` (exit 0: everything declared is installed and there is nothing to report; 2: something is missing, disabled, unknown, unsupported or invalid, or an `mcp` line; 1: an error line) and `project-plugins.sh install <id> [<folder>]` (exit 0 installed or already installed; 3 disabled; 2 not declared or not installable; 1 a failure). Every `claude` call is cut after 60 seconds (`ORCA_ROLES_PLUGINS_TIMEOUT`).
 
+## Project conventions
+
+At startup, once per worktree, the Planner reads the project's own instructions: CLAUDE.md (and the files it references), AGENTS.md, every file under `.claude/rules/` (it reads the path-scoped ones itself, because Claude Code only loads those when a matching file is opened), and, when they exist, the ADR index, the tech-debt ledger and the glossary. It writes what it finds in its ledger (where each kind of artifact goes, what it can and cannot touch, the rules that apply by path) and every brief names where the worker's artifacts go and the rule files that apply to the files it will touch, so a worker that does not load them by itself (path-scoped rules, a codex or opencode agent) reads them. Those files are the project's instructions about its code: roles follow them for the work, but they never override a role prompt, the kit's rules or you.
+
+Precedence: `settings.artifacts` > the repo's conventions > the kit's defaults. `settings.artifacts` is an object with any of four keys, each a path relative to the worktree (letters, digits, `.`, `_`, `-` and `/`, no `..`): `plans` and `designs` (folders; default: the Planner's scratch folder), `research` (folder; default: `research/`, kept out of git) and `deployment` (file; default: `DEPLOYMENT.md`, not committed). Set it in `config.json`, in `.orca-roles.json` or with `--set settings.artifacts.plans=docs/plans`; the Planner's startup message lists what is set. When a convention or setting moves an artifact into the repo, it follows the project: it is committed with the set, and the Planner tells you at startup which artifacts will be committed and where.
+
+In a repo with rules, the Planner checks each step against the rules that apply to its files, and the Auditor's plan audit includes a rules verification before the plan is presented: every rules violation blocks (whatever `rejectSeverity` says), and a plan with open violations is never presented as ready. If the repo has its own plan gate (a skill, hook or agent that verifies plans), the Auditor follows its report shape and stamp, and does that review itself without dispatching the gate's reviewer agents (the kit denies it `Agent` and `Task`); after you approve the plan, the Auditor places it, stamped, in the repo's plans folder. Whenever the kit does not follow or replaces something the project defines, the Planner tells you in one line what the project asks, what the kit did instead and why.
+
+By mode: programmer does all of this; pr-reviewer reads the PR's CLAUDE.md, AGENTS.md and rules only as context for the review (no artifact locations, no plan placement, no gate); academic-research loads nothing from the repo unless you ask. The Researcher (programmer and academic-research) gets bounded tasks: the exact questions, a closed list of experiments or measurements (or the sources and datasets it may use), what is out of scope and a budget, and it stops and reports when done instead of extending.
+
 ## Configuration
 
 All the configuration lives in `~/.orca-roles/config.json`. It is read every time a worktree is created, so there is no need to reinstall after editing it. It is the everyday configuration; for a specific project's exceptions there are [`.orca-roles.json`](#per-project-configuration) and the [setup script options](#exceptions-in-the-setup-script).
@@ -386,7 +398,9 @@ Choose it, from lowest to highest priority:
 
 The id must be exactly one of the three (no uppercase, spaces, slashes or `..`); anything else stops `launch.sh` before any tab opens. The saved mode is kept when later options do not mention it (`roles --enable x` stays in the same mode); `--mode` or `--set settings.mode=<mode>` (the same request, saved the same way) change it and `--reset` drops it.
 
-**Open team rule:** the mode of a worktree cannot change while its team is open. If the requested mode differs from the one the worktree was launched with and any tab of the saved team still exists (also one Orca restored after a restart with a new handle), `launch.sh` stops with an error and changes nothing. Close the team first (`close-role.sh` on each worker, or close the tabs) and run `roles` again.
+**Asking the mode.** In a new worktree the kit opens only the Planner, which asks which mode to use and suggests the one `settings.mode` gives (1 and 2 above are only the suggestion). It does not ask when the mode is explicit (3, 4, or `--set settings.mode=<mode>`), when the worktree has a Jira ticket (Orca's link, or a key in the branch: it starts in `programmer`), or with `settings.enableAskModeOnStart: false` (it opens the configured mode, as before). Until you answer, `roles --status` shows `Mode: not chosen yet`, and a restart, a `/clear` or another `roles` asks again; `roles --mode <mode>` from any terminal also answers. Once the mode is chosen it is saved for the worktree and not asked again.
+
+**Switching the mode:** ask the Planner. It tells you that the switch closes every worker of the current mode and clears its conversation, offers to save a summary of the work first, and runs `launch.sh --mode <mode>` from its tab: the kit closes the old workers (also tabs Orca restored after a restart), opens the new mode's team and gives the Planner its role message for the new mode. From any other terminal, a mode change while a tab of the team is open stops with an error naming the open tabs and changes nothing.
 
 Each role has `modes`: `"all"` or a list of mode ids; without it the role belongs to `["programmer"]`. In `config.default.json` the `planner` is `"all"`, the `auditor` is `["programmer", "pr-reviewer"]`, the `researcher`, `dev` and `tester` are `["programmer", "academic-research"]`, the other two programmer workers (`e2e-tester`, `deployer`) are `["programmer"]` and the seven academic-research roles are `["academic-research"]`. Only the enabled roles that belong to the mode open (the planner always does), and `--only`, `--enable` or `--disable` with a role outside the mode is an error naming the mode. An unknown id or a wrong type in `modes` is an error too.
 
@@ -641,6 +655,8 @@ The roles receive their instructions the same way as with Claude (the kit types 
 
 For OpenCode use `agent: "opencode"` (see [OpenCode roles](#opencode-roles)), not a `custom` command: OpenCode 2.x's main interface takes no `--model` or `--agent`.
 
+Each role's tab is titled with the role's title plus the agent's name: "Dev (claude)", "Researcher (codex)", and for `custom` the first word of its `command` that is not a `VAR=value` assignment, without its path or extension ("opencode", "gemini"). Orca only hands a task to a tab it recognizes as an agent, by its title or its process, and it does not recognize a native Claude Code by its process (named after its version; stablyai/orca#32090), so the name in the title is what lets the Planner dispatch to it. The kit sets that title again right before it starts the agent, since a shell profile can change it first (Ubuntu's `.bashrc` titles the tab "user@host: dir" at each prompt). For the same reason Claude workers start with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`, so Claude Code keeps that title instead of its session summary (the Planner keeps Claude's titles); set the variable in `defaults.env` or `roles.<id>.env` to override it. For a `custom` agent, Orca must know the command's name (for example `opencode`, `gemini`, `aider`); a wrapper script's name is not recognized, so give the role a title that already ends in the agent's name in parentheses, which the kit keeps as it is.
+
 With `agent: "custom"`:
 
 - The `command` runs with `bash -lc`, that is, in a login shell with your profile's PATH (nvm, brew, etc.).
@@ -871,7 +887,9 @@ $HOME/.orca-roles/bin/launch.sh --disable e2e-tester,deployer
 | `oracle` | Optional executable oracle for Dev's work (programmer mode): `{"enabled": false, "maxLoad": 0.8, "waitMax": 300, "timeout": 600, "retries": 1}`. Off by default; when `enabled` is `true` the Planner's startup message gets a sentence telling it to require an acceptance command in each Dev spec and to run `bin/oracle.sh` after each Dev report. See [Optional oracle](#optional-oracle). |
 | `trust` | Whether the kit marks the worktree as trusted for the agents: `"worktree"` (marks it in `~/.claude.json`, passes Codex its trust override, and accepts Claude Code's trust dialog itself) or `"never"` (the agents show the dialog and each tab waits for you; see [Trust of the folder](#trust-of-the-folder)). Unset: `"worktree"`. Any other value warns and counts as `"never"`. |
 | `mode` | The team's mode: `programmer` (default), `pr-reviewer` or `academic-research`. See [Modes](#modes). |
+| `enableAskModeOnStart` | `true` (default): a new worktree opens only the Planner, which asks the mode. `false`: it opens the configured mode directly, as before. An explicit `--mode` or a Jira ticket never asks. See [Modes](#modes). |
 | `superpowers` | `true` (default) lets the kit load its pinned superpowers folder for the roles that list it in `pluginDirs` (the Planner); `false` loads it for none. See [Superpowers for the Planner](#superpowers-for-the-planner). |
+| `artifacts` | Where the team's artifacts go, over what the project's conventions say: `{ "plans": ..., "designs": ..., "research": ..., "deployment": ... }`, any subset, each a path relative to the worktree. Absent: deduced from the repo, else the kit's defaults. See [Project conventions](#project-conventions). |
 | `phase` | academic-research only: the phase (`experiment` by default or `writing`). Changed by the Planner with `phase.sh`, not by hand. |
 | `language` | The language the Planner replies to you in. `"auto"` (default): the language you write in. Any other value (`"Spanish"`, `"English"`...): always that one. The prompts are in English either way. The workers always write in English (their repo artifacts follow the repo's language): for Claude workers the kit passes `--settings '{"language":"english"}'`, overriding Claude Code's own `language` setting, and every worker also gets the rule in its role anchor (the only channel for Codex and custom agents, whose own language settings are not overridden). A `--settings` in a role's `extraArgs` replaces the kit's one (claude does not merge them), so include `"language":"english"` in it. |
 
@@ -923,8 +941,12 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │       ├── common-workers.md    # rules common to the mode's workers
 │       ├── reports.md           # written-report rules, read by a worker only when a task asks for a report
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
+├── docs/
+│   ├── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
+│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand
 ├── tests/
-│   └── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
+│   ├── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
+│   └── live/                    # live checks: mac.sh, wsl.sh, agents.sh (see docs/live-checks.md)
 └── .github/workflows/ci.yml     # shellcheck + smoke on every push to main and every PR
 ```
 
@@ -961,6 +983,14 @@ Orca for Windows runs the terminals, and with them the agents and the setup scri
 
 **Orca's CLI has another name.** In WSL terminals, Orca does not install `orca` but a launcher whose name is given by `$ORCA_CLI_COMMAND` (`orca-ide` in Orca 1.4.219), which calls `orca.exe` on Windows. The kit detects it and creates the `~/.orca-roles/shim/orca` wrapper, which it prepends to the PATH of its scripts and of the agents; the prompts and the permissions (`Bash(orca orchestration:*)`) keep working unchanged. That is why the CLI is only available in terminals opened by Orca: the kit's commands (`roles`, `clean.sh`, the installer) must be run from one of them. So you can also type `orca ...` yourself in those terminals, the installer adds to your `~/.bashrc` an `orca` alias to `$ORCA_CLI_COMMAND`, which only applies when that variable is set and there is no real `orca`. Do not install the `orca` package apt suggests: it is GNOME's screen reader.
 
+**Orca for Windows with WSL terminals.** This is the supported mode: the kit and the agents run in WSL, Orca runs on Windows, and the kit reaches it through `orca-ide`. The shim finds `orca-ide` by `$ORCA_CLI_COMMAND`, by `$ORCA_WSL_CLI_DIR` or by the path it recorded the last time it found it, so it also works in a terminal where Orca did not set those variables. In this mode:
+
+- After a restart `roles` wakes the tabs Orca kept asleep, as on macOS, and reopens every role with its conversation.
+- When the Planner reopens itself from its own restored tab, closing that tab gets no answer from Orca; the kit waits out the limit, so this takes about 15 s more than elsewhere.
+- Orca lists WSL projects with `\\wsl.localhost\...` paths; the kit converts them. A project on a Windows drive (`C:\...`) cannot be served: `roles-yaml --all` lists it as skipped and says to move it into WSL.
+
+**Time limits on calls to Orca.** On every system, each call the kit's scripts make to Orca has a time limit: `ORCA_ROLES_CLI_TIMEOUT` seconds (default 60) and, for closing a tab, `ORCA_ROLES_CLOSE_TIMEOUT` seconds (default 15); `0` disables the limit (`ORCA_ROLES_CLI_TIMEOUT=0` disables it for every call). A value that is not a whole number is ignored and the default applies. They matter most on WSL, where closing a tab can get no answer from Orca.
+
 The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshrc` (zsh), `~/.bashrc` (bash on Linux), `~/.bash_profile` (bash on macOS) or `~/.profile` (other shells).
 
 ## Requirements
@@ -977,10 +1007,12 @@ The installer adds the `roles`, `new-role` and `roles-yaml` commands to `~/.zshr
 tests/smoke.sh                                   # does not touch ~/.orca-roles
 tests/smoke.sh --list                            # section names
 tests/smoke.sh roles-yaml mcp                    # only those sections, in that order
-shellcheck -S warning install.sh bin/*.sh tests/*.sh
+SMOKE_JOBS=1 tests/smoke.sh                    # one process, in order (default: half the CPUs, 1 to 8 sections at a time)
+SMOKE_CLI_TIMEOUT=60 tests/smoke.sh              # with the 60 s limit on orca calls, as in real use (CI; default: off in the suite)
+shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
-The GitHub Actions workflow runs the same on every push to main and every pull request.
+Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in `tests/smoke.sh`, with the reason for each) hold elapsed-time checks and run alone, after the others. The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
 
 ## Troubleshooting
 
@@ -997,6 +1029,8 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | An agent starts with another model or MCP | `orca-roles.config.json` in the worktree's git dir shows the configuration that was used, and `orca-roles-launch.log` the exceptions applied |
 | A role does not appear even though `enabled` is `true` | The worktree's saved exceptions: `orca-roles.overrides.json` in its git dir. Drop them with `roles --reset` |
 | `worker-start` fails with `terminal_handle_stale` | A role's tab changed (Orca restarted or lost the window). The Planner reopens the lost roles itself (`launch.sh --reopen`) and tells you in one line; if it cannot, run `roles` in a terminal of the worktree |
+| `worker-start` fails with `agent_unconfigured`, or `dispatch --inject` with `inject_rejected` ("no recognized agent detected") | Orca does not recognize the tab as an agent: its title lacks the agent's name (a tab opened before this kit version, or Claude Code retitled it) or, for `custom`, Orca does not know the command's name. Close the role (`close-role.sh <role>`) and run `roles` so the kit reopens it with its title; for `custom`, see "Using other agents". Orca 1.4.239 needs this (stablyai/orca#32090) |
+| `roles --mode` fails with "this worktree's team is open in mode ..." | A tab of the team is still open; the error names it. Ask the Planner to switch the mode, or close those tabs and run `roles --mode <mode>` again. |
 | The Planner is not notified when workers finish | A message batch it read but did not acknowledge: Orca types no notice while one is open. `orca orchestration check --peek --json` from the Planner's tab shows the unread messages; ask the Planner to read and acknowledge its messages (`check --ack <delivery_id> --json` until `count` is 0). Or the Run is still bound to the Planner's terminal before a restart: ask the Planner to check its binding (`run-show` against its own handle, then `run-use`); the kickoff log of its start says whether an old binding was found |
 | A worker opens a question dialog or plan mode | Claude workers start with `--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode` (only `AskUserQuestion` when the role's `permissionMode` is `plan`), and every worker's prompt tells it to ask the Planner instead. A `--disallowedTools` in the role's `extraArgs` adds to that list. Codex and custom agents rely on the prompt rule. A tab Orca restored after a restart runs without the kit's flags until `roles` (or the Planner's `--reopen`) reopens it |
 | The Planner does not have superpowers | The installer's warning (offline, no `git`); `ls ~/.orca-roles/plugins/superpowers/.orca-roles-pin` (it holds the pinned commit); run `install.sh` again. Also: the Planner is not a `claude` one, or `settings.superpowers` is `false` |
@@ -1008,6 +1042,9 @@ The GitHub Actions workflow runs the same on every push to main and every pull r
 | `roles` says "another roles is still running" | Another `roles` held `orca-roles.lock` (git dir) for more than 60 seconds. Wait for it to finish and run `roles` again; a lock left by a process that died is taken over on its own |
 | `roles` warns "this folder was launched before as worktree <old> and now as <new>" | Orca knows the same folder under two worktree ids (`orca-roles.wtid` in the git dir holds the last one), so its tabs may be duplicated. Close the extra tabs and launch from one id |
 | After a restart there are two teams in the worktree | A kit older than `orca-roles.pty`: close the tabs that are not in `orca-roles.env` and update the kit. With the current kit, `orca-roles-launch.log` says which restored tabs it reopened with their conversation |
+| After a restart `roles` says "Orca woke the tab of X but its conversation has not started yet" | The woken tab is still starting its agent: run `roles` again in a moment. No tab was opened |
+| After a restart a role's old tab comes back when you click it, next to a new one | `roles` could not wake it (a system where waking is not available, or the call failed: `orca-roles-launch.log` says why) and opened a new tab. Close the old one |
+| `roles` stops with "roles was run from the tab of <Title>, which has to be reopened" | Run `roles` from another terminal of this worktree |
 | Tabs in another workspace | `launch.sh` uses `ORCA_WORKTREE_ID`; you can force it with `launch.sh id:<ORCA_WORKTREE_ID>` |
 | `roles` says "All roles are already open" but a tab has no agent | The agent stopped in a tab Orca does not recognize as an agent's (a `custom` agent): close that tab and run `roles` |
 | After a restart, the Planner does not recover the state | `orca-roles-launch.log` must say "Resuming workspace". If not, the `orca-roles.env` file in the worktree's git dir did not exist or was empty |

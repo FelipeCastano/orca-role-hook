@@ -47,7 +47,7 @@ finish() { RESULT_ON=0; echo "ROLES_YAML_RESULT=$1"; exit "$2"; }
 trap '[ "$RESULT_ON" = 1 ] && echo "ROLES_YAML_RESULT=error:unexpected"' EXIT
 
 orca_cli() {
-  if command -v orca >/dev/null 2>&1; then orca "$@"
+  if type -P orca >/dev/null 2>&1; then orca "$@"
   elif [ -n "${ORCA_CLI_COMMAND:-}" ] && command -v "$ORCA_CLI_COMMAND" >/dev/null 2>&1; then "$ORCA_CLI_COMMAND" "$@"
   else return 127; fi
 }
@@ -62,17 +62,22 @@ if [ "$ALL" = 1 ]; then
   fi
   command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not found: roles-yaml --all needs it to read the project list." >&2; exit 2; }
   LIST_JSON="$(orca_cli repo list --json 2>/dev/null)" || { echo "ERROR: could not read the project list ('orca repo list --json' failed: is Orca running?)." >&2; exit 2; }
-  LIST="$(jq -r '.result.repos[] | [(if (.displayName // "") == "" then (.path | split("/") | last) else .displayName end), .path] | join("\u001f")' <<<"$LIST_JSON" 2>/dev/null)" || { echo "ERROR: unexpected response from 'orca repo list --json'." >&2; exit 2; }
+  LIST="$(jq -r '.result.repos[] | [(.displayName // ""), .path] | join("\u001f")' <<<"$LIST_JSON" 2>/dev/null)" || { echo "ERROR: unexpected response from 'orca repo list --json'." >&2; exit 2; }
   N_CREATED=0; N_UPDATED=0; N_UNCHANGED=0; N_SKIPPED=0; N_ERRORS=0; SEEN=""
   if [ -n "$MODE" ]; then SET_TXT="mode $MODE"; else SET_TXT="the default mode"; fi
   while IFS=$'\037' read -r NAME RPATH; do
     [ -n "$RPATH" ] || continue
+    WINPATH=0; case "$RPATH" in [A-Za-z]:\\*) WINPATH=1;; esac
+    if [ "$WINPATH" = 1 ] && [ -z "$NAME" ]; then NAME="$RPATH"; while [ "${NAME%\\}" != "$NAME" ]; do NAME="${NAME%\\}"; done; NAME="${NAME##*\\}"; fi
+    RPATH="$(local_path "$RPATH")"
+    [ -n "$NAME" ] || NAME="$(basename "$RPATH")"
     if [ -d "$RPATH" ]; then PHYS="$(cd "$RPATH" && pwd -P)"; else PHYS="$RPATH"; fi
     if [ -n "$UNDER_R" ]; then
       case "$PHYS" in "$UNDER_R"|"$UNDER_R"/*) ;; *) continue;; esac
     fi
     LINE=""; WARNS=""
-    if [ ! -d "$RPATH" ]; then LINE="skipped: path-missing"
+    if [ "$WINPATH" = 1 ]; then LINE="skipped: windows-path (the kit runs in WSL; move the project into WSL)"
+    elif [ ! -d "$RPATH" ]; then LINE="skipped: path-missing"
     elif ! git -C "$PHYS" rev-parse --git-dir >/dev/null 2>&1; then LINE="skipped: not-a-repo"
     else
       TOP="$(git -C "$PHYS" rev-parse --show-toplevel 2>/dev/null)" || TOP=""
@@ -185,8 +190,8 @@ lookup_policy() {
   local out id
   POLICY_INFO=""; POLICY_WHY=""
   command -v jq >/dev/null 2>&1 || { POLICY_WHY="jq not found"; return 1; }
-  if [ -z "${ORCA_CLI_COMMAND:-}" ]; then command -v orca >/dev/null 2>&1 || { POLICY_WHY="Orca CLI not found"; return 1; }
-  else command -v orca >/dev/null 2>&1 || command -v "$ORCA_CLI_COMMAND" >/dev/null 2>&1 || { POLICY_WHY="Orca CLI not found"; return 1; }; fi
+  if [ -z "${ORCA_CLI_COMMAND:-}" ]; then type -P orca >/dev/null 2>&1 || { POLICY_WHY="Orca CLI not found"; return 1; }
+  else type -P orca >/dev/null 2>&1 || command -v "$ORCA_CLI_COMMAND" >/dev/null 2>&1 || { POLICY_WHY="Orca CLI not found"; return 1; }; fi
   out="$(orca_cli repo show --repo "path:$ROOT" --json 2>/dev/null)" || true
   if ! jq -e '.result.repo | type == "object"' <<<"$out" >/dev/null 2>&1; then
     if [ "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)" = runtime_unavailable ]; then POLICY_WHY="Orca is not running"; return 1; fi

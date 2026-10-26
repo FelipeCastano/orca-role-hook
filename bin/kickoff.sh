@@ -72,7 +72,7 @@ oc_model_state() {
 
 kicked_set() {  # kicked_set <role> <handle>: replaces that role's line (or adds it), atomically
   local f tmp v; f="$(dirname "$STATE")/orca-roles.kicked"; tmp="$f.tmp.$$"; v="$(var_of "$1")"; [ -f "$f" ] || : > "$f"
-  awk -v k="$v" -v h="$2" 'index($0, k "=") == 1 { if (!d) print k "=" h; d = 1; next } { print } END { if (!d) print k "=" h }' "$f" > "$tmp" && mv "$tmp" "$f"
+  k="$v" h="$2" awk 'index($0, ENVIRON["k"] "=") == 1 { if (!d) print ENVIRON["k"] "=" ENVIRON["h"]; d = 1; next } { print } END { if (!d) print ENVIRON["k"] "=" ENVIRON["h"] }' "$f" > "$tmp" && mv "$tmp" "$f"
 }
 TRUST="$(trust_of "$CFG")"
 TRUST_RX='trust the files|trust this folder|do you trust|safety check|confías|confiar'   # confías/confiar: the Spanish-localized dialog
@@ -98,7 +98,7 @@ agent_trusted() {
     sleep "${ORCA_ROLES_TRUST_POLL:-2}"
   done
 }
-kick() {  # $1 handle, $2 role, $3 message
+kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not recorded as the role's kickoff]
   local screen_trust=1
   if [ "$TRUST" = never ]; then
     case "$(rstr "$CFG" "$2" agent)" in
@@ -119,7 +119,7 @@ kick() {  # $1 handle, $2 role, $3 message
           echo "$(title_of "$CFG" "$2"): the trust dialog was still open after ${TIMEOUT_MS} ms; its role was NOT sent. Answer the dialog, then run roles again: it sends the role to tabs that never got it."
           return 0; }
       else
-        press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
+        press_enter "$1"; echo "Trust dialog accepted in $1"; pace 3
       fi
     else break; fi
   done
@@ -129,7 +129,7 @@ kick() {  # $1 handle, $2 role, $3 message
     [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
   fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
-  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; }
+  orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null && { echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; }
   case "$ocm" in
     present) record_model "$2" "$model";;
     missing) model_failed "$2" "$model" "not in opencode models";;
@@ -149,6 +149,7 @@ BRANCH="$(git branch --show-current 2>/dev/null)"
 # existed before the team when Orca's setup script started the kit (see preexisting_agents), or whose FIRST title is the branch
 # or starts with the Jira key, or whose screen showed the key (see seen_merge and composer_targets).
 GITDIR="$(dirname "$STATE")"; PRE="$GITDIR/orca-roles.preexisting.json"; SEEN="$GITDIR/orca-roles.composer-seen.json"
+ASK_START=0; [ -e "$GITDIR/orca-roles.mode-pending" ] && ASK_START=1
 composer_watch() {
   local match ours tries targets h list
   [ "$(setting "$CFG" closeComposerAgent true)" = true ] || return 0
@@ -173,13 +174,13 @@ composer_watch() {
         echo "Composer extra session detected ($h, first title: '$(jq -r --arg h "$h" '.[] | select(.handle == $h) | .title' "$SEEN")'); closing it."
         if orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1; then echo "Closed $h"
         else  # older Orca without terminal close: ask the agent to exit
-          orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 2
+          orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; pace 2
           orca terminal send --terminal "$h" --text "/exit" --enter --json >/dev/null && echo "/exit sent to $h"
         fi
       done
       return 0
     fi
-    sleep 2
+    pace 2
   done
   echo "No composer extra session found (titles seen: $(jq -c '[.[] | select((.agentIdentity // "") != "") | .title]' "$SEEN"))."
 }
@@ -187,7 +188,22 @@ composer_watch & WATCH_PID=$!
 
 if is_new planner; then
   RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
-  PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+  if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] && [ ! -e "$GITDIR/orca-roles.mode-pending" ]; then
+    cmd="$(clear_command "$CFG" planner)"
+    if [ -n "$cmd" ]; then
+      orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      orca terminal send --terminal "$PLANNER" --text $'\e' --json >/dev/null 2>&1
+      pace 1
+      orca terminal send --terminal "$PLANNER" --text "$cmd" --enter --json >/dev/null
+      orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      echo "The Planner's conversation was cleared ($cmd) for the mode switch."
+    else
+      echo "The Planner's agent has no clear command: its role message for the new mode goes into the same conversation."
+    fi
+    PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
+  else
+    PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+  fi
   planner_history_add "$GITDIR" ""   # seeds the handle history from the previous kicked/env files before kicked_set overwrites them
   if STALE="$(stale_run "$GITDIR" "$PLANNER")"; then
     if [ -n "$STALE" ]; then
@@ -198,12 +214,18 @@ if is_new planner; then
   else
     echo "Could not list the Runs to check the Planner's binding."
   fi
-  kick "$PLANNER" planner "$PLANNER_MSG"
-  # a coordinator's marker covers only this first start: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
-  if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
-    if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
-    rm -f "$CM"
+  orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+  if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "$PLANNER" planner "$(planner_ask_msg "$CFG")" nokick
+  elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends the Planner its role message."
+  else
+    kick "$PLANNER" planner "$PLANNER_MSG"
+    # a coordinator's marker covers only this first start: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
+    if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
+      if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
+      rm -f "$CM"
+    fi
   fi
+  rm -f "$GITDIR/orca-roles.switch-from"
 fi
 OPENED_WORKERS=""; OPENED_IDS=""
 for id in $ROLES; do

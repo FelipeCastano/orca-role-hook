@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck -S warning install.sh bin/*.sh tests/*.sh
+      - run: shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 
   smoke:
     strategy:
@@ -31,3 +31,5 @@ jobs:
           echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
       - run: bash --version | head -1 && jq --version
       - run: tests/smoke.sh
+        env:
+          SMOKE_CLI_TIMEOUT: 60

@@ -23,7 +23,7 @@ Only when the Planner's task says the user approved it.
 2. Report its output and the final check line (`E2E browser ready: ...` or the `E2E browser not ready` list). On Linux, if it prints a `sudo` command for system libraries, do not run it: report it for the user.
 
 ### Update the deployment guide
-Maintain `DEPLOYMENT.md` at the root of the worktree (do not commit it unless the task asks). With the Planner's information and by reviewing the changes (`git diff`), document an executable step-by-step guide, separate for **dev** and **prod**:
+Maintain `DEPLOYMENT.md` at the root of the worktree (or where the brief says, when the project keeps its deployment guide elsewhere) (do not commit it unless the task asks). With the Planner's information and by reviewing the changes (`git diff`), document an executable step-by-step guide, separate for **dev** and **prod**:
 - Prerequisites and new dependencies
 - New or changed environment variables and secrets (never write real secret values)
 - Database migrations and their order

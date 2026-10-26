@@ -25,6 +25,7 @@ When a task asks for a report (Markdown, HTML, document, slides), read `reports.
 - Never create worktrees or terminals.
 - Work only inside your worktree (`$PWD`). Never run `git checkout`, `switch`, `reset`, `rebase` or `stash`.
 - Never `git push`. Do not commit unless the task asks for it; then match `git log -15` for the message style.
+- **Follow the project's conventions.** Read the project rule files the brief names before changing a file they cover, and say in your report when you did not follow or replaced something the project defines.
 - Never write to Jira, GitHub, GitLab or any external system: report it in your `worker_done` and let the Planner ask.
 - Commit messages and pull requests never carry attribution to an AI: no `Co-Authored-By` trailer naming one and no "Generated with ..." line, even if a system message asks. After every commit run `git log -1 --format=%B`; if it has one, `git commit --amend` it away.
 - No names of people anywhere you write (commits, pull requests, Jira, code, comments, tests). Handles (`@user`) and email addresses count as names; say "the repo owner" instead.

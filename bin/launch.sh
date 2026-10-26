@@ -22,7 +22,7 @@ set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,20p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
-command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
+type -P orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
 WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,21 +40,51 @@ if [ "$REOPEN" = 1 ]; then
   [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
   [ -z "$OTHERS" ] || { echo "ERROR: --reopen takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
 fi
+# a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
+if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  A="${ORCA_WORKTREE_ID#*::}"; A="$(local_path "${A%%::workspace:*}")"
+  if [ "$(cd "$A" 2>/dev/null && pwd -P)" != "$(cd "$TOP" && pwd -P)" ]; then
+    CUR_ID="$(orca worktree current --json 2>/dev/null | jq -r '.result.worktree.id // empty' 2>/dev/null)"
+    if [ -n "$CUR_ID" ]; then
+      WT="id:$CUR_ID"
+      echo "This terminal belongs to worktree $A; using the worktree of the current folder ($TOP)."
+    else
+      echo "ERROR: this terminal belongs to worktree $A but the current folder ($TOP) is not an Orca worktree. Run roles from a terminal of that worktree. Nothing was changed."
+      exit 1
+    fi
+  fi
+fi
 WT="${WT:-${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}}"; WT="${WT:-active}"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 OVR="$GITDIR/orca-roles.overrides.json"  # this worktree's exceptions
 STATE="$GITDIR/orca-roles.env"
 KICKED="$GITDIR/orca-roles.kicked"       # the handle each role had when kickoff.sh sent it its message
 PTY="$GITDIR/orca-roles.pty"             # each role's ptyId: stable across restarts, unlike the handle (see restored_handle)
+# each role's tab and pane ids: Orca restores them, so a tab Orca keeps asleep after a restart can be woken (see wake_tab)
+TABS="$GITDIR/orca-roles.tabs"
 KICKOFF="${ORCA_ROLES_KICKOFF:-$KIT/bin/kickoff.sh}"
 CFG="$GITDIR/orca-roles.config.json"     # copy of the effective config for this worktree
 LOG="$GITDIR/orca-roles-launch.log"
+MARKER="$GITDIR/orca-roles.mode-pending"  # exists while the worktree has no chosen mode yet (the Planner asks the user)
+SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has closed the old workers but the Planner has not had its new role message yet
 # Whether a role's tab is still working: 0 alive, 1 no tab (no handle, or Orca says the handle is stale), 2 the tab exists but its agent
 # is gone (e.g. after Ctrl+C), 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned"),
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
 # Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
 # An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
-agent_in()   { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
+# The pid of the claude or codex process whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
+agent_pid_of_handle() {
+  [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
+  local pid env
+  for pid in $(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)(claude|codex)$/ {print $1}'); do
+    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
+    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
+    echo "$pid"
+    return 0
+  done
+  return 0
+}
+agent_in()   { local js rc; js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"; rc=$?; printf '%s' "$js" | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; return "$rc"; }
 role_alive() {  # role_alive <role> <handle>
   [ -n "${2:-}" ] || return 1
   local js rc code; js="$(orca terminal show --terminal "$2" --json 2>/dev/null)"; rc=$?
@@ -65,8 +95,13 @@ role_alive() {  # role_alive <role> <handle>
   fi
   printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
   case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts; Orca sets agentIdentity only after mini's first message
-  local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
-    [ -n "$(agent_in "$2")" ] && return 0
+  local i ai; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
+    ai="$(agent_in "$2")" || { ROLE_ALIVE_CODE=no-response; return 4; }
+    if [ -n "$ai" ]; then
+      # Orca can list a tab after a restart with its old identity but no agent running
+      [ -n "$(agent_pid_of_handle "$2")" ] || return 2
+      return 0
+    fi
     [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
   done
   return 2
@@ -83,8 +118,11 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
   fi
   CFG="$SCFG"
   SMODE="$(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"; SMODE="$(canon_mode "$SMODE")"
-  echo "Mode: $SMODE"
-  [ "$SMODE" = academic-research ] && echo "Phase: $(phase_of "$SCFG")"
+  if [ -e "$MARKER" ]; then echo "Mode: not chosen yet (suggested: $SMODE)"
+  else
+    echo "Mode: $SMODE"
+    [ "$SMODE" = academic-research ] && echo "Phase: $(phase_of "$SCFG")"
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     var="${line%%=*}"; handle="${line#*=}"; role="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
@@ -133,7 +171,9 @@ echo "== $(date '+%F %T') launch.sh in $WT"
 
 # The new configuration and exceptions are prepared aside and only replace the saved ones once every check has passed
 NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
-fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; echo "$1"; exit 1; }
+fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; sw="${SWITCH_FROM:-}"; [ -n "$sw" ] || sw="$(cat "$SWITCH_FILE" 2>/dev/null)"
+  m="$1"; [ -z "$sw" ] || { case "$m" in *.) ;; *) m="$m.";; esac; m="$m The workers of mode $sw were already closed: run roles again to finish the switch."; }
+  echo "$m"; exit 1; }
 merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
 PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
 [ -z "$PREV_MODE" ] || PREV_MODE="$(canon_mode "$PREV_MODE")"   # a team open under an old mode id is the same mode
@@ -145,6 +185,36 @@ if [ -f "$OVR" ] && [ "$RESET" != 1 ]; then
   if legacy_mode_in "$OVR"; then
     OVR_LEGACY=1; canon_overrides "$OVR" > "$OVR.canon" || fail "ERROR: could not read the saved exceptions ($OVR)"
     OVRUSE="$OVR.canon"
+  fi
+fi
+FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
+PENDING=0; [ -e "$MARKER" ] && PENDING=1
+# A mode named by this run's options or by the saved exceptions was chosen by the user: nothing to ask
+EXPLICIT=0; ex=0
+while [ "$ex" -lt ${#FLAGS[@]} ]; do
+  case "${FLAGS[$ex]}" in
+    --mode|--mode=*|--set=settings.mode=*) EXPLICIT=1;;
+    --set) case "${FLAGS[$((ex + 1))]:-}" in settings.mode=*) EXPLICIT=1;; esac;;
+  esac
+  ex=$((ex + 1))
+done
+if [ "$EXPLICIT" = 0 ] && [ -n "$OVRUSE" ] && jq -e '(.mode // null) != null or any(.set[]?; .path == ["settings","mode"])' "$OVRUSE" >/dev/null 2>&1; then EXPLICIT=1; fi
+NEED=0; [ "$EXPLICIT" = 0 ] && { [ "$FRESH" = 1 ] || [ "$PENDING" = 1 ]; } && [ "$REOPEN" = 0 ] && NEED=1
+if [ "$NEED" = 1 ] && CMK="$(coordinated_marker)" && [ -f "$CMK" ]; then   # a coordinator opened this worktree: it dispatches the task, nobody answers a question
+  NEED=0
+  echo "A coordinator opened this worktree: it starts in mode $(setting "$NEWCFG" mode programmer) (change it later from the Planner)."
+fi
+if [ "$NEED" = 1 ]; then   # a worktree with a Jira ticket is a programmer worktree: no question
+  JCFG="$NEWCFG"
+  if [ -n "$OVRUSE" ]; then apply_overrides "$NEWCFG" "$OVRUSE" > "$NEWCFG.jira" 2>/dev/null && JCFG="$NEWCFG.jira"; fi
+  if [ ${#FLAGS[@]} -gt 0 ]; then
+    overrides_from_args "${FLAGS[@]}" > "$NEWCFG.jflags" 2>/dev/null && apply_overrides "$JCFG" "$NEWCFG.jflags" > "$NEWCFG.jira2" 2>/dev/null && JCFG="$NEWCFG.jira2"
+  fi
+  JKEY=""; [ "$(setting "$JCFG" enableAskModeOnStart true)" = false ] || JKEY="$(worktree_jira "$WT" "$JCFG" | head -1)"
+  rm -f "$NEWCFG.jflags" "$NEWCFG.jira" "$NEWCFG.jira2"
+  if [ -n "$JKEY" ]; then
+    FLAGS+=(--mode programmer); NEED=0
+    echo "Jira ticket $JKEY: this worktree starts in mode programmer (change it later from the Planner)."
   fi
 fi
 if [ ${#FLAGS[@]} -gt 0 ]; then
@@ -175,8 +245,12 @@ fi
 ERR="$(check_config "$NEWCFG" "$OVRSRC")"
 [ -z "$ERR" ] || fail "$ERR"
 NEWMODE="$(mode_of "$NEWCFG")"
-if [ "$NEWMODE" = academic-research ] && ! git rev-parse --show-toplevel >/dev/null 2>&1; then
-  fail "ERROR: mode academic-research needs the project to be a git repository (git init, then run roles again). Nothing was changed."
+ASK=0
+if [ "$NEED" = 1 ] && [ "$(setting "$NEWCFG" enableAskModeOnStart true)" != false ]; then ASK=1; fi
+if [ "$ASK" = 0 ]; then
+  if [ "$NEWMODE" = academic-research ] && ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+    fail "ERROR: mode academic-research needs the project to be a git repository (git init, then run roles again). Nothing was changed."
+  fi
 fi
 # A mode renamed between versions still works under its old id: say where the old id is still used
 LEGACY_SRC=""
@@ -205,14 +279,22 @@ if [ -n "$LEGACY_SRC" ]; then
   echo "$LEGACY_NOTE"
 fi
 
-FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
 pty_of_handle() { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("ptyId")) | .ptyId] | first // empty' 2>/dev/null; }
 saved_pty() { grep "^$1=" "$PTY" 2>/dev/null | head -1 | cut -d= -f2-; }
 # After a restart (of the computer or of Orca), Orca restores the tabs that were open with NEW handles and, in each agent tab,
 # relaunches the agent with 'claude --resume <session>' but without the kit's settings (model, auto mode, plugin, MCP...).
 # The ptyId of a tab does not change, so the restored tab of a role is the worktree terminal whose ptyId is the saved one.
-restored_handle() { printf '%s' "$LIST" | jq -r --arg p "$1" '[.. | objects | select(has("handle") and .ptyId == $p) | .handle] | first // empty' 2>/dev/null; }
+# The optional second argument is a handle to leave out: the old one of a tab Orca kept asleep, which it may still list next to the new one.
+restored_handle() { printf '%s' "$LIST" | jq -r --arg p "$1" --arg s "${2:-}" '[.. | objects | select(has("handle") and .ptyId == $p and .handle != $s) | .handle] | first // empty' 2>/dev/null; }
+# The old handle of a role's tab that this run woke (set in the wake block), for restored_handle's second argument.
+woke_old() { local k="WOKE_OLD_$1"; printf '%s' "${!k:-}"; }
+# role_alive for a saved handle, except that the old handle of a tab this run woke and found ready counts as no tab (1): the restored tab has another handle.
+role_state() {  # role_state <var> <role> <handle>
+  local wo; wo="$(woke_old "$1")"
+  [ -z "$wo" ] || [ "${3:-}" != "$wo" ] || return 1
+  role_alive "$2" "$3"
+}
 # The Claude session Orca resumed in a restored tab: the 'claude' process whose ORCA_TERMINAL_HANDLE is that handle, started with --resume <id>.
 session_of_handle() {
   [ -n "${ORCA_ROLES_SESSION_OF:-}" ] && { "$ORCA_ROLES_SESSION_OF" "$1"; return 0; }   # test hook
@@ -231,20 +313,154 @@ for i in $(seq 1 "$WAIT"); do
   LIST="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && { LISTOK=1; break; }
   echo "Waiting for Orca to have the worktree ready ($i/$WAIT)..."; sleep 1
 done
+LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
+[ "$ASK" = 1 ] && LROLES="planner"
+# After a restart Orca keeps agent tabs asleep: not in the terminal list, no handle, until someone clicks them (then Orca resumes their session itself).
+# Waking them first lets the code below see them as the restored tabs they are and reopen each with its conversation, instead of opening a second tab.
+if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
+  WAKE_ALL=0
+  if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ]; then WAKE_ALL=1; fi
+  if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then WAKE_ALL=1; fi
+  WAKE_MSG="Cannot wake tabs Orca kept asleep on this system; their roles are treated as closed."
+  W_N=0; W_STOP=0
+  for line in $(cat "$STATE"); do
+    [ "$W_STOP" = 0 ] || break
+    wv="${line%%=*}"; [ -n "${line#*=}" ] || continue
+    wid="$(printf '%s' "$wv" | tr 'A-Z_' 'a-z-')"
+    if [ "$WAKE_ALL" = 0 ]; then case " $LROLES " in *" $wid "*) ;; *) continue;; esac; fi
+    wp="$(saved_pty "$wv")"; [ -n "$wp" ] || continue
+    wold="$(restored_handle "$wp")"
+    wt="$(grep "^$wv=" "$TABS" 2>/dev/null | head -1 | cut -d= -f2-)"
+    if [ -n "$wold" ]; then
+      case "$(rstr "$CFG" "$wid" agent)" in claude|codex|"") ;; *) continue;; esac
+      [ -z "$(agent_pid_of_handle "$wold")" ] || continue
+      wsh="$(tabs_of_handle "$wold")"
+      [ -z "$wsh" ] || wt="$wsh"
+    fi
+    wtab="${wt%% *}"; wleaf="${wt#* }"
+    [ -n "$wtab" ] && [ -n "$wleaf" ] && [ "$wtab" != "$wt" ] || continue
+    wtitle="$(title_of "$CFG" "$wid")"
+    case "$WT" in
+      id:*) ;;
+      *) echo "Cannot wake tabs Orca kept asleep: this launch has no worktree id (ORCA_WORKTREE_ID is not set); their roles are treated as closed."; break;;
+    esac
+    reason="$(wake_tab "${WT#id:}" "$wtab" "$wleaf")"; wrc=$?
+    case "$wrc" in
+      0) W_ROLE[$W_N]="$wid"; W_PTY[$W_N]="$wp"; W_TITLE[$W_N]="$wtitle"; W_HANDLE[$W_N]=""; W_OLD[$W_N]="$wold"; W_VAR[$W_N]="$wv"; W_READY[$W_N]=0; W_N=$((W_N + 1));;
+      2) echo "$WAKE_MSG"; W_STOP=1;;
+      *) echo "Could not wake the tab of $wtitle ($reason); it is treated as closed.";;
+    esac
+  done
+  if [ "$W_N" -gt 0 ]; then
+    W_T0=$SECONDS
+    for ((wi = 0; wi < W_N; wi++)); do
+      if [ -n "${W_OLD[$wi]}" ]; then W_END[$wi]=$((W_T0 + ${ORCA_ROLES_WAKE_LISTED_BUDGET:-10})); else W_END[$wi]=$((W_T0 + ${ORCA_ROLES_WAKE_BUDGET:-30})); fi
+      W_DONE[$wi]=0
+    done
+    while :; do
+      NL="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && LIST="$NL"
+      W_ALL=1
+      for ((wi = 0; wi < W_N; wi++)); do
+        [ "${W_READY[$wi]}" = 0 ] && [ "${W_DONE[$wi]}" = 0 ] || continue
+        wh="$(restored_handle "${W_PTY[$wi]}" "${W_OLD[$wi]}")"
+        if [ -n "$wh" ]; then W_HANDLE[$wi]="$wh"; fi
+        wok=0
+        if [ -n "$wh" ]; then
+          wok=1
+          wag="$(rstr "$CFG" "${W_ROLE[$wi]}" agent)"
+          case "$wag" in claude|"") [ -n "$(session_of_handle "$wh")" ] || wok=0;; esac
+          if [ "$wok" = 1 ]; then
+            case "$wag" in claude|codex|"") orca terminal wait --terminal "$wh" --for tui-idle --timeout-ms 2000 --json >/dev/null 2>&1 || wok=0;; esac
+          fi
+        fi
+        if [ "$wok" = 1 ]; then
+          W_READY[$wi]=1; echo "Orca kept the tab of ${W_TITLE[$wi]} asleep after a restart; woke it."
+          [ -z "${W_OLD[$wi]}" ] || printf -v "WOKE_OLD_${W_VAR[$wi]}" '%s' "${W_OLD[$wi]}"
+        elif [ "$SECONDS" -ge "${W_END[$wi]}" ]; then
+          W_DONE[$wi]=1
+        else
+          W_ALL=0
+        fi
+      done
+      [ "$W_ALL" = 0 ] || break
+      sleep 1
+    done
+    [ -z "${ORCA_TERMINAL_HANDLE:-}" ] || orca terminal switch --terminal "$ORCA_TERMINAL_HANDLE" --json >/dev/null 2>&1 || true
+    for ((wi = 0; wi < W_N; wi++)); do
+      [ "${W_READY[$wi]}" = 0 ] || continue
+      if [ -z "${W_HANDLE[$wi]}" ] && [ -n "${W_OLD[$wi]}" ]; then
+        echo "The tab of ${W_TITLE[$wi]} (${W_OLD[$wi]}) has no agent running and Orca did not resume it; it is handled as an agent that is gone."
+      elif [ -z "${W_HANDLE[$wi]}" ]; then
+        echo "Could not wake the tab of ${W_TITLE[$wi]} (it did not appear in Orca's terminal list); it is treated as closed."
+      else
+        fail "ERROR: Orca woke the tab of ${W_TITLE[$wi]} but its conversation has not started yet; run roles again in a moment. No tab was opened."
+      fi
+    done
+  fi
+fi
+SWITCH_FROM=""
 # The mode cannot change under an open team: its tabs belong to the previous mode. Any tab of the saved team that still exists counts: its saved
 # handle, or, after a restart of Orca or the computer (new handles), the tab that has the role's saved ptyId.
-if [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ] && [ -s "$STATE" ]; then
+if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ] && [ -s "$STATE" ]; then
   [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether this worktree's team (mode '$PREV_MODE') is still open: 'orca terminal list' failed. Mode '$NEWMODE' was requested; nothing was changed. Try again once Orca is ready."
+  SAVED_PLANNER="$(grep '^PLANNER=' "$STATE" 2>/dev/null | head -1 | cut -d= -f2-)"
+  IS_PLANNER=0; [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "$ORCA_TERMINAL_HANDLE" = "$SAVED_PLANNER" ] && IS_PLANNER=1
+  if [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "$ORCA_TERMINAL_HANDLE" != "$SAVED_PLANNER" ]; then
+    SP="$(saved_pty PLANNER)"; MP="$(pty_of_handle "$ORCA_TERMINAL_HANDLE")"
+    if [ -n "$MP" ] && [ "$MP" = "$SP" ]; then
+      fail "ERROR: your tab was restored by Orca after a restart: run roles (without options) first so the kit reopens you, then switch the mode. If it cannot reopen you, run roles from another terminal of this worktree. Nothing was changed."
+    fi
+  fi
+  OPEN_LIST=""; OPEN_WORKERS=""; SW_RECORDS=""
   for line in $(cat "$STATE"); do
-    OPEN=0
+    OPEN=0; rh=""
     [ -n "${line#*=}" ] || continue
-    role_alive "$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')" "${line#*=}"; rc=$?
+    srole="$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')"
+    role_state "${line%%=*}" "$srole" "${line#*=}"; rc=$?
     [ "$rc" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready."
     [ "$rc" -eq 1 ] || OPEN=1
-    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p")" ] && OPEN=1
-    [ "$OPEN" = 1 ] || continue
-    fail "ERROR: this worktree's team is open in mode '$PREV_MODE' and mode '$NEWMODE' was requested. Close the team first (close-role.sh on each worker, or close its tabs), then run roles again. Nothing was changed."
+    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "${line%%=*}")")"
+    [ -z "$rh" ] || OPEN=1
+    stitle="$(title_of "$CFG" "$srole")"
+    if [ "$OPEN" = 1 ]; then
+      OPEN_LIST="${OPEN_LIST:+$OPEN_LIST, }$stitle (${rh:-${line#*=}})"
+      [ "$srole" = planner ] || OPEN_WORKERS="${OPEN_WORKERS:+$OPEN_WORKERS, }$stitle"
+    fi
+    SW_RECORDS="$SW_RECORDS${SW_RECORDS:+
+}${line%%=*}|$srole|$OPEN|$rc|${line#*=}|$rh|$stitle"
   done
+  if [ -n "$OPEN_LIST" ] && [ "$IS_PLANNER" = 0 ]; then
+    fail "ERROR: this worktree's team is open in mode '$PREV_MODE' and mode '$NEWMODE' was requested. Open tabs: $OPEN_LIST. Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."
+  fi
+  if [ -n "$OPEN_LIST" ]; then
+    for f in "$GITDIR/orca-roles.kickoff.d"/*; do
+      [ -f "$f" ] && kill -0 "$(basename "$f")" 2>/dev/null && fail "ERROR: the previous launch's kickoff is still running (pid $(basename "$f")): try again in a moment. Nothing was changed."
+    done
+    echo "Switching mode from $PREV_MODE to $NEWMODE: closing ${OPEN_WORKERS:-no workers}; the Planner keeps its tab and gets its role message for $NEWMODE after its conversation is cleared."
+    drop_role_lines() { local f; for f in "$STATE" "$PTY" "$KICKED" "$TABS"; do [ -f "$f" ] && { grep -v "^$1=" "$f" > "$f.tmp"; mv "$f.tmp" "$f"; }; done; return 0; }
+    while IFS='|' read -r svar srole sopen src shandle srh stitle; do
+      [ -n "$svar" ] && [ "$srole" != planner ] || continue
+      if [ "$sopen" = 1 ]; then
+        chs=""; case "$src" in 0|2|3) chs="$shandle";; esac
+        [ -z "$srh" ] || [ "$srh" = "$chs" ] || chs="$chs $srh"
+        for ch in $chs; do
+          orca terminal close --terminal "$ch" --tab --json >/dev/null 2>&1; crc=$?
+          [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "$ch" --json >/dev/null 2>&1; crc=$?; }
+          [ "$crc" = 0 ] || { [ "$crc" = 124 ] && close_unconfirmed "$ch" "$stitle" >/dev/null; } \
+            || fail "ERROR: could not close $stitle's tab ($ch); close it by hand and switch again."
+        done
+      fi
+      drop_role_lines "$svar"
+    done <<EOF2
+$SW_RECORDS
+EOF2
+    SWITCH_FROM="$PREV_MODE"
+    printf '%s\n' "$PREV_MODE" > "$SWITCH_FILE.tmp.$$"; mv "$SWITCH_FILE.tmp.$$" "$SWITCH_FILE"
+  fi
+fi
+if [ -z "$SWITCH_FROM" ] && [ -s "$SWITCH_FILE" ]; then
+  SWITCH_FROM="$(cat "$SWITCH_FILE")"
+  echo "Finishing the mode switch from $SWITCH_FROM to $NEWMODE that a previous launch left unfinished."
 fi
 # The phase cannot change under an open team either: a role of the old phase that the new one does not have must be closed first (phase.sh does it).
 if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ -s "$STATE" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
@@ -257,17 +473,30 @@ if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] &&
     prole="$(printf '%s' "${line%%=*}" | tr 'A-Z_' 'a-z-')"
     [ "$prole" != planner ] || continue
     printf '%s\n' "$NEWENABLED" | grep -qxF "$prole" && continue
-    role_alive "$prole" "${line#*=}"; rc=$?
+    role_state "${line%%=*}" "$prole" "${line#*=}"; rc=$?
     [ "$rc" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready."
     [ "$rc" -eq 1 ] || OPEN=1
-    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p")" ] && OPEN=1
+    p="$(saved_pty "${line%%=*}")"; [ -n "$p" ] && [ -n "$(restored_handle "$p" "$(woke_old "${line%%=*}")")" ] && OPEN=1
     [ "$OPEN" = 1 ] || continue
     fail "ERROR: this worktree's team is in phase '$OLDPHASE' and phase '$NEWPHASE' was requested while $(title_of "$CFG" "$prole") is still open. Change the phase with ~/.orca-roles/bin/phase.sh $NEWPHASE. Nothing was changed."
   done
 fi
+# A choice made from a Planner tab Orca restored after a restart: its kit settings are missing, so it must be reopened first
+if [ "$PENDING" = 1 ] && [ "$ASK" = 0 ] && [ "$REOPEN" = 0 ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
+  SAVED_PLANNER="$(grep '^PLANNER=' "$STATE" 2>/dev/null | head -1 | cut -d= -f2-)"
+  if [ "$ORCA_TERMINAL_HANDLE" != "$SAVED_PLANNER" ]; then
+    SP="$(saved_pty PLANNER)"
+    if [ -n "$SP" ] && [ "$SP" = "$(pty_of_handle "$ORCA_TERMINAL_HANDLE")" ]; then
+      fail "ERROR: your tab was restored by Orca after a restart: run roles (without options) first so the kit reopens you, then choose the mode. If it cannot reopen you, run roles from another terminal of this worktree. Nothing was changed."
+    fi
+  fi
+fi
 # Everything checked: the new configuration and exceptions become the saved ones
 jq --arg m "$NEWMODE" '.settings.mode = $m' "$NEWCFG" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG"   # the effective mode, explicit for the other scripts
 mv "$NEWCFG" "$CFG"
+CHOSEN=0
+if [ "$ASK" = 1 ]; then : > "$MARKER"
+elif [ "$PENDING" = 1 ] && [ "$REOPEN" = 0 ]; then rm -f "$MARKER"; CHOSEN=1; echo "Mode chosen: $NEWMODE."; fi
 if [ -n "$LEGACY_NOTE" ]; then printf '%s\n' "$LEGACY_NOTE" > "$GITDIR/orca-roles.legacy-note"; else rm -f "$GITDIR/orca-roles.legacy-note"; fi
 if [ "$RESET" = 1 ]; then rm -f "$OVR"; echo "This worktree's exceptions were forgotten."; fi
 [ "$OVRSRC" = "$NEWOVR" ] && mv "$NEWOVR" "$OVR"
@@ -281,10 +510,14 @@ case "$WT" in
     case "$OLDWT" in id:*) [ "$OLDWT" = "$WT" ] || echo "Warning: this folder was launched before as worktree $OLDWT and now as $WT; if Orca lists it twice, its tabs may be duplicated.";; esac
     printf '%s\n' "$WT" > "$GITDIR/orca-roles.wtid";;
 esac
-echo "Mode: $NEWMODE"
-if [ "$NEWMODE" = academic-research ]; then
-  echo "Phase: $(phase_of "$CFG")"
-  "$KIT/bin/academic-scaffold.sh" "$(git rev-parse --show-toplevel)" || echo "Warning: could not create the academic-research folders."
+if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then
+  echo "Mode: not chosen yet (suggested: $NEWMODE)"
+else
+  echo "Mode: $NEWMODE"
+  if [ "$NEWMODE" = academic-research ]; then
+    echo "Phase: $(phase_of "$CFG")"
+    "$KIT/bin/academic-scaffold.sh" "$(git rev-parse --show-toplevel)" || echo "Warning: could not create the academic-research folders."
+  fi
 fi
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
@@ -316,7 +549,10 @@ fi
 
 # shellcheck source=/dev/null
 [ -f "$STATE" ] && . "$STATE"
-ROLES="$(launchable_roles "$CFG" | tr '\n' ' ')"
+ROLES="$LROLES"
+if [ "$ASK" = 1 ]; then
+  echo "No mode chosen yet: only the Planner is opened; it asks which mode to use (settings.enableAskModeOnStart)."
+fi
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
 if [ "$(trust_of "$CFG")" = never ]; then
   echo "The folder is not marked as trusted (settings.trust is \"never\"): the agents will ask you to trust it; answer in each tab."
@@ -326,7 +562,7 @@ else
 fi
 state_set() {  # state_set <file> <VAR> <value>: replaces that line (or adds it), keeps the others, atomically
   local tmp="$1.tmp.$$"; [ -f "$1" ] || : > "$1"
-  awk -v k="$2" -v v="$3" 'index($0, k "=") == 1 { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$1" > "$tmp" && mv "$tmp" "$1"
+  k="$2" v="$3" awk 'index($0, ENVIRON["k"] "=") == 1 { if (!d) print ENVIRON["k"] "=" ENVIRON["v"]; d = 1; next } { print } END { if (!d) print ENVIRON["k"] "=" ENVIRON["v"] }' "$1" > "$tmp" && mv "$tmp" "$1"
 }
 # A team saved by an older kit has no marker file: all its tabs were kicked. Otherwise the file starts empty, before any tab is saved.
 if [ ! -f "$KICKED" ]; then if [ -s "$STATE" ]; then cp "$STATE" "$KICKED"; else : > "$KICKED"; fi; fi
@@ -334,10 +570,18 @@ kicked_of() { grep "^$1=" "$KICKED" 2>/dev/null | head -1 | cut -d= -f2-; }
 # Classify every role before closing or opening anything: if Orca cannot tell, the team is left exactly as it is
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
-  role_alive "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
+  role_state "$v" "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
   [ "$st" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE) for $t: no tab was closed or opened. Run roles again once Orca is ready."
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
+  fi
+  if [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ -n "${!v:-}" ]; then   # a tab this run would close must not be the one running it (the Planner's restored tab is reopened by its relauncher)
+    own=0
+    if [ "$st" = 2 ]; then [ "${!v}" = "$ORCA_TERMINAL_HANDLE" ] && own=1
+    elif [ "$st" = 1 ] && [ "$id" != planner ]; then
+      p="$(saved_pty "$v")"; [ -n "$p" ] && [ "$(restored_handle "$p" "$(woke_old "$v")")" = "$ORCA_TERMINAL_HANDLE" ] && own=1
+    fi
+    [ "$own" = 0 ] || fail "ERROR: roles was run from the tab of $t, which has to be reopened; run roles from the Planner's tab or another terminal of this worktree. No tab was closed or opened."
   fi
 done
 KICKOFFS="$GITDIR/orca-roles.kickoff.d"   # one file per running kickoff, named by its pid, listing the roles it will kick
@@ -359,6 +603,12 @@ for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
   sv="ST_$v"; st="${!sv}"
   if [ "$REOPEN" = 1 ] && [ -z "${!v:-}" ]; then echo "$t has no saved tab (closed on purpose or never opened); leaving it closed."; continue; fi
+  if [ "$st" = 0 ] && [ "$id" = planner ] && [ "$CHOSEN" = 1 ]; then
+    NEW="$NEW $id"; REUSED="$REUSED $id"; echo "The Planner gets its role message for mode $NEWMODE."; continue
+  fi
+  if [ "$st" = 0 ] && [ "$id" = planner ] && [ -n "$SWITCH_FROM" ]; then
+    NEW="$NEW $id"; REUSED="$REUSED $id"; echo "The Planner gets its role message for mode $NEWMODE after a context clear."; continue
+  fi
   if [ "$st" = 0 ]; then   # alive: reused as is, but a tab that never got its role message (interrupted launch) is kicked now
     if [ "$(kicked_of "$v")" != "${!v}" ]; then
       if kp="$(kickoff_of "$id")"; then echo "The kickoff of the previous launch is still running (pid $kp): $t gets its role from it."; continue; fi
@@ -369,13 +619,15 @@ for id in $ROLES; do
   if [ "$st" = 3 ]; then
     RESUMED="$RESUMED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one."
     oc_forget "$id"
-    orca terminal close --terminal "${!v}" --json >/dev/null 2>&1 || orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
+    orca terminal close --terminal "${!v}" --json >/dev/null 2>&1; crc=$?
+    [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1; crc=$?; }
+    [ "$crc" != 124 ] || close_unconfirmed "${!v}" "$t" || true
   elif [ "$st" = 2 ]; then
     RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
     oc_forget "$id"
-    orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
+    orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "${!v}" "$t" || true; }
   elif [ -n "${!v:-}" ]; then
-    p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p")"
+    p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "$v")")"
     if [ -n "$rh" ]; then
       if [ "$id" = planner ] && [ "$rh" = "${ORCA_TERMINAL_HANDLE:-}" ]; then
         PLANNER_KEEP_PTY="$p"
@@ -404,7 +656,7 @@ for id in $ROLES; do
         echo "The Planner's restored tab ($rh) is busy: not reopened now; run roles again when it is idle."
         continue
       fi
-      orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || true
+      orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "$rh" "$t" || true; }
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
       else
@@ -417,21 +669,49 @@ for id in $ROLES; do
   fi
   h=""
   for try in 1 2 3; do
-    h=$(orca terminal create --worktree "$WT" --title "$t" --command "$(kit_env)ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
+    out="$(orca terminal create --worktree "$WT" --title "$(tab_title_of "$CFG" "$id")" --command "$(kit_env)ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1)"; crc=$?
+    h="$(printf '%s' "$out" | handle_of)"
+    if [ "$crc" = 124 ]; then
+      # The list is read once, so a tab Orca opens after it is missed (N2).
+      NL="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" || NL=""
+      for c in $(printf '%s' "$NL" | jq -r --arg t "$(tab_title_of "$CFG" "$id")" '[.. | objects | select(has("handle") and .title == $t) | .handle] | .[]' 2>/dev/null); do
+        printf '%s' "$LIST" | grep -qF "\"$c\"" && continue
+        h="$c"; echo "Orca was slow to answer while opening the tab of $t; using the tab it opened ($h)."; break
+      done
+    fi
     [ -n "$h" ] && break
-    echo "Retrying $t ($try/3)..."; sleep 2
+    echo "Retrying $t ($try/3)..."; pace 2
   done
-  [ -n "$h" ] || { echo "ERROR: could not open $t. Check $LOG" >&2; exit 1; }
+  if [ -z "$h" ]; then
+    sw="${SWITCH_FROM:-}"; [ -n "$sw" ] || sw="$(cat "$SWITCH_FILE" 2>/dev/null)"
+    m="ERROR: could not open $t. Check $LOG"; [ -z "$sw" ] || { case "$m" in *.) ;; *) m="$m.";; esac; m="$m The workers of mode $sw were already closed: run roles again to finish the switch."; }
+    echo "$m" >&2; exit 1
+  fi
   printf -v "$v" '%s' "$h"; NEW="$NEW $id"
-  state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$(pty_of_handle "$h")"   # an interrupted launch still remembers the tabs it opened
+  hp="$(pty_of_handle "$h")"
+  if [ -z "$hp" ]; then
+    pace 2; hp="$(pty_of_handle "$h")"
+    [ -n "$hp" ] || echo "Could not read the ptyId of the tab of $t; after a restart it may open without memory."
+  fi
+  state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$hp"   # an interrupted launch still remembers the tabs it opened
+  tl="$(tabs_of_handle "$h")"; [ -z "$tl" ] || state_set "$TABS" "$v" "$tl"
 done
 
-: > "$STATE"; : > "$PTY"
+PREV_TABS="$(cat "$TABS" 2>/dev/null)"
+: > "$STATE"; : > "$PTY"; : > "$TABS.tmp.$$"
 for id in $ROLES; do   # a role with no saved tab (left closed) is not written back as VAR=
   v="$(var_of "$id")"; [ -n "${!v:-}" ] || continue
   echo "$v=${!v}" >> "$STATE"
-  if [ "$id" = planner ] && [ -n "$PLANNER_KEEP_PTY" ]; then echo "$v=$PLANNER_KEEP_PTY" >> "$PTY"; else echo "$v=$(pty_of_handle "${!v}")" >> "$PTY"; fi
+  if [ "$id" = planner ] && [ -n "$PLANNER_KEEP_PTY" ]; then
+    echo "$v=$PLANNER_KEEP_PTY" >> "$PTY"
+    tl="$(printf '%s\n' "$PREV_TABS" | grep "^$v=" | head -1 | cut -d= -f2-)"
+  else
+    echo "$v=$(pty_of_handle "${!v}")" >> "$PTY"
+    tl="$(tabs_of_handle "${!v}")"
+  fi
+  [ -z "$tl" ] || echo "$v=$tl" >> "$TABS.tmp.$$"
 done
+mv "$TABS.tmp.$$" "$TABS"
 "$KIT/bin/orca-yaml.sh" --check || true
 cat "$STATE"
 
@@ -461,7 +741,7 @@ if [ -z "$NEW" ]; then echo "All roles are already open."; start_relauncher; exi
 case " $NEW " in *" planner "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${PLANNER:-}" ] || echo 'The Planner kept its tab: it is told the new handles by a message ("Role handles changed"); if it does not pick them up, ask it to read its messages.';; esac
 KLOG="$GITDIR/orca-roles-kickoff.log"
 if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else : > "$KLOG"; fi   # launched by the relauncher: its log is appended to
-ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
+ORCA_ROLES_SWITCH_FROM="$SWITCH_FROM" ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
 mkdir -p "$KICKOFFS" && printf '%s\n' "${NEW# }" > "$KICKOFFS/$!"
 echo "Role kickoff in progress (log: $KLOG)"
 start_relauncher

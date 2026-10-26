@@ -27,7 +27,8 @@ if [ "$1" = --msg ]; then
   id="$(resolve "${2:-}")"; [ -n "$id" ] || { echo "Unknown role: ${2:-}" >&2; exit 1; }
   if [ "$id" = planner ]; then
     wt="${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}"; { IFS= read -r key; IFS= read -r url; } < <(worktree_jira "${wt:-active}" "$CFG")
-    planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3
+    if [ -e "$GITDIR/orca-roles.mode-pending" ]; then planner_ask_msg "$CFG"
+    else planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3; fi
   else worker_msg "$CFG" "$id"; fi
   echo; exit 0
 fi
@@ -49,7 +50,7 @@ for id in "${TARGETS[@]}"; do
   [ -n "$cmd" ] || { echo "$t: its agent has no cleanup command; define 'clearCommand' in its role in config.json."; RC=1; continue; }
   ocf=""; [ "$(rstr "$CFG" "$id" agent)" = opencode ] && { ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] || ocf=""; }
   since=$(( $(date +%s) * 1000 ))   # OpenCode: /new makes the tab switch to a session created after this moment
-  orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 1
+  orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; pace 1
   orca terminal send --terminal "$h" --text "$cmd" --enter --json >/dev/null || { echo "$t: could not send $cmd."; RC=1; continue; }
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then

@@ -11,20 +11,90 @@ kit_env() {
 }
 
 # Orca's CLI is not always called 'orca': in the WSL terminals Orca manages on Windows it is $ORCA_CLI_COMMAND
-# (e.g. orca-ide). If 'orca' is not on the PATH but Orca names another command, the $KIT/shim/orca wrapper is created and
+# (e.g. orca-ide). If 'orca' is not on the PATH but orca-ide is found, the $KIT/shim/orca wrapper is created and
 # prepended to the PATH: the kit's scripts, the prompts and the agents (which inherit the PATH) keep using 'orca'.
+# The absolute path of orca-ide: $ORCA_CLI_COMMAND, else $ORCA_WSL_CLI_DIR/orca-ide, else the target the shim recorded; nothing and 1 if none exists.
+orca_ide_path() {
+  local c="${ORCA_CLI_COMMAND:-}" p line
+  if [ -n "$c" ] && [ "$c" != orca ]; then
+    p="$(command -v "$c" 2>/dev/null)" || p=""
+    case "$p" in /*) [ -x "$p" ] && { printf '%s\n' "$p"; return 0; };; esac
+  fi
+  if [ -n "${ORCA_WSL_CLI_DIR:-}" ] && [ -x "$ORCA_WSL_CLI_DIR/orca-ide" ]; then printf '%s\n' "$ORCA_WSL_CLI_DIR/orca-ide"; return 0; fi
+  if [ -f "$KIT/shim/orca" ]; then
+    line="$(grep -m1 '^t=' "$KIT/shim/orca" 2>/dev/null)" || return 1
+    p="$( eval "$line" 2>/dev/null; printf '%s' "${t:-}" )"
+    [ -n "$p" ] && [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+  fi
+  return 1
+}
 orca_shim() {
-  local real="${ORCA_CLI_COMMAND:-}" dir="$KIT/shim" tmp
-  command -v orca >/dev/null 2>&1 && return 0
-  { [ -n "$real" ] && [ "$real" != orca ] && command -v "$real" >/dev/null 2>&1; } || return 0
-  mkdir -p "$dir" && tmp="$(mktemp "$dir/.orca.XXXXXX")" || return 0
-  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$real" > "$tmp" && chmod +x "$tmp" && mv "$tmp" "$dir/orca"
-  PATH="$dir:$PATH"; export PATH
+  local dir="$KIT/shim" tmp ide cur
+  cur="$(type -P orca 2>/dev/null)" || cur=""
+  [ -z "$cur" ] || [ "$cur" = "$dir/orca" ] || return 0
+  if ide="$(orca_ide_path)"; then
+    mkdir -p "$dir" && tmp="$(mktemp "$dir/.orca.XXXXXX")" || return 0
+    {
+      printf '#!/usr/bin/env bash\n'
+      printf 't=%q\n' "$ide"
+      printf '%s\n' '[ -x "$t" ] || t="${ORCA_WSL_CLI_DIR:+$ORCA_WSL_CLI_DIR/orca-ide}"' '[ -n "$t" ] && [ -x "$t" ] || t=orca-ide' 'exec "$t" "$@"'
+    } > "$tmp" && chmod +x "$tmp" || { rm -f "$tmp"; return 0; }
+    if cmp -s "$tmp" "$dir/orca" 2>/dev/null; then rm -f "$tmp"; else mv "$tmp" "$dir/orca"; fi
+  elif [ ! -e "$dir/orca" ]; then
+    return 0
+  fi
+  case ":$PATH:" in "$dir":*|":$dir:"*) ;; *) PATH="$dir:$PATH"; export PATH;; esac
 }
 orca_shim
 
 # Kills a process and all its descendants (children first).  kill_tree <pid>
 kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
+
+# Runs a command with a time limit, keeping its stdin, stdout and stderr: run_limited <secs> <label> <command> [args...].
+# Past the limit its process tree is killed, "<label>: no answer in <secs> s; stopped." goes to stderr and the status is 124.
+run_limited() {
+  local secs="$1" label="$2" m pid wd rc=0 caller=$$
+  shift 2
+  "$@" <&0 & pid=$!
+  m="${TMPDIR:-/tmp}/orca-roles-limit.$$.$pid"
+  { : > "$m"; } 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
+  ( trap 'kill "$s" 2>/dev/null; exit 0' TERM; sleep "$secs" & s=$!; wait "$s"
+    if [ -e "$m" ] && kill -0 "$pid" 2>/dev/null; then : > "$m.fired"; kill_tree "$pid"; kill -0 "$caller" 2>/dev/null || rm -f "$m" "$m.fired"; fi ) </dev/null >/dev/null 2>&1 & wd=$!
+  wait "$pid" 2>/dev/null || rc=$?
+  kill -TERM "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+  if [ -e "$m.fired" ]; then printf '%s: no answer in %s s; stopped.\n' "$label" "$secs" >&2; rc=124; fi
+  rm -f "$m" "$m.fired"
+  return "$rc"
+}
+
+# A fixed retry or poll wait of <secs> seconds; ORCA_ROLES_PACE replaces it (tests).
+pace() { sleep "${ORCA_ROLES_PACE:-$1}"; }
+
+# Every orca call of the kit's scripts has a time limit: $ORCA_ROLES_CLI_TIMEOUT s (60; 0 = none), or the call's --timeout-ms (rounded up to s) + 60.
+# `terminal close` has its own, $ORCA_ROLES_CLOSE_TIMEOUT s (15; 0 = none). A value that is not a whole number is ignored.
+orca() {
+  local lim="${ORCA_ROLES_CLI_TIMEOUT:-}" a prev="" close="${ORCA_ROLES_CLOSE_TIMEOUT:-}"
+  case "$lim" in ''|*[!0-9]*) lim=60;; esac
+  case "$close" in ''|*[!0-9]*) close=15;; esac
+  if [ "$lim" = 0 ] || { [ "${1:-} ${2:-}" = "terminal close" ] && [ "$close" = 0 ]; }; then   # by path: bash 3.2 ends a background job with set -e at a failing "command orca" inside this function
+    a="$(type -P orca)" || return 127
+    "$a" "$@"; return
+  fi
+  [ "${1:-} ${2:-}" = "terminal close" ] && lim="$close"   # on WSL a tab closing itself never gets the answer
+  for a in "$@"; do
+    if [ "$prev" = --timeout-ms ]; then case "$a" in ''|*[!0-9]*) ;; *) lim=$(( (a + 999) / 1000 + 60 ));; esac; fi
+    prev="$a"
+  done
+  run_limited "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca "$@"
+}
+
+# After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale), else tells it was not confirmed and returns 1.
+close_unconfirmed() {  # close_unconfirmed <handle> <title>
+  local js
+  js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"
+  [ "$(printf '%s' "$js" | jq -r '.error.code // empty' 2>/dev/null)" = terminal_handle_stale ] && return 0
+  echo "Orca did not confirm closing the tab of $2 ($1)."; return 1
+}
 
 # OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id in the worktree's git dir; the kit
 # deletes that session when the role is closed or replaced (a closed `mini` tab does not stop the turn: it runs in OpenCode's service).
@@ -127,7 +197,8 @@ model_error_regex() {
     custom|opencode) jq -r --arg r "$2" --arg m "$esc" '(.roles[$r].modelError // .defaults.modelError // empty) | gsub("\\{model\\}"; $m)' "$1" 2>/dev/null;;
   esac
 }
-setting() { jq -r --arg k "$2" --arg d "$3" '(.settings[$k]) // $d | tostring' "$1"; }
+# A setting's value as text, or the default when it is absent or null (false is a value: jq's // would drop it).
+setting() { jq -r --arg k "$2" --arg d "$3" '(if (.settings | type) == "object" and (.settings | has($k)) and .settings[$k] != null then .settings[$k] else $d end) | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
 MODE_IDS="programmer pr-reviewer academic-research"
 MODES_JSON='["programmer","pr-reviewer","academic-research"]'
@@ -182,6 +253,24 @@ launchable_roles() {
 # The role id a name (id or title, any case) refers to in a configuration; nothing if there is none.  resolve_role <config> <name>
 resolve_role() { jq -r --arg x "$2" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$1" 2>/dev/null | head -1; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
+# The tab title: the role's title plus "(<agent>)", the agent's CLI name. Orca (1.4.239) only dispatches to a tab it recognizes as an
+# agent, by its title or its process, and a native Claude Code's process is named after its version: the name in the title is what works.
+# tab_title_of <config> <role>
+tab_title_of() {
+  local t a c w tok="" words=() lt; t="$(title_of "$1" "$2")"; a="$(rstr "$1" "$2" agent)"; a="${a:-claude}"
+  if [ "$a" = custom ]; then
+    c="$(rstr "$1" "$2" command)"; read -r -a words <<< "$c" || true
+    for w in ${words[@]+"${words[@]}"}; do
+      case "$w" in *=*) continue;; esac
+      w="${w##*/}"; tok="$(printf '%s' "${w%%.*}" | tr '[:upper:]' '[:lower:]')"; break
+    done
+  else
+    tok="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+  fi
+  [ -n "$tok" ] || { printf '%s\n' "$t"; return 0; }
+  lt="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]')"
+  case "$lt" in *"($tok)") printf '%s\n' "$t";; *) printf '%s (%s)\n' "$t" "$tok";; esac
+}
 var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
 # The kit's prompts folder for the configuration's mode
 prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
@@ -337,6 +426,15 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("superpowers") then (.superpowers | select(. != true and . != false) | "ERROR: invalid configuration: settings.superpowers must be true or false") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.superpowers must be true or false"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("enableAskModeOnStart") then (.enableAskModeOnStart | select(. != true and . != false) | "ERROR: invalid configuration: settings.enableAskModeOnStart must be true or false") else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.enableAskModeOnStart must be true or false"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '.settings // {} | if has("artifacts") then (.artifacts
+      | if type != "object" or ((keys - ["plans", "designs", "research", "deployment"]) | length) > 0 then "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"
+        else (to_entries[] | select(.value | type != "string" or . == "" or startswith("/") or startswith("~") or (split("/") | any(. == "..")) or (split("/")[0] | startswith("-")) or (split("/") | any(ascii_downcase == ".git")) or . == "." or . == "./" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?\\z") | not))
+          | "ERROR: invalid configuration: settings.artifacts.\(.key) must be a relative path inside the worktree") end) else empty end' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
@@ -510,7 +608,7 @@ coordinator_run() {
 
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" id v t handles="" active="" extra params msg lang legacy_note cap oc esc e cm cr xc
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang legacy_note art cap oc esc e cm cr xc
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -529,6 +627,8 @@ planner_msg() {
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
   [ -n "$params" ] && msg="$msg Configuration parameters: $params."
+  art="$(jq -r '(.settings.artifacts | if type == "object" then . else {} end) | [("plans", "designs", "research", "deployment") as $k | select(has($k)) | "\($k)=\(.[$k])"] | join(", ")' "$cfg" 2>/dev/null)"
+  [ -z "$art" ] || msg="$msg Artifact locations set for this worktree (they win over the project's conventions): $art."
   [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
   if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
@@ -564,6 +664,10 @@ planner_msg() {
     msg="$msg WARNING: this workspace is being RESUMED after a restart. The team's previous terminals died and the handles above are new. Before talking to the user, follow the section \"Resuming a workspace after a restart\" of your prompt: recover the Run, the tasks, the latest communications and the state of the code, and give them a summary. Start there."
   elif [ "$resume" = 3 ]; then
     msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
+  elif [ "$resume" = 4 ]; then
+    msg="$msg WARNING: the mode was switched from $oldmode to $(mode_of "$cfg") and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in $(scratch_dir planner)/mode-switch-summary.md: read it first."
+    [ -n "$(clear_command "$cfg" planner)" ] || msg="$msg Your previous conversation is still there: follow only this mode's prompt from now on."
+    msg="$msg Start with the startup."
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
     [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && msg="$msg You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit's settings)."
@@ -572,6 +676,29 @@ planner_msg() {
   else
     msg="$msg Start with the startup."
   fi
+  printf '%s' "$msg"
+}
+# The Planner's first message while the worktree has no mode yet: ask the user which mode to use.  planner_ask_msg <config>
+planner_ask_msg() {
+  local cfg="$1" lang id one list="" sug msg
+  msg="You are the Planner of the orca-roles kit in this worktree, and no mode has been chosen yet."
+  lang="$(setting "$cfg" language auto)"
+  if [ "$lang" != auto ] && [ -n "$lang" ]; then msg="$msg Always reply to the user in $lang, whatever language they write in."
+  else msg="$msg Reply to the user in the language they write in."; fi
+  for id in $MODE_IDS; do
+    [ -z "$(mode_error "$id")" ] || continue
+    case "$id" in
+      programmer) one="plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)";;
+      academic-research) one="write a research paper: experiments first, then the writing phase";;
+      pr-reviewer) one="review a pull request with a team of reviewers";;
+      *) one="";;
+    esac
+    list="${list:+$list; }$id ($one)"
+  done
+  sug="$(mode_of "$cfg" 2>/dev/null)" || sug=programmer
+  msg="$msg Ask the user, in one question, which mode to use: $list. Suggested: $sug."
+  msg="$msg Do not start any work before the answer."
+  msg="$msg When the user answers, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn: the kit opens that mode's team and sends you your role message for it."
   printf '%s' "$msg"
 }
 # Every handle the Planner's tab has had in this worktree: <git dir>/orca-roles.planner-handles, one per line, no duplicates, atomic.
@@ -679,6 +806,9 @@ superpowers_deny() {
     'Skill(superpowers:requesting-code-review)' 'Skill(superpowers:using-git-worktrees)' 'Skill(superpowers:finishing-a-development-branch)' \
     'Skill(superpowers:writing-skills)' 'Skill(superpowers:diagnosing-superpowers)' EnterWorktree ExitWorktree Agent Task
 }
+# The auditor verifies plans against a repo's rules itself and must never dispatch a gate's reviewer subagents. The list lives in the kit so a
+# user's own disallowedTools (which replace a config default) cannot drop it.  auditor_deny → one tool per line
+auditor_deny() { printf '%s\n' Agent Task; }
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {
@@ -817,7 +947,7 @@ safe_json_edit() (
   cleanup() { [ -n "$tmp" ] && rm -f "$tmp"; [ "$got" = 1 ] && rmdir "$lock" 2>/dev/null; return 0; }   # only the lock we created
   trap cleanup EXIT; trap 'exit 1' INT TERM HUP
   if [ -n "$lock" ]; then
-    for _ in $(seq 1 20); do mkdir "$lock" 2>/dev/null && { got=1; break; }; sleep 0.25; done
+    for _ in $(seq 1 20); do mkdir "$lock" 2>/dev/null && { got=1; break; }; pace 0.25; done
     [ "$got" = 1 ] || echo "Note: $lock is held by another process; continuing without it." >&2
   fi
   b="$(basename "$f")"
@@ -892,5 +1022,71 @@ trust_custom_roles() {
       1|2) echo "Warning: could not mark $d as trusted in $file (role $id; $([ "$rc" = 2 ] && echo 'the file kept changing' || echo 'invalid file or filter, or no permission')); the file was left untouched." >&2;;
     esac
   done
+  return 0
+}
+
+# Orca's own binary (in node mode) and its runtime client, from the 'orca' on the PATH: "<binary>|<runtime-client.js>" (macOS app), else nothing and 1.
+# On WSL (Orca for Windows) the binary is Orca.exe, found through orca-ide's ORCA_WIN_LAUNCHER line, and the result ends in "|wsl": the runtime client is a Windows path.
+orca_app_node() {
+  local p l d app ide line v inst exe suf
+  if p="$(type -P orca 2>/dev/null)" && case "$p" in /*) true;; *) false;; esac; then
+    while [ -L "$p" ]; do
+      l="$(readlink "$p")" || break
+      case "$l" in /*) p="$l";; *) d="$(dirname "$p")"; p="$d/$l";; esac
+    done
+    case "$p" in
+      *.app/Contents/Resources/bin/orca)
+        app="${p%/Contents/Resources/bin/orca}"
+        [ -x "$app/Contents/MacOS/Orca" ] && [ -f "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js" ] || return 1
+        printf '%s|%s\n' "$app/Contents/MacOS/Orca" "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+        return 0;;
+    esac
+  fi
+  grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null || return 1
+  command -v wslpath >/dev/null 2>&1 || return 1
+  ide="$(orca_ide_path)" || return 1
+  line="$(grep -m1 '^ORCA_WIN_LAUNCHER=' "$ide" 2>/dev/null)" || return 1
+  v="${line#*\'}"; v="${v%%\'*}"
+  suf='\resources\bin\orca.exe'
+  [ "${#v}" -gt "${#suf}" ] && [ "$(printf '%s' "${v:${#v}-${#suf}}" | tr 'A-Z' 'a-z')" = "$suf" ] || return 1
+  inst="${v:0:${#v}-${#suf}}"
+  exe="$(wslpath -u "$inst\\Orca.exe" 2>/dev/null)" || return 1
+  [ -n "$exe" ] && [ -f "$exe" ] && [ -x "$exe" ] || return 1
+  printf '%s|%s|wsl\n' "$exe" "$inst\\resources\\app.asar.unpacked\\out\\cli\\runtime-client.js"
+}
+
+# A path as the kit's shell sees it: a Windows UNC path (\\wsl.localhost\Ubuntu\...) as a Linux path; any other path unchanged.
+local_path() {
+  local c
+  case "$1" in
+    '\\'*) if command -v wslpath >/dev/null 2>&1 && c="$(wslpath -u "$1" 2>/dev/null)" && [ -n "$c" ]; then printf '%s\n' "$c"; else printf '%s\n' "$1"; fi;;
+    *) printf '%s\n' "$1";;
+  esac
+}
+
+# Wakes a tab Orca keeps asleep after a restart: wake_tab <worktreeId> <tabId> <leafId>. Returns 0 woken (stdout empty), 1 failed (stdout: the reason), 2 unavailable here.
+wake_tab() {
+  local n bin rc rcl err wenv
+  if [ -n "${ORCA_ROLES_WAKE:-}" ]; then
+    "$ORCA_ROLES_WAKE" "$@"; rc=$?
+    case "$rc" in 0) return 0;; 2) return 2;; *) return 1;; esac
+  fi
+  n="$(orca_app_node)" || return 2
+  bin="${n%%|*}"; rcl="${n#*|}"
+  if [ "${rcl##*|}" = wsl ]; then
+    rcl="${rcl%|wsl}"
+    wenv="${WSLENV:-}"
+    case ":$wenv:" in *:ELECTRON_RUN_AS_NODE:*|*:ELECTRON_RUN_AS_NODE/*) ;; *) wenv="${wenv:+$wenv:}ELECTRON_RUN_AS_NODE";; esac
+    err="$(cd "$(dirname "$bin")" && ELECTRON_RUN_AS_NODE=1 WSLENV="$wenv" run_limited 30 "wake-tab" "$bin" "$(wslpath -w "$KIT/bin/wake-tab.cjs")" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+  else
+    err="$(ELECTRON_RUN_AS_NODE=1 run_limited 30 "wake-tab" "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+  fi
+  printf '%s\n' "$err" | head -1
+  return 1
+}
+
+# The tab and pane ids of a terminal handle, "<tabId> <leafId>" (what Orca restores); nothing if either is missing or the call fails.
+tabs_of_handle() {
+  orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select((.tabId // "") != "" and (.leafId // "") != "")] | first | select(. != null) | "\(.tabId) \(.leafId)"' 2>/dev/null
   return 0
 }
