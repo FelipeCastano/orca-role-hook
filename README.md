@@ -116,10 +116,10 @@ The installer takes no options: roles are enabled and disabled with `enabled` in
 **Pinning a version.** The download installs `main` unless you say otherwise. `ORCA_ROLES_REF` takes a branch, a tag or a commit sha (`ORCA_ROLES_BRANCH` still works and is used when `ORCA_ROLES_REF` is not set):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/v1.0.0/install.sh | ORCA_ROLES_REF=v1.0.0 bash
+curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/v1.3.0/install.sh | ORCA_ROLES_REF=v1.3.0 bash
 ```
 
-Use the same ref in the script URL and in the variable, so the installer and the files it installs match. The installer records what it installed in `~/.orca-roles/VERSION` (the kit's version) and `~/.orca-roles/.installed` (one line: `<source>@<ref>`, plus the commit when it is known without a network call: from a local clone, `local@<branch> <sha>` with `-dirty` appended if the clone has uncommitted changes, or when the ref is a full sha). `roles --status` prints both as its first line: `Kit: 1.0.0 (local@main 2263b1d...)`; `unknown` replaces a part that is missing.
+Use the same ref in the script URL and in the variable, so the installer and the files it installs match. The installer records what it installed in `~/.orca-roles/VERSION` (the kit's version) and `~/.orca-roles/.installed` (one line: `<source>@<ref>`, plus the commit when it is known without a network call: from a local clone, `local@<branch> <sha>` with `-dirty` appended if the clone has uncommitted changes, or when the ref is a full sha). `roles --status` prints both as its first line: `Kit: 1.3.0 (local@main f5f02a8...)`; `unknown` replaces a part that is missing.
 
 **Your edits to the kit's files.** `bin/`, `prompts/`, `plugin/` and `mcp/` are regenerated on every install. The installer keeps a checksum list (`~/.orca-roles/.manifest`); on the next install, any file in those folders that you modified or added since the last one is first copied to `~/.orca-roles/backup/<UTC timestamp>/` (same relative path) and listed in a `WARNING`. It never stops or asks (it also runs through `curl | bash`), and a file you deleted is simply restored. `README.md`, `config.default.json` and `VERSION` at the kit's root are checked and backed up the same way. Without a manifest (first install, or a kit from before this feature) nothing is compared. To keep a prompt change, put it in your own role (see `new-role`) or in `~/.orca-roles/roles/`, which are never touched.
 
