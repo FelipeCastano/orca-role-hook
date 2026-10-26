@@ -756,14 +756,18 @@ scratch_dir() {
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
 }
+# The kit's own files a worker must not edit (paths relative to $KIT), one per line; tmp/ and backup/ stay writable.
+kit_protected_paths() {
+  printf '%s\n' 'prompts/**' 'roles/**' 'bin/**' 'plugin/**' 'plugins/**' 'shim/**' 'pw/**' 'mcp/**' 'browsers/**' 'browser/**' \
+    config.json config.default.json trusted.list .manifest .installed VERSION
+}
 # Claude Code deny rules that keep a worker from editing the kit itself: its prompts, scripts, plugin, roles and configuration.
 # --add-dir gives write access in auto mode (additional directories follow the permission mode), and every future worker
 # reads these files.  Not the whole $KIT: scratch folders live in $KIT/tmp and must stay writable (a deny cannot be undone by an allow).
 # "//" anchors the pattern at the filesystem root; Claude Code applies a rule written through a symlinked directory at its real location too.
 kit_deny_rules() {
   local k="${KIT#/}" d
-  for d in prompts roles bin plugin; do printf 'Edit(//%s/%s/**)\n' "$k" "$d"; done
-  for d in config.json config.default.json; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done
+  while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done < <(kit_protected_paths)
 }
 # A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
 worker_back_msg() {

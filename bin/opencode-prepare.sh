@@ -4,7 +4,8 @@
 # start (temp file + mv), and its pattern goes once into the repo's info/exclude, never into a tracked .gitignore.
 #   frontmatter: description, mode, model, steps (roles.<r>.opencode.steps, else settings.flow.maxStepsPerWorker, else none) and
 #     permissions: allow everything first (a call that matches no rule would wait for an answer that nobody gives in the tab),
-#     then the denies (question, git push, editing the kit's own files), then roles.<r>.opencode.permissions as written
+#     then roles.<r>.opencode.permissions as written, then the kit's denies (question, subagent for the Auditor, git push, editing
+#     the kit's own files)
 #   body (the agent's system prompt): the role anchor, the role's common rules, the role's prompt
 set -euo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
@@ -49,15 +50,16 @@ OUT="$DIR/orca-$ROLE.md"; TMPF="$(mktemp "$DIR/.orca-$ROLE.XXXXXX")"
 # undone by the role's list (as for Claude roles).
 {
   echo "---"
-  jq -nr --arg title "$(title_of "$CFG" "$ROLE")" --arg model "$MODEL" --arg steps "$STEPS" --arg kit "$KITP" --slurpfile extra "$EXTRA_OK" '
+  jq -nr --arg title "$(title_of "$CFG" "$ROLE")" --arg model "$MODEL" --arg steps "$STEPS" --arg kit "$KITP" --arg role "$ROLE" --arg paths "$(kit_protected_paths)" --slurpfile extra "$EXTRA_OK" '
     "description: \("orca-roles \($title) role" | tojson)", "mode: \("primary" | tojson)",
     (if $model != "" then "model: \($model | tojson)" else empty end),
     (if $steps != "" then "steps: \($steps)" else empty end),
     "permissions:",
     (([{action: "*", resource: "*", effect: "allow"}] + $extra
-     + [{action: "question", resource: "*", effect: "deny"},
-      {action: "shell", resource: "git push*", effect: "deny"}]
-     + ([("prompts/**", "roles/**", "bin/**", "plugin/**", "config.json", "config.default.json")] | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"})))[] | "  - \(tojson)")'
+     + [{action: "question", resource: "*", effect: "deny"}]
+     + (if $role == "auditor" then [{action: "subagent", resource: "*", effect: "deny"}] else [] end)
+     + [{action: "shell", resource: "git push*", effect: "deny"}]
+     + ($paths | split("\n") | map(select(. != "")) | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"})))[] | "  - \(tojson)")'
   echo "---"
   role_anchor "$CFG" "$ROLE"; printf '\n\n'
   printf '%s\n\n' "$(cat "$COMMON")"   # exactly one blank line between the parts

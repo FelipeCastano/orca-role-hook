@@ -110,6 +110,7 @@ cat > "$KIT/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1 }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": {
     "planner": { "title": "Planner" },
     "dev": { "title": "Dev", "params": { "a": 1 } },
+    "auditor": { "title": "Auditor", "agent": "opencode" },
     "cx": { "title": "Codex", "agent": "codex" },
     "cu": { "title": "Custom", "agent": "custom", "command": "x" },
     "cc": { "title": "Custom2", "agent": "custom", "command": "x", "clearCommand": "/reset" } } }
@@ -3626,7 +3627,7 @@ check "agent.sh: a claude worker keeps the kit's tab title (CLAUDE_CODE_DISABLE_
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"
 case "$(ag dev)" in *"$DQ"*) A1=dev-ok;; *) A1=dev-no;; esac
 KRD="$TMP/home/.orca-roles"; KRD="${KRD#/}"   # the kit's edit deny rules (see "workers cannot edit the kit" below) come between --allowedTools and the dialog deny
-KED="--disallowedTools Edit(//$KRD/prompts/**) Edit(//$KRD/roles/**) Edit(//$KRD/bin/**) Edit(//$KRD/plugin/**) Edit(//$KRD/config.json) Edit(//$KRD/config.default.json) "
+KED="--disallowedTools Edit(//$KRD/prompts/**) Edit(//$KRD/roles/**) Edit(//$KRD/bin/**) Edit(//$KRD/plugin/**) Edit(//$KRD/plugins/**) Edit(//$KRD/shim/**) Edit(//$KRD/pw/**) Edit(//$KRD/mcp/**) Edit(//$KRD/browsers/**) Edit(//$KRD/browser/**) Edit(//$KRD/config.json) Edit(//$KRD/config.default.json) Edit(//$KRD/trusted.list) Edit(//$KRD/.manifest) Edit(//$KRD/.installed) Edit(//$KRD/VERSION) "
 case "$(ag aq)" in *'--allowedTools Read AskUserQuestion '"$KED$DQ"'--disallowedTools Foo '*) A1="$A1 aq-ok";; *) A1="$A1 aq-no";; esac
 check "agent.sh: a claude worker cannot open dialogs (--disallowedTools after --allowedTools, before --settings), its allowedTools and extraArgs (a second --disallowedTools) are kept" "$A1" "dev-ok aq-ok"
 A2="$(ag pw | grep -c -- '--permission-mode plan --add-dir' || true):$(ag pw | grep -cF -- '--disallowedTools AskUserQuestion --settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} ' || true):$(ag pw | grep -c 'EnterPlanMode\|ExitPlanMode' || true)"
@@ -3682,13 +3683,13 @@ check "agent.sh leaves pre-seeded scratch content intact" "$([ -f "$SDT/f" ] && 
 # agent.sh: workers cannot edit the kit (deny rules for the folders --add-dir exposes), the Planner can; the scratch folders stay writable
 KH="$TMP/home/.orca-roles"; KR="${KH#/}"   # the kit as agent.sh sees it, and as the "//" rules write it
 DENY="$(printf '%s\n' "$OUT" | awk '$0 == "--disallowedTools" { on = 1; next } /^--/ { on = 0 } on' | grep '^Edit(')"   # tester's argv, one per line: its Edit rules (the dialog deny is another --disallowedTools)
-check "agent.sh worker: deny rules for the kit's prompts, roles, scripts, plugin and configuration" "$(printf '%s\n' "$DENY" | tr '\n' ' ')" "Edit(//$KR/prompts/**) Edit(//$KR/roles/**) Edit(//$KR/bin/**) Edit(//$KR/plugin/**) Edit(//$KR/config.json) Edit(//$KR/config.default.json) "
+check "agent.sh worker: deny rules for the kit's own files (prompts, roles, scripts, plugins, shim, pw, mcp, browsers, configuration and install records)" "$(printf '%s\n' "$DENY" | tr '\n' ' ')" "Edit(//$KR/prompts/**) Edit(//$KR/roles/**) Edit(//$KR/bin/**) Edit(//$KR/plugin/**) Edit(//$KR/plugins/**) Edit(//$KR/shim/**) Edit(//$KR/pw/**) Edit(//$KR/mcp/**) Edit(//$KR/browsers/**) Edit(//$KR/browser/**) Edit(//$KR/config.json) Edit(//$KR/config.default.json) Edit(//$KR/trusted.list) Edit(//$KR/.manifest) Edit(//$KR/.installed) Edit(//$KR/VERSION) "
 BAD=0; while IFS= read -r r; do d="${r#Edit(/}"; d="${d%\)}"; d="${d%/\*\*}"; case "$SDT/" in "$d/"*) BAD=1;; esac; done <<EOF_DENY
 $DENY
 EOF_DENY
 check "agent.sh worker: no deny rule covers the role's scratch folder" "$BAD:$(printf '%s' "$SDT" | grep -c "^$KH/tmp/")" "0:1"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tx)"
-check "agent.sh worker: a role's own --settings does not drop the deny rules" "$(printf '%s\n' "$OUT" | grep -c '^Edit(//')" "6"
+check "agent.sh worker: a role's own --settings does not drop the deny rules" "$(printf '%s\n' "$OUT" | grep -c '^Edit(//')" "16"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" planner)"
 check "agent.sh: the Planner gets no kit edit deny rules (it edits the configuration for the user; its superpowers list is checked below)" "$(printf '%s\n' "$OUT" | grep -c '^Edit(')" "0"
 # the Planner's superpowers: the kit deny list whenever the pinned folder is loaded (before the role's own list), a missing folder is skipped, workers get the dialog deny + the settings and never the kit list, codex ignores the field
@@ -4878,12 +4879,28 @@ permissions:
   - {\"action\":\"edit\",\"resource\":\"$KITP/roles/**\",\"effect\":\"deny\"}
   - {\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
   - {\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/plugins/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/shim/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/pw/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/mcp/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/browsers/**\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/browser/**\",\"effect\":\"deny\"}
   - {\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}"
+  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/trusted.list\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/.manifest\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/.installed\",\"effect\":\"deny\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}"
 check "opencode: frontmatter is exactly the expected text (allow first, the role's valid items, then the kit's denies last)" "$FM" "$EXPECT_FM"
 check "opencode: the kit's deny on its prompts comes after a role item that allows them (the last matching rule wins)" "$([ "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"deny\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" -gt "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"allow\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" ] && echo after)" "after"
+check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | sed 's/^  - //' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
+OCA="$OCW/.opencode/agents/orca-auditor.md"; try ocrun opencode-prepare.sh auditor
+check "opencode: the auditor's subagent deny comes right after the question deny" "$(grep -A1 -F '"action":"question"' "$OCA" | tail -1)" '  - {"action":"subagent","resource":"*","effect":"deny"}'
+jq '.roles.auditor = {"title": "Auditor", "agent": "opencode", "opencode": {"permissions": [{"action": "subagent", "resource": "*", "effect": "allow"}]}}' "$OC/cfg.json" > "$OC/cfg-aud.json"; OCCFG="$OC/cfg-aud.json" try ocrun opencode-prepare.sh auditor
+check "opencode: the auditor's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(grep -nF '"action":"subagent"' "$OCA" | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
+check "opencode: a dev role's file has no subagent line" "$(grep -c '"action":"subagent"' "$FILE" || true)" "0"
 if python3 -c 'import yaml' 2>/dev/null; then
-  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 11"
+  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 21"
 else echo "ok   opencode: PyYAML not installed, the frontmatter was checked as exact text only"; fi
 check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
 BODY="$(awk 'NR==1{next} f{print;next} $0=="---"{f=1}' "$FILE")"
