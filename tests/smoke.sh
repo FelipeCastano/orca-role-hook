@@ -1094,6 +1094,16 @@ bash test.sh
   P="$(oracle_repo rs13b)"; printf '{"scripts":{"lint":"./lint.sh"}}\n' > "$P/package.json"; printf 'exit 0\n' > "$P/lint.sh"; B="$(oc_base "$P" pkg)"
   printf 'exit 0 # edited\n' > "$P/lint.sh"; oracle_run "$P" r13b "$(oracle_spec '`npm run lint`')" --dry-run --base "$B"
   check "oracle: npm run lint running ./lint.sh, lint.sh edited -> cheat runner_file_changed (lint.sh)" "$(fnd)" "runner_file_changed:lint.sh||true"
+  for v in "rs13c|scripts/run.sh|run.sh edited as the whole script" "rs13d|sh -e scripts/run.sh|sh -e option before the file" "rs13e|echo ok && scripts/run.sh|bare path after &&"; do
+    IFS='|' read -r vn vs vd <<< "$v";
+    P="$(oracle_repo "$vn")"; mkdir -p "$P/scripts"; printf '{"scripts":{"test":"%s"}}\n' "$vs" > "$P/package.json"; printf 'exit 0\n' > "$P/scripts/run.sh"; B="$(oc_base "$P" pkg)"
+    printf 'exit 0 # edited\n' > "$P/scripts/run.sh"; oracle_run "$P" "$vn" "$(oracle_spec '`npm test`')" --dry-run --base "$B"
+    check "oracle: npm test, $vd, scripts/run.sh edited -> cheat runner_file_changed (scripts/run.sh)" "$(fnd)" "runner_file_changed:scripts/run.sh||true"
+  done
+  P="$(oracle_repo rs13f)"; printf '{"scripts":{"test":"node tool.js --out x.sh"}}\n' > "$P/package.json"; printf 'exit 0\n' > "$P/x.sh"; B="$(oc_base "$P" pkg)"
+  printf 'exit 0 # edited\n' > "$P/x.sh"
+  oracle_run "$P" r13f "$(oracle_spec '`npm test`')" --dry-run --base "$B"
+  check "oracle: npm test with a .sh only as an argument, edited -> listed, no cheat" "$(fnd)" "|x.sh|false"
   P="$(oracle_repo rs14)"; B="$(oc_base "$P" none)"; printf 'exit 0\n' > "$P/other.sh"; rm "$P/test.sh"; ln -s other.sh "$P/test.sh"
   oracle_run "$P" r14 "$(oracle_spec '`bash test.sh`')" --dry-run --base "$B"
   check "oracle: bash test.sh with test.sh replaced by a symlink -> cheat runner_file_changed" "$(fnd)" "runner_file_changed:test.sh|other.sh|true"

@@ -61,7 +61,9 @@ CONFIG_NAMES = {'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'noxfile
                 'Makefile', 'makefile', 'GNUmakefile', 'package.json'}
 SCRIPT_REF = re.compile(r'(?:npm run(?:-script)?|pnpm(?: run)?|yarn(?: run)?)\s+([A-Za-z0-9_:.\-]+)')
 NPM_TEST_REF = re.compile(r'npm (?:test|t)\b')
-SH_REF = (re.compile(r'(?:^|[\s;&|(])(?:bash|sh)\s+([\w./\-]+\.sh)\b'), re.compile(r'(?:^|[\s;&|(])(\.{1,2}/[\w./\-]+\.sh)\b'))
+SH_REF = (re.compile(r'(?:^|[\s;&|(])(?:bash|sh)(?:\s+-[A-Za-z]+)*\s+([\w./\-]+\.sh)\b'),
+          re.compile(r'(?:^|[\s;&|(])(\.{1,2}/[\w./\-]+\.sh)\b'),
+          re.compile(r'(?:^|&&|\|\||[;|(])\s*([\w./\-]+\.sh)\b'))
 
 
 def is_config_file(path):
