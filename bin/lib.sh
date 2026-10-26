@@ -439,6 +439,36 @@ check_config() {
   out="$(jq -r '.settings // {} | if has("phase") then (.phase | select(. != "experiment" and . != "writing") | "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\"") else empty end' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.phase must be \"experiment\" or \"writing\""; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r 'def P: "ERROR: invalid configuration: ";
+      def pint: type == "number" and . == floor and . >= 1;
+      def nn: (type == "number" and . >= 0) or (type == "string" and test("^([0-9]+\\.?[0-9]*|\\.[0-9]+)\\z"));
+      def got($k): has($k) and .[$k] != null;
+      def objs($k; $path; f): if got($k) then (.[$k] | if type == "object" then f else P + "\($path) must be an object" end) else empty end;
+      (.settings // {}) as $s | ($s | if type == "object" then . else {} end) as $s
+      | ($s | objs("flow"; "settings.flow";
+          (if got("roundCap") and (.roundCap | pint | not) then P + "settings.flow.roundCap must be a positive integer" else empty end),
+          (if got("maxStepsPerWorker") and (.maxStepsPerWorker | pint | not) then P + "settings.flow.maxStepsPerWorker must be a positive integer" else empty end),
+          (if got("workerReportBody") and (.workerReportBody != "full" and .workerReportBody != "short") then P + "settings.flow.workerReportBody must be \"full\" or \"short\"" else empty end),
+          (if got("crossCheck") and (.crossCheck != true and .crossCheck != false) then P + "settings.flow.crossCheck must be true or false" else empty end),
+          (if got("recordRounds") and (.recordRounds != true and .recordRounds != false) then P + "settings.flow.recordRounds must be true or false" else empty end),
+          objs("escalation"; "settings.flow.escalation";
+            (to_entries[] | select(.value != null) | .key as $r | .value as $v
+              | if $r == "planner" then P + "settings.flow.escalation.planner is not allowed (the Planner is never relaunched)"
+                elif ($v | type == "object" and ((.to | type == "string" and . != "" and (test("\\s") | not))) and ((got("after") | not) or (.after | pint))) then empty
+                else P + "settings.flow.escalation.\($r) must be {\"to\": \"<model>\", \"after\": <positive integer>}" end)))),
+        ($s | objs("oracle"; "settings.oracle";
+          (if got("enabled") and (.enabled != true and .enabled != false) then P + "settings.oracle.enabled must be true or false" else empty end),
+          (. as $o | ("maxLoad", "waitMax", "timeout", "retries") as $k | select($o | got($k) and (.[$k] | nn | not)) | P + "settings.oracle.\($k) must be a non-negative number"))),
+        ($s | objs("telemetry"; "settings.telemetry";
+          (if got("roleAttribute") and (.roleAttribute != true and .roleAttribute != false) then P + "settings.telemetry.roleAttribute must be true or false" else empty end))),
+        ($s | if got("trust") and (.trust != "worktree" and .trust != "never") then P + "settings.trust must be \"worktree\" or \"never\"" else empty end),
+        ((.roles // {}) | to_entries[] | .key as $r | select(.value | type == "object" and got("opencode")) | .value.opencode
+          | if type != "object" then "ERROR: invalid configuration: role \($r): opencode must be an object"
+            else (if got("steps") and (.steps | pint | not) then "ERROR: invalid configuration: role \($r): opencode.steps must be a positive integer" else empty end),
+              (if got("permissions") and (.permissions | type != "array" or any(.[]; type != "object" or (.action | type) != "string" or (.resource | type) != "string" or (.effect | IN("allow", "ask", "deny") | not)))
+                then "ERROR: invalid configuration: role \($r): opencode.permissions must be a list of {\"action\", \"resource\", \"effect\": \"allow\"|\"ask\"|\"deny\"}" else empty end) end)' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: settings.flow, settings.oracle, settings.telemetry, settings.trust and roles.<role>.opencode must be valid (see README)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
   out="$(jq -r --slurpfile o "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]

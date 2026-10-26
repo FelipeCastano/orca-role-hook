@@ -791,6 +791,41 @@ AR3=""; for v in '{"plans":""}' '{"plans":"/abs"}' '{"plans":"~/x"}' '{"plans":"
 jq -c '.settings.artifacts = {"designs":"/b"}' "$ROOT/config.default.json" > "$TMP/ar.json"; AR4="$(check_config "$TMP/ar.json")"
 jq -c '.settings.artifacts = {"x":"a","plans":"/a"}' "$ROOT/config.default.json" > "$TMP/ar.json"; AR5="$(check_config "$TMP/ar.json")"
 check "settings.artifacts: objects with only the four keys and relative paths pass (also a..b/c, ./e, .hidden, trailing slash, docs/superpowers/plans, docs/.gitkeep, my.git/x, .github/plans, a/./b, .gitx); a non-object, an unknown key, an empty, absolute, ~, '..' (as a whole segment), non-string value or any other character (spaces, quotes, ':', '$', ';', backtick, newline, tab, '//', non-ASCII, a first segment starting with '-', any segment equal to .git in any case (.git, .GIT/x, docs/.git/y, a/.Git, a/.git, a/.GIT/b, a/.git/, a/b/.git), '.' and './', and the sentence-shaped injection case) is one error each, with the right message" "$AR1|$AR2|$AR3|$(printf '%s' "$AR4" | tr '\n' '/')|$(printf '%s' "$AR5" | tr '\n' '/')" "0000000000000|11111|11111111111111111111111111111111111111|ERROR: invalid configuration: settings.artifacts.designs must be a relative path inside the worktree|ERROR: invalid configuration: settings.artifacts must be an object with only plans, designs, research, deployment"
+# settings.flow, oracle, telemetry, trust and roles.<r>.opencode: an invalid value is one ERROR line; null and absent are fine
+CVE() { jq -c --argjson v "$2" "$1 = \$v" "$ROOT/config.default.json" > "$TMP/cv.json"; check_config "$TMP/cv.json" | tr '\n' '/'; }
+EP="ERROR: invalid configuration: "
+cvbad() { local m="$EP$3/"; [ "$(CVE "$1" "$2")" = "$m" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
+cvok() { [ -z "$(CVE "$1" "$2")" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
+CV1="$(
+for v in '"3"' '0' '-1' '1.5' 'true' '[]'; do cvbad .settings.flow.roundCap "$v" 'settings.flow.roundCap must be a positive integer'; cvbad .settings.flow.maxStepsPerWorker "$v" 'settings.flow.maxStepsPerWorker must be a positive integer'; done
+for v in '"x"' '"Full"' 'true' '1'; do cvbad .settings.flow.workerReportBody "$v" 'settings.flow.workerReportBody must be "full" or "short"'; done
+for v in '"true"' '1' '[]'; do cvbad .settings.flow.crossCheck "$v" 'settings.flow.crossCheck must be true or false'; cvbad .settings.flow.recordRounds "$v" 'settings.flow.recordRounds must be true or false'; cvbad .settings.oracle.enabled "$v" 'settings.oracle.enabled must be true or false'; cvbad .settings.telemetry.roleAttribute "$v" 'settings.telemetry.roleAttribute must be true or false'; done
+for v in '"x"' '5' '[]' 'true'; do cvbad .settings.flow "$v" 'settings.flow must be an object'; cvbad .settings.oracle "$v" 'settings.oracle must be an object'; cvbad .settings.telemetry "$v" 'settings.telemetry must be an object'; cvbad .settings.flow.escalation "$v" 'settings.flow.escalation must be an object'; done
+for v in '"sometimes"' '"Never"' 'true' '1' '[]'; do cvbad .settings.trust "$v" 'settings.trust must be "worktree" or "never"'; done
+for k in maxLoad waitMax timeout retries; do for v in '-1' '"abc"' '"-1"' '""' '"."' '"1.2.3"' 'true' '[]'; do cvbad ".settings.oracle.$k" "$v" "settings.oracle.$k must be a non-negative number"; done; done
+cvbad .settings.flow.escalation '{"planner":{"to":"m"}}' 'settings.flow.escalation.planner is not allowed (the Planner is never relaunched)'
+for v in '"m"' '{}' '{"to":""}' '{"to":"a b"}' '{"to":3}' '{"to":"m","after":0}' '{"to":"m","after":"2"}' '{"to":"m","after":1.5}' '[]'; do cvbad .settings.flow.escalation '{"dev":'"$v"'}' 'settings.flow.escalation.dev must be {"to": "<model>", "after": <positive integer>}'; done
+)"
+CV2="$(
+for v in '"x"' '[]' '5'; do cvbad .roles.dev.opencode "$v" 'role dev: opencode must be an object'; done
+for v in '"3"' '0' '1.5' 'true'; do cvbad .roles.dev.opencode '{"steps":'"$v"'}' 'role dev: opencode.steps must be a positive integer'; done
+for v in '{}' '"x"' '["x"]' '[{"action":"a","resource":"r"}]' '[{"action":"a","resource":"r","effect":"maybe"}]' '[{"action":1,"resource":"r","effect":"allow"}]' '[{"action":"a","effect":"allow"}]'; do cvbad .roles.dev.opencode '{"permissions":'"$v"'}' 'role dev: opencode.permissions must be a list of {"action", "resource", "effect": "allow"|"ask"|"deny"}'; done
+)"
+CV3="$(
+for p in .settings.flow .settings.trust .settings.oracle .settings.telemetry .settings.flow.roundCap .settings.flow.escalation .roles.dev.opencode; do cvok "$p" null; done
+for v in 1 12 2.0; do cvok .settings.flow.roundCap "$v"; cvok .settings.flow.maxStepsPerWorker "$v"; done
+for v in '"full"' '"short"'; do cvok .settings.flow.workerReportBody "$v"; done
+for v in true false; do cvok .settings.flow.crossCheck "$v"; cvok .settings.flow.recordRounds "$v"; cvok .settings.oracle.enabled "$v"; cvok .settings.telemetry.roleAttribute "$v"; done
+for v in '"worktree"' '"never"'; do cvok .settings.trust "$v"; done
+for k in maxLoad waitMax timeout retries; do for v in 0 0.8 300 '"0"' '"0.8"' '"600"' '".5"' '"5."'; do cvok ".settings.oracle.$k" "$v"; done; done
+cvok .settings.flow.escalation '{}'; cvok .settings.flow.escalation '{"dev":null}'; cvok .settings.flow.escalation '{"dev":{"to":"m"},"tester":{"to":"opus-4","after":2}}'
+cvok .roles.dev.opencode '{}'; cvok .roles.dev.opencode '{"steps":5,"permissions":[]}'; cvok .roles.dev.opencode '{"steps":null,"permissions":null}'
+cvok .roles.dev.opencode '{"permissions":[{"action":"edit","resource":"x/*","effect":"allow"},{"action":"shell","resource":"*","effect":"ask"},{"action":"a","resource":"b","effect":"deny"}]}'
+)"
+check "check_config: an invalid flow, oracle, telemetry or trust value is exactly one ERROR with the right message" "$(grep -c BAD <<< "$CV1"):$(grep -o 'ok ' <<< "$CV1" | wc -l | tr -d ' ')" "0:91"
+check "check_config: an invalid roles.<r>.opencode is exactly one ERROR with the right message" "$(grep -c BAD <<< "$CV2"):$(grep -o 'ok ' <<< "$CV2" | wc -l | tr -d ' ')" "0:14"
+check "check_config: null, absent and every valid value of those keys give no ERROR" "$(grep -c BAD <<< "$CV3"):$(grep -o 'ok ' <<< "$CV3" | wc -l | tr -d ' ')" "0:64"
+check "check_config: config.default.json gives no ERROR, and several invalid values give one line each" "$(check_config "$ROOT/config.default.json" | wc -l | tr -d ' '):$(jq -c '.settings.trust = "x" | .settings.flow.roundCap = "3" | .settings.oracle.timeout = -1' "$ROOT/config.default.json" > "$TMP/cv.json"; check_config "$TMP/cv.json" | grep -c '^ERROR: invalid configuration: settings\.')" "0:3"
 }
 
 sec_planner_msg() {
@@ -4619,7 +4654,7 @@ try tl; check "trust launch: programmer by default -> marked and recorded" "$RC:
 try tl --mode pr-reviewer; check "trust launch: pr-reviewer without settings.trust -> marked and recorded like every mode" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:true:$TWP :0"
 try tl --mode pr-reviewer --set settings.trust=never; check "trust launch: pr-reviewer with trust never -> not marked, not recorded, one info line" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO"):$(jq -c '.projects|keys' "$PH/.claude.json")" '0:false::1:["/other"]'
 try tl --set settings.trust=never; check "trust launch: programmer with trust never -> not marked" "$RC:$(tlmarked):$(tllist):$(printf '%s' "$OUT" | grep -c "$INFO")" "0:false::1"
-try tl --set settings.trust=sometimes; check "trust launch: invalid trust -> warning, not marked" "$RC:$(tlmarked):$(printf '%s' "$OUT" | grep -c '^Warning: settings.trust must be')" "0:false:1"
+try tl --set settings.trust=sometimes; check "trust launch: invalid trust -> launch refused with the ERROR, not marked" "$RC:$(tlmarked):$(printf '%s' "$OUT" | grep -cxF 'ERROR: invalid configuration: settings.trust must be "worktree" or "never"')" "1:false:1"
 
 # codex: the trust override is left out with "never"
 FB3="$TMP/fb3"; mkdir -p "$FB3"; printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\0" "$a"; done > "%s/argv"\n' "$FB3" > "$FB3/codex"; chmod +x "$FB3/codex"
