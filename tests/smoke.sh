@@ -5227,7 +5227,8 @@ RK="$TMP/rounds-kit"; rm -rf "$RK"; mkdir -p "$RK"; cp -R "$KIT/bin" "$KIT/promp
 cat > "$RK/bin/relaunch-role.sh" <<EOS
 #!/bin/bash
 echo "\$*" >> "$RLL"; [ -f "$TMP/rounds-failrelaunch" ] && exit 1
-jq --arg r "\$1" --arg m "\$3" '.roles[\$r].model = \$m' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
+m="\$3"; [ "\$2" = --default-model ] && m=""
+jq --arg r "\$1" --arg m "\$m" '.roles[\$r].model = \$m' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
 echo "Relaunched \$1 on \$3"
 EOS
 chmod +x "$RK/bin/relaunch-role.sh"
@@ -5257,6 +5258,11 @@ esc_cfg '{"dev": {"to": "m-big"}}'; touch "$TMP/rounds-failrelaunch"; N0="$(grep
 try re dev --step 8 --round 1 --outcome rejected
 check "escalation: a failed relaunch -> exit 4, the round is still recorded, nothing saved as escalated" "$RC|$(( $(grep -c . "$RG/orca-roles.rounds.jsonl") - N0 ))|$([ -s "$RG/orca-roles.escalation" ] && echo saved || echo none)|$(printf '%s' "$OUT" | grep -c 'Could not escalate Dev to m-big; it stays on m-dev.')" "4|1|none|1"
 rm -f "$TMP/rounds-failrelaunch"
+esc_cfg '{"dev": {"to": "m-big"}}'; jq '.roles.dev.model = ""' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
+try re dev --step 3 --round 1 --outcome rejected
+check "escalation: a role with no model of its own escalates, and the state line holds the - sentinel" "$RC|$(tail -1 "$RLL")|$(grep -c . "$RLL")|$(tr '\t' '<' < "$RG/orca-roles.escalation" | sed 's/</<TAB>/g')|$(printf '%s' "$OUT" | grep -c 'it comes back to its default model when the step is accepted')" "0|dev --model m-big|1|dev<TAB>3<TAB>-|1"
+try re dev --step 3 --round 2 --outcome accepted
+check "escalation: the accepted round brings a role with no model of its own back to the agent's default and clears the state" "$RC|$(tail -1 "$RLL")|[$(jq -r .roles.dev.model "$RG/orca-roles.config.json")]|$(grep -c . "$RG/orca-roles.escalation")|$(printf '%s' "$OUT" | grep -c 'Step accepted: Dev is back on its default model.')" "0|dev --default-model|[]|0|1"
 esc_cfg '{"dev": {"to": "m big"}}'; try re dev --step 9 --round 1 --outcome rejected
 check "escalation: an invalid value relaunches nothing, warns and still records" "$RC|$(grep -c . "$RLL")|$(printf '%s' "$OUT" | grep -c 'settings.flow.escalation.dev must be')" "0|0|1"
 # planner_msg: the escalation sentence (with the round log) whenever an active role has a valid escalation, even without recordRounds
@@ -6500,6 +6506,14 @@ check "relaunch: the saved --only is kept, the model is saved and effective" "$(
 check "relaunch: kickoff for that role only" "$(rkicks)" "dev,"
 : > "$RCL"; try rr Dev --model gone --no-check
 check "relaunch: --no-check skips the probe, matches the title in any case" "$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")" "0:0:gone"
+B="$(rstate)"; C0="$(rclosed)"
+for args in "dev --model good --default-model" "dev --default-model --model good"; do
+  # shellcheck disable=SC2086
+  try rr $args; check "relaunch: '$args' is refused, nothing is closed or changed" "$RC:$(printf '%s' "$OUT" | grep -c -- '--model and --default-model exclude each other'):$(( $(rclosed) - C0 )):$(rstate)" "1:1:0:$B"
+done
+: > "$RCL"; : > "$RKL"; N0="$(grep -c '^terminal create' "$RLOG")"; C0="$(rclosed)"
+try rr dev --default-model
+check "relaunch --default-model: no probe, one tab closed and one opened, the exception roles.dev.model is the empty string, final message names the default" "$RC:$(wc -c < "$RCL" | tr -d ' '):$(( $(rclosed) - C0 )):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(jq -c '.set[] | select(.path == ["roles","dev","model"]) | .value' "$RG/orca-roles.overrides.json"):[$(jq -r .roles.dev.model "$RG/orca-roles.config.json")]:$(printf '%s' "$OUT" | grep -c 'Relaunched Dev on its default model; this worktree keeps that (roles --reset forgets it).'):$(rkicks)" "0:0:1:1:\"\":[]:1:dev,"
 touch "$TMP/rl-failclose"; B="$(rstate)"; N0="$(grep -c '^terminal create' "$RLOG")"; : > "$RKL"
 try rr dev --model good --no-check
 check "relaunch: a failing close stops before launching; nothing created, state unchanged, no kickoff" "$RC:$(printf '%s' "$OUT" | grep -c 'Could not close the tab of Dev; nothing was relaunched.'):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(rstate):$(rkicks)" "1:1:0:$B:"

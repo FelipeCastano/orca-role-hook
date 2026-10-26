@@ -46,7 +46,7 @@ jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg wt "$WTB" --arg step "$ST
   || { echo "round.sh: could not write $LOG" >&2; exit 1; }
 echo "Recorded round $ROUND of step $STEP for $TITLE ($MODEL): $OUTCOME."
 
-# Escalation. The state file holds one line per escalated role: <role> <tab> <step> <tab> <model it had before>.
+# Escalation. The state file holds one line per escalated role: <role> <tab> <step> <tab> <model it had before, or - when it had none>.
 TO=""; AFTER=1
 if [ "$(mode_of "$CFG")" = programmer ]; then read -r TO AFTER <<< "$(flow_escalation "$CFG" "$ID")"; fi
 [ -n "$TO" ] || exit 0
@@ -54,11 +54,17 @@ escalated_from() { [ -f "$ESC" ] && awk -F'\t' -v r="$1" '$1 == r {print $3; exi
 FROM="$(escalated_from "$ID")"
 if [ "$OUTCOME" = accepted ]; then
   [ -n "$FROM" ] || exit 0
-  if [ "$FROM" != "$MODEL" ]; then
-    "$KIT/bin/relaunch-role.sh" "$ID" --model "$FROM" || { echo "Could not bring $TITLE back to $FROM; it stays on $MODEL (run relaunch-role.sh $ID --model $FROM)." >&2; exit 4; }
+  if [ "$FROM" = - ]; then
+    "$KIT/bin/relaunch-role.sh" "$ID" --default-model || { echo "Could not bring $TITLE back to its default model; it stays on $MODEL (run relaunch-role.sh $ID --default-model)." >&2; exit 4; }
+    BACK="its default model"
+  else
+    BACK="$FROM"
+    if [ "$FROM" != "$MODEL" ]; then
+      "$KIT/bin/relaunch-role.sh" "$ID" --model "$FROM" || { echo "Could not bring $TITLE back to $FROM; it stays on $MODEL (run relaunch-role.sh $ID --model $FROM)." >&2; exit 4; }
+    fi
   fi
   awk -F'\t' -v r="$ID" '$1 != r' "$ESC" > "$ESC.tmp" && mv "$ESC.tmp" "$ESC"
-  echo "Step accepted: $TITLE is back on $FROM. Use its new handle from now on."
+  echo "Step accepted: $TITLE is back on $BACK. Use its new handle from now on."
   exit 0
 fi
 [ -z "$FROM" ] || exit 0          # already escalated in this step
@@ -66,5 +72,5 @@ fi
 N="$(jq -s --arg w "$WTB" --arg s "$STEP" --arg r "$ID" '[.[] | select(.worktree == $w and .step == $s and .role == $r and .outcome != "accepted")] | length' "$LOG" 2>/dev/null || echo 0)"
 [ "$N" -ge "$AFTER" ] || exit 0
 "$KIT/bin/relaunch-role.sh" "$ID" --model "$TO" || { echo "Could not escalate $TITLE to $TO; it stays on $MODEL." >&2; exit 4; }
-printf '%s\t%s\t%s\n' "$ID" "$STEP" "$MODEL" >> "$ESC"
-echo "Escalated $TITLE from $MODEL to $TO after $N rejected round(s) of step $STEP; it comes back to $MODEL when the step is accepted. Use its new handle from now on."
+printf '%s\t%s\t%s\n' "$ID" "$STEP" "${MODEL:--}" >> "$ESC"
+echo "Escalated $TITLE from $MODEL to $TO after $N rejected round(s) of step $STEP; it comes back to ${MODEL:-its default model} when the step is accepted. Use its new handle from now on."

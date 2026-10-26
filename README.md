@@ -568,7 +568,7 @@ The order of the tabs is the order of the roles in the JSON.
 
 `~/.orca-roles/bin/models.sh <role|title> [--check]` lists the models a role can use and, with `--check`, tests them. When a role's model does not exist (see Troubleshooting), the Planner's fix steps can use it to find one that works. `--model <m>` replaces the candidates with exactly `<m>`, with or without `--check`.
 
-**Relaunching a role with another model:** `~/.orca-roles/bin/relaunch-role.sh <role|title> --model <m> [--no-check]`, from the worktree, is what the Planner runs after your yes. It tests the model first (`models.sh <role> --check --model <m>`; it stops without changing anything unless the model is `ok`, or `--no-check`), closes the role's tab and runs `launch.sh --set roles.<id>.model=<m>`. The worktree's other saved exceptions are kept; launch.sh reopens every tab of the team that is missing (normally just this role's), and kicks only the roles it opened. The model is saved for the worktree (`roles --reset` forgets it). The Planner cannot be relaunched.
+**Relaunching a role with another model:** `~/.orca-roles/bin/relaunch-role.sh <role|title> --model <m> [--no-check]` (or `--default-model` for the agent's default model, without the model check), from the worktree, is what the Planner runs after your yes. It tests the model first (`models.sh <role> --check --model <m>`; it stops without changing anything unless the model is `ok`, or `--no-check`), closes the role's tab and runs `launch.sh --set roles.<id>.model=<m>`. The worktree's other saved exceptions are kept; launch.sh reopens every tab of the team that is missing (normally just this role's), and kicks only the roles it opened. The model is saved for the worktree (`roles --reset` forgets it). The Planner cannot be relaunched.
 
 - Without `--check` it only prints the candidates, one per line, the role's own model first. Nothing is run against a model and nothing is spent.
   - `claude`: Claude Code cannot list the models of your login, so these are its aliases (`sonnet`, `opus`, `haiku`, `fable`).
@@ -731,7 +731,7 @@ Start a worker on a cheaper model and move it to a stronger one only when its wo
 How it works (programmer mode):
 1. The Planner runs `round.sh` after each round of the role that writes code, as in [Round log](#round-log). The startup message asks for it as soon as an active role has an escalation, with or without `recordRounds`.
 2. When the step reaches `after` rejected or oracle-red rounds, `round.sh` relaunches the role on `to` with `relaunch-role.sh`. That script checks the model first, and the role reopens with a new tab and handle.
-3. On the step's accepted round, `round.sh` relaunches the role back on the model it had. The model in effect before escalating is kept in `<gitdir>/orca-roles.escalation`.
+3. On the step's accepted round, `round.sh` relaunches the role back on the model it had. The model in effect before escalating is kept in `<gitdir>/orca-roles.escalation`. A role whose own model is empty (the agent's default) comes back to that default (`relaunch-role.sh <role> --default-model`, which the Planner can also run by hand).
 4. The Planner tells you in one line and uses the new handle. The rejected rounds still count toward the step's limit (`roundCap`, 3 by default).
 
 Things to know:
