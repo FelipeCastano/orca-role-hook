@@ -3,7 +3,7 @@
   verify_task.py --worktree <path> (--spec-file f | --task <id>) [--base <ref>] [--timeout 600] [--retries 1]
                  [--max-load 0.8] [--wait-max 300] [--no-wait] [--dry-run] [--agent A --model M] [--config-sha S]
 1) takes the acceptance command from the task spec (never from the worker) and runs only what allow.py permits, in the worktree;
-2) checks test integrity against the base: deleted test files, added skip/xfail/.only, weakened tests;
+2) checks test integrity of the whole worktree (untracked files included) against the base: deleted test files, added skip/xfail/.only, weakened tests, and changes to the runner's own configuration;
 3) writes verify.json to $ORCA_ROLES_ORACLE_OUT (default ${XDG_CACHE_HOME:-~/.cache}/orca-roles/oracle)/<task>/, never inside the repo.
 Statuses: pass, pass_flaky, fail, no_acceptance_command, command_not_allowed, env_not_runnable, dry_run.
 Exit 0 only on pass (or pass_flaky) and no cheat."""
@@ -12,8 +12,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from allow import command_lines, check_command, split_and  # noqa: E402
@@ -26,6 +28,10 @@ SECRET = re.compile(r'(sk-[A-Za-z0-9_\-]{16,}|eyJ[A-Za-z0-9_\-]{20,}|gh[pousr]_\
 
 def git(wt, *a):
     return subprocess.run(['git', '-C', wt] + list(a), capture_output=True, text=True)
+
+
+def git_env(wt, env, *a):
+    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True, text=True, env=env)
 
 
 def pick_base(wt, given):
@@ -51,15 +57,138 @@ def subject_also_deleted(all_deleted, test_path):
     return any(stem_of(p) == st and p != test_path and not TEST_PATH.search(p) for p in all_deleted)
 
 
-def integrity(wt, base):
-    """Compares the worktree (commits + uncommitted changes) with the base."""
+CONFIG_NAMES = {'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'noxfile.py', 'conftest.py',
+                'Makefile', 'makefile', 'GNUmakefile', 'package.json'}
+SCRIPT_REF = re.compile(r'(?:npm run(?:-script)?|pnpm(?: run)?|yarn(?: run)?)\s+([A-Za-z0-9_:.\-]+)')
+NPM_TEST_REF = re.compile(r'npm (?:test|t)\b')
+SH_REF = (re.compile(r'(?:^|[\s;&|(])(?:bash|sh)\s+([\w./\-]+\.sh)\b'), re.compile(r'(?:^|[\s;&|(])(\.{1,2}/[\w./\-]+\.sh)\b'))
+
+
+def is_config_file(path):
+    name = os.path.basename(path)
+    return name in CONFIG_NAMES or name.startswith(('jest.config.', 'vitest.config.')) or name.endswith('.sh')
+
+
+def package_scripts(text):
+    try:
+        scripts = json.loads(text).get('scripts')
+    except (ValueError, AttributeError):
+        return {}
+    return scripts if isinstance(scripts, dict) else {}
+
+
+def script_name(tokens):
+    """The package script a command runs, or None when it is not one of the recognised forms."""
+    if len(tokens) < 2:
+        return None
+    tool, a1 = tokens[0], tokens[1]
+    if tool == 'npm':
+        if a1 in ('test', 't'):
+            return 'test'
+        if a1 in ('run', 'run-script') and len(tokens) > 2:
+            return tokens[2]
+    elif tool in ('pnpm', 'yarn'):
+        if a1 == 'run':
+            return tokens[2] if len(tokens) > 2 else None
+        if not a1.startswith('-'):
+            return a1
+    return None
+
+
+def reached_scripts(start, scripts):
+    seen = []
+    level = [start]
+    for _ in range(6):
+        nxt = []
+        for name in level:
+            if name in seen:
+                continue
+            seen.append(name)
+            text = scripts.get(name)
+            if not isinstance(text, str):
+                continue
+            nxt += [m.group(1) for m in SCRIPT_REF.finditer(text)]
+            if NPM_TEST_REF.search(text):
+                nxt.append('test')
+        level = nxt
+    return seen
+
+
+def runner_findings(wt, base, cmds, changed):
+    """Cheats in the files the acceptance commands run: package scripts (with their pre/post hooks and the .sh files they run) and bash scripts.
+    changed: path -> status of the paths whose content changed."""
+    findings = []
+    now = {}
+    old = {}
+    pkg = os.path.join(wt, 'package.json')
+    if os.path.isfile(pkg):
+        with open(pkg, errors='replace') as fh:
+            now = package_scripts(fh.read())
+    shown = git(wt, 'show', '%s:package.json' % base)
+    if shown.returncode == 0:
+        old = package_scripts(shown.stdout)
+
+    def file_changed(path):
+        path = os.path.normpath(path)
+        if path in changed and not any(f.get('file') == path for f in findings):
+            findings.append(dict(kind='runner_file_changed', file=path))
+
+    reported = []
+    for cmd in cmds:
+        for part in split_and(cmd):
+            try:
+                tokens = shlex.split(part)
+            except ValueError:
+                continue
+            start = script_name(tokens)
+            if start:
+                names = reached_scripts(start, now) + [n for n in reached_scripts(start, old)]
+                names = [n for i, n in enumerate(names) if n not in names[:i]]
+                texts = []
+                for name in names:
+                    for hook in (name, 'pre' + name, 'post' + name):
+                        if now.get(hook) != old.get(hook) and hook not in reported:
+                            reported.append(hook)
+                            findings.append(dict(kind='runner_script_changed', script=hook))
+                        texts += [t for t in (now.get(hook), old.get(hook)) if isinstance(t, str)]
+                for text in texts:
+                    for rx in SH_REF:
+                        for m in rx.finditer(text):
+                            file_changed(m.group(1))
+            elif len(tokens) > 1 and tokens[0] == 'bash' and tokens[1].endswith('.sh'):
+                file_changed(tokens[1])
+    return findings
+
+
+def integrity(wt, base, cmds=None):
+    """Compares the whole worktree (commits, uncommitted and untracked files, not ignored) with the base, through a temporary index."""
     if not base:
         return dict(checked=False, reason='no base ref', cheat=False, findings=[])
-    ns = git(wt, 'diff', '--name-status', base)  # base -> working tree
+    if git(wt, 'rev-parse', '--verify', '-q', base + '^{commit}').returncode != 0:
+        return dict(checked=False, reason='base not found: %s' % base, cheat=False, findings=[])
+    d = tempfile.mkdtemp(prefix='orca-oracle-idx-')
+    try:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(d, 'index'))
+        if git_env(wt, env, 'read-tree', 'HEAD').returncode != 0 or git_env(wt, env, 'add', '-A').returncode != 0:
+            return dict(checked=False, reason='temporary index failed', cheat=False, findings=[])
+        return integrity_diff(wt, base, cmds, env)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def integrity_diff(wt, base, cmds, env):
+    ns = git_env(wt, env, 'diff', '--cached', '--name-status', base)  # base -> worktree
     findings = []
     deleted = []
     modified = []
     all_deleted = []
+    changed = {}
+    for l in git_env(wt, env, 'diff', '--cached', '--raw', '--no-abbrev', '--no-renames', base).stdout.splitlines():
+        meta, _, paths = l.partition('\t')
+        fields = meta.lstrip(':').split(' ')
+        st = fields[4][0]
+        if st in 'MARCT' and (st == 'A' or fields[2] != fields[3]):
+            changed[paths.split('\t')[-1]] = st
     for l in ns.stdout.splitlines():
         parts = l.split('\t')
         st, path = parts[0][0], parts[-1]
@@ -78,7 +207,7 @@ def integrity(wt, base):
     removed = 0
     added = 0
     for p in modified:
-        d = git(wt, 'diff', '-U0', base, '--', p).stdout
+        d = git_env(wt, env, 'diff', '--cached', '-U0', base, '--', p).stdout
         for l in d.splitlines():
             if l.startswith('+') and not l.startswith('+++'):
                 added += 1
@@ -89,10 +218,16 @@ def integrity(wt, base):
                 removed += 1
     if removed > 20 and removed > 2 * max(added, 1):
         findings.append(dict(kind='tests_weakened', detail='%d test lines removed against %d added' % (removed, added)))
+    runner = runner_findings(wt, base, cmds, changed) if cmds else []
+    findings += runner
+    reported_files = {f['file'] for f in runner if f['kind'] == 'runner_file_changed'}
+    script_hit = any(f['kind'] == 'runner_script_changed' for f in runner)
+    config = sorted(p for p, st in changed.items()
+                    if is_config_file(p) and p not in reported_files and not (script_hit and p == 'package.json'))[:20]
     return dict(checked=True, base=base[:10], tests_deleted=len(deleted),
                 tests_deleted_with_subject=sum(1 for p in deleted if subject_also_deleted(all_deleted, p)),
                 tests_modified=len(modified), lines_added=added, lines_removed=removed,
-                skips_added=added_skip, cheat=bool(findings), findings=findings[:10])
+                skips_added=added_skip, runner_config_changed=config, cheat=bool(findings), findings=findings[:10])
 
 
 def wait_for_load(max_wait, max_load_ratio):
@@ -212,6 +347,9 @@ def main(argv):
     ap.add_argument('--model')
     ap.add_argument('--config-sha')
     a = ap.parse_args(argv)
+    if a.task is not None and re.sub(r'[^A-Za-z0-9_.-]', '_', a.task).strip('.') == '':
+        print('verify_task.py: invalid task id: %s' % a.task, file=sys.stderr)
+        return 2
     wt = os.path.abspath(a.worktree)
     if a.spec_file:
         with open(a.spec_file) as fh:
@@ -248,7 +386,7 @@ def main(argv):
             else:
                 res['status'] = 'env_not_runnable' if any(c['exit'] == 127 for c in res['commands']) else 'fail'
             res['flaky_isolated'] = sum(c['flaky_isolated_files'] for c in res['commands'])
-    res['integrity'] = integrity(wt, pick_base(wt, a.base))
+    res['integrity'] = integrity(wt, pick_base(wt, a.base), cmds)
     res['cheat'] = bool(res['integrity'].get('cheat'))
     ncpu = os.cpu_count() or 1
     load = os.getloadavg()[0]

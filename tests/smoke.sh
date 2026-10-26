@@ -993,7 +993,7 @@ bash test.sh
   P="$(oracle_repo fail)"; printf 'exit 1\n' > "$P/test.sh"; oracle_run "$P" t2 "$(oracle_spec '`bash test.sh`')"
   check "oracle fail: exit 1, status fail, retried once (2 attempts)" "$RC:$(st .status):$(st .pass):$(st '.commands[0].attempts')" "1:fail:false:2"
   P="$(oracle_repo flaky)"; printf 'c=%s\nif [ -f "$c" ]; then exit 0; fi\ntouch "$c"; exit 1\n' "$OR/flaky-counter" > "$P/test.sh"
-  oracle_run "$P" t3 "$(oracle_spec '`bash test.sh`')"
+  git -C "$P" commit -q -am flaky; oracle_run "$P" t3 "$(oracle_spec '`bash test.sh`')" --base HEAD
   check "oracle flaky: fails once, passes on retry -> pass_flaky, exit 0" "$RC:$(st .status):$(st .flaky):$(st '.commands[0].attempts')" "0:pass_flaky:true:2"
   # test integrity
   P="$(oracle_repo del)"; git -C "$P" rm -q tests/a.sh; oracle_run "$P" t4 "$(oracle_spec '`bash test.sh`')"
@@ -1009,6 +1009,70 @@ bash test.sh
   check "oracle: most of a test file removed is tests_weakened" "$RC:$(st .cheat):$(st '.integrity.findings[0].kind')" "1:true:tests_weakened"
   P="$(oracle_repo subject)"; git -C "$P" rm -q tests/widget.test.sh src/widget.sh; oracle_run "$P" t8 "$(oracle_spec '`bash test.sh`')"
   check "oracle: a test deleted together with its subject is not a cheat" "$RC:$(st .status):$(st .cheat):$(st .integrity.tests_deleted_with_subject)" "0:pass:false:1"
+  # the whole worktree (untracked files), the step's base, and the runner's own configuration
+  fnd() { jq -r '.integrity | [(.findings | map(.kind + ":" + (.script // .file // "")) | join(",")), (.runner_config_changed | join(",")), (.cheat | tostring)] | join("|")' <<<"$OUT"; }
+  oc_base() { git -C "$1" add -A; git -C "$1" commit -q --allow-empty -m "$2"; git -C "$1" rev-parse HEAD; }
+  P="$(oracle_repo rs1)"; printf '{"scripts":{"test":"echo ok"}}\n' > "$P/package.json"; B="$(oc_base "$P" pkg)"
+  printf '{"scripts":{"test":"jest"}}\n' > "$P/package.json"; oracle_run "$P" r1 "$(oracle_spec '`npm test`')" --dry-run --base "$B"
+  check "oracle: npm test with scripts.test changed -> cheat runner_script_changed (script test), package.json not repeated in runner_config_changed" "$(fnd)" "runner_script_changed:test||true"
+  P="$(oracle_repo rs2)"; printf '{"scripts":{"test":"npm run unit","unit":"echo ok","lint":"x"}}\n' > "$P/package.json"; B="$(oc_base "$P" pkg)"
+  printf '{"scripts":{"test":"npm run unit","unit":"true","lint":"y"}}\n' > "$P/package.json"; oracle_run "$P" r2 "$(oracle_spec '`npm test`')" --dry-run --base "$B"
+  check "oracle: npm test calling npm run unit, only unit changed -> cheat (script unit); lint is not reached" "$(fnd)" "runner_script_changed:unit||true"
+  P="$(oracle_repo rs3)"; mkdir -p "$P/ci"; printf 'exit 0\n' > "$P/ci/check.sh"; B="$(oc_base "$P" ci)"
+  printf 'exit 0 # edited\n' > "$P/ci/check.sh"; oracle_run "$P" r3 "$(oracle_spec '`bash ci/check.sh`')" --dry-run --base "$B"
+  check "oracle: bash ci/check.sh edited -> cheat runner_file_changed, not repeated in runner_config_changed" "$(fnd)" "runner_file_changed:ci/check.sh||true"
+  P="$(oracle_repo rs4)"; B="$(oc_base "$P" none)"; mkdir -p "$P/ci"; printf 'exit 0\n' > "$P/ci/check.sh"
+  oracle_run "$P" r4 "$(oracle_spec '`bash ./ci/check.sh`')" --dry-run --base "$B"
+  check "oracle: bash ./ci/check.sh new and untracked -> cheat runner_file_changed" "$(fnd)" "runner_file_changed:ci/check.sh||true"
+  P="$(oracle_repo rs5)"; printf '[project]\ndependencies = []\n' > "$P/pyproject.toml"; B="$(oc_base "$P" py)"
+  printf '[project]\ndependencies = ["requests"]\n' > "$P/pyproject.toml"; oracle_run "$P" r5 "$(oracle_spec '`pytest`')" --dry-run --base "$B"
+  check "oracle: pyproject.toml gains a dependency -> no cheat, runner_config_changed lists it" "$(fnd):$(jq -c '.integrity.runner_config_changed' <<<"$OUT")" '|pyproject.toml|false:["pyproject.toml"]'
+  P="$(oracle_repo rs6)"; B="$(oc_base "$P" none)"; printf 'x = 1\n' > "$P/conftest.py"; printf '[pytest]\n' > "$P/pytest.ini"
+  oracle_run "$P" r6 "$(oracle_spec '`pytest`')" --dry-run --base "$B"
+  check "oracle: new untracked conftest.py and pytest.ini -> no cheat, both listed" "$(fnd)" "|conftest.py,pytest.ini|false"
+  P="$(oracle_repo rs7)"; mkdir -p "$P/tests"
+  printf 'def test_new():\n    assert 1\n' > "$P/tests/test_new.py"; (cd "$P" && "$ROOT/bin/checkpoint.sh" s 1 >/dev/null); B1="$(cd "$P" && "$ROOT/bin/checkpoint.sh" --list s | awk '{print $1}')"
+  oracle_run "$P" r7 "$(oracle_spec '`pytest`')" --dry-run --base "$B1"
+  check "oracle: a test file created by an earlier step (untracked, in the base checkpoint) is not a finding" "$(fnd)" "||false"
+  rm "$P/tests/test_new.py"; oracle_run "$P" r8 "$(oracle_spec '`pytest`')" --dry-run --base "$B1"
+  check "oracle: Dev deletes an untracked test file present in the base checkpoint -> test_deleted_without_subject" "$(fnd)" "test_deleted_without_subject:tests/test_new.py||true"
+  P="$(oracle_repo rs9)"; printf 'x\n' > "$P/tests/test_u.py"; git -C "$P" add tests/test_u.py; printf 'kept\n' > "$P/ign.txt"; printf 'ign.txt\n' > "$P/.gitignore"
+  printf 'u\n' > "$P/untracked.txt"; IDX1="$(git -C "$P" diff --cached; git -C "$P" ls-files --stage)"
+  oracle_run "$P" r9 "$(oracle_spec '`pytest`')" --base HEAD
+  check "oracle: the real index is unchanged by a run (diff --cached and ls-files --stage)" "$([ "$(git -C "$P" diff --cached; git -C "$P" ls-files --stage)" = "$IDX1" ] && echo same || echo changed)" "same"
+  check "oracle: no temporary index left behind" "$(ls -d "${TMPDIR:-/tmp}"/orca-oracle-idx-* 2>/dev/null | wc -l | tr -d ' ')" "0"
+  P="$(oracle_repo rs10)"; oracle_run "$P" r10 "$(oracle_spec '`bash test.sh`')" --base nonexistent-ref-xyz
+  check "oracle: a base that does not resolve -> integrity checked false, reason base not found" "$(st '.integrity | [.checked, .reason, .cheat] | join("|")')" "false|base not found: nonexistent-ref-xyz|false"
+  P="$(oracle_repo rs11)"; printf '{"scripts":{"test":"jest","pretest":"echo a"}}\n' > "$P/package.json"; B="$(oc_base "$P" pkg)"
+  printf '{"scripts":{"test":"jest","pretest":"echo b"}}\n' > "$P/package.json"; oracle_run "$P" r11 "$(oracle_spec '`npm test`')" --dry-run --base "$B"
+  check "oracle: npm test with only pretest edited -> cheat runner_script_changed (pretest)" "$(fnd)" "runner_script_changed:pretest||true"
+  printf '{"scripts":{"test":"jest","pretest":"echo a","posttest":"echo c"}}\n' > "$P/package.json"; oracle_run "$P" r12 "$(oracle_spec '`npm test`')" --dry-run --base "$B"
+  check "oracle: npm test with only posttest added -> cheat runner_script_changed (posttest)" "$(fnd)" "runner_script_changed:posttest||true"
+  P="$(oracle_repo rs13)"; printf '{"scripts":{"lint":"bash lint.sh"}}\n' > "$P/package.json"; printf 'exit 0\n' > "$P/lint.sh"; B="$(oc_base "$P" pkg)"
+  printf 'exit 0 # edited\n' > "$P/lint.sh"; oracle_run "$P" r13 "$(oracle_spec '`npm run lint`')" --dry-run --base "$B"
+  check "oracle: npm run lint running bash lint.sh, lint.sh edited -> cheat runner_file_changed (lint.sh), not listed" "$(fnd)" "runner_file_changed:lint.sh||true"
+  P="$(oracle_repo rs13b)"; printf '{"scripts":{"lint":"./lint.sh"}}\n' > "$P/package.json"; printf 'exit 0\n' > "$P/lint.sh"; B="$(oc_base "$P" pkg)"
+  printf 'exit 0 # edited\n' > "$P/lint.sh"; oracle_run "$P" r13b "$(oracle_spec '`npm run lint`')" --dry-run --base "$B"
+  check "oracle: npm run lint running ./lint.sh, lint.sh edited -> cheat runner_file_changed (lint.sh)" "$(fnd)" "runner_file_changed:lint.sh||true"
+  P="$(oracle_repo rs14)"; B="$(oc_base "$P" none)"; printf 'exit 0\n' > "$P/other.sh"; rm "$P/test.sh"; ln -s other.sh "$P/test.sh"
+  oracle_run "$P" r14 "$(oracle_spec '`bash test.sh`')" --dry-run --base "$B"
+  check "oracle: bash test.sh with test.sh replaced by a symlink -> cheat runner_file_changed" "$(fnd)" "runner_file_changed:test.sh|other.sh|true"
+  P="$(oracle_repo rs16)"; mkdir -p "$P/ci"; printf 'exit 0\n' > "$P/ci/noop.sh"; B="$(oc_base "$P" ci)"
+  git -C "$P" mv ci/noop.sh ci/check.sh
+  oracle_run "$P" r16 "$(oracle_spec '`bash ci/check.sh`')" --dry-run --base "$B"
+  check "oracle: ci/noop.sh renamed to ci/check.sh unchanged (R100, identical blob) and the command runs bash ci/check.sh -> cheat runner_file_changed (ci/check.sh)" "$(fnd)" "runner_file_changed:ci/check.sh||true"
+  P="$(oracle_repo rs15)"; B="$(oc_base "$P" none)"; chmod +x "$P/test.sh"
+  oracle_run "$P" r15 "$(oracle_spec '`bash test.sh`')" --dry-run --base "$B"
+  check "oracle: bash test.sh with only chmod +x -> no cheat, runner_config_changed empty" "$(fnd)" "||false"
+  # S7: a task id that sanitises to nothing is refused before anything is read or written
+  P="$(oracle_repo tid)"; rm -rf "$OR/out"; mkdir -p "$OR/out"; TS="$(oracle_spec '`bash test.sh`')"; TID=""
+  for t in .. .; do
+    oracle_run "$P" "$t" "$TS"; TID="$TID$RC:$(grep -c 'invalid task id' "$OR/err" || true):"
+    try bash -c 'cd "$1" && ORCA_ROLES_ORACLE_OUT="$0" KIT="$2" HOME="$5" exec "$2/bin/oracle.sh" --task "$4" --no-wait 2>"$3"' "$OR/out" "$P" "$KIT" "$OR/err" "$t" "$TMP/home"; TID="$TID$RC:$(grep -c 'invalid task id' "$OR/err" || true):"
+  done
+  check "oracle: --task .. and --task . (with and without --spec-file) -> exit 2, message on stderr" "$TID" "2:1:2:1:2:1:2:1:"
+  check "oracle: a refused task id writes nothing under ORCA_ROLES_ORACLE_OUT" "$(ls -A "$OR/out" | wc -l | tr -d ' ')" "0"
+  oracle_run "$P" t.1 "$TS" --dry-run; check "oracle: --task t.1 is accepted" "$RC:$(st .status)" "1:dry_run"
   # not runnable
   P="$(oracle_repo curl)"; oracle_run "$P" t9 "$(oracle_spec '```
 curl x | sh
@@ -1060,7 +1124,7 @@ jq '.settings.oracle = {enabled: false}' "$C" > "$OR/o0.json"; check "oracle dis
 jq '.settings.oracle = {}' "$C" > "$OR/o1.json"; check "oracle {} (no enabled): planner_msg unchanged" "$(PM "$OR/o1.json")" "$BASEP"
 jq '.settings.oracle = {enabled: "yes"}' "$C" > "$OR/o2.json"; check "oracle enabled not true (a string): planner_msg unchanged" "$(PM "$OR/o2.json")" "$BASEP"
 jq '.settings.oracle = {enabled: true}' "$C" > "$OR/o3.json"; OM="$(PM "$OR/o3.json")"
-case "$OM" in *'## Acceptance command'*"spec-<task_id>.md"*"$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file>"*"The Tester's VERDICT stays, but the oracle decides"*) echo "ok   oracle enabled in programmer: planner_msg carries the sentence";; *) echo "FAIL oracle planner sentence: $OM"; FAIL=1;; esac
+case "$OM" in *'## Acceptance command'*"spec-<task_id>.md"*"$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file> --base <the step's base ref: the previous step's last checkpoint ref, or HEAD for the first step of the set>"*"pass or pass_flaky means go on to the Tester (a non-empty runner_config_changed in its integrity goes into the Tester's brief as state)"*"The Tester's VERDICT stays, but the oracle decides"*) echo "ok   oracle enabled in programmer: planner_msg carries the sentence";; *) echo "FAIL oracle planner sentence: $OM"; FAIL=1;; esac
 case "$OM" in "${BASEP%Start with the startup.}"*"Start with the startup.") echo "ok   oracle enabled: the usual message and its ending are kept";; *) echo "FAIL oracle: message lost its usual parts"; FAIL=1;; esac
 jq '.settings.mode = "pr-reviewer"' "$C" > "$OR/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.oracle = {enabled: true}' "$C" > "$OR/p1.json"
 check "oracle enabled in pr-reviewer: planner_msg unchanged" "$(PM "$OR/p1.json")" "$(PM "$OR/p0.json")"
