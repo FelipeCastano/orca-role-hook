@@ -10,7 +10,7 @@ orca-roles is a kit for Orca that opens a team of role-based agents (Planner, Re
 **First, find out where you are:**
 
 - **The kit is not installed yet** (`~/.orca-roles` does not exist): you are a regular Claude Code session the user installed this plugin in to get help. Walk them through sections 1 and 2, one step at a time, checking each result with them before the next. The full reference is the `README.md` of the repo (https://github.com/FelipeCastano/orca-role-hook).
-- **The kit is installed but you are not in a team's worktree**: help with installation, configuration, diagnosis and cost (sections 1 to 5, 8 and 9). Sections 6 and 7 are for the Planner.
+- **The kit is installed but you are not in a team's worktree**: help with installation, configuration, diagnosis and cost (sections 1 to 5 and 8 to 11). Sections 6 and 7 are for the Planner. The full reference is `~/.orca-roles/README.md`; read it when you need a detail that is not here.
 - **You are the Planner** of a team (your startup message gave you that role): everything applies. The full reference is `~/.orca-roles/README.md`; read it when you need a detail that is not here.
 
 ## Rules
@@ -252,3 +252,35 @@ When the user asks how much the team spends, which role costs most, or whether w
 - **Team versus a single session**: "the team spends more" only means something on the same task and against the result. Walk the user through README → Comparing the team with a single session: two worktrees from the same commit (team in one, one agent session in the other, same task text and same Claude Code settings), close every session, `metrics.sh --summary | tail -1` in each, decide acceptance with `oracle.sh` in both, and repeat with at least three tasks. Compare the cost per accepted task.
 - **Live dashboards**: Claude Code exports `claude_code.token.usage` and `claude_code.cost.usage` through OpenTelemetry when the user sets `CLAUDE_CODE_ENABLE_TELEMETRY=1` and an exporter. `settings.telemetry.roleAttribute: true` tags each role's data with `orca_roles.role`. With it on, the user's own `OTEL_RESOURCE_ATTRIBUTES` must be set in the shell or in `defaults.env`, not in Claude Code's `settings.json` (the launch environment wins over it), and no value may contain a space (Claude Code then drops every custom key).
 - Only Claude sessions are counted per role; OpenCode gives one line for the whole project (`opencode stats`), and Codex is not measured.
+
+## 10. Coordinating several worktrees
+
+To work on several features at once, each in its own worktree with its own team, the user starts a coordinator in an Orca terminal, for example in the project's main checkout: `~/.orca-roles/bin/coordinator.sh [--model <m>]` (Claude Code with `prompts/coordinator.md`, the Planner's model and permission mode by default; it needs `claude` on the PATH).
+
+- **What it does**: it splits the request into features (one worktree each, two features share one only if they touch the same code and ship together), shows the split with each feature's project, worktree name and acceptance criteria and waits for the user's yes; then it creates one Run, and per feature a task, the worktree's marker and the worktree (`orca worktree create --setup run`, so the kit opens the team). When the Planner says it is waiting, it dispatches the task to it and waits for messages.
+- **How Planners talk to it**: everything the Planner would ask or report to the user goes to the coordinator: in a dispatch with `ask` and `worker_done`, outside one with `orca orchestration send --to run:<id>` (`question`, or `status` for the end), never in its tab. If the user writes in a Planner's tab, the user still takes precedence.
+- **What still needs the user's yes**: the split into features, doubts the spec does not settle, questions on the project's rules, anything that leaves a worktree (push, pull request, comments, Jira, deploys) unless the user gave a standing authorization for that exact action, and closing teams or removing worktrees.
+- **Project rules**: each Planner still reads its project's conventions at startup, has its plans checked against them by the Auditor and names them in its briefs, exactly as without a coordinator. The coordinator approves plans against the spec and the acceptance criteria; any question on the project's rules that the spec does not settle goes to the user, never settled by the coordinator. The coordinator itself only gets what Claude Code loads in the folder it runs in (that folder's CLAUDE.md and its rules without a path scope), not AGENTS.md or other projects' rules.
+- **Requirements**: Orca's Settings → Orchestration → "Nested worker depth" at 2 or more (the default is 1), and each project registered to start the kit in new worktrees (`roles-yaml` or the setup script). Every worktree opens a whole team, so keep open only the worktrees needed.
+- **The marker**: `<git common dir>/orca-roles.coordinated/<name>`, holding the coordinator's Run id, makes the worktree's Planner wait for the coordinator's task instead of planning with the user. `<name>` must match `^[a-z0-9][a-z0-9-]{0,39}$`, because the kit finds the marker by the worktree folder's name; the kit removes it once the Planner has its role.
+
+| Symptom | Cause and fix |
+|---|---|
+| A Planner stops with `nested_worker_depth_exceeded` | Orca's nested worker depth is 1. Raise it to 2; the Planner waits and must not write the code itself. |
+| `worker-start` fails with `agent_prompt_blocked` | The Planner is mid-turn or has a question dialog open. The coordinator reads its tab, folds what it did into the spec, answers it there only when the spec settles the question (otherwise asks the user), and retries once with `--retry-of`. It never presses Esc or types over the Planner's work. |
+| A coordinated worktree's Planner plans by itself with the user | The marker was missing or the worktree folder's name differs from `<name>` (Orca rewrote it). Nothing is renamed; the user can let that Planner go on or close the worktree. |
+| A follow-up `send` fails with `recipient_run_mismatch` | It was sent with `--run`; send to `dispatch:<id>` without it. |
+| A Planner's question goes unanswered | Its messages must reach the coordinator's Run: check that the worktree's git dir holds `orca-roles.coordinator` with that Run id, and that the coordinator runs `check` again right after asking the user. |
+
+## 11. Moving a worker to a stronger model (escalation)
+
+A worker can start on a cheaper model and move to a stronger one only when its work fails a check (programmer mode):
+
+```json
+"settings": { "flow": { "escalation": { "dev": { "to": "claude-opus-5-5", "after": 1 } } } }
+```
+
+- **When**: the Planner records each code round with `~/.orca-roles/bin/round.sh <role> --step <s> --round <n> --outcome accepted|rejected|oracle-red`, from the worktree's own terminal. After `after` rejected or oracle-red rounds in a step (default 1), `round.sh` relaunches the role on `to` with `relaunch-role.sh`, which tests the model first; on the step's accepted round it relaunches it on the model it had (kept in `<git dir>/orca-roles.escalation`; a role with no model of its own goes back to the agent's default). The Planner tells the user in one line and uses the new handle; it needs no confirmation.
+- **Limits**: `to` must be a model of the role's own agent (for an OpenCode role, one from `opencode models`); every relaunch is a fresh start, with a new tab and handle, and the step's context stays in the old tab; a step abandoned without an accepted round leaves the role on `to` until some step is accepted; rejected rounds keep counting toward the step's limit (`settings.flow.roundCap`, 3 by default) across models; `round.sh` run from another worktree's terminal opens the relaunched tab in that other worktree.
+- **Invalid values** (a missing `to`, a non-positive `after`, an entry for `planner`) stop the launch with an ERROR.
+- **The data**: every `round.sh` call appends one line to `orca-roles.rounds.jsonl` in the main checkout's `.git` (agent, model, outcome, files changed), to see which tasks each model gets right on the first round. `settings.flow.recordRounds: true` makes the Planner record rounds even without an escalation.
