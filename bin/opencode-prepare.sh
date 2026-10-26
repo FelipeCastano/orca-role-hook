@@ -45,6 +45,8 @@ done < "$EXTRA"
 
 DIR="$TOP/.opencode/agents"; mkdir -p "$DIR"
 OUT="$DIR/orca-$ROLE.md"; TMPF="$(mktemp "$DIR/.orca-$ROLE.XXXXXX")"
+# The role's own permissions come before the kit's denies: OpenCode applies the last matching rule, so the kit's guards cannot be
+# undone by the role's list (as for Claude roles).
 {
   echo "---"
   jq -nr --arg title "$(title_of "$CFG" "$ROLE")" --arg model "$MODEL" --arg steps "$STEPS" --arg kit "$KITP" --slurpfile extra "$EXTRA_OK" '
@@ -52,11 +54,10 @@ OUT="$DIR/orca-$ROLE.md"; TMPF="$(mktemp "$DIR/.orca-$ROLE.XXXXXX")"
     (if $model != "" then "model: \($model | tojson)" else empty end),
     (if $steps != "" then "steps: \($steps)" else empty end),
     "permissions:",
-    (([{action: "*", resource: "*", effect: "allow"},
-      {action: "question", resource: "*", effect: "deny"},
+    (([{action: "*", resource: "*", effect: "allow"}] + $extra
+     + [{action: "question", resource: "*", effect: "deny"},
       {action: "shell", resource: "git push*", effect: "deny"}]
-     + ([("prompts/**", "roles/**", "bin/**", "plugin/**", "config.json", "config.default.json")] | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"}))
-     + $extra)[] | "  - \(tojson)")'
+     + ([("prompts/**", "roles/**", "bin/**", "plugin/**", "config.json", "config.default.json")] | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"})))[] | "  - \(tojson)")'
   echo "---"
   role_anchor "$CFG" "$ROLE"; printf '\n\n'
   printf '%s\n\n' "$(cat "$COMMON")"   # exactly one blank line between the parts

@@ -4730,6 +4730,7 @@ cat > "$OC/cfg.json" <<'J'
     "e2e-tester": { "title": "E2E", "agent": "opencode", "opencode": { "steps": 0 } },
     "cx": { "title": "Codex", "agent": "codex" }, "cl": { "title": "Claude" } } }
 J
+jq --arg k "$KITP" '.roles.dev.opencode.permissions += [{action: "edit", resource: "\($k)/prompts/**", effect: "allow"}]' "$OC/cfg.json" > "$OC/cfg.tmp" && mv "$OC/cfg.tmp" "$OC/cfg.json"
 cat > "$OC/bin/orca" <<'EOS'
 #!/bin/sh
 echo "orca $*" >> "${OC_DELLOG:-/dev/null}"
@@ -4758,6 +4759,8 @@ model: \"p/m\"
 steps: 5
 permissions:
   - {\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
+  - {\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}
+  - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"allow\"}
   - {\"action\":\"question\",\"resource\":\"*\",\"effect\":\"deny\"}
   - {\"action\":\"shell\",\"resource\":\"git push*\",\"effect\":\"deny\"}
   - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"deny\"}
@@ -4765,11 +4768,11 @@ permissions:
   - {\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
   - {\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
   - {\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
-  - {\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}"
-check "opencode: frontmatter is exactly the expected text (allow first, the denies, then the role's valid item)" "$FM" "$EXPECT_FM"
+  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}"
+check "opencode: frontmatter is exactly the expected text (allow first, the role's valid items, then the kit's denies last)" "$FM" "$EXPECT_FM"
+check "opencode: the kit's deny on its prompts comes after a role item that allows them (the last matching rule wins)" "$([ "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"deny\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" -gt "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"allow\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" ] && echo after)" "after"
 if python3 -c 'import yaml' 2>/dev/null; then
-  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 10"
+  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 11"
 else echo "ok   opencode: PyYAML not installed, the frontmatter was checked as exact text only"; fi
 check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
 BODY="$(awk 'NR==1{next} f{print;next} $0=="---"{f=1}' "$FILE")"
