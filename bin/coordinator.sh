@@ -19,13 +19,13 @@ CFG="$(mktemp)"; merged_config . > "$CFG"
 [ -n "$MODEL" ] || MODEL="$(rstr "$CFG" planner model)"
 PERM="$(rstr "$CFG" planner permissionMode)"
 # Same trust as the teams (settings.trust, default "worktree"); with "never" Claude asks, as the user is in this tab anyway. A folder
-# Claude Code already knows keeps its entry: only the flag is set and it is not recorded, since forget-trust.sh deletes whole entries.
+# Claude Code already knows keeps its entry: only the flag is set and it is not recorded, so forget-trust.sh never touches it (it only removes the flag the kit set, and an entry only when nothing else is in it).
 if [ "$(trust_of "$CFG")" = worktree ]; then
   D="$(pwd -P)"; KNOWN="$(jq -r --arg d "$D" '.projects[$d] | if . == null then "no" elif .hasTrustDialogAccepted == true then "trusted" else "yes" end' "$HOME/.claude.json" 2>/dev/null)" || KNOWN=""
   case "$KNOWN" in
     no) trust_folder;;
     yes) safe_json_edit "$HOME/.claude.json" '.projects[$dir].hasTrustDialogAccepted = true' "$D" "$HOME/.claude.json.lock" \
-           && echo "Marked $D as trusted for Claude Code (its existing entry is kept; forget-trust.sh does not remove it).";;
+           && echo "Marked $D as trusted for Claude Code (its existing entry is kept; forget-trust.sh does not touch it).";;
   esac
 fi
 rm -f "$CFG"

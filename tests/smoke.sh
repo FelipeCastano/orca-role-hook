@@ -4571,15 +4571,31 @@ sec_forget_trust() {
 # forget-trust.sh: removes only the kit's entries from ~/.claude.json (fake HOME, own copy of the kit)
 FT="$TMP/ft"; rm -rf "$FT"; mkdir -p "$FT/home" "$FT/kit" "$FT/a" "$FT/b"; cp -R "$ROOT/bin" "$FT/kit/"
 FA="$(cd "$FT/a" && pwd -P)"; FB="$(cd "$FT/b" && pwd -P)"; FC="$FT/gone-c"; FD="$FT/gone-d"
-ftj() { printf '{"oauthAccount":{"email":"a@b"},"numStartups":3,"projects":{"%s":{"hasTrustDialogAccepted":true,"x":1},"%s":{"hasTrustDialogAccepted":true},"%s":{"hasTrustDialogAccepted":true},"%s":{"hasTrustDialogAccepted":true}}}' "$FA" "$FB" "$FC" "$FD" > "$FT/home/.claude.json"; printf '%s\n%s\n%s\n' "$FA" "$FB" "$FC" > "$FT/kit/trusted.list"; }
+ftj() { printf '{"oauthAccount":{"email":"a@b"},"numStartups":3,"projects":{"%s":{"hasTrustDialogAccepted":true,"x":1,"allowedTools":["Bash(ls)"],"history":[{"display":"x"}]},"%s":{"hasTrustDialogAccepted":true},"%s":{"hasTrustDialogAccepted":true},"%s":{"hasTrustDialogAccepted":true}}}' "$FA" "$FB" "$FC" "$FD" > "$FT/home/.claude.json"; printf '%s\n%s\n%s\n' "$FA" "$FB" "$FC" > "$FT/kit/trusted.list"; }
 ft() { (cd "$FT/a" && env -i HOME="$FT/home" KIT="$FT/kit" PATH="$PATH" /bin/bash "$FT/kit/bin/forget-trust.sh" "$@" 2>&1); }
 ftkeys() { jq -r '.projects | keys[] | split("/") | last' "$FT/home/.claude.json" | tr '\n' ' '; }
-ftwithout() { jq -S -c --arg d "$1" 'del(.projects[$d])' "$FT/orig.json" | cmp -s - <(jq -S -c . "$FT/home/.claude.json") && echo same || echo DIFF; }
+ftwithout() { jq -S -c --arg d "$1" 'del(.projects[$d])' "$FT/orig.json" | cmp -s - <(jq -S -c --arg d "$1" 'del(.projects[$d])' "$FT/home/.claude.json") && echo same || echo DIFF; }
 ftj; cp "$FT/home/.claude.json" "$FT/orig.json"; cp "$FT/kit/trusted.list" "$FT/orig.list"
 OUT="$(ft --dry-run)"
-check "forget-trust --dry-run: prints what it would remove, writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig.json" && echo same) $(cmp -s "$FT/kit/trusted.list" "$FT/orig.list" && echo same) $(printf '%s' "$OUT" | grep -c "^Would remove projects\[$FA\]") $(printf '%s' "$OUT" | grep -c "^Would remove $FA from")" "same same 1 1"
+check "forget-trust --dry-run: prints what it would remove, writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig.json" && echo same) $(cmp -s "$FT/kit/trusted.list" "$FT/orig.list" && echo same) $(printf '%s' "$OUT" | grep -c "^Would remove the kit.s trust flag from projects\[$FA\] in .* (its other keys stay)\.") $(printf '%s' "$OUT" | grep -c "^Would remove $FA from")" "same same 1 1"
 OUT="$(ft)"
-check "forget-trust: removes only this worktree's entry; the other keys are equal under jq -S; the list loses that line" "$(ftkeys)| $(ftwithout "$FA") $(tr '\n' ' ' < "$FT/kit/trusted.list")" "b gone-c gone-d | same $FB $FC "
+check "forget-trust: removes only the kit's flag from this worktree's entry (its other keys stay); the other entries are equal under jq -S; the list loses that line" "$(ftkeys)| $(jq -c --arg a "$FA" '.projects[$a] | [has("hasTrustDialogAccepted"), (.allowedTools|length), (.history|length)]' "$FT/home/.claude.json") $(ftwithout "$FA") $(tr '\n' ' ' < "$FT/kit/trusted.list") $(printf '%s' "$OUT" | grep -c "^Removed the kit's trust flag from projects\[$FA\]")" "a b gone-c gone-d | [false,1,1] same $FB $FC  1"
+ftj; OUT="$(cd "$FT/b" && env -i HOME="$FT/home" KIT="$FT/kit" PATH="$PATH" /bin/bash "$FT/kit/bin/forget-trust.sh" 2>&1)"
+check "forget-trust: an entry that holds only the kit's flag is removed entirely" "$(jq -r --arg d "$FB" '(.projects // {}) | has($d)' "$FT/home/.claude.json") $(printf '%s' "$OUT" | grep -cxF "Removed $FB from $FT/home/.claude.json.")" "false 1"
+# an entry with other keys and no kit flag: untouched, "has no kit trust flag", still dropped from the list; dry-run writes nothing
+ftn() { ftj; jq --arg a "$FA" '.projects[$a] |= del(.hasTrustDialogAccepted)' "$FT/home/.claude.json" > "$FT/n.tmp" && mv "$FT/n.tmp" "$FT/home/.claude.json"; cp "$FT/home/.claude.json" "$FT/orig-n.json"; }
+ftn; OUT="$(ft --dry-run)"
+check "forget-trust --dry-run: an entry with other keys and no kit flag -> says so, writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig-n.json" && echo same) $(printf '%s' "$OUT" | grep -cxF "$FA has no kit trust flag in $FT/home/.claude.json.") $(printf '%s' "$OUT" | grep -c '^Would remove projects')" "same 1 0"
+OUT="$(ft)"
+check "forget-trust: an entry with other keys and no kit flag is untouched, says so, and its folder leaves trusted.list" "$(cmp -s "$FT/home/.claude.json" "$FT/orig-n.json" && echo same) $(printf '%s' "$OUT" | grep -cxF "$FA has no kit trust flag in $FT/home/.claude.json.") $(tr '\n' ' ' < "$FT/kit/trusted.list")" "same 1 $FB $FC "
+ftj; OUT="$(cd "$FT/b" && env -i HOME="$FT/home" KIT="$FT/kit" PATH="$PATH" /bin/bash "$FT/kit/bin/forget-trust.sh" --dry-run 2>&1)"
+check "forget-trust --dry-run: an entry holding only the flag -> 'Would remove projects[<d>]', writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig.json" && echo same) $(printf '%s' "$OUT" | grep -c "^Would remove projects\[$FB\] from")" "same 1"
+# a listed folder with no entry in ~/.claude.json: "has no entry", file untouched, folder leaves the list
+ftj; jq --arg a "$FA" 'del(.projects[$a])' "$FT/home/.claude.json" > "$FT/n.tmp" && mv "$FT/n.tmp" "$FT/home/.claude.json"; cp "$FT/home/.claude.json" "$FT/orig-n.json"; OUT="$(ft)"
+check "forget-trust: a listed folder with no entry -> 'has no entry', file untouched, folder leaves trusted.list" "$(cmp -s "$FT/home/.claude.json" "$FT/orig-n.json" && echo same) $(printf '%s' "$OUT" | grep -cxF "$FA has no entry in $FT/home/.claude.json.") $(printf '%s' "$OUT" | grep -c 'no kit trust flag') $(tr '\n' ' ' < "$FT/kit/trusted.list")" "same 1 0 $FB $FC "
+# --stale with a recorded missing folder that has other keys: only the flag goes
+ftj; jq --arg c "$FC" '.projects[$c].allowedTools = ["Bash(ls)"]' "$FT/home/.claude.json" > "$FT/n.tmp" && mv "$FT/n.tmp" "$FT/home/.claude.json"; OUT="$(ft --stale)"
+check "forget-trust --stale: a missing recorded folder with other keys keeps them and loses only the flag" "$(jq -c --arg c "$FC" '.projects[$c]' "$FT/home/.claude.json") $(printf '%s' "$OUT" | grep -c "^Removed the kit's trust flag from projects\[$FC\]") $(ftkeys)" '{"allowedTools":["Bash(ls)"]} 1 a b gone-c gone-d '
 ftj
 OUT="$(ft --stale --dry-run)"
 check "forget-trust --stale --dry-run: names the recorded missing folder only, writes nothing" "$(cmp -s "$FT/home/.claude.json" "$FT/orig.json" && echo same) $(cmp -s "$FT/kit/trusted.list" "$FT/orig.list" && echo same) $(printf '%s' "$OUT" | grep -c "$FC") $(printf '%s' "$OUT" | grep -c "$FD")" "same same 2 0"
