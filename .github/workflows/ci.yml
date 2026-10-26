@@ -8,6 +8,11 @@ on:
     branches: [main]
   pull_request:
 
+# a new push to a PR cancels the run still going for its previous push; on main every merge keeps its own run
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   shellcheck:
     runs-on: ubuntu-latest
@@ -20,6 +25,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # one section per CPU: GitHub's runners for public repos have 4 (ubuntu) and 3 (macos); smoke.sh's default, half the CPUs, ran macOS serially
+        include:
+          - os: ubuntu-latest
+            jobs: 4
+          - os: macos-latest
+            jobs: 3
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,3 +44,4 @@ jobs:
       - run: tests/smoke.sh
         env:
           SMOKE_CLI_TIMEOUT: 60
+          SMOKE_JOBS: ${{ matrix.jobs }}
