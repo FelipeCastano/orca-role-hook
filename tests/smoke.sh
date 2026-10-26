@@ -5724,6 +5724,45 @@ for bad in "export $XW" "export $XD/full" "export $XD/cand --only ../x" "export 
 done
 check "crosscheck: the worktree is unchanged after every run, export and apply" "$(xstate)" "$X0"
 xrun --help; check "crosscheck --help: the header comment only" "$XRC:$(printf '%s\n' "$XOUT" | grep -c '^# Throwaway copies'):$(printf '%s\n' "$XOUT" | grep -vc '^#' || true)" "0:1:0"
+# build outputs are not linked, dependencies are
+XB2="$XD/bwt"; mkdir -p "$XB2"; git -C "$XB2" init -q -b main; printf 'dist/\nnode_modules/\n' > "$XB2/.gitignore"; printf 'x\n' > "$XB2/f"
+git -C "$XB2" add -A; git -C "$XB2" -c user.email=t@example.com -c user.name=t commit -q -m init; mkdir -p "$XB2/dist" "$XB2/node_modules"; printf 'o\n' > "$XB2/dist/o"
+( cd "$XB2" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" tree "$XD/bcopy" --ref HEAD >/dev/null 2>&1 )
+check "crosscheck tree: node_modules is linked, dist (a build output) is neither linked nor copied" "$([ -L "$XD/bcopy/node_modules" ] && echo link):$([ -e "$XD/bcopy/dist" ] || [ -L "$XD/bcopy/dist" ] && echo present || echo absent)" "link:absent"
+# apply --replace: a created file over the same file of the copy
+xrun tree "$XD/rp" --ref "$XBASE"; printf 'ref\n' > "$XD/rp/tests/t9"; git -C "$XD/rp" add tests/t9; git -C "$XD/rp" -c user.name=x -c user.email=x@x commit -q -m t9
+xrun tree "$XD/rq" --ref "$XBASE"; printf 'cand\n' > "$XD/rq/tests/t9"; xrun export "$XD/rq"; printf '%s\n' "$XOUT" > "$XD/t9.diff"
+xrun apply "$XD/rp" "$XD/t9.diff"; check "crosscheck apply: without --replace a created file that exists in the copy fails and stays unchanged" "$([ "$XRC" != 0 ] && echo fail):$(cat "$XD/rp/tests/t9")" "fail:ref"
+xrun apply --replace "$XD/rp" "$XD/t9.diff"; check "crosscheck apply --replace: the created file replaces the copy's, nothing left in tmp" "$XRC:$(cat "$XD/rp/tests/t9"):$(printf '%s' "$XERR" | grep -c '^Applied ')" "0:cand:1"
+printf 'ref\n' > "$XD/rp/tests/t9"; printf 'other\n' > "$XD/rp/src/a"; printf 'v9\n' > "$XD/rq/src/a"; xrun export "$XD/rq"; printf '%s\n' "$XOUT" > "$XD/t9b.diff"
+XS2="$(cd "$XD/rp" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum | shasum)"
+xrun apply --replace "$XD/rp" "$XD/t9b.diff"
+check "crosscheck apply --replace: a patch with a hunk that does not apply fails, nothing changed (the replaced file included)" "$([ "$XRC" != 0 ] && echo fail):$(printf '%s' "$XERR" | grep -c 'nothing was changed'):$(cat "$XD/rp/tests/t9"):$(cd "$XD/rp" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum | shasum)" "fail:1:ref:$XS2"
+rm "$XD/rp/tests/t9"; ln -s ../src/a "$XD/rp/tests/t9"
+xrun apply --replace "$XD/rp" "$XD/t9.diff"
+check "crosscheck apply --replace: a created path that is a symbolic link in the copy fails with the not-a-regular-file message, nothing changed" "$([ "$XRC" != 0 ] && echo fail):$(printf '%s' "$XERR" | grep -c 'not a regular file (nothing was changed)'):$([ -L "$XD/rp/tests/t9" ] && echo link):$(cat "$XD/src_a_none" 2>/dev/null)$(cd "$XD/rp" && git status --porcelain | tr '\n' ' ')" "fail:1:link: M src/a  T tests/t9 "
+XB3="$XD/b3wt"; mkdir -p "$XB3/pkg"; git -C "$XB3" init -q -b main; printf 'x\n' > "$XB3/f"; printf 'x\n' > "$XB3/pkg/f"
+XB3N="dist build out coverage htmlcov target .tox .nox .nyc_output .next .nuxt .svelte-kit .turbo .parcel-cache .gradle .eggs __pycache__ .pytest_cache .mypy_cache .ruff_cache"
+for n in $XB3N; do printf '%s/\n/pkg/%s/\n' "$n" "$n"; done > "$XB3/.gitignore"; printf '.venv/\n' >> "$XB3/.gitignore"
+git -C "$XB3" add -A; git -C "$XB3" -c user.email=t@example.com -c user.name=t commit -q -m init
+mkdir -p "$XB3/.venv"; for n in $XB3N; do mkdir -p "$XB3/$n" "$XB3/pkg/$n"; done
+( cd "$XB3" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" tree "$XD/b3copy" --ref HEAD >/dev/null 2>&1 )
+XB3L=""; for n in $XB3N; do { [ -e "$XD/b3copy/$n" ] || [ -L "$XD/b3copy/$n" ] || [ -e "$XD/b3copy/pkg/$n" ] || [ -L "$XD/b3copy/pkg/$n" ]; } && XB3L="$XB3L $n"; done
+check "crosscheck tree: none of the cache and build-output names is linked, at the top or in a subfolder; .venv still is" "$([ -L "$XD/b3copy/.venv" ] && echo link):${XB3L:-none}" "link:none"
+# apply --replace with two replaced files and a failing hunk: both are back
+xrun tree "$XD/r2" --ref "$XBASE"; printf 'a1\n' > "$XD/r2/tests/t8"; printf 'a2\n' > "$XD/r2/tests/t9"; git -C "$XD/r2" add -A; git -C "$XD/r2" -c user.name=x -c user.email=x@x commit -q -m t89
+xrun tree "$XD/r3" --ref "$XBASE"; printf 'b1\n' > "$XD/r3/tests/t8"; printf 'b2\n' > "$XD/r3/tests/t9"; printf 'v9\n' > "$XD/r3/src/a"; xrun export "$XD/r3"; printf '%s\n' "$XOUT" > "$XD/t89.diff"
+printf 'other\n' > "$XD/r2/src/a"; XS3="$(cd "$XD/r2" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum | shasum)"
+xrun apply --replace "$XD/r2" "$XD/t89.diff"
+check "crosscheck apply --replace: two replaced files are both restored when the patch fails" "$([ "$XRC" != 0 ] && echo fail):$(cat "$XD/r2/tests/t8")$(cat "$XD/r2/tests/t9"):$(cd "$XD/r2" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum | shasum)" "fail:a1a2:$XS3"
+# apply --replace never moves a file of the worktree: a created path under a linked folder is refused (the folder is read-only so a move would fail visibly)
+XB4="$XD/b4wt"; mkdir -p "$XB4/node_modules/foo"; git -C "$XB4" init -q -b main; printf 'node_modules/\n' > "$XB4/.gitignore"; printf 'x\n' > "$XB4/f"
+git -C "$XB4" add -A; git -C "$XB4" -c user.email=t@example.com -c user.name=t commit -q -m init; printf 'WT\n' > "$XB4/node_modules/foo/index.js"
+( cd "$XB4" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" tree "$XD/b4copy" --ref HEAD >/dev/null 2>&1 )
+XP="$XD/b4patch"; mkdir -p "$XP/node_modules/foo"; git -C "$XP" init -q -b main; printf 'NEW\n' > "$XP/node_modules/foo/index.js"; git -C "$XP" add -f -A; git -C "$XP" diff --cached --binary > "$XD/b4.diff"
+chmod 555 "$XB4/node_modules/foo"; XRC=0
+( cd "$XB4" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" apply --replace "$XD/b4copy" "$XD/b4.diff" >/dev/null 2>"$TMP/xc.err" ) || XRC=$?; XERR="$(cat "$TMP/xc.err")"; chmod 755 "$XB4/node_modules/foo"
+check "crosscheck apply --replace: a created path under a linked folder is refused without moving the worktree's file" "$([ "$XRC" != 0 ] && echo fail):$(printf '%s' "$XERR" | grep -c 'cannot move'):$(cat "$XB4/node_modules/foo/index.js")" "fail:0:WT"
 xrun run "$XD/base" --label nb -- true; check "crosscheck run: no link back into the worktree -> backLinks false" "$(printf '%s' "$XOUT" | jq -r .backLinks)" "false"
 # links back into the worktree: an editable Python install in a linked venv, a workspace package in a linked node_modules
 XE="$XD/ewt"; mkdir -p "$XE"; git -C "$XE" init -q -b main; printf '.venv/\nnode_modules/\nvenv2/\n' > "$XE/.gitignore"
