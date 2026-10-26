@@ -13,6 +13,8 @@ Install the checkout you want to check (`./install.sh`), then run the script fro
 - asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca); type `skip` at a prompt to skip that check;
 - writes one report, `~/orca-live-checks/report-<script>.md`: one row per check (OK, FAIL, INFO, SKIP) plus the logs of the failures. Send it to the Planner.
 
+The scripts put the kit's shim (`~/.orca-roles/shim`) first in their PATH themselves when `orca` is not found, so a plain WSL terminal needs no PATH setup.
+
 A check already done is not repeated when you run the script again. To start over: `rm ~/orca-live-checks/state-<script>`.
 
 | Script | Who | Steps |
@@ -32,7 +34,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | X1 | The smoke sections that once failed together (`launch restart reopen wake worktree-select`) pass in one run | #29 |
 | X2 | `upgrade_config` on a user config without a `roles` key. Expected FAIL today ("null has no keys"): a known bug, left for a later PR | #37 |
 | X3 | `scholar.sh` against the live APIs: OpenAlex, arXiv (one word and a phrase), Semantic Scholar (with `S2_API_KEY` if set), Crossref and DataCite DOIs through doi.org, `verify`, a real PDF download under the size limit. Known FAIL: a several-word arXiv search returns nothing | #28 |
-| X4 | `roles-yaml --all --dry-run` over the projects registered in your Orca; nothing is written | #32 |
+| X4 | `roles-yaml --all --dry-run` over the projects registered in your Orca; nothing is written; fails when every project was skipped | #32 |
 | X5 | A fresh install into a temporary HOME: the real superpowers fetch from GitHub, a Claude session that loads its skills, and `project-plugins.sh install` doing a real `claude plugin marketplace add` and `install` (in a temporary Claude config) | #39 |
 | X6 | The new-role wizard typed by you, in that temporary kit | #28 |
 | X7 | The pinned E2E stack: install, `browser-login.sh` saving a real session (a local page sets a cookie and localStorage), `e2e-browser.sh session`, and `e2e-run.sh` running a flow with that session against the page | #31 |
@@ -42,7 +44,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | T4 | The Tester's agent runs at nice 10 with its thread caps | #8 |
 | T5 | A worker reopened while the Planner keeps its tab: kickoff's background shell sends "Role handles changed" | #29 |
 | T6, T7 | A mode switch typed in the Planner's own tab, to pr-reviewer and back: old workers closed, Esc + clear while kickoff runs, the new role message, no leftover tab, how long it took | #45 |
-| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS; on WSL it says it cannot yet), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took | this PR, #8, #38, BACKLOG |
+| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took | this PR, #8, #38, BACKLOG |
 | R2 | T3 again after the restart | this PR |
 
 ### wsl.sh only
@@ -50,7 +52,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | Id | What it proves | From |
 |---|---|---|
 | W0 | How the `orca` CLI is reached from WSL (`$ORCA_CLI_COMMAND`, the bridge) | #19 |
-| W1 | The Planner relauncher's hang: a process started in a tab and detached with `setsid` closes that same tab; does the close return? And closing another tab from this terminal | WSL bug report |
+| W1 | The Planner relauncher's hang: a process started in a tab and detached with `setsid` closes that same tab; does the close return? And closing another tab from this terminal. It measures Orca's behaviour and stays FAIL while Orca hangs; the kit no longer hangs on it because it limits closes to 15 s (`ORCA_ROLES_CLOSE_TIMEOUT`) | WSL bug report |
 
 ### agents.sh
 

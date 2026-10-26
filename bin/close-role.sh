@@ -28,8 +28,16 @@ for x in "$@"; do
   t="$(title_of "$CFG" "$id")"
   [ "$id" = planner ] && { echo "$t: the Planner is never closed."; RC=1; continue; }
   v="$(var_of "$id")"; h="${!v}"
-  if orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
-    orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1 || { echo "$t: could not close its tab ($h)."; RC=1; continue; }
+  js=""; src=1
+  if [ -n "$h" ]; then js="$(orca terminal show --terminal "$h" --json 2>/dev/null)"; src=$?; fi
+  if [ -n "$h" ] && [ "$src" -ne 0 ] && [ "$(printf '%s' "$js" | jq -r '.error.code // empty' 2>/dev/null)" != terminal_handle_stale ]; then
+    echo "$t: Orca did not answer about its tab ($h); nothing was changed."; RC=1; continue
+  fi
+  if [ "$src" -eq 0 ]; then
+    orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1 || {
+      if [ $? = 124 ]; then close_unconfirmed "$h" "$t" || { echo "$t: could not close its tab ($h)."; RC=1; continue; }
+      else echo "$t: could not close its tab ($h)."; RC=1; continue; fi
+    }
     echo "$t: tab closed ($h)."
   else
     echo "$t: its tab ($h) was already gone."

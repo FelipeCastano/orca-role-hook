@@ -3,20 +3,90 @@
 KIT="${KIT:-$HOME/.orca-roles}"
 
 # Orca's CLI is not always called 'orca': in the WSL terminals Orca manages on Windows it is $ORCA_CLI_COMMAND
-# (e.g. orca-ide). If 'orca' is not on the PATH but Orca names another command, the $KIT/shim/orca wrapper is created and
+# (e.g. orca-ide). If 'orca' is not on the PATH but orca-ide is found, the $KIT/shim/orca wrapper is created and
 # prepended to the PATH: the kit's scripts, the prompts and the agents (which inherit the PATH) keep using 'orca'.
+# The absolute path of orca-ide: $ORCA_CLI_COMMAND, else $ORCA_WSL_CLI_DIR/orca-ide, else the target the shim recorded; nothing and 1 if none exists.
+orca_ide_path() {
+  local c="${ORCA_CLI_COMMAND:-}" p line
+  if [ -n "$c" ] && [ "$c" != orca ]; then
+    p="$(command -v "$c" 2>/dev/null)" || p=""
+    case "$p" in /*) [ -x "$p" ] && { printf '%s\n' "$p"; return 0; };; esac
+  fi
+  if [ -n "${ORCA_WSL_CLI_DIR:-}" ] && [ -x "$ORCA_WSL_CLI_DIR/orca-ide" ]; then printf '%s\n' "$ORCA_WSL_CLI_DIR/orca-ide"; return 0; fi
+  if [ -f "$KIT/shim/orca" ]; then
+    line="$(grep -m1 '^t=' "$KIT/shim/orca" 2>/dev/null)" || return 1
+    p="$( eval "$line" 2>/dev/null; printf '%s' "${t:-}" )"
+    [ -n "$p" ] && [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+  fi
+  return 1
+}
 orca_shim() {
-  local real="${ORCA_CLI_COMMAND:-}" dir="$KIT/shim" tmp
-  command -v orca >/dev/null 2>&1 && return 0
-  { [ -n "$real" ] && [ "$real" != orca ] && command -v "$real" >/dev/null 2>&1; } || return 0
-  mkdir -p "$dir" && tmp="$(mktemp "$dir/.orca.XXXXXX")" || return 0
-  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$real" > "$tmp" && chmod +x "$tmp" && mv "$tmp" "$dir/orca"
-  PATH="$dir:$PATH"; export PATH
+  local dir="$KIT/shim" tmp ide cur
+  cur="$(type -P orca 2>/dev/null)" || cur=""
+  [ -z "$cur" ] || [ "$cur" = "$dir/orca" ] || return 0
+  if ide="$(orca_ide_path)"; then
+    mkdir -p "$dir" && tmp="$(mktemp "$dir/.orca.XXXXXX")" || return 0
+    {
+      printf '#!/usr/bin/env bash\n'
+      printf 't=%q\n' "$ide"
+      printf '%s\n' '[ -x "$t" ] || t="${ORCA_WSL_CLI_DIR:+$ORCA_WSL_CLI_DIR/orca-ide}"' '[ -n "$t" ] && [ -x "$t" ] || t=orca-ide' 'exec "$t" "$@"'
+    } > "$tmp" && chmod +x "$tmp" || { rm -f "$tmp"; return 0; }
+    if cmp -s "$tmp" "$dir/orca" 2>/dev/null; then rm -f "$tmp"; else mv "$tmp" "$dir/orca"; fi
+  elif [ ! -e "$dir/orca" ]; then
+    return 0
+  fi
+  case ":$PATH:" in "$dir":*|":$dir:"*) ;; *) PATH="$dir:$PATH"; export PATH;; esac
 }
 orca_shim
 
 # Kills a process and all its descendants (children first).  kill_tree <pid>
 kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
+
+# Runs a command with a time limit, keeping its stdin, stdout and stderr: run_limited <secs> <label> <command> [args...].
+# Past the limit its process tree is killed, "<label>: no answer in <secs> s; stopped." goes to stderr and the status is 124.
+run_limited() {
+  local secs="$1" label="$2" m pid wd rc=0 caller=$$
+  shift 2
+  "$@" <&0 & pid=$!
+  m="${TMPDIR:-/tmp}/orca-roles-limit.$$.$pid"
+  { : > "$m"; } 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
+  ( trap 'kill "$s" 2>/dev/null; exit 0' TERM; sleep "$secs" & s=$!; wait "$s"
+    if [ -e "$m" ] && kill -0 "$pid" 2>/dev/null; then : > "$m.fired"; kill_tree "$pid"; kill -0 "$caller" 2>/dev/null || rm -f "$m" "$m.fired"; fi ) </dev/null >/dev/null 2>&1 & wd=$!
+  wait "$pid" 2>/dev/null || rc=$?
+  kill -TERM "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+  if [ -e "$m.fired" ]; then printf '%s: no answer in %s s; stopped.\n' "$label" "$secs" >&2; rc=124; fi
+  rm -f "$m" "$m.fired"
+  return "$rc"
+}
+
+# A fixed retry or poll wait of <secs> seconds; ORCA_ROLES_PACE replaces it (tests).
+pace() { sleep "${ORCA_ROLES_PACE:-$1}"; }
+
+# Every orca call of the kit's scripts has a time limit: $ORCA_ROLES_CLI_TIMEOUT s (60; 0 = none), or the call's --timeout-ms (rounded up to s) + 60.
+# `terminal close` has its own, $ORCA_ROLES_CLOSE_TIMEOUT s (15; 0 = none). A value that is not a whole number is ignored.
+orca() {
+  local lim="${ORCA_ROLES_CLI_TIMEOUT:-}" a prev="" close="${ORCA_ROLES_CLOSE_TIMEOUT:-}"
+  case "$lim" in ''|*[!0-9]*) lim=60;; esac
+  case "$close" in ''|*[!0-9]*) close=15;; esac
+  if [ "$lim" = 0 ] || { [ "${1:-} ${2:-}" = "terminal close" ] && [ "$close" = 0 ]; }; then   # by path: bash 3.2 ends a background job with set -e at a failing "command orca" inside this function
+    a="$(type -P orca)" || return 127
+    "$a" "$@"; return
+  fi
+  [ "${1:-} ${2:-}" = "terminal close" ] && lim="$close"   # on WSL a tab closing itself never gets the answer
+  for a in "$@"; do
+    if [ "$prev" = --timeout-ms ]; then case "$a" in ''|*[!0-9]*) ;; *) lim=$(( (a + 999) / 1000 + 60 ));; esac; fi
+    prev="$a"
+  done
+  run_limited "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca "$@"
+}
+
+# After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale), else tells it was not confirmed and returns 1.
+close_unconfirmed() {  # close_unconfirmed <handle> <title>
+  local js
+  js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"
+  [ "$(printf '%s' "$js" | jq -r '.error.code // empty' 2>/dev/null)" = terminal_handle_stale ] && return 0
+  echo "Orca did not confirm closing the tab of $2 ($1)."; return 1
+}
 
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
@@ -658,7 +728,7 @@ safe_json_edit() (
   cleanup() { [ -n "$tmp" ] && rm -f "$tmp"; [ "$got" = 1 ] && rmdir "$lock" 2>/dev/null; return 0; }   # only the lock we created
   trap cleanup EXIT; trap 'exit 1' INT TERM HUP
   if [ -n "$lock" ]; then
-    for _ in $(seq 1 20); do mkdir "$lock" 2>/dev/null && { got=1; break; }; sleep 0.25; done
+    for _ in $(seq 1 20); do mkdir "$lock" 2>/dev/null && { got=1; break; }; pace 0.25; done
     [ "$got" = 1 ] || echo "Note: $lock is held by another process; continuing without it." >&2
   fi
   b="$(basename "$f")"
@@ -716,31 +786,62 @@ trust_custom_roles() {
   return 0
 }
 
-# Orca's own binary (in node mode) and its runtime client, from the 'orca' on the PATH: "<binary>|<runtime-client.js>" (macOS app only), else nothing and 1.
+# Orca's own binary (in node mode) and its runtime client, from the 'orca' on the PATH: "<binary>|<runtime-client.js>" (macOS app), else nothing and 1.
+# On WSL (Orca for Windows) the binary is Orca.exe, found through orca-ide's ORCA_WIN_LAUNCHER line, and the result ends in "|wsl": the runtime client is a Windows path.
 orca_app_node() {
-  local p l d app
-  p="$(command -v orca 2>/dev/null)" || return 1
-  case "$p" in /*) ;; *) return 1;; esac
-  while [ -L "$p" ]; do
-    l="$(readlink "$p")" || return 1
-    case "$l" in /*) p="$l";; *) d="$(dirname "$p")"; p="$d/$l";; esac
-  done
-  case "$p" in *.app/Contents/Resources/bin/orca) ;; *) return 1;; esac
-  app="${p%/Contents/Resources/bin/orca}"
-  [ -x "$app/Contents/MacOS/Orca" ] && [ -f "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js" ] || return 1
-  printf '%s|%s\n' "$app/Contents/MacOS/Orca" "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+  local p l d app ide line v inst exe suf
+  if p="$(type -P orca 2>/dev/null)" && case "$p" in /*) true;; *) false;; esac; then
+    while [ -L "$p" ]; do
+      l="$(readlink "$p")" || break
+      case "$l" in /*) p="$l";; *) d="$(dirname "$p")"; p="$d/$l";; esac
+    done
+    case "$p" in
+      *.app/Contents/Resources/bin/orca)
+        app="${p%/Contents/Resources/bin/orca}"
+        [ -x "$app/Contents/MacOS/Orca" ] && [ -f "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js" ] || return 1
+        printf '%s|%s\n' "$app/Contents/MacOS/Orca" "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+        return 0;;
+    esac
+  fi
+  grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null || return 1
+  command -v wslpath >/dev/null 2>&1 || return 1
+  ide="$(orca_ide_path)" || return 1
+  line="$(grep -m1 '^ORCA_WIN_LAUNCHER=' "$ide" 2>/dev/null)" || return 1
+  v="${line#*\'}"; v="${v%%\'*}"
+  suf='\resources\bin\orca.exe'
+  [ "${#v}" -gt "${#suf}" ] && [ "$(printf '%s' "${v:${#v}-${#suf}}" | tr 'A-Z' 'a-z')" = "$suf" ] || return 1
+  inst="${v:0:${#v}-${#suf}}"
+  exe="$(wslpath -u "$inst\\Orca.exe" 2>/dev/null)" || return 1
+  [ -n "$exe" ] && [ -f "$exe" ] && [ -x "$exe" ] || return 1
+  printf '%s|%s|wsl\n' "$exe" "$inst\\resources\\app.asar.unpacked\\out\\cli\\runtime-client.js"
+}
+
+# A path as the kit's shell sees it: a Windows UNC path (\\wsl.localhost\Ubuntu\...) as a Linux path; any other path unchanged.
+local_path() {
+  local c
+  case "$1" in
+    '\\'*) if command -v wslpath >/dev/null 2>&1 && c="$(wslpath -u "$1" 2>/dev/null)" && [ -n "$c" ]; then printf '%s\n' "$c"; else printf '%s\n' "$1"; fi;;
+    *) printf '%s\n' "$1";;
+  esac
 }
 
 # Wakes a tab Orca keeps asleep after a restart: wake_tab <worktreeId> <tabId> <leafId>. Returns 0 woken (stdout empty), 1 failed (stdout: the reason), 2 unavailable here.
 wake_tab() {
-  local n bin rc rcl err
+  local n bin rc rcl err wenv
   if [ -n "${ORCA_ROLES_WAKE:-}" ]; then
     "$ORCA_ROLES_WAKE" "$@"; rc=$?
     case "$rc" in 0) return 0;; 2) return 2;; *) return 1;; esac
   fi
   n="$(orca_app_node)" || return 2
   bin="${n%%|*}"; rcl="${n#*|}"
-  err="$(ELECTRON_RUN_AS_NODE=1 "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+  if [ "${rcl##*|}" = wsl ]; then
+    rcl="${rcl%|wsl}"
+    wenv="${WSLENV:-}"
+    case ":$wenv:" in *:ELECTRON_RUN_AS_NODE:*|*:ELECTRON_RUN_AS_NODE/*) ;; *) wenv="${wenv:+$wenv:}ELECTRON_RUN_AS_NODE";; esac
+    err="$(cd "$(dirname "$bin")" && ELECTRON_RUN_AS_NODE=1 WSLENV="$wenv" run_limited 30 "wake-tab" "$bin" "$(wslpath -w "$KIT/bin/wake-tab.cjs")" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+  else
+    err="$(ELECTRON_RUN_AS_NODE=1 run_limited 30 "wake-tab" "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+  fi
   printf '%s\n' "$err" | head -1
   return 1
 }

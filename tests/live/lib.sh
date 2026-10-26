@@ -57,9 +57,18 @@ ask() {  # ask <text>: a step only the user can do; waits for Enter
 
 # ---------- environment ----------
 live_is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
+local_path() {  # a UNC path (Orca on Windows reports WSL paths that way) as a Linux path; any other path unchanged
+  local c
+  case "$1" in
+    '\\'*) if command -v wslpath >/dev/null 2>&1 && c="$(wslpath -u "$1" 2>/dev/null)" && [ -n "$c" ]; then printf '%s\n' "$c"; else printf '%s\n' "$1"; fi;;
+    *) printf '%s\n' "$1";;
+  esac
+}
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' is missing." >&2; exit 1; }; }
 live_preflight() {  # the installed kit must be this checkout (the checks test the code, not an older install)
-  need jq; need git; need orca
+  need jq; need git
+  if ! command -v orca >/dev/null 2>&1 && [ -e "$HOME/.orca-roles/shim/orca" ]; then export PATH="$HOME/.orca-roles/shim:$PATH"; fi
+  need orca
   orca status --json 2>/dev/null | jq -e '.ok == true' >/dev/null || { echo "ERROR: Orca is not running or its CLI does not answer (orca status)." >&2; exit 1; }
   # the worktree id of this checkout: launches run as if typed in one of its terminals (so T2 exercises the folder's-worktree rule)
   HOST_WTID="${ORCA_WORKTREE_ID:-$(cd "$LIVE_ROOT" && orca worktree current --json 2>/dev/null | jq -r '.result.worktree.id // empty')}"
@@ -109,11 +118,22 @@ launch_wait() {  # launch_wait <launch log lines before>: waits (up to 180 s) fo
 }
 WT=""; WTID=""; GD=""
 wt_load() { WT="$(st_get wt)"; WTID="$(st_get wtid)"; [ -n "$WT" ] && GD="$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)"; }
+proj_repo() {  # the --repo selector of $PROJ: id:<repo id> of the repo Orca lists with that path (through local_path), else path:$PROJ
+  local p id=""
+  while IFS=$'\t' read -r rid p; do
+    [ -n "$p" ] && [ "$(local_path "$p")" = "$PROJ" ] && { id="$rid"; break; }
+  done < <(orca repo list --json 2>/dev/null | jq -r '.result.repos[]? | [.id, .path] | join("\t")' 2>/dev/null)
+  if [ -n "$id" ]; then printf 'id:%s\n' "$id"; else printf 'path:%s\n' "$PROJ"; fi
+}
 wt_create() {  # wt_create <name> [orca worktree create options...]: a new worktree of $PROJ; sets WT, WTID, GD
   local name="$1" out; shift
-  out="$(orca worktree create --repo "path:$PROJ" --name "$name" --setup run --json "$@" 2>&1)"
-  WT="$(printf '%s' "$out" | jfield result.worktree.path)"; WTID="$(printf '%s' "$out" | jfield result.worktree.id)"
-  [ -n "$WT" ] || { printf '%s\n' "$out" | head -5 >&2; return 1; }
+  out="$(orca worktree create --repo "$(proj_repo)" --name "$name" --setup run --json "$@" 2>&1)"
+  WT="$(local_path "$(printf '%s' "$out" | jfield result.worktree.path)")"; WTID="$(printf '%s' "$out" | jfield result.worktree.id)"
+  [ -n "$WT" ] || {
+    local code msg; code="$(printf '%s' "$out" | jfield error.code)"; msg="$(printf '%s' "$out" | jfield error.message)"
+    if [ -n "$code$msg" ]; then echo "orca worktree create: $code: $msg" >&2; else printf '%s\n' "$out" | head -20 >&2; fi
+    return 1
+  }
   GD="$(git -C "$WT" rev-parse --absolute-git-dir)"; st_set wt "$WT"; st_set wtid "$WTID"
 }
 wt_terms() {  # one line per live terminal of the worktree: handle<TAB>ptyId<TAB>title<TAB>agent
@@ -159,7 +179,7 @@ wt_cleanup() {  # closes every tab of the throwaway worktree and removes it
 # ---------- checks shared by mac.sh and wsl.sh ----------
 c_smoke_combo() {  # sections that failed together once (#29) must pass together
   local id=$1 out rc
-  out="$("$LIVE_ROOT/tests/smoke.sh" launch restart reopen wake worktree-select 2>&1)"; rc=$?
+  out="$(SMOKE_JOBS=1 "$LIVE_ROOT/tests/smoke.sh" launch restart reopen wake worktree-select 2>&1)"; rc=$?
   if [ $rc = 0 ] && printf '%s' "$out" | grep -q 'ALL OK'; then ok "$id" "smoke launch+restart+reopen+wake+worktree-select together: ALL OK"
   else fail "$id" "smoke sections together: rc=$rc"; attach "$id smoke" "$(printf '%s\n' "$out" | grep -E 'FAIL|aborted' | head -40)"; fi
 }
@@ -195,7 +215,9 @@ c_scholar() {  # scholar.sh against the live APIs (#28)
 c_roles_yaml_all() {  # roles-yaml --all against the projects registered in Orca, without writing (#32)
   local id=$1 out rc
   out="$("$KIT/bin/orca-yaml.sh" --all --dry-run 2>&1)"; rc=$?
-  [ $rc = 0 ] && ok "$id" "roles-yaml --all --dry-run over $(printf '%s\n' "$out" | grep -c . ) lines, nothing written" || fail "$id" "rc=$rc"
+  if [ $rc != 0 ]; then fail "$id" "rc=$rc"
+  elif printf '%s\n' "$out" | grep -qE '(^|[^0-9])0 created, 0 updated, 0 unchanged, [1-9][0-9]* skipped'; then fail "$id" "every project was skipped"
+  else ok "$id" "roles-yaml --all --dry-run over $(printf '%s\n' "$out" | grep -c . ) lines, nothing written"; fi
   attach "$id roles-yaml --all --dry-run" "$out"
 }
 c_install_superpowers() {  # a fresh install into a temporary HOME: the real superpowers fetch, a session with it, a real plugin install (#39)
@@ -299,14 +321,17 @@ c_switch_from_planner() {  # a mode switch typed in the Planner's own tab: worke
   pl="$(env_of PLANNER)"; expect="$(team_for "$to")"; n="$(wc -l < "$GD/orca-roles-launch.log" | tr -d ' ')"
   orca terminal wait --terminal "$pl" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
   t0=$SECONDS
-  orca terminal send --terminal "$pl" --text "!$KIT/bin/launch.sh --mode $to" --enter --json >/dev/null 2>&1
+  orca terminal send --terminal "$pl" --text '!' --json >/dev/null 2>&1; sleep 1
+  orca terminal send --terminal "$pl" --text "$KIT/bin/launch.sh --mode $to" --enter --json >/dev/null 2>&1
   launch_wait "$n"; t1=$SECONDS
   attach "$id launch log" "$(tail -n +"$((n + 1))" "$GD/orca-roles-launch.log")"
   check "$id.team" "after switching to $to the team is" "$(cut -d= -f1 "$GD/orca-roles.env" | sort | tr '\n' ' ')" "$expect"
   check "$id.file" "the switch-from file is gone" "$([ -e "$GD/orca-roles.switch-from" ] && echo present || echo gone)" gone
   grep -q 'cleared' "$GD/orca-roles-kickoff.log" && ok "$id.clear" "the Planner's conversation was cleared ($(grep -o 'cleared ([^)]*)' "$GD/orca-roles-kickoff.log" | head -1))" || fail "$id.clear" "no clear in the kickoff log"
   wait_screen "$pl" "switched from" 90 && ok "$id.msg" "the Planner got the new mode's role message" || fail "$id.msg" "no 'switched from' on the Planner's screen"
-  check "$id.tabs" "role tabs open in the worktree (one per role, no leftovers)" "$(wt_terms | awk -F'\t' '$3 ~ /\(claude\)$/ || $4 != ""' | wc -l | tr -d ' ')" "$(grep -c . "$GD/orca-roles.env")"
+  local nt; nt="$(wt_terms | awk -F'\t' '$3 ~ /\(claude\)$/ || $4 != ""' | wc -l | tr -d ' ')"
+  check "$id.tabs" "role tabs open in the worktree (one per role, no leftovers)" "$nt" "$(grep -c . "$GD/orca-roles.env")"
+  [ "$nt" = "$(grep -c . "$GD/orca-roles.env")" ] || attach "$id terminals of the worktree (handle, ptyId, title, agent)" "$(wt_terms)"
   info "$id.time" "switch took $((t1 - t0)) s"
 }
 c_restart_prepare() {  # before the restart: what each role had
@@ -327,11 +352,7 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
   attach "$id roles after the restart" "$LIVE_DIR/last-roles.log"
   info "$id.time" "roles took $((t1 - t0)) s"
   r="$(grep -c 'woke it' "$LIVE_DIR/last-roles.log")"
-  if live_is_wsl; then
-    grep -q 'Cannot wake tabs' "$LIVE_DIR/last-roles.log" && info "$id.wake" "WSL: the kit says it cannot wake asleep tabs (expected until the WSL PR)" || info "$id.wake" "woke $r tabs"
-  else
-    check "$id.wake" "every asleep or placeholder role was woken" "$r" "$(echo $asleep | wc -w | tr -d ' ')"
-  fi
+  check "$id.wake" "every asleep or placeholder role was woken" "$r" "$(echo $asleep | wc -w | tr -d ' ')"
   check "$id.memory" "every role reopened with its conversation" "$(grep -c 'reopening it with its conversation' "$LIVE_DIR/last-roles.log")" "$(grep -c . "$GD/orca-roles.env")"
   check "$id.lost" "no role started without memory" "$(grep -c 'no longer exists\|could not be read\|treated as closed' "$LIVE_DIR/last-roles.log")" 0
   sleep 20
@@ -360,6 +381,7 @@ live_main() {
   if [ -z "$phase" ]; then
     project_setup   # the throwaway project: X7 runs its E2E flow there
     echo "== Part 1: checks without Orca"
+    echo "X1: running smoke sections launch restart reopen wake worktree-select together (several minutes)..."
     run_check X1 c_smoke_combo
     run_check X2 c_upgrade_no_roles
     run_check X3 c_scholar

@@ -11,7 +11,64 @@ for s in "$@"; do
   [ "$known" = 1 ] || { echo "smoke.sh: unknown section '$s'. Sections:"; printf '  %s\n' $SECTIONS; } >&2
   [ "$known" = 1 ] || exit 2
 done
+# Sections run in parallel (SMOKE_JOBS, default half the CPUs, 1 to 8; 1, or a single section = one process, in order). Each section is its own
+# `smoke.sh <section>` process with its output in a temp file; the parent prints them in the requested order and adds up their results.
+# SMOKE_SERIAL: the sections that hold elapsed-time checks run alone, after the others, so a loaded machine cannot fail them.
+SMOKE_SERIAL=(
+  wake            # times the wake loop against its budgets (WAKE_BUDGET, WAKE_LISTED_BUDGET)
+  review-skill    # an install must finish in under 20 s although two timers exist
+  scholar         # the arXiv and Crossref pacing checks assert the seconds waited
+)
+smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
+smoke_parallel() {
+  local d n i k printed=0 running=0 bad=0 last
+  local -a SP_PID SP_RC SP_ST
+  d="$(mktemp -d)"; n=${#ARGS[@]}
+  for ((i = 0; i < n; i++)); do SP_ST[i]=0; done
+  trap 'for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done; rm -rf "$d"; exit 130' INT TERM
+  while [ "$printed" -lt "$n" ]; do
+    for ((i = 0; i < n; i++)); do
+      [ "${SP_ST[i]}" = 1 ] && ! kill -0 "${SP_PID[i]}" 2>/dev/null || continue
+      if wait "${SP_PID[i]}" 2>/dev/null; then SP_RC[i]=0; else SP_RC[i]=$?; fi
+      SP_ST[i]=2; running=$((running - 1))
+    done
+    for ((i = 0; i < n; i++)); do
+      [ "$running" -lt "$JOBS" ] || break
+      [ "${SP_ST[i]}" = 0 ] && ! smoke_serial "${ARGS[i]}" || continue
+      SMOKE_JOBS=1 bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=$((running + 1))
+    done
+    if [ "$running" = 0 ]; then
+      for ((i = 0; i < n; i++)); do
+        [ "${SP_ST[i]}" = 0 ] || continue
+        SMOKE_JOBS=1 bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=1
+        break
+      done
+    fi
+    while [ "$printed" -lt "$n" ] && [ "${SP_ST[printed]}" = 2 ]; do
+      i=$printed; last="$(tail -n 1 "$d/$i.out")"
+      case "$last" in "ALL OK"|FAILURES) sed '$d' "$d/$i.out";; *) cat "$d/$i.out";; esac
+      cat "$d/$i.err" >&2
+      [ "${SP_RC[i]}" = 0 ] && [ "$last" = "ALL OK" ] || bad=1
+      printed=$((printed + 1))
+    done
+    [ "$printed" -lt "$n" ] && sleep 0.05
+  done
+  rm -rf "$d"
+  [ "$bad" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
+  exit 0
+}
+ARGS=("$@"); [ ${#ARGS[@]} -gt 0 ] || read -r -a ARGS <<< "$SECTIONS"
+JOBS="${SMOKE_JOBS:-}"
+if [ -z "$JOBS" ]; then
+  JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"; case "$JOBS" in ''|*[!0-9]*) JOBS=2;; esac
+  JOBS=$((JOBS / 2)); [ "$JOBS" -ge 1 ] || JOBS=1; [ "$JOBS" -le 8 ] || JOBS=8
+fi
+case "$JOBS" in ''|*[!0-9]*|0) JOBS=1;; esac
+if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
 unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET   # the suite gives the same result from any terminal; a test that needs one sets it itself
+export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
+export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and poll waits, and the stop tick of bounded(), shortened; a check that needs the real value sets it itself
+UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
 SECTION=""; ERR_AT=""
@@ -31,6 +88,8 @@ blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0
 try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
 # poll <predicate> [args]: waits until it holds, every 0.2 s for at most 5 s (a slow runner gets the time; the check that follows reports what is still wrong)
 poll() { local n=0; until "$@" 2>/dev/null || [ "$n" -ge 25 ]; do sleep 0.2; n=$((n+1)); done; return 0; }
+# fast_poll <predicate> [args]: like poll, every 0.02 s for at most 5 s
+fast_poll() { local n=0; until "$@" 2>/dev/null || [ "$n" -ge 250 ]; do sleep 0.02; n=$((n+1)); done; return 0; }
 pgone() { ! kill -0 "${1:-0}" 2>/dev/null; }
 dir_empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
 nonempty() { [ -s "$1" ]; }
@@ -506,18 +565,18 @@ rule R28 "$R28RM" '`roles` wakes each role'"'"'s asleep tab before deciding anyt
 rule R28 "$R28RM" '`orca-roles.tabs` in the worktree'"'"'s git dir' "$R28B"
 rule R28 "$R28RM" 'waits until its conversation is running and then reopens it as above' "$R28B"
 rule R28 "$R28RM" 'so no role is left with two tabs' "$R28B"
-rule R28 "$R28RM" 'Waking uses an internal call of the Orca app (Orca has no command for it yet) and works only on macOS' "$R28B"
-rule R28 "$R28RM" 'elsewhere `roles` says it cannot wake them and opens new tabs: close the old ones without opening them' "$R28B"
+rule R28 "$R28RM" 'Waking uses an internal call of the Orca app (Orca has no command for it yet) and works on macOS and on Orca for Windows with WSL terminals' "$R28B"
+rule R28 "$R28RM" 'on other systems `roles` says it cannot wake them and opens new tabs: close the old ones without opening them' "$R28B"
 [ "$(awk '/^- \*\*Orca restored the tabs\*\*/{p=1; next} p{print; exit}' "$R28RM" | cut -c1-31)" = '- **Orca kept the tabs asleep**' ] || { echo "FAIL rules R28: README.md: the 'Orca kept the tabs asleep' bullet is not right after 'Orca restored the tabs'"; FAIL=1; }
 for f in "$R28RM" "$R28SK"; do
   rule R28 "$f" 'The woken tab is still starting its agent: run `roles` again in a moment. No tab was opened' '^\| After a restart `roles` says "Orca woke the tab of X but its conversation has not started yet"'
-  rule R28 "$f" '`roles` could not wake it (not macOS, or the call failed: `orca-roles-launch.log` says why) and opened a new tab. Close the old one' '^\| After a restart a role'"'"'s old tab comes back when you click it, next to a new one'
+  rule R28 "$f" '`roles` could not wake it (a system where waking is not available, or the call failed: `orca-roles-launch.log` says why) and opened a new tab. Close the old one' '^\| After a restart a role'"'"'s old tab comes back when you click it, next to a new one'
 done
 case "$(awk '/^\| `worker-start` fails with `terminal_handle_stale`/{p=1; next} p{print; exit}' "$R28SK")" in '| After a restart `roles` says "Orca woke the tab of X but its conversation has not started yet" |'*) ;; *) echo "FAIL rules R28: SKILL.md: the 'Orca woke the tab' row is not right after the terminal_handle_stale row"; FAIL=1;; esac
 R28BLS="$(awk '/^## /{s=$0} s == "## Revert when Orca fixes it" && /^- /{l=$0} END{print l}' "$R28BL")"
-grep -qF -- "Waking asleep tabs through Orca's internal \`terminal.reveal\`" <<<"$R28BLS" && grep -qF 'remove `bin/wake-tab.cjs` and the macOS-only limit in the README' <<<"$R28BLS" || { echo "FAIL rules R28: BACKLOG.md: the last entry of 'Revert when Orca fixes it' is not the one for Orca's internal terminal.reveal"; FAIL=1; }
+grep -qF -- "Waking asleep tabs through Orca's internal \`terminal.reveal\`" <<<"$R28BLS" && grep -qF 'remove `bin/wake-tab.cjs` and the platform limits in the README' <<<"$R28BLS" || { echo "FAIL rules R28: BACKLOG.md: the last entry of 'Revert when Orca fixes it' is not the one for Orca's internal terminal.reveal"; FAIL=1; }
 R28BLP="$(awk '/^## /{s=$0} s == "## Pending verification" && /^- /{l=$0} END{print l}' "$R28BL")"
-grep -qF '**Asleep tabs on Linux and WSL.**' <<<"$R28BLP" && grep -qF '`roles` treats them as closed and opens new tabs' <<<"$R28BLP" || { echo "FAIL rules R28: BACKLOG.md: the last entry of 'Pending verification' is not the one for asleep tabs on Linux and WSL"; FAIL=1; }
+grep -qF '**Asleep tabs on Linux.**' <<<"$R28BLP" && grep -qF '`roles` treats them as closed and opens new tabs' <<<"$R28BLP" || { echo "FAIL rules R28: BACKLOG.md: the last entry of 'Pending verification' is not the one for asleep tabs on Linux"; FAIL=1; }
 rule R28 "$ROOT/bin/launch.sh" 'but its conversation has not started yet; run roles again in a moment. No tab was opened.' 'Orca woke the tab of'
 rule R28 "$ROOT/bin/lib.sh" 'wake_tab()' '^wake_tab\(\)'
 rule R28 "$ROOT/bin/launch.sh" 'orca-roles.tabs' '^TABS='
@@ -962,9 +1021,78 @@ cli_shim_dir
 # Orca CLI under another name (WSL: ORCA_CLI_COMMAND=orca-ide): 'orca' wrapper in $KIT/shim
 check "shim: 'orca' calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c '. "$KIT/bin/lib.sh"; orca terminal list')" "orca-ide:terminal list"
 rm -f "$KIT/shim/orca"
-check "shim: not created without ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c '. "$KIT/bin/lib.sh"; command -v orca || echo none')" "none"
-check "shim: not created if 'orca' already exists" "$(PATH="$TMP/fakebin:$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c 'printf "#!/bin/sh\n" > "$0/orca"; chmod +x "$0/orca"; . "$KIT/bin/lib.sh"; command -v orca' "$TMP/fakebin")" "$TMP/fakebin/orca"
+check "shim: not created without ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c '. "$KIT/bin/lib.sh"; type -P orca || echo none')" "none"
+check "shim: not created if 'orca' already exists" "$(PATH="$TMP/fakebin:$TMP/cli:/usr/bin:/bin" ORCA_CLI_COMMAND=orca-ide bash -c 'printf "#!/bin/sh\n" > "$0/orca"; chmod +x "$0/orca"; . "$KIT/bin/lib.sh"; type -P orca' "$TMP/fakebin")" "$TMP/fakebin/orca"
 rm -f "$TMP/fakebin/orca"
+# orca_ide_path: ORCA_CLI_COMMAND, ORCA_WSL_CLI_DIR, the target recorded in the shim; not the name 'orca'; nothing and 1 otherwise
+IDE="$TMP/ide"; mkdir -p "$IDE/a" "$IDE/b" "$IDE/c d"
+for d in a b "c d"; do printf '#!/bin/sh\necho "ide-%s:$*"\n' "$d" > "$IDE/$d/orca-ide"; chmod +x "$IDE/$d/orca-ide"; done
+ip() {  # ip <ORCA_CLI_COMMAND> <ORCA_WSL_CLI_DIR> <extra PATH dir>: orca_ide_path's output and status, with a fresh $KIT/shim only when the case keeps one
+  env -u ORCA_CLI_COMMAND -u ORCA_WSL_CLI_DIR PATH="$3:/usr/bin:/bin" ORCA_CLI_COMMAND="$1" ORCA_WSL_CLI_DIR="$2" bash -c '. "$KIT/bin/lib.sh"; r=0; orca_ide_path || r=$?; echo "rc$r"' | tr '\n' ' '
+}
+rm -rf "$KIT/shim"; I1="$(ip orca-ide '' "$IDE/a")"; rm -rf "$KIT/shim"
+I2="$(ip orca "$IDE/b" "$IDE/a")"; rm -rf "$KIT/shim"
+I3="$(ip orca-ide "$IDE/b" "$IDE/a")"; rm -rf "$KIT/shim"
+chmod -x "$IDE/b/orca-ide"; I4="$(ip '' "$IDE/b" "$IDE/a")"; rm -rf "$KIT/shim"; chmod +x "$IDE/b/orca-ide"
+I5="$(ip orca-ide '' "$IDE/a")"; I6="$(ip '' '' "$IDE/a")"; mv "$IDE/a/orca-ide" "$IDE/a/orca-ide.off"; I7="$(ip '' '' "$IDE/a")"; mv "$IDE/a/orca-ide.off" "$IDE/a/orca-ide"
+printf '#!/usr/bin/env bash\nexec orca-ide "$@"\n' > "$KIT/shim/orca"; I8="$(ip '' '' "$IDE/a")"; rm -rf "$KIT/shim"
+check "orca_ide_path: ORCA_CLI_COMMAND first, then ORCA_WSL_CLI_DIR (not executable, or ORCA_CLI_COMMAND=orca, is skipped), then the target the shim recorded; a gone target and an old-format shim give nothing and 1" "$I1|$I2|$I3|$I4|$I5|$I6|$I7|$I8" "$IDE/a/orca-ide rc0 |$IDE/b/orca-ide rc0 |$IDE/a/orca-ide rc0 |rc1 |$IDE/a/orca-ide rc0 |$IDE/a/orca-ide rc0 |rc1 |rc1 "
+# sourced under set -e with no orca on the PATH (CI runners): it goes on and creates no shim
+NOO="$TMP/noorca"; mkdir -p "$NOO/kit" "$NOO/bin" "$NOO/home"
+NO1="$(env -i HOME="$NOO/home" PATH="$NOO/bin" "$(command -v bash)" -c 'set -e; KIT="$1"; . "$2/bin/lib.sh"; echo reached' x "$NOO/kit" "$ROOT" </dev/null 2>&1):$?:$([ -e "$NOO/kit/shim" ] && echo shim || echo noshim)"
+check "lib.sh: sourcing it under set -e with no orca on the PATH goes on (CI runners have none)" "$NO1" "reached:0:noshim"
+# the shim: exact content, a path with a space, rewritten only when it changes, the fallbacks at run time, one PATH entry, a real 'orca' is left alone
+sh1() { env -u ORCA_CLI_COMMAND -u ORCA_WSL_CLI_DIR PATH="$2:/usr/bin:/bin" ORCA_CLI_COMMAND="$1" ORCA_WSL_CLI_DIR="${3:-}" bash -c '. "$KIT/bin/lib.sh"; . "$KIT/bin/lib.sh"; echo "$PATH" | tr ":" "\n" | grep -cx "$KIT/shim"'; }
+rm -rf "$KIT/shim"; S1="$(sh1 orca-ide "$IDE/c d")"; SHF="$KIT/shim/orca"
+S2="$(sed -n '1p;3,5p' "$SHF" | tr '\n' '~')"; S3="$(bash -c 'eval "$(sed -n 2p "$0")"; printf "%s" "$t"' "$SHF")"
+S4="$(PATH="/usr/bin:/bin" "$SHF" x y)"; INO="$(ls -i "$SHF" | cut -d' ' -f1)"; sh1 orca-ide "$IDE/c d" >/dev/null; S5="$([ "$(ls -i "$SHF" | cut -d' ' -f1)" = "$INO" ] && echo kept || echo rewritten)"
+sh1 orca-ide "$IDE/a" >/dev/null; S6="$(bash -c 'eval "$(sed -n 2p "$0")"; printf "%s" "$t"' "$SHF")"
+mv "$IDE/a/orca-ide" "$IDE/a/orca-ide.off"; S7="$(ORCA_WSL_CLI_DIR="$IDE/b" PATH="/usr/bin:/bin" "$SHF" z)"; S8="$(ORCA_WSL_CLI_DIR="" PATH="$IDE/c d:/usr/bin:/bin" "$SHF" w)"; mv "$IDE/a/orca-ide.off" "$IDE/a/orca-ide"
+BEFS="$(cksum < "$SHF")"; mkdir -p "$TMP/realorca"; printf '#!/bin/sh\n' > "$TMP/realorca/orca"; chmod +x "$TMP/realorca/orca"; S9="$(sh1 orca-ide "$TMP/realorca:$IDE/b"):$(cksum < "$SHF" | cut -d' ' -f1 | grep -qx "${BEFS%% *}" && echo same || echo changed)"
+rm -rf "$KIT/shim"
+check "shim: the exact script with a printf %q target (a path with a space works), one PATH entry after two sourcings, not rewritten while unchanged, rewritten when the target changes, run-time fallbacks to ORCA_WSL_CLI_DIR and to orca-ide on the PATH, untouched and not put on the PATH when a real 'orca' exists" "$S1|$S2|$S3|$S4|$S5|$S6|$S7|$S8|$S9" "1|#!/usr/bin/env bash~[ -x \"\$t\" ] || t=\"\${ORCA_WSL_CLI_DIR:+\$ORCA_WSL_CLI_DIR/orca-ide}\"~[ -n \"\$t\" ] && [ -x \"\$t\" ] || t=orca-ide~exec \"\$t\" \"\$@\"~|$IDE/c d/orca-ide|ide-c d:x y|kept|$IDE/a/orca-ide|ide-b:z|ide-c d:w|0:same"
+# run_limited: past the limit the process tree is killed, the label goes to stderr and the status is 124; nothing is left behind
+RLT="$TMP/rltmp"; mkdir -p "$RLT"; : > "$TMP/rl.pid"
+rl() { TMPDIR="$RLT" bash -c '. "$KIT/bin/lib.sh"; run_limited "$@"' x "$@" 2>&1; }
+T0=$SECONDS; try rl 1 lbl sh -c "sleep 41 & echo \$! > '$TMP/rl.pid'; wait" ; R1="$RC:$OUT:$((SECONDS - T0 < 10 ? 1 : 0))"
+RLP="$(cat "$TMP/rl.pid")"; poll pgone "$RLP"
+check "run_limited: a command past its limit is stopped with its whole process tree, '<label>: no answer in <secs> s; stopped.' and status 124, no temp folder left" "$R1:$(pgone "$RLP" && echo gone || echo alive):$(ls -A "$RLT" | wc -l | tr -d ' ')" "124:lbl: no answer in 1 s; stopped.:1:gone:0"
+[ -n "$RLP" ] && kill "$RLP" 2>/dev/null || true
+# run_limited: status, stdin and output pass through; no watchdog is left; without a temp folder the command runs unlimited
+try rl $((UT + 5)) lbl sh -c 'cat; echo err >&2; exit 7' <<<"in" ; P1="$RC:$OUT"
+poll bt_none "sleep $((UT + 5))"; P2="$(pgrep -f "sleep $((UT + 5))" | wc -l | tr -d ' '):$(ls -A "$RLT" | wc -l | tr -d ' ')"
+try env TMPDIR="$TMP/no/such/dir" bash -c '. "$KIT/bin/lib.sh"; run_limited 1 lbl sh -c "sleep 2; echo done; exit 3"'; P3="$RC:$OUT"
+check "run_limited: the command's status, stdin, stdout and stderr pass through; the watchdog is gone and the temp folder removed; if mktemp fails the command runs without a limit" "$P1|$P2|$P3" "7:in
+err|0:0|3:done"
+# the orca function: limit 60 s, ORCA_ROLES_CLI_TIMEOUT, or --timeout-ms rounded up to seconds + 60; label from the first two arguments; runs the real command with its status
+ol() { env -u ORCA_ROLES_CLI_TIMEOUT ${OLT:+ORCA_ROLES_CLI_TIMEOUT=$OLT} PATH="$TMP/realorca:/usr/bin:/bin" bash -c '. "$KIT/bin/lib.sh"; run_limited() { echo "$1|$2"; }; orca "$@"' x "$@"; }
+O1="$(ol terminal list)"; O2="$(OLT=5 ol a)"; O3="$(ol ask --timeout-ms 600000 --json)"; O4="$(ol ask --timeout-ms 1500)"; O5="$(ol ask --timeout-ms abc)"; O6="$(ol ask --timeout-ms)"
+printf '#!/bin/sh\necho "real:$*"; exit 3\n' > "$TMP/realorca/orca"; try env ORCA_ROLES_CLI_TIMEOUT=60 PATH="$TMP/realorca:/usr/bin:/bin" bash -c '. "$KIT/bin/lib.sh"; orca terminal list --json'; O7="$RC:$OUT"; O8="$(OLT=0 ol ask --timeout-ms 1500 | tr '\n' ' ' || true)"; rm -f "$TMP/realorca/orca"
+check "orca function: default 60 s, ORCA_ROLES_CLI_TIMEOUT (0 = no limit even with --timeout-ms: the real command runs directly), --timeout-ms N rounded up + 60 (a non-numeric or missing N keeps the default), label from the first two arguments; the real command's status and output pass through" "$O1|$O2|$O3|$O4|$O5|$O6|$O7|$O8" "60|orca terminal list (no answer from Orca)|5|orca a  (no answer from Orca)|660|orca ask --timeout-ms (no answer from Orca)|62|orca ask --timeout-ms (no answer from Orca)|60|orca ask --timeout-ms (no answer from Orca)|60|orca ask --timeout-ms (no answer from Orca)|3:real:terminal list --json|real:ask --timeout-ms 1500 "
+# run_limited from two forked subshells at once: each call has its own marker, both are stopped, no marker is left
+rl2() { TMPDIR="$RLT" bash -c '. "$KIT/bin/lib.sh"; ( run_limited 1 a sleep "$1"; echo "a:$?" ) 2>/dev/null & ( run_limited 1 b sleep "$2"; echo "b:$?" ) 2>/dev/null & wait' x $((UT + 7)) $((UT + 8)) | sort | tr '\n' ' '; }
+check "run_limited: two calls running at once from forked subshells are both stopped at their limit (own marker each) and no marker file is left" "$(rl2):$(ls -A "$RLT" | wc -l | tr -d ' ')" "a:124 b:124 :0"
+# run_limited: a caller that dies does not leave the command running past its limit, and the watchdog removes the marker
+rlk_up() { ls "$RLT"/orca-roles-limit.* >/dev/null 2>&1; }
+TMPDIR="$RLT" bash -c '. "$KIT/bin/lib.sh"; run_limited 2 c sleep "$1"' x $((UT + 9)) 2>/dev/null & RLC=$!
+fast_poll rlk_up; kill -9 "$RLC" 2>/dev/null; wait "$RLC" 2>/dev/null || true
+poll bt_none "^sleep $((UT + 9))$"; poll dir_empty "$RLT"
+check "run_limited: the caller was killed: the command is stopped at the limit by the watchdog and the marker is removed" "$(pgrep -f "^sleep $((UT + 9))$" | wc -l | tr -d ' '):$(ls -A "$RLT" | wc -l | tr -d ' ')" "0:0"
+pkill -f "^sleep $((UT + 9))$" 2>/dev/null || true
+# pace: ORCA_ROLES_PACE replaces the wait; unset or empty keeps the caller's value
+T0=$SECONDS; ORCA_ROLES_PACE=0 bash -c '. "$KIT/bin/lib.sh"; pace 30'; PF=$((SECONDS - T0 < 5 ? 1 : 0))
+T0=$SECONDS; ORCA_ROLES_PACE='' bash -c '. "$KIT/bin/lib.sh"; pace 2'; PS=$((SECONDS - T0 >= 1 ? 1 : 0))
+check "pace: ORCA_ROLES_PACE replaces the wait, an empty one keeps the given seconds" "$PF:$PS" "1:1"
+# bounded(): a shorter ORCA_ROLES_TICK does not shorten the timeout in seconds
+bsrun() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO="$1"; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; bounded x sleep "$2"; echo "$TIMED:$RC"; rm -rf "$T" ); }
+check "bounded: with ORCA_ROLES_TICK=0.01 a 1 s probe still finishes inside a 2 s timeout, and one that outlasts a 1 s timeout is stopped" "$(ORCA_ROLES_TICK=0.01 bsrun 2 1)|$(ORCA_ROLES_TICK=0.01 bsrun 1 $((UT + 10)))" "0:0|1:137"
+SLW="$TMP/slowsleep"; mkdir -p "$SLW"; REALSLEEP="$(command -v sleep)"
+printf '#!/bin/sh\n%s "$(awk -v t="$1" '"'"'BEGIN { print t + 0.2 }'"'"')"\n' "$REALSLEEP" > "$SLW/sleep"; chmod +x "$SLW/sleep"
+bslow() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=1; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; PATH="$SLW:$PATH"; T0=$SECONDS; bounded x "$REALSLEEP" $((UT + 11)); echo "$TIMED:$RC:$((SECONDS - T0 < 5 ? 1 : 0))"; rm -rf "$T" ); }
+check "bounded: the timeout is kept on the clock when each tick costs more than the tick (slow CI machines)" "$(ORCA_ROLES_TICK=0.01 bslow)" "1:137:1"
+bsal() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=3; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; s=$SECONDS; while [ "$SECONDS" -eq "$s" ]; do :; done; bounded x "$REALSLEEP" 3.5; echo "$TIMED:$RC"; rm -rf "$T" ); }
+check "bounded: a probe that ends inside the timeout is not stopped early, whatever the fraction of the second when it started" "$(ORCA_ROLES_TICK=0.01 bsal)" "0:0"
+pkill -f "^$REALSLEEP $((UT + 11))$" 2>/dev/null || true
 }
 
 sec_roles_yaml() {
@@ -1311,6 +1439,85 @@ yallrun --all --mode programmer --under "$YA/u/a-b"
 check "roles-yaml --all --under: only the folder itself, never the look-alike sibling a-bc" "$RC:$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -c '/a-b):'):$(printf '%s\n' "$OUT" | grep -c 'a-bc'):$(grep -c 'academic-research' "$YA/u/a-bc/orca.yaml"):$(grep -c 'programmer' "$YA/u/a-b/orca.yaml")" "0:2:1:0:1:1"
 yallrun --all --dry-run --under "$YA/u/"; check "roles-yaml --all --under: a folder with a trailing slash matches its children, not the rest" "$RC:$(printf '%s\n' "$OUT" | grep -c '^a-bc\? ('):$(printf '%s\n' "$OUT" | grep -c '^fresh ')" "0:2:0"
 yallrun --all --dry-run --under "$YA/fresh"; check "roles-yaml --all --under: a project folder includes the project and what is nested in it" "$RC:$(printf '%s\n' "$OUT" | grep -c '^fresh \|^nested \|^fresh-again '):$(printf '%s\n' "$OUT" | grep -c '^reg ')" "0:3:0"
+# roles-yaml --all on WSL: Orca lists WSL projects as UNC paths (\\wsl.localhost\Ubuntu\...), and a project on a Windows drive cannot be used; a fake wslpath, a list of its own (the folder above is left as it is)
+YU="$TMP/yunc"; rm -rf "$YU"; mkdir -p "$YU/bin" "$YU/u"; YUP="$(cd "$YU" && pwd -P)"
+for n in plain-name shown u/under; do mkdir -p "$YU/$n"; git -C "$YU/$n" init -q; git -C "$YU/$n" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; done
+cp "$YA/bin/orca" "$YU/bin/orca"
+cat > "$YU/bin/wslpath" <<'EOS'
+#!/bin/sh
+case "$2" in
+  \\\\wsl.localhost\\Ubuntu*) printf '%s\n' "$2" | cut -c23- | tr '\\' '/';;
+  *) exit 1;;
+esac
+EOS
+chmod +x "$YU/bin/wslpath"
+yunc() { printf '%s' "\\\\wsl.localhost\\Ubuntu$(printf '%s' "$YUP/$1" | tr / '\\')"; }
+jq -nc --arg a "$(yunc plain-name)" --arg b "$(yunc shown)" --arg c "$(yunc u/under)" --arg d "$(yunc gone)" --arg e 'C:\Users\x\proj' --arg f "$YUP/plain-name" \
+  '{ok:true,result:{repos:[{path:$a},{displayName:"Shown",path:$b},{displayName:"",path:$c},{displayName:"Missing",path:$d},{displayName:"Win",path:$e},{path:$f}]}}' > "$YU/list.json"
+yuncrun() { try env PATH="$YU/bin:$PATH" FAKE_LIST="$YU/list.json" FAKE_SHOW="$YA/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>/dev/null; }
+yuncrun --all --dry-run
+check "roles-yaml --all: a UNC project path is converted before the existence test and the name (when there is no displayName) is taken from the converted path; a Windows drive path is skipped with its own reason and counted as skipped; the same folder listed as UNC and as Linux is 'already-listed'" "$RC:$(printf '%s\n' "$OUT" | sed "s#$YUP#Y#g")" "0:plain-name (Y/plain-name): would create
+Shown (Y/shown): would create
+under (Y/u/under): would create
+Missing (Y/gone): skipped: path-missing
+Win (C:\\Users\\x\\proj): skipped: windows-path (the kit runs in WSL; move the project into WSL)
+plain-name (Y/plain-name): skipped: already-listed
+Summary: 3 created, 0 updated, 0 unchanged, 3 skipped, 0 errors
+Dry run: nothing was written."
+yuncrun --all --dry-run --under "$YUP/u"
+check "roles-yaml --all --under compares the converted path: only the project under the folder, not the Windows-path one" "$RC:$(printf '%s\n' "$OUT" | sed "s#$YUP#Y#g")" "0:under (Y/u/under): would create
+Summary: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run: nothing was written."
+yuncrun --all --dry-run --under "$YUP/shown"; check "roles-yaml --all --under on a UNC project's folder lists it" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Shown ')" "0:1"
+jq -nc '{ok:true,result:{repos:[{path:"D:\\Work\\my-proj"},{displayName:"",path:"E:\\x\\y"},{displayName:"Named",path:"F:\\a\\b"},{path:"G:\\Docs\\proj\\"},{path:"H:\\Docs\\two\\\\"}]}}' > "$YU/list.json"
+yuncrun --all --dry-run
+check "roles-yaml --all: a Windows drive project without a displayName (or with an empty one) is named by the last backslash segment (trailing backslashes ignored), not the whole path; a displayName wins" "$RC:$(printf '%s\n' "$OUT" | head -5)" '0:my-proj (D:\Work\my-proj): skipped: windows-path (the kit runs in WSL; move the project into WSL)
+y (E:\x\y): skipped: windows-path (the kit runs in WSL; move the project into WSL)
+Named (F:\a\b): skipped: windows-path (the kit runs in WSL; move the project into WSL)
+proj (G:\Docs\proj\): skipped: windows-path (the kit runs in WSL; move the project into WSL)
+two (H:\Docs\two\\): skipped: windows-path (the kit runs in WSL; move the project into WSL)'
+# tests/live/lib.sh helpers that need no Orca: local_path, proj_repo and wt_create against a fake orca and the fake wslpath above
+YL="$YU/live"; rm -rf "$YL"; mkdir -p "$YL/bin" "$YL/wt"; YLP="$(cd "$YL" && pwd -P)"
+git -C "$YL/wt" init -q
+cat > "$YL/bin/orca" <<'EOS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_LOG"
+case "$1 $2" in
+  "repo list") cat "$FAKE_REPOS";;
+  "worktree create") cat "$FAKE_WTC";;
+esac
+EOS
+chmod +x "$YL/bin/orca"
+cat > "$YL/probe.sh" <<'EOS'
+export ORCA_LIVE_DIR="$LD"; export HOME="$LH"; mkdir -p "$HOME"
+. "$ROOT/tests/live/lib.sh"
+STATE="$LD/state-probe"; : > "$STATE"
+case "$1" in
+  lp) local_path "$2";;
+  pr) proj_repo;;
+  wc) wt_create nm --x y; echo "rc=$? WT=$WT WTID=$WTID";;
+esac
+EOS
+ylive() { env PATH="$YL/bin:$YU/bin:$PATH" ROOT="$ROOT" LD="$YLP/ld" LH="$YLP/home" FAKE_LOG="$YL/log" FAKE_REPOS="$YL/repos.json" FAKE_WTC="$YL/wtc.json" bash "$YL/probe.sh" "$@" 2>&1; }
+M=""
+for a in "$(yunc plain-name)" 'C:\Users\x\proj' '/home/u/p' '\\other\share\x' ''; do M="${M}[$(ylive lp "$a" | sed "s#$YUP#Y#g")]"; done
+check "live lib local_path: a UNC path is converted, a drive path, a Linux path and an unconvertible UNC path are unchanged" "$M" '[Y/plain-name][C:\Users\x\proj][/home/u/p][\\other\share\x][]'
+PROJL="$YLP/ld/project"
+jq -nc --arg a "$(yunc live/ld/project)" '{result:{repos:[{id:"r0",path:"/elsewhere"},{id:"r1",path:$a},{id:"r2",path:$a}]}}' > "$YL/repos.json"
+check "live lib proj_repo: the repo whose path (UNC converted) is the throwaway project gives id:<id> (the first one)" "$(ylive pr)" "id:r1"
+jq -nc --arg a "$PROJL" '{result:{repos:[{id:"r9",path:$a}]}}' > "$YL/repos.json"
+check "live lib proj_repo: a Linux path matches too" "$(ylive pr)" "id:r9"
+jq -nc '{result:{repos:[{id:"r0",path:"/elsewhere"}]}}' > "$YL/repos.json"
+check "live lib proj_repo: no listed repo with that path -> path:<project>" "$(ylive pr)" "path:$PROJL"
+printf 'not json' > "$YL/repos.json"
+check "live lib proj_repo: an unreadable list -> path:<project>" "$(ylive pr)" "path:$PROJL"
+jq -nc --arg a "$PROJL" '{result:{repos:[{id:"r9",path:$a}]}}' > "$YL/repos.json"
+jq -nc '{ok:false,error:{code:"repo_not_found",message:"no such repo"}}' > "$YL/wtc.json"; : > "$YL/log"
+check "live lib wt_create: a failure prints 'orca worktree create: <code>: <message>', returns 1 and sets no worktree" "$(ylive wc)" "orca worktree create: repo_not_found: no such repo
+rc=1 WT= WTID="
+check "live lib wt_create: passes --repo id:<id>, the name, --setup run and the extra options" "$(grep '^worktree create' "$YL/log")" "worktree create --repo id:r9 --name nm --setup run --json --x y"
+jq -nc --arg p "$(yunc live/wt)" '{result:{worktree:{path:$p,id:"w1"}}}' > "$YL/wtc.json"
+check "live lib wt_create: the UNC worktree path comes back as a Linux path" "$(ylive wc | sed "s#$YUP#Y#g")" "rc=0 WT=Y/live/wt WTID=w1"
 # error class: a project whose orca.yaml path is a directory (fails for any user, root included)
 mkdir "$YA/ro/orca.yaml"; printf '%s\n' "$(jq -c '.result.repos += [{displayName:"ro",path:($d+"/ro"),kind:"git",gitUsername:"SECRET-USER"}]' --arg d "$YA" "$YA/list.json")" > "$YA/list.json"
 yallrun --all; rmdir "$YA/ro/orca.yaml"
@@ -1516,7 +1723,10 @@ esac
 exit 0
 EOS
 chmod +x "$LK/bin/orca"; printf '#!/bin/sh\nexit 0\n' > "$LK/bin/kickoff"; chmod +x "$LK/bin/kickoff"
+# shellcheck disable=SC2120
 lkl() { (cd "$LK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LK/bin:$PATH" ORCA_ROLES_KICKOFF="${LKK:-$LK/bin/kickoff}" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+lkkickgone() { ! pgrep -f "$LK/bin/kickoff" >/dev/null; }
+akkickgone() { ! pgrep -f "$TMP/home/.orca-roles/bin/kickoff.sh" >/dev/null; }
 lkdrain() { local n=0; while pgrep -f "$LK/bin/kickoff2" >/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: a stub kickoff was still running after 10s"; FAIL=1; }; }   # a kickoff left from the previous check must be gone before the fixture is reset
 lkreset() { lkdrain; rm -rf "$LKG"/orca-roles.* "$LK"/show.* "$LK"/listfail "$LK"/failcreate-* || { echo "FAIL launch: could not reset the fixture"; FAIL=1; }; : > "$LKL"; }
 lkreg() { local pid="$1"; shift; { mkdir -p "$LKG/orca-roles.kickoff.d" && printf '%s\n' "$*" > "$LKG/orca-roles.kickoff.d/$pid"; } 2>/dev/null || { echo "FAIL launch: could not register the stub kickoff $pid in $LKG/orca-roles.kickoff.d"; FAIL=1; }; }
@@ -1586,8 +1796,10 @@ lkreset; mkdir "$LKG/orca-roles.lock"; ORCA_ROLES_LOCK_WAIT=1 try lkl
 check "launch: a lock whose pid is dead is taken over; one without a pid file is waited for, then taken over; both run and remove the lock" "$R1:$RC:$(lkcnt create):$([ -e "$LKG/orca-roles.lock" ] && echo held || echo free)" "0:1:3:free:0:3:free"
 # a launch blocked by the lock reads the state the first one wrote: every role alive, nothing opened
 lkreset; mkdir "$LKG/orca-roles.lock"; sleep 30 & HP=$!; echo "$HP" > "$LKG/orca-roles.lock/pid"
-(cd "$LK" && sleep 2; lkseed; for h in p1 d1 x1; do echo alive > "$LK/show.$h"; done; kill "$HP"; rm -rf "$LKG/orca-roles.lock") &
-ORCA_ROLES_LOCK_WAIT=20 try lkl; wait
+ORCA_ROLES_LOCK_WAIT=20 lkl > "$TMP/lkb.out" & LP=$!
+fast_poll grep -q 'Another roles is running' "$TMP/lkb.out"   # the launch is blocked by the lock
+(cd "$LK" && lkseed; for h in p1 d1 x1; do echo alive > "$LK/show.$h"; done; kill "$HP"; rm -rf "$LKG/orca-roles.lock")
+if wait "$LP"; then RC=0; else RC=$?; fi; OUT="$(cat "$TMP/lkb.out")"
 check "launch: blocked by the lock, it reads the state written meanwhile and opens nothing when every role is alive" "$RC:$(printf '%s' "$OUT" | grep -c 'All roles are already open'):$(lkcnt create):$(lkcnt close)" "0:1:0:0"
 # worktree id
 lkreset
@@ -1597,7 +1809,7 @@ try lkl id:BBB; R3="$RC:$(printf '%s' "$OUT" | grep -c '^Warning: this folder wa
 try lkl active; R4="$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before' || true):$(cat "$LKG/orca-roles.wtid")"
 check "launch: a changed worktree id warns (and is saved), the same id or 'active' does not" "$R1:$R2:$R3:$R4" "0:0:0:0:1:id:BBB:0:id:BBB"
 lkreset
-sleep 1   # lets the background kickoffs finish before the temporary directory is deleted
+fast_poll lkkickgone   # the background kickoffs finish before the temporary directory is deleted
 # ask start and mode choice: the real kickoff.sh with a fake orca whose h-* tabs are alive; the tab 'restored' has the Planner's saved ptyId under another handle
 AK="$TMP/ak"; mkdir -p "$AK/bin" "$AK/proj" "$AK/nogit"; git -C "$AK/proj" init -q; AKG="$AK/proj/.git"; AKL="$AK/orca.log"; : > "$AKL"
 cat > "$AK/bin/orca" <<EOS
@@ -1622,7 +1834,7 @@ EOS
 chmod +x "$AK/bin/orca"
 write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.auditor = {"title": "Auditor", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
 akl() { (cd "${AKDIR:-$AK/proj}" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$AK/bin:$PATH" ORCA_TERMINAL_HANDLE="${AKH:-}" ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 10s"; FAIL=1; }; sleep 0.3; }
+akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 10s"; FAIL=1; }; fast_poll akkickgone; }
 akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
 akrun() { try akl "$@"; akdrain; }
 akmark() { [ -e "$AKG/orca-roles.mode-pending" ] && printf marker || printf none; }
@@ -1719,7 +1931,7 @@ case "$1 $2" in
   "terminal create") t=""; while [ $# -gt 0 ]; do [ "$1" = --title ] && t="$2"; shift; done; t="${t% (*)}"; [ -e "$SWD/cc.$t" ] && exit 1; echo "{\"handle\":\"h-$t-$(grep -c '^terminal create' "$SWD/orca.log")\"}";;
   "terminal list") cat "$SWD/list.json" 2>/dev/null || echo '{"terminals":[]}';;
   "terminal read") echo '{"text":""}';;
-  "terminal close") [ -e "$SWD/cf.$h" ] && exit 1; case " $* " in *" --tab "*) [ -e "$SWD/cft.$h" ] && exit 1;; esac; exit 0;;
+  "terminal close") [ -e "$SWD/ch.$h" ] && { echo stale > "$SWD/st.$h"; sleep 5; exit 0; }; [ -e "$SWD/chn.$h" ] && { sleep 5; exit 0; }; [ -e "$SWD/cf.$h" ] && exit 1; case " $* " in *" --tab "*) [ -e "$SWD/cft.$h" ] && exit 1;; esac; exit 0;;
   "terminal send") [ -e "$SWD/sf.$h" ] && exit 1; t=""; while [ $# -gt 0 ]; do [ "$1" = --text ] && t="$2"; shift; done; printf '%s\037' "$t" >> "$SWD/sent.$h";;
   "terminal show") st=""; [ -e "$SWD/st.$h" ] && st="$(cat "$SWD/st.$h")"
     case "$st" in
@@ -1740,7 +1952,7 @@ jq '.roles.dev.modes = ["programmer", "academic-research"] | .roles.tester = {"t
 swl() { (cd "$AK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$SWD/bin:$PATH" SWD="$SWD" ORCA_TERMINAL_HANDLE="${SWH:-}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 swrun() { try swl "$@"; akdrain; }
 swseed() {
-  akreset; rm -rf "$SWD"/sent.* "$SWD"/st.* "$SWD"/cf.* "$SWD"/cc.* "$SWD"/sf.* "$SWD"/cft.* "$SWD"/pty.* "$SWD/orca.log" "$SWD/list.json"; : > "$SWD/orca.log"
+  akreset; rm -rf "$SWD"/sent.* "$SWD"/st.* "$SWD"/cf.* "$SWD"/cc.* "$SWD"/sf.* "$SWD"/cft.* "$SWD"/ch.* "$SWD"/chn.* "$SWD"/pty.* "$SWD/orca.log" "$SWD/list.json"; : > "$SWD/orca.log"
   cp "$SWD/cfg.json" "$KIT/config.json"; cp "$SWD/cfg.json" "$AKG/orca-roles.config.json"
   printf 'PLANNER=h-Planner\nDEV=h-Dev\nTESTER=h-Tester\nDEPLOYER=h-Deployer\nE2E_TESTER=h-E2E-old\n' | tee "$AKG/orca-roles.env" > "$AKG/orca-roles.kicked"
   printf 'PLANNER=pty-h-Planner\nDEV=pty-h-Dev\nTESTER=pty-h-Tester\nDEPLOYER=pty-h-Deployer\nE2E_TESTER=pty-h-E2E\n' > "$AKG/orca-roles.pty"
@@ -1789,6 +2001,12 @@ N1="$RC:$(swerr 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whe
 swseed; : > "$SWD/cf.h-Deployer"; SWH=h-Planner swrun --mode pr-reviewer
 N2="$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(swclosed):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.pty" | tr '\n' ' '):$(swcnt create)"
 check "C12: a tab the kit cannot tell about stops the switch before anything is closed; a tab that fails to close in both forms stops it naming that tab, with the roles closed before it already removed from the state files and nothing opened" "$N1|$N2" "1:1:0:same|1:1:h-Dev h-Tester h-Deployer h-Deployer :PLANNER DEPLOYER E2E_TESTER :PLANNER DEPLOYER E2E_TESTER :0"
+# n14 step 2: a close that gets no answer (124) in the mode-switch close loop: the other form is not tried; the tab is gone (show says stale) -> the switch goes on, else it fails as when both forms fail, without the "did not confirm" message
+swseed; : > "$SWD/ch.h-Tester"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 SWH=h-Planner swrun --mode pr-reviewer
+H1="$RC:$(swerr "ERROR: could not close Tester's tab (h-Tester); close it by hand and switch again."):$(grep -c '^terminal close --terminal h-Tester' "$SWD/orca.log" || true):$(grep -c 'Orca did not confirm' <<<"$OUT" || true):$(grep -c 'h-Deployer' <<<"$(swclosed)" || true)"
+swseed; : > "$SWD/chn.h-Tester"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 SWH=h-Planner swrun --mode pr-reviewer
+H1="$H1|$RC:$(swerr "ERROR: could not close Tester's tab (h-Tester); close it by hand and switch again."):$(grep -c '^terminal close --terminal h-Tester' "$SWD/orca.log" || true):$(grep -c 'Orca did not confirm' <<<"$OUT" || true)"
+check "C15: mode switch: a close with no answer is not retried in the other form; gone afterwards -> the switch goes on; still there -> it fails naming the tab, with no 'did not confirm' line" "$H1" "0:0:1:0:1|1:1:1:0"
 # no saved tab is open: the mode change is a normal launch
 swseed; for h in Planner Dev Tester Deployer; do echo stale > "$SWD/st.h-$h"; done; echo '{"terminals":[]}' > "$SWD/list.json"; SWH=other swrun --mode pr-reviewer
 check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new Planner and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:PLANNER AUDITOR :"
@@ -1825,6 +2043,42 @@ swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
 P1="$P1:$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true):$(printf '%s\n' "$OUT" | grep -c 'orca-roles-launch\.log\. The workers of mode programmer were already closed' || true)"; rm -f "$SWD/cc.Auditor"
 check "the 'already closed' sentence is joined with exactly one period whether the message ends with a period or not (never '..' or a run-on without one)" "$P1" "1:1:0:0:1"
 check "the 'already closed' sentence ends a failure of a later run while orca-roles.switch-from holds a mode (also one raised before the switch block), not with an empty or missing file; the failure to close an old worker, which comes before the file is written, keeps its message and writes no file" "$V5" "1:1:0:0:1:1:0:none"
+# a slow Orca (n14 step 1): terminal create past its limit adopts the tab Orca opened; a failing terminal show is 'unknown', not 'agent gone'; the ptyId is read again after 2 s
+write_launch_config
+LN="$TMP/ln"; mkdir -p "$LN/bin" "$LN/proj"; git -C "$LN/proj" init -q; LNG="$LN/proj/.git"; : > "$LN/orca.log"
+printf '#!/bin/sh\nexit 0\n' > "$LN/bin/kickoff"; chmod +x "$LN/bin/kickoff"
+lnseed() { printf 'PLANNER=p1\nDEV=d1\nDEPLOYER=x1\n' > "$LNG/orca-roles.env"; printf 'PLANNER=pty1\nDEV=pty2\nDEPLOYER=pty3\n' > "$LNG/orca-roles.pty"; cp "$KIT/config.json" "$LNG/orca-roles.config.json"; }
+lnsum() { cat "$LNG/orca-roles.env" "$LNG/orca-roles.pty" 2>/dev/null | cksum; }
+cat > "$LN/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LN/orca.log"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; b="\${t% (*}"
+    if [ -f "$LN/slow-\$b" ]; then [ ! -f "$LN/rec-\$b" ] || printf '{"terminals":[{"handle":"h-%s","title":"%s"}]}' "\$b" "\$t" > "$LN/list.json"; sleep 31; fi
+    echo "{\"handle\":\"h-\$b\"}";;
+  "terminal list") cat "$LN/list.json";;
+  "terminal show") case "\$4" in
+    h-*) if [ -f "$LN/nopty" ] || { [ -f "$LN/nopty1" ] && [ ! -f "$LN/seen.\$4" ] && : > "$LN/seen.\$4"; }; then echo '{"result":{"terminal":{"agentIdentity":"claude"}}}'; else echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\"}}}"; fi;;
+    d1) if [ -f "$LN/seen.d1" ]; then exit 1; fi; : > "$LN/seen.d1"; echo '{"result":{"terminal":{}}}';;
+    *) echo '{"result":{"terminal":{"agentIdentity":"claude"}}}';;
+  esac;;
+esac
+exit 0
+EOS
+chmod +x "$LN/bin/orca"
+lnl() { (cd "$LN/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LN/bin:$PATH" ORCA_ROLES_KICKOFF="$LN/bin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+lnreset() { rm -rf "$LNG"/orca-roles.* "$LN"/slow-* "$LN"/rec-* "$LN"/seen.* "$LN"/nopty "$LN"/nopty1; echo '{"terminals":[]}' > "$LN/list.json"; : > "$LN/orca.log"; }
+lncnt() { grep -cE "^terminal create .*--title $1 " "$LN/orca.log" || true; }
+lnreset; : > "$LN/slow-Dev"; : > "$LN/rec-Dev"; try lnl
+check "launch: terminal create past its limit adopts the tab Orca opened (same title, not in the list read at the start) instead of opening another" "$RC:$(lncnt 'Dev'):$(printf '%s\n' "$OUT" | grep -c '^Orca was slow to answer while opening the tab of Dev; using the tab it opened (h-Dev)\.$'):$(grep '^DEV=' "$LNG/orca-roles.env")" "0:1:1:DEV=h-Dev"
+lnreset; : > "$LN/slow-Dev"; echo '{"terminals":[{"handle":"old-Dev","title":"Dev (claude)"}]}' > "$LN/list.json"; try lnl
+check "launch: a tab with the role's title that was already in the list at the start is not adopted; the create is retried 3 times and the launch stops" "$RC:$(lncnt 'Dev'):$(printf '%s\n' "$OUT" | grep -c 'using the tab it opened'):$(grep -c '^DEV=' "$LNG/orca-roles.env" || true)" "1:3:0:0"
+lnreset; lnseed; try lnl --status; R1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Dev	d1	unknown (no-response)	')"; rm -f "$LN/seen.d1"; : > "$LN/orca.log"; B="$(lnsum)"; try lnl
+check "launch: terminal show failing while the agent is looked for is 'unknown (no-response)' in --status and stops a launch with 'Orca is not ready', nothing closed or opened, state unchanged" "$R1:$RC:$(printf '%s\n' "$OUT" | grep -c 'ERROR: Orca is not ready (no-response) for Dev: no tab was closed or opened'):$(grep -cE '^terminal (create|close)' "$LN/orca.log" || true):$([ "$(lnsum)" = "$B" ] && echo same || echo CHANGED)" "0:1:1:1:0:same"
+lnreset; : > "$LN/nopty"; try lnl; R1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Could not read the ptyId of the tab of [A-Za-z]*; after a restart it may open without memory\.$')"
+lnreset; : > "$LN/nopty1"; try lnl
+check "launch: a ptyId missing at the first read is read again after 2 s: no message when it shows up, the message once per tab when it never does" "$R1:$RC:$(printf '%s\n' "$OUT" | grep -c 'Could not read the ptyId'):$(grep -c '^DEV=pty-h-Dev$' "$LNG/orca-roles.pty" || true)" "0:3:0:0:1"
+lnreset
 akreset; write_launch_config
 }
 
@@ -2473,7 +2727,7 @@ rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy 
 sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
-check "plugin.json: version 1.1.0 (the skill changed; /plugin update only picks up a new version)" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")" "1.1.0"
+check "plugin.json: version 1.2.0 (the skill changed; /plugin update only picks up a new version)" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")" "1.2.0"
 check "skill: name in the frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/team/SKILL.md")" "name: team"
 check "default config: the planner's plugins (the kit's skill and the pinned superpowers)" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin","{kit}/plugins/superpowers"]'
 cat > "$KIT/config.json" <<'J'
@@ -2634,7 +2888,7 @@ CRLOG="$TMP/crorca.log"; : > "$CRLOG"
 cat > "$TMP/fakebin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$CRLOG"
-case "\$*" in *"show --terminal t2 "*) exit 1;; esac
+case "\$*" in *"show --terminal t2 "*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *"show --terminal t4 "*) exit 1;; *"close --terminal t5 "*) : > "$TMP/t5gone"; sleep 5; exit 0;; *"show --terminal t5 "*) [ -e "$TMP/t5gone" ] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; };; *"close --terminal t6 "*) sleep 5; exit 0;; esac
 exit 0
 EOS
 chmod +x "$TMP/fakebin/orca"
@@ -2643,6 +2897,16 @@ try closerole Sec; check "close-role: by title" "$RC:$OUT" "0:Sec: tab closed (t
 check "close-role: closes the whole tab" "$(grep -c 'terminal close --terminal t3 --tab' "$CRLOG")" "1"
 check "close-role: forgets its handle" "$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')" "PLANNER DEV "
 try closerole dev; check "close-role: a dead tab is just forgotten" "$RC" "0"; case "$OUT" in *"already gone"*"still enabled"*) echo "ok   close-role: warns that roles would reopen an enabled role";; *) echo "FAIL close-role enabled: $OUT"; FAIL=1;; esac
+printf 'PLANNER=t1\nDEV=t4\n' > "$TMP/state.env"; printf 'DEV=pty4\n' > "$TMP/orca-roles.pty"; printf 'DEV=tabs4\n' > "$TMP/orca-roles.tabs"
+try closerole dev; check "close-role: a failure of terminal show other than terminal_handle_stale is 'Orca did not answer': RC 1, no close, its state lines kept" "$RC:$OUT:$(grep -c 'terminal close --terminal t4' "$CRLOG" || true):$(cat "$TMP/state.env" "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" | tr '\n' ' ')" "1:Dev: Orca did not answer about its tab (t4); nothing was changed.:0:PLANNER=t1 DEV=t4 DEV=pty4 DEV=tabs4 "
+rm -f "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs"
+printf 'PLANNER=t1\nDEV=\n' > "$TMP/state.env"; : > "$CRLOG"; try closerole dev
+check "close-role: an empty saved handle is already gone, without calling orca" "$RC:$(printf '%s\n' "$OUT" | grep -c 'its tab () was already gone'):$(wc -l < "$CRLOG" | tr -d ' ')" "0:1:0"
+rm -f "$TMP/t5gone"; printf 'PLANNER=t1\nDEV=t5\n' > "$TMP/state.env"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 try closerole dev
+D1="$RC:$(printf '%s\n' "$OUT" | head -1):$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')"
+printf 'PLANNER=t1\nDEV=t6\n' > "$TMP/state.env"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 try closerole dev
+D1="$D1|$RC:$(printf '%s' "$OUT" | tr '\n' '/'):$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')"
+check "close-role: a close with no answer (124): the tab gone afterwards counts as closed, no message; still there -> 'did not confirm' then 'could not close its tab', RC 1 and its state line kept" "$D1" "0:Dev: tab closed (t5).:PLANNER |1:Orca did not confirm closing the tab of Dev (t6)./Dev: could not close its tab (t6).:PLANNER DEV "
 try closerole planner; check "close-role: never the planner" "$RC" "1"
 try closerole nobody; check "close-role: unknown role" "$RC" "1"
 rm -f "$TMP/fakebin/orca"
@@ -2952,7 +3216,13 @@ echo "\$*" >> "$OLOG"
 case "\$1 \$2" in
   "terminal list") cat "$TMP/olist";;
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
-  "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *) echo '{"result":{"terminal":{"ptyId":"wt@@x","agentIdentity":"claude"}}}';; esac;;
+  "terminal show") h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done
+    s=""; [ -e "$TMP/ost.\$h" ] && s="\$(cat "$TMP/ost.\$h")"
+    case "\$s" in stale) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; orphan) echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}'; exit 0;; noagent) echo '{"result":{"terminal":{"handle":"x"}}}'; exit 0;; esac
+    case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *) echo '{"result":{"terminal":{"ptyId":"wt@@x","agentIdentity":"claude"}}}';; esac;;
+  "terminal close") h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done
+    [ -e "$TMP/och.\$h" ] && { echo stale > "$TMP/ost.\$h"; sleep 5; exit 0; }; [ -e "$TMP/ochn.\$h" ] && { sleep 5; exit 0; }
+    [ -e "$TMP/ocf.\$h" ] && case " \$* " in *" --tab "*) ;; *) exit 1;; esac;;
   "terminal wait") [ -e "$TMP/owaitfail" ] && { echo '{"ok":false}'; exit 1; };;
 esac
 exit 0
@@ -3047,6 +3317,49 @@ check "relauncher's launch: without a readable session the restored Planner tab 
 ost "$SELFS" "$SELFP"; : > "$TMP/owaitfail"; OSES=session-none OTH=other-tab ol; rm -f "$TMP/owaitfail"
 Z1="$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep -c 'terminal wait --terminal rs-pl' "$OLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'is busy: not reopened now' || true):$(printf '%s\n' "$OUT" | grep -c 'Resuming workspace: planner.*start without memory' || true)"
 check "busy check needs a session: no session and a failing wait -> the restored Planner tab is closed and a new Planner opened (no memory), no wait is asked, not reported busy" "$Z1" "0:1:1:0:0:1"
+# n14 step 2: a close of a role's tab that gets no answer (124) is checked with terminal show: stale = done, else "Orca did not confirm closing the tab of <Title> (<handle>)." and the launch goes on; the two-step st=3 close does not try the other form after a 124
+oclr() { rm -f "$TMP"/ost.* "$TMP"/och.* "$TMP"/ochn.* "$TMP"/ocf.*; }
+oclosed() { grep -c "terminal close --terminal $1" "$OLOG" || true; }
+omsg() { printf '%s\n' "$OUT" | grep -cxF "Orca did not confirm closing the tab of $1." || true; }
+OSEED=$'PLANNER=live-pl\nDEV=ng-dev\n'; OSEEDP=$'PLANNER=wt@@a\nDEV=wt@@b\n'
+oseed2() { ost "$OSEED" "$OSEEDP"; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; }
+echo '{"terminals":[]}' > "$TMP/olist"
+oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/ochn.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+C1="$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c -- '--title Dev' "$OLOG" || true)"
+oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/och.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+C1="$C1|$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c -- '--title Dev' "$OLOG" || true)"
+check "st=2 close with no answer: still there -> one 'did not confirm' line, no retry, the new tab opened anyway; gone afterwards -> no message, new tab opened" "$C1" "0:1:1:1|0:0:1:1"
+oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/ochn.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+C2="$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c 'terminal close --terminal ng-dev --tab' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true)"
+oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/och.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+C2="$C2|$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c 'terminal close --terminal ng-dev --tab' "$OLOG" || true)"
+oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/ocf.ng-dev"; oseed2; ol
+C2="$C2|$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c 'terminal close --terminal ng-dev --tab' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true)"
+check "st=3 close: a 124 is not retried in the other form (message if the tab is still there, none if gone); a plain close that fails otherwise still falls back to --tab" "$C2" "0:1:1:0:1|0:0:1:0|0:0:2:1:1"
+printf '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"}]}\n' > "$TMP/olist"
+oclr; : > "$TMP/ochn.rs-dev"; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@p2\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+C3="$RC:$(omsg 'Dev (rs-dev)'):$(oclosed rs-dev):$(grep -c -- '--title Dev' "$OLOG" || true)"
+oclr; : > "$TMP/och.rs-dev"; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@p2\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+C3="$C3|$RC:$(omsg 'Dev (rs-dev)'):$(oclosed rs-dev):$(grep -c -- '--title Dev' "$OLOG" || true)"
+check "restored worker tab close with no answer: still there -> 'did not confirm' and the worker reopened; gone -> no message" "$C3" "0:1:1:1|0:0:1:1"
+# B5: a tab this run would close must not be the one running it; refused in the classification, before any tab is closed or opened, state untouched
+oclr; echo '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"}]}' > "$TMP/olist"
+BERR() { printf '%s\n' "$OUT" | grep -cxF "ERROR: roles was run from the tab of $1, which has to be reopened; run roles from the Planner's tab or another terminal of this worktree. No tab was closed or opened." || true; }
+bfacts() { echo "$RC:$(BERR "$1"):$(grep -c 'terminal close\|terminal create' "$OLOG" || true):$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum | cmp -s - <(echo "$HB") && echo same || echo CHANGED)"; }
+echo noagent > "$TMP/ost.ng-dev"; oseed2; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=ng-dev ol; B1="$(bfacts Dev)"
+oclr; echo noagent > "$TMP/ost.ng-pl"; ost $'PLANNER=ng-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=ng-pl\n' > "$OG/orca-roles.kicked"; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=ng-pl ol; B1="$B1|$(bfacts Planner)"
+oclr; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@p2\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=rs-dev ol; B1="$B1|$(bfacts Dev)"
+oclr; echo noagent > "$TMP/ost.ng-dev"; oseed2; OTH=other-tab ol; B1="$B1|$RC:$(BERR Dev):$(oclosed ng-dev)"
+oclr; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@p2\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; OTH=live-pl ol; B1="$B1|$RC:$(BERR Dev):$(oclosed rs-dev)"
+check "B5: run from the tab of a worker whose agent is gone (st=2), of the Planner whose agent is gone, or of a worker's restored tab -> refused with the C16 message, nothing closed or opened, state unchanged; from another tab, or from a live tab that closes nothing of its own -> no refusal" "$B1" "1:1:0:same|1:1:0:same|1:1:0:same|0:0:1|0:0:1"
+# the close limit: ORCA_ROLES_CLOSE_TIMEOUT applies to 'orca terminal close' only, ORCA_ROLES_CLI_TIMEOUT to every other call; CLI_TIMEOUT=0 disables both
+mkdir -p "$TMP/lbin"; printf '#!/bin/sh\nsleep 2\n' > "$TMP/lbin/orca"; chmod +x "$TMP/lbin/orca"
+printf '%s\n' 'set -u' ". '$ROOT/bin/lib.sh'" 'orca terminal close --terminal x >/dev/null 2>&1; a=$?; orca terminal show --terminal x >/dev/null 2>&1; b=$?; echo "$a $b"' > "$TMP/lim.sh"
+L1="$(PATH="$TMP/lbin:$PATH" ORCA_ROLES_CLOSE_TIMEOUT=1 ORCA_ROLES_CLI_TIMEOUT=30 bash "$TMP/lim.sh" 2>/dev/null)|$(PATH="$TMP/lbin:$PATH" ORCA_ROLES_CLOSE_TIMEOUT=30 ORCA_ROLES_CLI_TIMEOUT=1 bash "$TMP/lim.sh" 2>/dev/null)|$(PATH="$TMP/lbin:$PATH" ORCA_ROLES_CLOSE_TIMEOUT=1 ORCA_ROLES_CLI_TIMEOUT=0 bash "$TMP/lim.sh" 2>/dev/null)"
+check "orca(): the close limit applies to 'terminal close' only (the CLI limit does not), the CLI limit to the other calls, and CLI_TIMEOUT=0 turns both off" "$L1" "124 0|0 124|0 0"
+lim() { PATH="$TMP/lbin:$PATH" env "$@" bash "$TMP/lim.sh" 2>/dev/null; }
+L2="$(lim ORCA_ROLES_CLOSE_TIMEOUT=0 ORCA_ROLES_CLI_TIMEOUT=1)|$(lim ORCA_ROLES_CLOSE_TIMEOUT=1.5 ORCA_ROLES_CLI_TIMEOUT=1)|$(lim ORCA_ROLES_CLOSE_TIMEOUT=-1 ORCA_ROLES_CLI_TIMEOUT=1)|$(lim ORCA_ROLES_CLOSE_TIMEOUT=abc ORCA_ROLES_CLI_TIMEOUT=1)|$(lim ORCA_ROLES_CLOSE_TIMEOUT=1 ORCA_ROLES_CLI_TIMEOUT=abc)|$(lim ORCA_ROLES_CLOSE_TIMEOUT=1 ORCA_ROLES_CLI_TIMEOUT=1.5)|$(lim ORCA_ROLES_CLOSE_TIMEOUT=1 ORCA_ROLES_CLI_TIMEOUT=)|$(lim ORCA_ROLES_CLOSE_TIMEOUT= ORCA_ROLES_CLI_TIMEOUT=1)"
+check "orca(): ORCA_ROLES_CLOSE_TIMEOUT=0 turns off the close limit only; a close or CLI value that is not a whole number (1.5, -1, abc, empty) is ignored and the default (15 / 60) applies" "$L2" "0 124|0 124|0 124|0 124|124 0|124 0|124 0|0 124"
 # 5. relaunch-planner.sh against a stub launch.sh: idle -> one launch without the tab's handle; wait error -> nothing; not reopened -> a second try, then it gives up
 RH="$TMP/orl-home"; rm -rf "$RH" "$TMP/ebin"; mkdir -p "$RH/.orca-roles/bin" "$TMP/ebin" "$TMP/etop"; cp "$KIT/bin/lib.sh" "$RH/.orca-roles/bin/"
 EG="$TMP/egd"; mkdir -p "$EG"; ELOG="$TMP/elaunch.log"; EWL="$TMP/ewait.log"; ETOP="$(cd "$TMP/etop" && pwd -P)"
@@ -3145,8 +3458,8 @@ an() {  # an <dir on the PATH>: orca_app_node's output and status
   if [ -n "$o" ] && same_file "$ob" "$XBIN" && same_file "$orcjs" "$XJS"; then o="X-app"; fi
   printf '%s:%s' "$r" "$o"
 }
-AN="$(an rel) $(an abs) $(an chain) $(an plain) $(an norc) $(an noexe) $(ORCA_CLI_BIN_DIR="$A/rel" an plain) $(orca() { :; }; an rel)"
-check "orca_app_node: a relative link, an absolute one and a chain resolve to the app's binary and runtime client; a plain script, an app without its runtime client, one with a non-executable binary, ORCA_CLI_BIN_DIR and a shell function named orca give nothing and 1" "$AN" "0:X-app 0:X-app 0:X-app 1: 1: 1: 1: 1:"
+AN="$(an rel) $(an abs) $(an chain) $(an plain) $(an norc) $(an noexe) $(ORCA_CLI_BIN_DIR="$A/rel" an plain) $(orca() { :; }; an rel) $(orca() { :; }; PATH="$A/nodir:/usr/bin:/bin" orca_app_node; echo "$?")"
+check "orca_app_node: a relative link, an absolute one and a chain resolve to the app's binary and runtime client; a plain script, an app without its runtime client, one with a non-executable binary and ORCA_CLI_BIN_DIR give nothing and 1; a shell function named orca with the real link on the PATH still resolves the app, and alone gives nothing and 1" "$AN" "0:X-app 0:X-app 0:X-app 1: 1: 1: 1: 0:X-app 1"
 wt() {  # wt <PATH dir> [VAR=value...]: wake_tab wt-1 tab-1 leaf-1 with the real path; prints status:stdout:the line the fake binary logged
   local d="$1" o r=0; shift; : > "$WOLOG"; o="$( (export PATH="$A/$d:$PATH" ${1+"$@"}; wake_tab wt-1 tab-1 leaf-1) 2>/dev/null)" || r=$?
   printf '%s:%s:%s' "$r" "$o" "$(sed "s#$KIT#KIT#; s#$A/[a-z]*/\.\./#A/#; s#$A#A#" "$WOLOG" | tr '\n' ' ')"
@@ -3181,6 +3494,66 @@ TH="$(for h in h-ok h-split h-noleaf h-emptyleaf h-fail; do (PATH="$TMP/wbin:$PA
 check "wake_tab: the hook replaces the helper with the same arguments, 0 -> 0, 2 -> 2, any other code -> 1, stdout passed through; without the hook the app binary runs in node mode (ELECTRON_RUN_AS_NODE=1) with wake-tab.cjs, the runtime client and the three ids, its stdout is dropped on success and only the first stderr line is the reason on failure; without an app it is 2 with no output. tabs_of_handle prints the first object with both ids, nothing when either is missing or empty or the call fails, always status 0" \
   "$WH|$(wt rel WFAKE_RC=0)|$(wt rel WFAKE_RC=3)|$(wt plain)|$TH" \
   "0:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: 2:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: |0::NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js wt-1 tab-1 leaf-1 |1:first line:NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js wt-1 tab-1 leaf-1 |2::|0:T1 L1 0:T2 L2 0: 0: 0: "
+# 2b. WSL (Orca for Windows): Orca.exe found through orca-ide's ORCA_WIN_LAUNCHER line, run from its own folder with the node-mode variable passed through WSLENV; fake wslpath, orca-ide, /proc/version and Orca.exe
+WS="$TMP/wwsl"; rm -rf "$WS"; mkdir -p "$WS/bin" "$WS/ide" "$WS/root/Users/u/AppData/Local/Programs/orca"
+printf '#!/bin/sh\necho plain\n' > "$WS/bin/orca"; chmod +x "$WS/bin/orca"
+cat > "$WS/bin/wslpath" <<'EOS'
+#!/bin/sh
+p="$2"
+case "$1" in
+  -u) case "$p" in
+        [A-Za-z]:\\*) printf '%s/%s\n' "$WS_ROOT" "$(printf '%s' "$p" | cut -c4- | tr '\\' '/')";;
+        \\\\wsl.localhost\\Ubuntu*) printf '%s\n' "$p" | cut -c23- | tr '\\' '/';;
+        *) exit 1;;
+      esac;;
+  -w) printf '\\\\wsl.localhost\\Ubuntu%s\n' "$(printf '%s' "$p" | tr '/' '\\')";;
+esac
+EOS
+chmod +x "$WS/bin/wslpath"
+WSEXE="$WS/root/Users/u/AppData/Local/Programs/orca/Orca.exe"
+printf '#!/bin/sh\nprintf "%%s\\n" "NODE=$ELECTRON_RUN_AS_NODE WSLENV=$WSLENV CWD=$(pwd -P) $*" >> "%s"\necho noise\n[ "${WFAKE_RC:-0}" = 0 ] || { printf "first line\\nsecond line\\n" >&2; exit "$WFAKE_RC"; }\n' "$WOLOG" > "$WSEXE"; chmod +x "$WSEXE"
+wsl_ide() {  # wsl_ide <launcher value, or - for no launcher line>
+  { printf '#!/usr/bin/env bash\necho ide\n'; [ "$1" = - ] || printf "ORCA_WIN_LAUNCHER='%s'\n" "$1"; } > "$WS/ide/orca-ide"; chmod +x "$WS/ide/orca-ide"
+}
+WLAUNCH='C:\Users\u\AppData\Local\Programs\orca\resources\bin\orca.exe'
+printf 'Linux version 5.15.0-microsoft-standard-WSL2\n' > "$WS/ver"; printf 'Linux version 6.1 generic\n' > "$WS/ver-linux"; printf 'Linux version 5.15 Microsoft\n' > "$WS/ver-caps"
+wsl_ide "$WLAUNCH"
+wwk() {  # wwk <orca_app_node|wake_tab> <version file> [VAR=value...]: runs it in the WSL fakes (wake_tab with wt-1 tab-1 leaf-1); prints status:stdout
+  local fn="$1" ver="$2" o r=0; shift 2; : > "$WOLOG"
+  o="$( (unset WSLENV; export PATH="$WS/bin:/usr/bin:/bin" WS_ROOT="$WS/root" ORCA_ROLES_PROC_VERSION="$ver" ORCA_CLI_COMMAND="" ORCA_WSL_CLI_DIR="$WS/ide" ${1+"$@"}; if [ "$fn" = wake_tab ]; then wake_tab wt-1 tab-1 leaf-1; else orca_app_node; fi) 2>/dev/null)" || r=$?
+  printf '%s:%s' "$r" "$o"
+}
+WSP="$(cd "$WS" && pwd -P)"
+wwlog() { sed "s#$WSP/root#R#g" "$WOLOG" | tr '\n' ' '; }
+WINJS='C:\Users\u\AppData\Local\Programs\orca\resources\app.asar.unpacked\out\cli\runtime-client.js'
+WINKIT='\\wsl.localhost\Ubuntu'"$(printf '%s' "$KIT" | tr / '\\')"'\bin\wake-tab.cjs'
+WRX="R/Users/u/AppData/Local/Programs/orca/Orca.exe"
+wnr() { sed "s#$WS/root#R#"; }
+WN1="$(wwk orca_app_node "$WS/ver" | wnr)"
+WN2="$(wwk orca_app_node "$WS/ver-caps" | wnr)"
+WN3="$(wwk orca_app_node "$WS/ver-linux"):$(wwk orca_app_node "$WS/nover")"
+wsl_ide 'C:\Users\u\AppData\Local\Programs\orca\RESOURCES\BIN\ORCA.EXE'; WN4="$(wwk orca_app_node "$WS/ver" | wnr)"
+wsl_ide 'C:\Users\u\AppData\Local\Programs\orca\resources\bin\other.exe'; WN5="$(wwk orca_app_node "$WS/ver")"
+wsl_ide 'C:\Users\u\AppData\Local\Programs\gone\resources\bin\orca.exe'; WN6="$(wwk orca_app_node "$WS/ver")"
+wsl_ide -; WN7="$(wwk orca_app_node "$WS/ver")"
+wsl_ide "$WLAUNCH"; chmod -x "$WSEXE"; WN8="$(wwk orca_app_node "$WS/ver")"; chmod +x "$WSEXE"
+WN9="$(wwk orca_app_node "$WS/ver" ORCA_WSL_CLI_DIR="$WS/none")"
+WN10="$(PATH="$A/rel:$WS/bin:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$WS/ver" ORCA_WSL_CLI_DIR="$WS/ide" orca_app_node | sed "s#$A#A#g; s#A/rel/\.\./#A/#g")"
+check "orca_app_node on WSL: Orca.exe's Linux path, the runtime client as a Windows path and '|wsl' from orca-ide's ORCA_WIN_LAUNCHER line (the launcher's suffix and the kernel's 'microsoft' in any case); nothing and 1 for a kernel without it or a missing version file, a launcher that does not end in \\resources\\bin\\orca.exe, an install without Orca.exe, no launcher line, a non-executable Orca.exe, no orca-ide; the macOS layout still wins when it is found" \
+  "$WN1|$WN2|$WN3|$WN4|$WN5|$WN6|$WN7|$WN8|$WN9|$WN10" \
+  "0:$WRX|$WINJS|wsl|0:$WRX|$WINJS|wsl|1::1:|0:$WRX|$WINJS|wsl|1:|1:|1:|1:|1:|A/X.app/Contents/MacOS/Orca|A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+wsl_ide "$WLAUNCH"
+ww() { local r; r="$(wwk wake_tab "$WS/ver" "$@")"; printf '%s:%s' "$r" "$(wwlog)"; }
+WXL="NODE=1 WSLENV=ELECTRON_RUN_AS_NODE CWD=R/Users/u/AppData/Local/Programs/orca $WINKIT $WINJS wt-1 tab-1 leaf-1 "
+WW1="$(ww)"
+WW2="$(ww WSLENV=FOO/p:BAR)|$(ww WSLENV=A:ELECTRON_RUN_AS_NODE/u:B)|$(ww WSLENV=ELECTRON_RUN_AS_NODE)|$(ww WSLENV=ELECTRON_RUN_AS_NODE_X)|$(ww WSLENV=XELECTRON_RUN_AS_NODE/u)"
+WW3="$(ww WFAKE_RC=3)"
+WW4="$(wwk wake_tab "$WS/ver-linux")|$(wwk wake_tab "$WS/ver-caps" | cut -c1-2)"
+RL_STUB='run_limited() { echo "LIM:$1:$2" >&2; return 124; }'
+WW5="$( (unset WSLENV; export PATH="$WS/bin:/usr/bin:/bin" WS_ROOT="$WS/root" ORCA_ROLES_PROC_VERSION="$WS/ver" ORCA_CLI_COMMAND="" ORCA_WSL_CLI_DIR="$WS/ide"; eval "$RL_STUB"; r=0; o="$(wake_tab a b c)" || r=$?; echo "$r:$o"; PATH="$A/rel:$PATH"; r=0; o="$(wake_tab a b c)" || r=$?; echo "$r:$o") | tr '\n' ' ')"
+check "wake_tab on WSL: Orca.exe runs from its own folder with ELECTRON_RUN_AS_NODE=1, WSLENV carrying the name (appended to what is there, kept when already listed with or without a /flag, not fooled by a longer or prefixed name), the wake-tab.cjs path and the runtime client as Windows paths and the three ids; stdout dropped, status 0; a failure is 1 with the first stderr line; a kernel without 'microsoft' is 2 with nothing run, 'Microsoft' works; both the WSL and the macOS call go through run_limited 30 labelled wake-tab (a 124 is 1 with its message)" \
+  "$WW1|$WW2|$WW3|$WW4|$WW5" \
+  "0::$WXL|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=FOO/p:BAR:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=A:ELECTRON_RUN_AS_NODE/u:B}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE_X:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=XELECTRON_RUN_AS_NODE/u:ELECTRON_RUN_AS_NODE}|1:first line:${WXL}|2:|0:|1:LIM:30:wake-tab 1:LIM:30:wake-tab "
 # 3. launch.sh against the fake orca and the fake wake hook (it appends the woken tab to the terminal list, as Orca does)
 cat > "$TMP/wbin/wake" <<EOS
 #!/bin/sh
@@ -3460,6 +3833,23 @@ for c in "$WSP|$WS" "$WSP|$WS/sub/deep" "$WSP::workspace:abc|$WS" "$TMP/wsel-lin
   wsreset; wsl "${c#*|}" "repo1::${c%%|*}"; E="$E $RC:$(wsid):$(wscur):$(wsmsg "This terminal belongs to worktree ${c%%|*}; using the worktree of the current folder ($WSP).")"
 done
 check "worktree: ORCA_WORKTREE_ID with the folder's own path (also from a subfolder, with a ::workspace: suffix, through a symlink, with a trailing slash) keeps the terminal's worktree: no message and no 'orca worktree current'" "$E" " 0:id:repo1::$WSP:0:0 0:id:repo1::$WSP:0:0 0:id:repo1::$WSP::workspace:abc:0:0 0:id:repo1::$TMP/wsel-link:0:0 0:id:repo1::$WSP/:0:0"
+# the terminal's worktree path as Orca for Windows reports it (UNC): with wslpath it is the folder's own path (same as above); without wslpath, or for another folder, it is another worktree
+cat > "$WS/bin/wslpath" <<'EOS'
+#!/bin/sh
+case "$2" in
+  \\\\wsl.localhost\\Ubuntu*) printf '%s\n' "$2" | cut -c23- | tr '\\' '/';;
+  *) exit 1;;
+esac
+EOS
+chmod +x "$WS/bin/wslpath"
+wsunc() { printf '%s' "\\\\wsl.localhost\\Ubuntu$(printf '%s' "$1" | tr / '\\')"; }
+U=""
+for c in "$(wsunc "$WSP")|$WS" "$(wsunc "$WSP")::workspace:abc|$WS/sub/deep"; do
+  wsreset; wsl "${c#*|}" "repo1::${c%%|*}"; U="$U $RC:$([ "$(wsid)" = "id:repo1::${c%%|*}" ] && echo kept):$(wscur):$(printf '%s\n' "$OUT" | grep -c 'This terminal belongs to' || true)"
+done
+wsreset; wsl "$WS" "repo1::$(wsunc "$WS/other/repo2")"; U="$U $RC:$(wscur):$(printf '%s\n' "$OUT" | grep -c 'This terminal belongs to' || true)"
+mv "$WS/bin/wslpath" "$WS/bin/wslpath.off"; wsreset; wsl "$WS" "repo1::$(wsunc "$WSP")"; U="$U $RC:$(wscur):$(printf '%s\n' "$OUT" | grep -c 'This terminal belongs to' || true)"; mv "$WS/bin/wslpath.off" "$WS/bin/wslpath"
+check "worktree: a UNC ORCA_WORKTREE_ID (\\\\wsl.localhost\\Ubuntu\\...) is converted with wslpath before it is compared with the folder: the folder's own path (also with a suffix, from a subfolder) keeps the terminal's worktree with no message and no 'orca worktree current'; another folder's UNC path is another worktree (asked once, message); without wslpath the UNC path cannot be compared and is treated as another worktree" "$U" " 0:kept:0:0 0:kept:0:0 0:1:1 0:1:1"
 # another worktree's terminal in this folder: the worktree of the folder wins, the message names the terminal's path without the suffix and the folder's top level; the old 'launched before as' warning still shows
 wsreset; wsl "$WS" "repo1::$WSP"; echo '{"ok":true,"result":{"worktree":{"id":"repo2::'"$WSP"'"}}}' > "$WS/cur.json"
 wsl "$WS/sub" "repo0::$WS/other/repo2::workspace:zz"
@@ -4435,16 +4825,16 @@ ORCA_ROLES_PROBE_TIMEOUT=4 mt hl; check "models: a hung models.list ends with a 
 rm -rf "$MM/conc" "$MM/conc.log"; mt conc --check
 check "models: 10 probes all answered" "$(tabs | tr ';' '\n' | grep -c '|ok|-')" "10"
 check "models: never more than 6 probes run at once, and they did overlap" "$(sort -n "$MM/conc.log" | tail -1):$(wc -l < "$MM/conc.log" | tr -d ' ')" "6:10"
-ORCA_ROLES_PROBE_TIMEOUT=7357 mt fast --check
-for _ in $(seq 25); do pgrep -f 'sleep 7357' >/dev/null || break; sleep 0.2; done
-check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f 'sleep 7357' | wc -l | tr -d ' ')" "40:0"
+ORCA_ROLES_PROBE_TIMEOUT=$((UT + 6)) mt fast --check
+for _ in $(seq 25); do pgrep -f "sleep $((UT + 6))" >/dev/null || break; sleep 0.2; done
+check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f "sleep $((UT + 6))" | wc -l | tr -d ' ')" "40:0"
 # the timer of bounded() is stopped whatever the moment: many instant probes in a row, in parallel, and again under the same id (a stale marker of the previous call)
-t0=$SECONDS; G="$(bt_guard 120 "$KIT/bin/models.sh" 100 unique 23)"
-check "models: 100 instant bounded() calls in a row finish (none waits for its timer), leave no timer sleep behind and cost no more than the stop tick" "$G:$(bt_left 23):$(( SECONDS - t0 < 60 ? 1 : 0 ))" "done:0:1"
-G="$(for k in 1 2 3 4 5 6 7 8; do bt_guard 120 "$KIT/bin/models.sh" 20 unique 24 & done; wait)"
-check "models: 8 x 20 instant bounded() calls in parallel all finish and leave no timer sleep behind" "$(printf '%s\n' "$G" | grep -c '^done$' || true):$(bt_left 24)" "8:0"
-G="$(bt_guard 120 "$KIT/bin/models.sh" 100 same 25)"
-check "models: 100 instant bounded() calls under the same id finish (no stale marker) and leave no timer sleep behind" "$G:$(bt_left 25)" "done:0"
+t0=$SECONDS; G="$(bt_guard 120 "$KIT/bin/models.sh" 100 unique $((UT)))"
+check "models: 100 instant bounded() calls in a row finish (none waits for its timer), leave no timer sleep behind and cost no more than the stop tick" "$G:$(bt_left $((UT))):$(( SECONDS - t0 < 60 ? 1 : 0 ))" "done:0:1"
+G="$(for k in 1 2 3 4 5 6 7 8; do bt_guard 120 "$KIT/bin/models.sh" 20 unique $((UT + 1)) & done; wait)"
+check "models: 8 x 20 instant bounded() calls in parallel all finish and leave no timer sleep behind" "$(printf '%s\n' "$G" | grep -c '^done$' || true):$(bt_left $((UT + 1)))" "8:0"
+G="$(bt_guard 120 "$KIT/bin/models.sh" 100 same $((UT + 2)))"
+check "models: 100 instant bounded() calls under the same id finish (no stale marker) and leave no timer sleep behind" "$G:$(bt_left $((UT + 2)))" "done:0"
 # the timeout must be a whole number of seconds not starting with 0: anything else says so on stderr and the default is used
 for v in 1.5 2m 0 08 00 -3; do ORCA_ROLES_PROBE_TIMEOUT=$v mt lines
   check "models: ORCA_ROLES_PROBE_TIMEOUT=$v -> one note, default 90, the probe result is unchanged" "$RC:$(cat "$MM/err"):$(tabs)" "0:models.sh: ORCA_ROLES_PROBE_TIMEOUT must be a whole number of seconds; using 90:alpha;beta"; done
@@ -4507,14 +4897,14 @@ cat > "$PPD/bin/claude" <<EOS
 echo "\$*" >> "$PPL"
 C="$PPD/c"
 case "\$1 \$2 \$3" in
-  "plugin list --json") [ -f "\$C/list-hang" ] && exec -a pphang31 sleep 31; [ -f "\$C/list-fail" ] && { echo "boom list" >&2; exit 1; }; [ -f "\$C/list-junk" ] && { echo "not json"; exit 0; }; cat "\$C/list.json";;
+  "plugin list --json") [ -f "\$C/list-hang" ] && exec -a pph$$ sleep 31; [ -f "\$C/list-fail" ] && { echo "boom list" >&2; exit 1; }; [ -f "\$C/list-junk" ] && { echo "not json"; exit 0; }; cat "\$C/list.json";;
   "plugin marketplace list") cat "\$C/mk.json";;
-  "plugin marketplace add") [ -f "\$C/add-hang" ] && exec -a pphang31 sleep 31; [ -f "\$C/add-fail" ] && { echo "add boom" >&2; exit 1; }; [ -f "\$C/add-exists" ] && { echo "Marketplace already exists" >&2; exit 1; }
+  "plugin marketplace add") [ -f "\$C/add-hang" ] && exec -a pph$$ sleep 31; [ -f "\$C/add-fail" ] && { echo "add boom" >&2; exit 1; }; [ -f "\$C/add-exists" ] && { echo "Marketplace already exists" >&2; exit 1; }
     shift 3; src=""; sp=""   # --sparse takes every following argument up to the next option, so a source after it is swallowed
     while [ \$# -gt 0 ]; do case "\$1" in --scope) shift 2;; --sparse) shift; while [ \$# -gt 0 ] && [ "\${1#-}" = "\$1" ]; do sp="\$sp \$1"; shift; done;; -*) shift;; *) src="\$1"; shift;; esac; done
     [ -n "\$src" ] || { echo "error: missing source" >&2; exit 1; }
     echo "ADDPARSE src=\$src sparse=\${sp# }" >> "$PPL"; echo added;;
-  "plugin install --scope") [ -f "\$C/inst-hang" ] && exec -a pphang31 sleep 31; [ -f "\$C/inst-fail" ] && { echo "install boom" >&2; exit 1; }; echo done;;
+  "plugin install --scope") [ -f "\$C/inst-hang" ] && exec -a pph$$ sleep 31; [ -f "\$C/inst-fail" ] && { echo "install boom" >&2; exit 1; }; echo done;;
 esac
 exit 0
 EOS
@@ -4532,8 +4922,8 @@ ppr() {  # ppr <args...>: stdout in OUT (tabs shown as ~), stderr in ERR, status
   (cd "$PPD" && PATH="${PPPATH:-$PPD/bin:$PATH}" TMPDIR="$PPD/tmpd" ORCA_ROLES_PLUGINS_TIMEOUT="${PPTO:-60}" "$KIT/bin/project-plugins.sh" "$@" > "$PPD/out" 2> "$PPD/err") && RC=0 || RC=$?
   OUT="$(tr '\t' '~' < "$PPD/out")"; ERR="$(tr '\t' '~' < "$PPD/err")"
 }
-pphung() { poll pphgone; pgrep -f '^pphang31 31$' | wc -l | tr -d ' ' || true; }   # hanging stubs still alive after the script returned (a leak lives 31 s; a killed one needs a moment to go)
-pphgone() { ! pgrep -f '^pphang31 31$' >/dev/null; }
+pphung() { poll pphgone; pgrep -f "^pph$$ 31\$" | wc -l | tr -d ' ' || true; }   # hanging stubs still alive after the script returned (a leak lives 31 s; a killed one needs a moment to go)
+pphgone() { ! pgrep -f "^pph$$ 31\$" >/dev/null; }
 pcalls() { grep -c "$1" "$PPL" || true; }
 # 1. every status line kind, in declared order; the kit's own plugins and false ids are not reported
 ppc '[{"id":"a@mk1","scope":"user","enabled":true,"installPath":"/x"},{"id":"b@mk1","scope":"user","enabled":false,"installPath":"/y"},{"id":"zz@m","scope":"user","enabled":true,"installPath":""}]' '[{"name":"inst"}]'
@@ -4799,10 +5189,10 @@ if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CO
 CP="$(cat "$RS/child.pid" 2>/dev/null || true)"; poll pgone "$CP"
 check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
 # the timer of bounded() is stopped whatever the moment: instant calls under the same id ('bounded list' runs twice in an install) and a real install
-G="$(bt_guard 120 "$KIT/bin/review-skill.sh" 100 same 26)"
-check "review-skill: 100 instant bounded() calls under the same id finish and leave no timer sleep behind" "$G:$(bt_left 26)" "done:0"
-rs_state missing; t0=$SECONDS; ORCA_ROLES_SKILL_TIMEOUT=27 rs_try install
-check "review-skill: an install (two 'bounded list' calls) succeeds, does not wait for its timers and leaves no timer sleep behind" "$RC:$(( SECONDS - t0 < 20 ? 1 : 0 )):$(bt_left 27)" "0:1:0"
+G="$(bt_guard 120 "$KIT/bin/review-skill.sh" 100 same $((UT + 3)))"
+check "review-skill: 100 instant bounded() calls under the same id finish and leave no timer sleep behind" "$G:$(bt_left $((UT + 3)))" "done:0"
+rs_state missing; t0=$SECONDS; ORCA_ROLES_SKILL_TIMEOUT=$((UT + 4)) rs_try install
+check "review-skill: an install (two 'bounded list' calls) succeeds, does not wait for its timers and leaves no timer sleep behind" "$RC:$(( SECONDS - t0 < 20 ? 1 : 0 )):$(bt_left $((UT + 4)))" "0:1:0"
 for v in 1.5 2m 0 08 00 -3; do rs_state installed; ORCA_ROLES_SKILL_TIMEOUT=$v rs_try status
   check "review-skill: ORCA_ROLES_SKILL_TIMEOUT=$v -> one note, default 60, status unchanged" "$RC:$ERR" "0:review-skill.sh: ORCA_ROLES_SKILL_TIMEOUT must be a whole number of seconds; using 60"; done
 rs_state installed; ORCA_ROLES_SKILL_TIMEOUT=7 rs_try status; check "review-skill: a valid ORCA_ROLES_SKILL_TIMEOUT is kept without a note" "$RC:$ERR" "0:"
@@ -5350,8 +5740,8 @@ echo 1000 > "$ST"; mkdir "$LK"; ( sleep 2; rmdir "$LK" ) & T0="$(date +%s)"
 SCHOLAR_ARXIV_DELAY=2 sc show arxiv:2401.00001; wait; H1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 >= 1 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)"
 mkdir "$LK"; T0="$(date +%s)"; sc show arxiv:2401.00001; H2="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 4 ? 1 : 0 )):$([ -d "$LK" ] && echo untouched || echo removed):$(scu export.arxiv.org)"; rmdir "$LK"
 check "scholar arXiv pacing: a run waits while another holds the lock and leaves nothing behind; with the delay 0 there is no lock at all" "$H1:$H2" "0:1:gone:1:0:1:untouched:1"
-mkdir "$LK"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
-check "scholar arXiv pacing: a lock nobody releases is taken over after 30 s (not before, not never) and removed" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)" "0:1:gone:1"
+mkdir "$LK"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 SCHOLAR_STALE_LOCK_SECS=2 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
+check "scholar arXiv pacing: a lock nobody releases is taken over after SCHOLAR_STALE_LOCK_SECS (2 here; not before, not never) and removed" "$(cat "$SCH/rc"):$(( Z >= 2 && Z <= 20 ? 1 : 0 )):$([ -e "$LK" ] && echo left || echo gone):$(scu export.arxiv.org)" "0:1:gone:1"
 # no usable state dir or no lock: the call is made unpaced (no lock, no sleep, no stamp), one note on stderr per run, same exit code; never a hang
 SD="$SCH/state"; rm -rf "$SD" "$SCH/nostate"; T0="$(date +%s)"
 SCHOLAR_ARXIV_DELAY=8 sc show arxiv:2401.00001; U1="$(cat "$SCH/rc"):$(( $(date +%s) - T0 <= 5 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$([ -e "$SD" ] && echo created || echo none)"
@@ -5359,8 +5749,8 @@ printf 'x' > "$SCH/nostate"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=8 sc search q
 SCHOLAR_ARXIV_DELAY=0 sc show arxiv:2401.00001; U3="$(cat "$SCH/rc"):$(wc -c < "$SCH/err" | tr -d ' ')"; mkdir -p "$SD"
 U4=skipped; if [ "$(id -u)" != 0 ]; then chmod 555 "$SD"; SCHOLAR_ARXIV_DELAY=3 sc show arxiv:2401.00001; U4="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu export.arxiv.org):$(ls -A "$SD" | wc -l | tr -d ' ')"; chmod 755 "$SD"; fi
 check "scholar arXiv pacing: a missing or read-only state dir (or delay 0) never hangs: the call is made at once without lock, sleep or stamp, with the note 'arXiv calls are not paced: <dir> is not a writable directory'" "$U1|$U2|$U3|$U4" "0:1:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:none|0:1:1|0:0|$([ "$(id -u)" != 0 ] && echo "0:scholar.sh: arXiv calls are not paced: $SD is not a writable directory:1:0" || echo skipped)"
-mkdir -p "$LK"; : > "$LK/pin"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
-check "scholar arXiv pacing: a lock that cannot be removed ends the wait once after 30 s (no restart), the call is made unpaced with the note 'cannot take the lock', the stamp is not touched" "$(cat "$SCH/rc"):$(( Z >= 30 && Z <= 120 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$(cat "$ST"):$([ -e "$LK/pin" ] && echo kept || echo gone)" "0:1:scholar.sh: arXiv calls are not paced: cannot take the lock $ST.lock:1:1000:kept"
+mkdir -p "$LK"; : > "$LK/pin"; echo 1000 > "$ST"; T0="$(date +%s)"; SCHOLAR_ARXIV_DELAY=1 SCHOLAR_STALE_LOCK_SECS=2 sc show arxiv:2401.00001; Z="$(( $(date +%s) - T0 ))"
+check "scholar arXiv pacing: a lock that cannot be removed ends the wait once after SCHOLAR_STALE_LOCK_SECS (2 here; no restart), the call is made unpaced with the note 'cannot take the lock', the stamp is not touched" "$(cat "$SCH/rc"):$(( Z >= 2 && Z <= 20 ? 1 : 0 )):$(cat "$SCH/err"):$(scu export.arxiv.org):$(cat "$ST"):$([ -e "$LK/pin" ] && echo kept || echo gone)" "0:1:scholar.sh: arXiv calls are not paced: cannot take the lock $ST.lock:1:1000:kept"
 rm -rf "$LK"
 rm -f "$ST"; mkdir "$ST"; SCHOLAR_ARXIV_DELAY=1 sc show arxiv:2401.00001; Y="$(cat "$SCH/rc"):$(grep -c 'not paced' "$SCH/err" || true):$(scu export.arxiv.org):$([ -e "$LK" ] && echo left || echo gone)"; rmdir "$ST"
 check "scholar arXiv pacing: a lock taken but a stamp that cannot be written is silent (no 'cannot take the lock' note), the call is made and the lock is released" "$Y" "0:0:1:gone"
@@ -5920,6 +6310,22 @@ sed -i.bak "s/Nothing leaves the worktree without the user's explicit yes/Nothin
 rt_run; check "rules helpers: a pinned fragment removed from a prompt -> 'FAIL rules R1' naming the file, FAILURES, exit 1, no ALL OK" "$CRC:$(grep -c "^FAIL rules R1: prompts/programmer/planner.md lost 'Nothing leaves the worktree without the user's explicit yes'$" "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:1:0"
 rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review skill$/## Review skill/' "$RT/prompts/pr-reviewer/planner.md"; rm -f "$RT/prompts/pr-reviewer/planner.md.bak"
 rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer planner.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
+# the parallel runner (SMOKE_JOBS): output in the requested order, one process per section, the serial sections alone at the end, the same result as a sequential run
+CP="$TMP/cli-par"; rm -rf "$CP"; mkdir -p "$CP/tests"; ln -sfn "$ROOT/bin" "$CP/bin"; ln -sfn "$ROOT/prompts" "$CP/prompts"; ln -sfn "$ROOT/config.default.json" "$CP/config.default.json"
+sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\
+sec_fast() { : > "$RUNDIR\/run.fast"; echo "marker fast $$"; rm -f "$RUNDIR\/run.fast"; }\
+sec_wake() { echo "marker wake-alone:$(ls "$RUNDIR" | grep -c "^run\\.")"; }\
+sec_bad() { check "marker bad" a b; }; sec_quit() { exit 0; }\
+&/' "$ROOT/tests/smoke.sh" > "$CP/tests/smoke.sh"
+mkdir -p "$TMP/cprun"
+cp_run() { local j="$1"; shift; CRC=0; RUNDIR="$TMP/cprun" SMOKE_JOBS="$j" bash "$CP/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
+cp_marks() { grep '^marker ' "$TMP/cli.out" | sed 's/ [0-9][0-9]*$//' | tr '\n' ','; }
+cp_run 3 slow fast wake; P1="$CRC:$(cp_marks):$(grep -c '^ALL OK$' "$TMP/cli.out"):$(grep '^marker \(slow\|fast\) ' "$TMP/cli.out" | awk '{print $3}' | sort -u | wc -l | tr -d ' ')"; P1B="$(grep -v '^marker' "$TMP/cli.out" | wc -l | tr -d ' ')"
+cp_run 1 slow fast wake; P2="$CRC:$(cp_marks):$(grep -c '^ALL OK$' "$TMP/cli.out")"
+check "parallel runner: SMOKE_JOBS=3 prints the sections in the requested order although the fast one ends first, one process per section, the serial section (wake) runs with nothing else running, one ALL OK, same output as SMOKE_JOBS=1" "$P1:$P1B|$P2" "0:marker slow,marker fast,marker wake-alone:0,:1:2:1|0:marker slow,marker fast,marker wake-alone:0,:1"
+cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out" | cut -d: -f1):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
+cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
+check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK" "$Q1|$Q2" "1:marker fast,:1:1:0|1:marker fast,:1:1:0"
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS

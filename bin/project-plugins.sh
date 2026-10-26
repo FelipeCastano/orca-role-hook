@@ -40,10 +40,11 @@ case "$TO" in ''|*[!0-9]*|0*) echo "project-plugins.sh: ORCA_ROLES_PLUGINS_TIMEO
 first_line() { head -1 | tr '\t\r' '  '; }
 # <name> <command...>: runs it in the background with stdout/err in $T/<name>.out/.err, kills it after $TO seconds. Sets RC and TIMED.
 bounded() {
-  local i="$1" pid sl; shift
+  local i="$1" pid sl MAXN=$((TO * 10)); shift
+  [ -z "${ORCA_ROLES_TICK:-}" ] || MAXN="$(awk -v t="$TO" -v k="$ORCA_ROLES_TICK" 'BEGIN { printf "%d", t / k + 0.5 }')"
   rm -f "$T/$i.stop" "$T/$i.to"
   "$@" > "$T/$i.out" 2> "$T/$i.err" < /dev/null & pid=$!
-  ( n=0; while [ ! -e "$T/$i.stop" ] && [ "$n" -lt $((TO * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$T/$i.stop" ] || { : > "$T/$i.to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
+  ( n=0; s0=$SECONDS; while [ ! -e "$T/$i.stop" ] && [ "$n" -lt "$MAXN" ] && [ $((SECONDS - s0)) -le "$TO" ]; do sleep "${ORCA_ROLES_TICK:-0.1}"; n=$((n + 1)); done; [ -e "$T/$i.stop" ] || { : > "$T/$i.to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
   wait $pid 2>/dev/null; RC=$?
   : > "$T/$i.stop"; wait $sl 2>/dev/null
   TIMED=0; [ -f "$T/$i.to" ] && TIMED=1

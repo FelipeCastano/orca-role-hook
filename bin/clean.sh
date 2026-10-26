@@ -48,7 +48,7 @@ for id in "${TARGETS[@]}"; do
   orca terminal show --terminal "$h" --json >/dev/null 2>&1 || { echo "$t: its tab ($h) does not respond."; RC=1; continue; }
   cmd="$(clear_command "$CFG" "$id")"
   [ -n "$cmd" ] || { echo "$t: its agent has no cleanup command; define 'clearCommand' in its role in config.json."; RC=1; continue; }
-  orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 1
+  orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; pace 1
   orca terminal send --terminal "$h" --text "$cmd" --enter --json >/dev/null || { echo "$t: could not send $cmd."; RC=1; continue; }
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
