@@ -18,18 +18,20 @@ DENY_CHARS = re.compile(r'[|><`$]|\$\(|&(?!&)|\b(?:rm|sudo|curl|wget|ssh|scp|dd|
 
 
 def command_lines(section):
-    """Candidate commands of a section: lines of ``` blocks, '$ cmd' lines and inline `cmd` spans."""
+    """Candidate commands of a section, from the most explicit source present: lines of ``` blocks; else '$ cmd' lines; else inline `cmd` spans."""
     cands = []
-    for blk in re.findall(r'```[^\n]*\n(.*?)```', section, re.S):
-        cands += [l.strip().lstrip('$ ').strip() for l in blk.splitlines() if l.strip() and not l.strip().startswith('#')]
-    for l in section.splitlines():
-        m = re.match(r'^\s*\$\s+(.+)$', l)
-        if m:
-            cands.append(m.group(1).strip())
-    for m in re.finditer(r'`([^`\n]{4,200})`', section):
-        t = m.group(1).strip()
-        if re.match(r'^(?:uv run |npx |python3? -m )?(?:pytest|ruff|mypy|npm|pnpm|yarn|vitest|jest|tsc|eslint|make|go|cargo|bash)\b', t):
-            cands.append(t)
+    blocks = re.findall(r'```[^\n]*\n(.*?)```', section, re.S)
+    dollars = [m.group(1).strip() for m in (re.match(r'^\s*\$\s+(.+)$', l) for l in section.splitlines()) if m]
+    if blocks:
+        for blk in blocks:
+            cands += [l.strip().lstrip('$ ').strip() for l in blk.splitlines() if l.strip() and not l.strip().startswith('#')]
+    elif dollars:
+        cands = dollars
+    else:
+        for m in re.finditer(r'`([^`\n]{4,200})`', section):
+            t = m.group(1).strip()
+            if re.match(r'^(?:uv run |npx |python3? -m )?(?:pytest|ruff|mypy|npm|pnpm|yarn|vitest|jest|tsc|eslint|make|go|cargo|bash)\b', t):
+                cands.append(t)
     seen = set()
     out = []
     for c in (strip_comment(x) for x in cands):

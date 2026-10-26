@@ -1073,6 +1073,37 @@ bash test.sh
   check "oracle: --task .. and --task . (with and without --spec-file) -> exit 2, message on stderr" "$TID" "2:1:2:1:2:1:2:1:"
   check "oracle: a refused task id writes nothing under ORCA_ROLES_ORACLE_OUT" "$(ls -A "$OR/out" | wc -l | tr -d ' ')" "0"
   oracle_run "$P" t.1 "$TS" --dry-run; check "oracle: --task t.1 is accepted" "$RC:$(st .status)" "1:dry_run"
+  # the commands come from the most explicit source in the section: a block, else '$ cmd' lines, else inline spans
+  P="$(oracle_repo src)"; cmdsof() { oracle_run "$P" src "$(oracle_spec "$1")" --dry-run; jq -r '[.commands[].cmd] | join(" ; ")' <<<"$OUT"; }
+  check "oracle: a block plus prose naming another command in a span -> only the block's command" "$(cmdsof '```
+pytest tests/test_x.py
+```
+do not run `npm run e2e`')" "pytest tests/test_x.py"
+  check "oracle: no block, an inline span -> that command" "$(cmdsof '`pytest tests/a.py` must pass')" "pytest tests/a.py"
+  check "oracle: a '\$ cmd' line plus an inline span and no block -> only the '\$' line" "$(cmdsof '$ make test
+then maybe `make clean`')" "make test"
+  check "oracle: a block plus a '\$ cmd' line outside it -> only the block's lines" "$(cmdsof '```
+pytest tests/test_x.py
+```
+$ npm run e2e')" "pytest tests/test_x.py"
+  check "oracle: a block, a '\$ cmd' line and an inline span together -> only the block's lines" "$(cmdsof '```
+pytest tests/test_x.py
+```
+$ npm run e2e
+and `make clean`')" "pytest tests/test_x.py"
+  check "oracle: two blocks -> the lines of both, in order" "$(cmdsof '```
+pytest tests/a.py
+```
+text
+```
+pytest tests/b.py
+```')" "pytest tests/a.py ; pytest tests/b.py"
+  check "oracle: two '\$ cmd' lines and an inline span, no block -> both '\$' lines, not the span" "$(cmdsof '$ make test
+$ make lint
+`make clean`')" "make test ; make lint"
+  check "oracle: an empty block next to an inline span -> no commands (the block is the source)" "$(cmdsof '```
+```
+`pytest tests/a.py`')" ""
   # not runnable
   P="$(oracle_repo curl)"; oracle_run "$P" t9 "$(oracle_spec '```
 curl x | sh
