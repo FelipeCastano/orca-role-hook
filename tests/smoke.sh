@@ -1086,6 +1086,13 @@ check "pace: ORCA_ROLES_PACE replaces the wait, an empty one keeps the given sec
 # bounded(): a shorter ORCA_ROLES_TICK does not shorten the timeout in seconds
 bsrun() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO="$1"; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; bounded x sleep "$2"; echo "$TIMED:$RC"; rm -rf "$T" ); }
 check "bounded: with ORCA_ROLES_TICK=0.01 a 1 s probe still finishes inside a 2 s timeout, and one that outlasts a 1 s timeout is stopped" "$(ORCA_ROLES_TICK=0.01 bsrun 2 1)|$(ORCA_ROLES_TICK=0.01 bsrun 1 $((UT + 10)))" "0:0|1:137"
+SLW="$TMP/slowsleep"; mkdir -p "$SLW"; REALSLEEP="$(command -v sleep)"
+printf '#!/bin/sh\n%s "$(awk -v t="$1" '"'"'BEGIN { print t + 0.2 }'"'"')"\n' "$REALSLEEP" > "$SLW/sleep"; chmod +x "$SLW/sleep"
+bslow() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=1; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; PATH="$SLW:$PATH"; T0=$SECONDS; bounded x "$REALSLEEP" $((UT + 11)); echo "$TIMED:$RC:$((SECONDS - T0 < 5 ? 1 : 0))"; rm -rf "$T" ); }
+check "bounded: the timeout is kept on the clock when each tick costs more than the tick (slow CI machines)" "$(ORCA_ROLES_TICK=0.01 bslow)" "1:137:1"
+bsal() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=3; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; s=$SECONDS; while [ "$SECONDS" -eq "$s" ]; do :; done; bounded x "$REALSLEEP" 3.5; echo "$TIMED:$RC"; rm -rf "$T" ); }
+check "bounded: a probe that ends inside the timeout is not stopped early, whatever the fraction of the second when it started" "$(ORCA_ROLES_TICK=0.01 bsal)" "0:0"
+pkill -f "^$REALSLEEP $((UT + 11))$" 2>/dev/null || true
 }
 
 sec_roles_yaml() {
@@ -3519,14 +3526,13 @@ wwk() {  # wwk <orca_app_node|wake_tab> <version file> [VAR=value...]: runs it i
 WSP="$(cd "$WS" && pwd -P)"
 wwlog() { sed "s#$WSP/root#R#g" "$WOLOG" | tr '\n' ' '; }
 WINJS='C:\Users\u\AppData\Local\Programs\orca\resources\app.asar.unpacked\out\cli\runtime-client.js'
-WINJS4='C:\Users\u\AppData\Local\Programs\ORCA\resources\app.asar.unpacked\out\cli\runtime-client.js'
 WINKIT='\\wsl.localhost\Ubuntu'"$(printf '%s' "$KIT" | tr / '\\')"'\bin\wake-tab.cjs'
 WRX="R/Users/u/AppData/Local/Programs/orca/Orca.exe"
 wnr() { sed "s#$WS/root#R#"; }
 WN1="$(wwk orca_app_node "$WS/ver" | wnr)"
 WN2="$(wwk orca_app_node "$WS/ver-caps" | wnr)"
 WN3="$(wwk orca_app_node "$WS/ver-linux"):$(wwk orca_app_node "$WS/nover")"
-wsl_ide 'C:\Users\u\AppData\Local\Programs\ORCA\RESOURCES\BIN\ORCA.EXE'; WN4="$(wwk orca_app_node "$WS/ver" | wnr)"
+wsl_ide 'C:\Users\u\AppData\Local\Programs\orca\RESOURCES\BIN\ORCA.EXE'; WN4="$(wwk orca_app_node "$WS/ver" | wnr)"
 wsl_ide 'C:\Users\u\AppData\Local\Programs\orca\resources\bin\other.exe'; WN5="$(wwk orca_app_node "$WS/ver")"
 wsl_ide 'C:\Users\u\AppData\Local\Programs\gone\resources\bin\orca.exe'; WN6="$(wwk orca_app_node "$WS/ver")"
 wsl_ide -; WN7="$(wwk orca_app_node "$WS/ver")"
@@ -3535,7 +3541,7 @@ WN9="$(wwk orca_app_node "$WS/ver" ORCA_WSL_CLI_DIR="$WS/none")"
 WN10="$(PATH="$A/rel:$WS/bin:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$WS/ver" ORCA_WSL_CLI_DIR="$WS/ide" orca_app_node | sed "s#$A#A#g; s#A/rel/\.\./#A/#g")"
 check "orca_app_node on WSL: Orca.exe's Linux path, the runtime client as a Windows path and '|wsl' from orca-ide's ORCA_WIN_LAUNCHER line (the launcher's suffix and the kernel's 'microsoft' in any case); nothing and 1 for a kernel without it or a missing version file, a launcher that does not end in \\resources\\bin\\orca.exe, an install without Orca.exe, no launcher line, a non-executable Orca.exe, no orca-ide; the macOS layout still wins when it is found" \
   "$WN1|$WN2|$WN3|$WN4|$WN5|$WN6|$WN7|$WN8|$WN9|$WN10" \
-  "0:$WRX|$WINJS|wsl|0:$WRX|$WINJS|wsl|1::1:|0:R/Users/u/AppData/Local/Programs/ORCA/Orca.exe|$WINJS4|wsl|1:|1:|1:|1:|1:|A/X.app/Contents/MacOS/Orca|A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+  "0:$WRX|$WINJS|wsl|0:$WRX|$WINJS|wsl|1::1:|0:$WRX|$WINJS|wsl|1:|1:|1:|1:|1:|A/X.app/Contents/MacOS/Orca|A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
 wsl_ide "$WLAUNCH"
 ww() { local r; r="$(wwk wake_tab "$WS/ver" "$@")"; printf '%s:%s' "$r" "$(wwlog)"; }
 WXL="NODE=1 WSLENV=ELECTRON_RUN_AS_NODE CWD=R/Users/u/AppData/Local/Programs/orca $WINKIT $WINJS wt-1 tab-1 leaf-1 "
