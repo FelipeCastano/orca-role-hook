@@ -57,10 +57,10 @@ else
   SOURCE=local; INST_REF=unknown
 fi
 
-# manifest_of <dir>: "<sha1>  <relative path>" of every file the install regenerates, sorted
+# manifest_of <dir>: "<sha1>  <relative path>" of every file the install regenerates, plus the top-level README.md, config.default.json and VERSION, sorted
 manifest_of() {
   local f
-  ( cd "$1" && { find bin prompts plugin mcp -type f 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$1" && { find bin prompts plugin mcp -type f 2>/dev/null || true; ls -d README.md config.default.json VERSION 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s  %s\n' "$(shasum < "$f" | cut -d' ' -f1)" "$f"
     done )
 }
@@ -70,7 +70,11 @@ mkdir -p "$KIT"
 # Files you changed or added in the regenerated folders since the last install are saved aside first (no manifest: nothing to compare)
 if [ -f "$KIT/.manifest" ]; then
   NOW="$(mktemp)"; manifest_of "$KIT" > "$NOW"
-  CHANGED="$(grep -vxFf "$KIT/.manifest" "$NOW" | sed 's/^[0-9a-f]*  //' || true)"
+  # changed: another hash than in the old manifest; or absent from it and in a folder that was always listed (the top-level files are new in the manifest)
+  CHANGED="$(awk 'NR == FNR { old[substr($0, 43)] = $1; next }
+    { p = substr($0, 43) }
+    p in old { if (old[p] != $1) print p; next }
+    p ~ /^(bin|prompts|plugin|mcp)\// { print p }' "$KIT/.manifest" "$NOW" || true)"
   rm -f "$NOW"
   if [ -n "$CHANGED" ]; then
     BK="$KIT/backup/$(date -u +%Y%m%dT%H%M%SZ)"

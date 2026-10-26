@@ -100,7 +100,7 @@ probe_opencode() {
   local l
   if [ -n "$PROBE" ]; then probe_custom "$1"; return; fi
   l="$(opencode models 2>/dev/null)" || return 97
-  grep -qxF -- "$1" <<<"$l"
+  grep -qxF -- "${1%%#*}" <<<"$l"  # a variant suffix (provider/model#variant) is not part of the listed name
 }
 probe_custom() { bash -c "${PROBE//\{model\}/$(printf '%q' "$1")}"; }
 one() {  # <i> <model> → writes $T/<i>.res

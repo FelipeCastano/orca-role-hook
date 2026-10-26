@@ -4946,6 +4946,7 @@ check "opencode: model_error_regex is the role's modelError (none built in)" "$(
 ocm() { (cd "$PROJ" && PATH="$OC/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$OC/cfg.json" "$KIT/bin/models.sh" "$@" 2>&1 | tr '\t\n' '|;'); }
 check "opencode: models.sh lists the role's model first, then opencode models, deduplicated" "$(ocm dev)" "p/m;p/other;"
 check "opencode: models.sh --check: in the list ok, not in it unavailable" "$(ocm dev --check --model p/other);$(ocm dev --check --model q/zzz)" "p/other|ok|-;;q/zzz|unavailable;"
+check "opencode: models.sh --check: a #variant is looked up without it (listed model available, unlisted unavailable)" "$(ocm dev --check --model p/other#high);$(ocm dev --check --model q/zzz#high)" "p/other#high|ok|-;;q/zzz#high|unavailable;"
 # new-role.sh accepts the agent and the opencode field; an unknown agent is refused
 printf '%s' '{"id":"oc-role","description":"x","agent":"opencode","model":"p/m","opencode":{"steps":9,"permissions":[]},"prompt":"# x\n## Report\n"}' > "$OC/role.json"
 try newrole "$OC/role.json"; check "from-json: accepts agent opencode and keeps its opencode object" "$RC $(jq -c '.roles["oc-role"] | [.agent, .opencode]' "$KIT/config.json")" '0 ["opencode",{"steps":9,"permissions":[]}]'
@@ -5261,6 +5262,15 @@ check "install: the backup keeps both files at their relative path with the edit
 check "install: the kit is restored to the repo version (edit gone, added file gone, deleted file back)" "$(cmp -s "$ROOT/prompts/programmer/dev.md" "$VK/prompts/programmer/dev.md" && echo same):$([ -e "$VK/bin/mine.sh" ] && echo present || echo gone):$([ -f "$VK/prompts/programmer/tester.md" ] && echo back)" "same:gone:back"
 vrun
 check "install: after the restore the next install is quiet again" "$(vwarn)" "0"
+# top-level README.md, config.default.json and VERSION are compared too
+echo '{"edited":1}' >> "$VK/config.default.json"; echo "9.9.9" > "$VK/VERSION"; rm -rf "$VK/backup"; vrun; BKD="$(find "$VK/backup" -mindepth 1 -maxdepth 1 -type d | head -1)"
+check "install: edited config.default.json and VERSION are backed up and listed; README.md, untouched, is not" "$VRC:$(vwarn):$(printf '%s\n' "$VOUT" | grep -c '^  config.default.json$'):$(printf '%s\n' "$VOUT" | grep -c '^  VERSION$'):$(printf '%s\n' "$VOUT" | grep -c '^  README.md$' || true):$(tail -1 "$BKD/config.default.json"):$(cat "$BKD/VERSION")" "0:1:1:1:0:{\"edited\":1}:9.9.9"
+check "install: the manifest lists the top-level files and stays sorted" "$(grep -c '  README.md$' "$VK/.manifest"):$(grep -c '  config.default.json$' "$VK/.manifest"):$(grep -c '  VERSION$' "$VK/.manifest"):$(sed 's/^[0-9a-f]*  //' "$VK/.manifest" | LC_ALL=C sort -c && echo sorted)" "1:1:1:sorted"
+# an old manifest without the top-level files: they are not reported as added (nor backed up)
+grep -v -e '  README.md$' -e '  config.default.json$' -e '  VERSION$' "$VK/.manifest" > "$VK/.manifest.old" && mv "$VK/.manifest.old" "$VK/.manifest"; rm -rf "$VK/backup"; vrun
+check "install: an old manifest without README.md, config.default.json and VERSION reports none of them" "$VRC:$(vwarn):$([ -e "$VK/backup" ] && echo backup || echo none)" "0:0:none"
+echo "# my readme edit" >> "$VK/README.md"; vrun
+check "install: an edited README.md is backed up and listed" "$(vwarn):$(printf '%s\n' "$VOUT" | grep -c '^  README.md$')" "1:1"
 # no manifest (first install or an older kit): no comparison, no warning, no backup
 rm -rf "$VK/backup" "$VK/.manifest"; echo "# edit" >> "$VK/prompts/programmer/dev.md"; vrun
 check "install: without a manifest nothing is compared" "$VRC:$(vwarn):$([ -e "$VK/backup" ] && echo backup || echo none):$([ -s "$VK/.manifest" ] && echo manifest)" "0:0:none:manifest"
@@ -5467,6 +5477,19 @@ check "kit-path: launch.sh without KIT keeps the tab command (no KIT=, ~/.orca-r
 rm -f "$NH/.orca-roles"; printf 'DEV=t2\n' > "$TMP/kp-state.env"
 try kp_run "$TMP" HOME="$NH" PATH="$KPB:$PATH" KIT="$K2" ORCA_ROLES_STATE="$TMP/kp-state.env" ORCA_ROLES_CONFIG="$K2/config.json" "$K2/bin/clean.sh" --msg dev
 case "$RC:$OUT" in 0:*"$K2/prompts/"*) echo "ok   kit-path: clean.sh honours KIT";; *) echo "FAIL kit-path clean.sh: $RC $OUT"; FAIL=1;; esac
+# relaunch-planner.sh takes the kit from KIT too: a copy with a lib.sh that announces itself is the one sourced
+mkdir -p "$TMP/kp-rl/bin"; cp "$ROOT/bin/relaunch-planner.sh" "$TMP/kp-rl/bin/"; printf 'echo SOURCED-COPY-LIB; exit 0\n' > "$TMP/kp-rl/bin/lib.sh"
+try kp_run "$TMP" HOME="$NH" KIT="$TMP/kp-rl" bash "$TMP/kp-rl/bin/relaunch-planner.sh" w g h t
+check "kit-path: relaunch-planner.sh sources the lib.sh of KIT" "$RC:$(grep -c SOURCED-COPY-LIB <<<"$OUT")" "0:1"
+# lint: every script that uses KIT defaults it with KIT="${KIT:-...}"; none pins the installed kit
+KPNO=""; KPPIN=""
+for f in "$ROOT"/bin/*.sh; do
+  [ "$(basename "$f")" = lib.sh ] && continue
+  if grep -qE '\$KIT|\$\{KIT' "$f" && ! grep -qF 'KIT="${KIT:-' "$f"; then KPNO="$KPNO $(basename "$f")"; fi
+done
+for f in "$ROOT"/bin/*.sh; do grep -qF 'KIT="$HOME/.orca-roles"' "$f" && KPPIN="$KPPIN $(basename "$f")"; done
+check "kit-path: every bin script that uses KIT defaults it with KIT=\"\${KIT:-...}\"; offenders:${KPNO:- none}" "${KPNO:-none}" "none"
+check "kit-path: no bin script sets KIT=\"\$HOME/.orca-roles\" outright; offenders:${KPPIN:- none}" "${KPPIN:-none}" "none"
 # the anchor's command names the kit only when it is not the installed one
 check "kit-path: kit_env is empty for the installed kit and KIT=<path> otherwise" "[$(KIT="$HOME/.orca-roles" kit_env)][$(KIT="/x y/kit" kit_env)]" "[][KIT=/x\\ y/kit ]"
 ln -sfn "$K2" "$NH/.orca-roles"
