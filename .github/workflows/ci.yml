@@ -31,3 +31,5 @@ jobs:
           echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
       - run: bash --version | head -1 && jq --version
       - run: tests/smoke.sh
+        env:
+          SMOKE_CLI_TIMEOUT: 60

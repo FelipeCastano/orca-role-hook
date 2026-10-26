@@ -59,7 +59,7 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
   for _ in 1 2 3; do
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
     if { screen_of "$1" || true; } | grep -qiE 'trust the files|trust this folder|do you trust|safety check|confías|confiar'; then   # confías/confiar: the Spanish-localized dialog
-      press_enter "$1"; echo "Trust dialog accepted in $1"; sleep 3
+      press_enter "$1"; echo "Trust dialog accepted in $1"; pace 3
     else break; fi
   done
   local before rx; rx="$(model_error_regex "$CFG" "$2" "$(rstr "$CFG" "$2" model)")"
@@ -105,13 +105,13 @@ composer_watch() {
         echo "Composer extra session detected ($h, first title: '$(jq -r --arg h "$h" '.[] | select(.handle == $h) | .title' "$SEEN")'); closing it."
         if orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1; then echo "Closed $h"
         else  # older Orca without terminal close: ask the agent to exit
-          orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; sleep 2
+          orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; pace 2
           orca terminal send --terminal "$h" --text "/exit" --enter --json >/dev/null && echo "/exit sent to $h"
         fi
       done
       return 0
     fi
-    sleep 2
+    pace 2
   done
   echo "No composer extra session found (titles seen: $(jq -c '[.[] | select((.agentIdentity // "") != "") | .title]' "$SEEN"))."
 }
@@ -124,7 +124,7 @@ if is_new planner; then
     if [ -n "$cmd" ]; then
       orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
       orca terminal send --terminal "$PLANNER" --text $'\e' --json >/dev/null 2>&1
-      sleep 1
+      pace 1
       orca terminal send --terminal "$PLANNER" --text "$cmd" --enter --json >/dev/null
       orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
       echo "The Planner's conversation was cleared ($cmd) for the mode switch."

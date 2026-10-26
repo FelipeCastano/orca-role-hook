@@ -101,7 +101,7 @@ arxiv_get() {
       (
         start="$(date +%s)"
         until mkdir "$f.lock" 2>/dev/null; do
-          if [ $(($(date +%s) - start)) -ge 30 ]; then
+          if [ $(($(date +%s) - start)) -ge "${SCHOLAR_STALE_LOCK_SECS:-30}" ]; then
             rmdir "$f.lock" 2>/dev/null
             mkdir "$f.lock" 2>/dev/null || exit 3
             break

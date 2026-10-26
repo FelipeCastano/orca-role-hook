@@ -22,7 +22,7 @@ set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,20p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="$HOME/.orca-roles"; . "$KIT/bin/lib.sh"
-command -v orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
+type -P orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
 WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -42,7 +42,7 @@ if [ "$REOPEN" = 1 ]; then
 fi
 # a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
 if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-  A="${ORCA_WORKTREE_ID#*::}"; A="${A%%::workspace:*}"
+  A="${ORCA_WORKTREE_ID#*::}"; A="$(local_path "${A%%::workspace:*}")"
   if [ "$(cd "$A" 2>/dev/null && pwd -P)" != "$(cd "$TOP" && pwd -P)" ]; then
     CUR_ID="$(orca worktree current --json 2>/dev/null | jq -r '.result.worktree.id // empty' 2>/dev/null)"
     if [ -n "$CUR_ID" ]; then
@@ -84,7 +84,7 @@ agent_pid_of_handle() {
   done
   return 0
 }
-agent_in()   { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; }
+agent_in()   { local js rc; js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"; rc=$?; printf '%s' "$js" | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; return "$rc"; }
 role_alive() {  # role_alive <role> <handle>
   [ -n "${2:-}" ] || return 1
   local js rc code; js="$(orca terminal show --terminal "$2" --json 2>/dev/null)"; rc=$?
@@ -95,8 +95,9 @@ role_alive() {  # role_alive <role> <handle>
   fi
   printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
   case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac
-  local i; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
-    if [ -n "$(agent_in "$2")" ]; then
+  local i ai; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
+    ai="$(agent_in "$2")" || { ROLE_ALIVE_CODE=no-response; return 4; }
+    if [ -n "$ai" ]; then
       # Orca can list a tab after a restart with its old identity but no agent running
       [ -n "$(agent_pid_of_handle "$2")" ] || return 2
       return 0
@@ -435,7 +436,9 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
         chs=""; case "$src" in 0|2|3) chs="$shandle";; esac
         [ -z "$srh" ] || [ "$srh" = "$chs" ] || chs="$chs $srh"
         for ch in $chs; do
-          orca terminal close --terminal "$ch" --tab --json >/dev/null 2>&1 || orca terminal close --terminal "$ch" --json >/dev/null 2>&1 \
+          orca terminal close --terminal "$ch" --tab --json >/dev/null 2>&1; crc=$?
+          [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "$ch" --json >/dev/null 2>&1; crc=$?; }
+          [ "$crc" = 0 ] || { [ "$crc" = 124 ] && close_unconfirmed "$ch" "$stitle" >/dev/null; } \
             || fail "ERROR: could not close $stitle's tab ($ch); close it by hand and switch again."
         done
       fi
@@ -560,6 +563,14 @@ for id in $ROLES; do
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
   fi
+  if [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ -n "${!v:-}" ]; then   # a tab this run would close must not be the one running it (the Planner's restored tab is reopened by its relauncher)
+    own=0
+    if [ "$st" = 2 ]; then [ "${!v}" = "$ORCA_TERMINAL_HANDLE" ] && own=1
+    elif [ "$st" = 1 ] && [ "$id" != planner ]; then
+      p="$(saved_pty "$v")"; [ -n "$p" ] && [ "$(restored_handle "$p" "$(woke_old "$v")")" = "$ORCA_TERMINAL_HANDLE" ] && own=1
+    fi
+    [ "$own" = 0 ] || fail "ERROR: roles was run from the tab of $t, which has to be reopened; run roles from the Planner's tab or another terminal of this worktree. No tab was closed or opened."
+  fi
 done
 KICKOFFS="$GITDIR/orca-roles.kickoff.d"   # one file per running kickoff, named by its pid, listing the roles it will kick
 for f in "$KICKOFFS"/*; do [ -f "$f" ] && ! kill -0 "$(basename "$f")" 2>/dev/null && rm -f "$f"; done
@@ -594,10 +605,12 @@ for id in $ROLES; do
   fi
   if [ "$st" = 3 ]; then
     RESUMED="$RESUMED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one."
-    orca terminal close --terminal "${!v}" --json >/dev/null 2>&1 || orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
+    orca terminal close --terminal "${!v}" --json >/dev/null 2>&1; crc=$?
+    [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1; crc=$?; }
+    [ "$crc" != 124 ] || close_unconfirmed "${!v}" "$t" || true
   elif [ "$st" = 2 ]; then
     RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
-    orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || true
+    orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "${!v}" "$t" || true; }
   elif [ -n "${!v:-}" ]; then
     p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "$v")")"
     if [ -n "$rh" ]; then
@@ -625,7 +638,7 @@ for id in $ROLES; do
         echo "The Planner's restored tab ($rh) is busy: not reopened now; run roles again when it is idle."
         continue
       fi
-      orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || true
+      orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "$rh" "$t" || true; }
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
       else
@@ -637,9 +650,18 @@ for id in $ROLES; do
   fi
   h=""
   for try in 1 2 3; do
-    h=$(orca terminal create --worktree "$WT" --title "$(tab_title_of "$CFG" "$id")" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1 | handle_of)
+    out="$(orca terminal create --worktree "$WT" --title "$(tab_title_of "$CFG" "$id")" --command "ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1)"; crc=$?
+    h="$(printf '%s' "$out" | handle_of)"
+    if [ "$crc" = 124 ]; then
+      # The list is read once, so a tab Orca opens after it is missed (N2).
+      NL="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" || NL=""
+      for c in $(printf '%s' "$NL" | jq -r --arg t "$(tab_title_of "$CFG" "$id")" '[.. | objects | select(has("handle") and .title == $t) | .handle] | .[]' 2>/dev/null); do
+        printf '%s' "$LIST" | grep -qF "\"$c\"" && continue
+        h="$c"; echo "Orca was slow to answer while opening the tab of $t; using the tab it opened ($h)."; break
+      done
+    fi
     [ -n "$h" ] && break
-    echo "Retrying $t ($try/3)..."; sleep 2
+    echo "Retrying $t ($try/3)..."; pace 2
   done
   if [ -z "$h" ]; then
     sw="${SWITCH_FROM:-}"; [ -n "$sw" ] || sw="$(cat "$SWITCH_FILE" 2>/dev/null)"
@@ -647,7 +669,12 @@ for id in $ROLES; do
     echo "$m" >&2; exit 1
   fi
   printf -v "$v" '%s' "$h"; NEW="$NEW $id"
-  state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$(pty_of_handle "$h")"   # an interrupted launch still remembers the tabs it opened
+  hp="$(pty_of_handle "$h")"
+  if [ -z "$hp" ]; then
+    pace 2; hp="$(pty_of_handle "$h")"
+    [ -n "$hp" ] || echo "Could not read the ptyId of the tab of $t; after a restart it may open without memory."
+  fi
+  state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$hp"   # an interrupted launch still remembers the tabs it opened
   tl="$(tabs_of_handle "$h")"; [ -z "$tl" ] || state_set "$TABS" "$v" "$tl"
 done
 
