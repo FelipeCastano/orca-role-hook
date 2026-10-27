@@ -384,7 +384,7 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
         fi
       done
       [ "$W_ALL" = 0 ] || break
-      sleep 1
+      sleep "${ORCA_ROLES_WAKE_TICK:-1}"   # the budgets above stay whole seconds; only the pause between passes is tunable
     done
     [ -z "${ORCA_TERMINAL_HANDLE:-}" ] || orca terminal switch --terminal "$ORCA_TERMINAL_HANDLE" --json >/dev/null 2>&1 || true
     for ((wi = 0; wi < W_N; wi++)); do

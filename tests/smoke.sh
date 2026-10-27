@@ -67,6 +67,7 @@ case "$JOBS" in ''|*[!0-9]*|0) JOBS=1;; esac
 if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
 unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
+export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
 export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and poll waits, and the stop tick of bounded(), shortened; a check that needs the real value sets it itself
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -4422,7 +4423,7 @@ check "wake of placeholders: a tab listed with its old handle and no agent proce
 "a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:1:0 b:0:W:tab-noid-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1 c:0:W:tab-dev switch:other create:Planner close:rs-dev create:Dev create:Tst  d:0:create:Planner close:h-noleaf create:Dev create:Tst :0:1:1"
 # e: the old handle is still listed (with a readable session and idle) while the new one has not appeared yet: the wait ignores it, so the tab reopened is the one under the new handle
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wdelay.tab-od-dev"; : > "$TMP/wsess.od-dev"; WB=8
-OTH=other wl; unset WB; sleep 3
+OTH=other wl; unset WB; for _ in $(seq 50); do grep -qF '"handle":"od-dev"' "$TMP/wbase" || break; sleep 0.1; done   # the delayed fake hook has dropped the old handle
 check "wake of a placeholder: while the old handle is still listed the readiness wait does not take it for the woken tab; the new handle is the one closed and reopened, the old one is never closed" "$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
 # f: a placeholder that cannot be woken (the helper says unavailable, 2, or fails, 1) is a tab whose agent is gone: closed by its old handle and replaced, never 'already open'
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; echo 2 > "$TMP/wrc.tab-od-dev"
@@ -4480,6 +4481,17 @@ T0=$(date +%s); WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; T1=$(date +%s
 M="$M b:$RC:$(wev):$(wn "$WGONE"):$([ $((T1 - T0)) -lt 5 ] && echo fast || echo slow)"
 check "wake of a listed tab that never gets a new handle: it waits only ORCA_ROLES_WAKE_LISTED_BUDGET (fast when it is the only one, the unlisted one in the same run still keeps ORCA_ROLES_WAKE_BUDGET), prints the 'has no agent running and Orca did not resume it' line, then the 'agent is gone' path closes it by its old handle and opens a new one; the unlisted one is 'treated as closed'; never 'Could not wake' for the listed one" "$M" \
 "a:0:W:tab-pl W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:1:1:0:slow b:0:W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:fast"
+# m2: the pause between passes is ORCA_ROLES_WAKE_TICK, one second when it is unset (the suite sets a short one)
+printf '#!/bin/bash\necho "$1" >> %s\nexec /bin/sleep "$1"\n' "$TMP/wsleep.log" > "$TMP/wbin/sleep"; chmod +x "$TMP/wbin/sleep"
+M2=""
+for tick in unset 0.3; do
+  wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; printf '%s\n{"handle":"od-dev","ptyId":"wt@@p2"}\n' "$WOTHER" > "$TMP/wbase"; : > "$TMP/wnoproc.od-dev"; : > "$TMP/wsleep.log"
+  if [ "$tick" = unset ]; then unset ORCA_ROLES_WAKE_TICK; else export ORCA_ROLES_WAKE_TICK=$tick; fi
+  WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; export ORCA_ROLES_WAKE_TICK=0.2
+  M2="$M2 $tick:$(sort -u "$TMP/wsleep.log" | tr '\n' ',')"
+done
+rm -f "$TMP/wbin/sleep"
+check "wake: the pause between passes of the wait loop is ORCA_ROLES_WAKE_TICK when set and exactly 1 second when it is unset" "$M2" " unset:1, 0.3:0.3,"
 # n: the old handle of a woken placeholder keeps answering 'terminal show' (and stays listed) after the wake: the role is not 'gone'; its restored tab is reopened from the new handle with its conversation and the old handle is never closed (role loop and mode switch)
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
 mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
