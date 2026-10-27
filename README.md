@@ -261,7 +261,7 @@ When `roles` opens or reopens workers but the Planner keeps its tab (for example
 
 Orca announces worker reports only to the terminal a Run is bound to. After a restart the Planner's terminal changes, so until it binds the Run again (`run-use`) reports reach it late. The Planner checks its binding when reports may be missing, and when the kit starts a Planner it looks for the most recent Run still bound to one of this worktree's previous Planner tabs (`orca-roles.planner-handles` in the git dir) and reminds it to bind it; the kickoff log says so.
 
-`roles` also reopens a role whose tab is still there but whose agent stopped (for example after `Ctrl+C`), and one whose tab you closed with the X: Orca keeps that session running without a tab ("orphaned"), so the kit ends it and opens a new tab. This check works for the agents Orca recognizes (Claude, Codex); for `custom` agents only the tab counts.
+`roles` also reopens a role whose tab is still there but whose agent stopped (for example after `Ctrl+C`). A tab Orca reports as orphaned (it does when you close it with the X and Orca keeps the session, and also for live tabs Orca has not bound yet) is kept while its Claude or Codex agent is running, with a line telling you to run `close-role.sh <role>` and then `roles` to end it; closing a tab with the X does not stop its agent, `close-role.sh` does. This check works for the agents Orca recognizes (Claude, Codex); for `custom` and `opencode` agents only the tab counts.
 
 ## Creating a new role
 

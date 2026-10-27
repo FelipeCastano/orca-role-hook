@@ -237,7 +237,7 @@ When the user wants a role gone, ask whether only from this workspace or for goo
 | The E2E-Tester's tab still starts `npx @playwright/mcp@latest` | A `mcpServers.playwright` override (saved in the worktree or in the user's config) was not migrated to the pinned stack: drop the override with `roles --reset`, or edit the config entry (confirm first, see Rules) |
 | `e2e-run.sh` refuses a real `qa-e2e/node_modules` | Remove it (never `npm install` there): the kit links its own pinned packages |
 | `e2e-run.sh` does not find the flow | It must be a folder `qa-e2e/<flow>/` (`e2eDir` param) of the worktree with at least one `*.flow.ts` or `*.flow.js` |
-| A role's tab was closed with the X | Orca keeps that session running without a tab; `roles` ends it and opens a new one |
+| A role's tab was closed with the X, or Orca says "detached" | Orca keeps the session running without a tab and also flags live tabs it has not bound yet; while the Claude or Codex agent runs, `roles` keeps it and says so. To end it: `~/.orca-roles/bin/close-role.sh <role>` and then `roles` |
 | A role lost its role after a manual `/clear` or `/new` | Claude and Codex roles ask for it again on the next message (`clean.sh --msg <role>`, from a line outside the conversation). A `custom` role only if its `command` passes `{anchor}`; otherwise `clean.sh <role>`, or tell it to run `clean.sh --msg <role>` |
 
 More cases in the "Troubleshooting" table of `~/.orca-roles/README.md`.
