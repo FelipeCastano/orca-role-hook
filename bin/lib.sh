@@ -206,7 +206,11 @@ MODE_LIST="programmer, pr-reviewer, academic-research"
 # Modes renamed between versions (old id → new id); the old id is accepted with a note until the version after the next tag.
 LEGACY_MODES='{"academic-writer": "academic-research"}'
 # The current id of a mode (an old id maps to its new one; anything else is unchanged), without a trailing newline.  canon_mode <id>
-canon_mode() { jq -jn --argjson l "$LEGACY_MODES" --arg m "$1" '$l[$m] // $m'; }
+canon_mode() {
+  local m
+  for m in $MODE_IDS; do [ "$m" = "$1" ] && { printf '%s' "$1"; return 0; }; done
+  jq -jn --argjson l "$LEGACY_MODES" --arg m "$1" '$l[$m] // $m'
+}
 # Why a mode id is unusable (empty output if it is fine): the match is exact against the list, so nothing like ../x or a path reaches a prompt path.
 mode_error() {  # <id>
   local m
@@ -262,16 +266,26 @@ tab_title_of() {
     c="$(rstr "$1" "$2" command)"; read -r -a words <<< "$c" || true
     for w in ${words[@]+"${words[@]}"}; do
       case "$w" in *=*) continue;; esac
-      w="${w##*/}"; tok="$(printf '%s' "${w%%.*}" | tr '[:upper:]' '[:lower:]')"; break
+      w="${w##*/}"; tok="$(lower_ascii "${w%%.*}")"; break
     done
   else
-    tok="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+    tok="$(lower_ascii "$a")"
   fi
   [ -n "$tok" ] || { printf '%s\n' "$t"; return 0; }
-  lt="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]')"
+  lt="$(lower_ascii "$t")"
   case "$lt" in *"($tok)") printf '%s\n' "$t";; *) printf '%s (%s)\n' "$t" "$tok";; esac
 }
-var_of()   { echo "$1" | tr 'a-z-' 'A-Z_'; }
+# The text with A-Z mapped to a-z, no trailing newline; non-ASCII letters are left as they are.  lower_ascii <text>
+lower_ascii() {
+  local s="$1" u=ABCDEFGHIJKLMNOPQRSTUVWXYZ l=abcdefghijklmnopqrstuvwxyz i
+  for ((i = 0; i < 26; i++)); do s="${s//"${u:i:1}"/${l:i:1}}"; done
+  printf '%s' "$s"
+}
+var_of() {
+  local s="$1" u=ABCDEFGHIJKLMNOPQRSTUVWXYZ l=abcdefghijklmnopqrstuvwxyz i
+  for ((i = 0; i < 26; i++)); do s="${s//"${l:i:1}"/${u:i:1}}"; done
+  printf '%s\n' "${s//-/_}"
+}
 # The kit's prompts folder for the configuration's mode
 prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
 # A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~, {kit} and {home}), or the mode's prompts/<mode>/<role>.md
@@ -782,7 +796,9 @@ scratch_dir() {
   [ -n "$role" ] || return 1
   gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || gd="$(pwd -P)"
   h="$(printf '%s' "$gd" | { shasum 2>/dev/null || sha1sum 2>/dev/null || cksum; } | cut -d' ' -f1 | cut -c1-10)"
-  proj="$(project_name . | tr -c 'A-Za-z0-9._\n-' '_')"; role="$(printf '%s' "$role" | tr -c 'A-Za-z0-9._-' '_')"
+  proj="$(project_name .)"
+  case "$proj" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) proj="$(printf '%s\n' "$proj" | tr -c 'A-Za-z0-9._\n-' '_')";; esac
+  case "$role" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) role="$(printf '%s' "$role" | tr -c 'A-Za-z0-9._-' '_')";; esac
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
 }
@@ -902,7 +918,7 @@ url_host_origin() {
     *) host="${auth%%:*}"; port=""; case "$auth" in *:*) port="${auth#*:}";; esac;;
   esac
   [ -n "$host" ] || return 1
-  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  host="$(lower_ascii "$host")"
   case "$scheme:$port" in http:80|https:443) port="";; esac
   origin="$scheme://$host"; [ -z "$port" ] || origin="$origin:$port"
   printf '%s\n%s\n' "$host" "$origin"

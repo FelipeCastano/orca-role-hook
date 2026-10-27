@@ -750,6 +750,12 @@ check "tab_title_of: a title already ending in the agent's name is unchanged in 
 check "tab_title_of: custom takes the first word of command that is not an assignment, basename, cut at the first dot, lowercased" "$(tt X custom 'opencode run {prompt}'):$(tt X custom 'FOO=1 BAR=2 /opt/bin/gemini --yolo'):$(tt X custom './bin/my-agent.sh --flag'):$(tt X custom 'Aider.EXE'):$(tt X custom '* --x')" "X (opencode):X (gemini):X (my-agent):X (aider):X (*)"
 check "tab_title_of: custom without a usable word in command adds no suffix" "$(tt X custom ''):$(tt X custom 'FOO=1'):$(tt X custom '.hidden'):$(tt X custom '   ')" "X:X:X:X"
 check "var_of" "$(var_of e2e-tester)" "E2E_TESTER"
+check "var_of: ids, edges and non-ids map as tr did" "$(var_of dev):$(var_of e2e-tester):$(var_of a--b):$(var_of -x-):$(var_of 9):[$(var_of '')]:$(var_of Dev):$(var_of a_b.c):$(var_of é-x)" "DEV:E2E_TESTER:A__B:_X_:9:[]:DEV:A_B.C:é_X"
+check "var_of: ends with one newline and never swallows an echo option" "$(var_of dev | od -An -c | tr -d ' '):$(var_of -n):$(var_of -e)" 'DEV\n:_N:_E'
+check "lower_ascii: A-Z only, no trailing newline, specials and non-ASCII untouched" "$(lower_ascii Claude):$(lower_ascii OPENCODE):$(lower_ascii 'Researcher (Claude)'):$(lower_ascii a1-B2_C3):[$(lower_ascii '')]:$(lower_ascii ÉX):$(lower_ascii 'A&B*[Q]\Z'):$(lower_ascii ABCDEFGHIJKLMNOPQRSTUVWXYZ)" 'claude:opencode:researcher (claude):a1-b2_c3:[]:Éx:a&b*[q]\z:abcdefghijklmnopqrstuvwxyz'
+NS="$TMP/nospawn"; mkdir -p "$NS/bin"; for c in tr jq cut; do printf '#!/bin/sh\necho %s >> "%s/spawned"\nexit 1\n' "$c" "$NS" > "$NS/bin/$c"; chmod +x "$NS/bin/$c"; done
+check "var_of, lower_ascii and canon_mode of a known mode start no tr, cut or jq" "$(PATH="$NS/bin:$PATH" bash -c 'source "$1/bin/lib.sh"; var_of a-b; lower_ascii AbC; canon_mode programmer; canon_mode pr-reviewer; canon_mode academic-research' _ "$ROOT" >/dev/null 2>&1; cat "$NS/spawned" 2>/dev/null | wc -l | tr -d ' ')" "0"
+check "canon_mode: known modes unchanged, legacy id mapped, unknown unchanged" "$(canon_mode programmer):$(canon_mode pr-reviewer):$(canon_mode academic-research):$(canon_mode academic-writer):$(canon_mode foo):[$(canon_mode '')]" "programmer:pr-reviewer:academic-research:academic-research:foo:[]"
 # Renamed role: visual-tester → e2e-tester, keeping the user's settings and position
 printf '{"roles":{"dev":{},"visual-tester":{"title":"Visual-Tester","enabled":false},"deployer":{}}}' > "$TMP/legacy.json"
 check "upgrade_config renames visual-tester" "$(upgrade_config "$ROOT/config.default.json" "$TMP/legacy.json" | jq -c '[(.roles | keys_unsorted | .[0:3]), .roles["e2e-tester"].title, .roles["e2e-tester"].enabled, (.roles | has("visual-tester"))]')" '[["dev","e2e-tester","deployer"],"E2E-Tester",false,false]'
@@ -1360,6 +1366,21 @@ case "$S1" in "$KIT/tmp/"?*/tester) echo "ok   scratch_dir is absolute, under \$
 check "scratch_dir differs per role" "$([ "$S1" != "$(cd "$SW/main" && scratch_dir dev)" ] && echo y)" "y"
 case "$S1" in "$SW"/*|"$(cd "$SW" && pwd -P)"/*) echo "FAIL scratch_dir inside the worktree: $S1"; FAIL=1;; *) echo "ok   scratch_dir is outside the worktree";; esac
 check "scratch_dir without a role fails" "$(cd "$SW/main" && scratch_dir "" || echo fail)" "fail"
+SN="$TMP/scratch names"; mkdir -p "$SN/orca-role-hook" "$SN/my project" "$SN/café" "$SN/a b.c-d"
+SNN="$SN/x
+y"; mkdir -p "$SNN" "$SN/a'b" "$SN/a-é"
+ref_names() { printf '%s/%s' "$(printf '%s\n' "$1" | tr -c 'A-Za-z0-9._\n-' '_')" "$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_')"; }
+sd_names() { sed 's|.*/tmp/||; s|-[0-9a-f]\{10\}/|/|'; }
+SDOUT=""; SDREF=""
+for LCX in en_US.UTF-8 C; do for d in orca-role-hook "my project" café "a b.c-d" "a'b" "a-é" "x
+y"; do for r in dev 'r/ö x' 'a b' 'é'; do
+  SDOUT="$SDOUT$(cd "$SN/$d" && LC_ALL=$LCX scratch_dir "$r" | sd_names)|"; SDREF="$SDREF$(LC_ALL=$LCX ref_names "$d" "$r")|"
+done; done; done
+check "scratch_dir: project and role names equal main's tr cleaning in en_US.UTF-8 and in C (cafe, slash, quote, newline, non-ASCII)" "$SDOUT" "$SDREF"
+check "scratch_dir: a name with only A-Za-z0-9._- is kept" "$(cd "$SN/orca-role-hook" && scratch_dir 'a.b-C_9' | sd_names)" "orca-role-hook/a.b-C_9"
+mkdir -p "$TMP/trshim"; printf '#!/bin/sh\necho tr >> "%s/trspawned"\nexec /usr/bin/tr "$@"\n' "$TMP/trshim" > "$TMP/trshim/tr"; chmod +x "$TMP/trshim/tr"
+check "scratch_dir starts no tr when both names use only A-Za-z0-9._-, and starts one when a name needs cleaning" "$(cd "$SN/orca-role-hook" && PATH="$TMP/trshim:$PATH" scratch_dir 'a.b-C_9' >/dev/null; [ -e "$TMP/trshim/trspawned" ] && echo spawned || echo none):$(cd "$SN/my project" && PATH="$TMP/trshim:$PATH" scratch_dir dev >/dev/null; [ -e "$TMP/trshim/trspawned" ] && echo spawned || echo none)" "none:spawned"
+check "scratch_dir: an empty project name still fails" "$(cd "$SN/orca-role-hook" && project_name() { :; }; scratch_dir dev || echo fail)" "fail"
 # New contract: the kit never empties a scratch folder; clean.sh leaves it intact and resends the role with scratchDir
 SD_DEV="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir dev)"; mkdir -p "$SD_DEV/sub"; touch "$SD_DEV/f" "$SD_DEV/sub/g" "$SD_DEV/.hidden"
 : > "$LOGF"; run_clean dev >/dev/null
