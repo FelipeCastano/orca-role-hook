@@ -750,7 +750,7 @@ if [ -z "$NEW" ]; then echo "All roles are already open."; start_relauncher; exi
 [ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; the Planner will recover the previous state and give you a summary."
 case " $NEW " in *" planner "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${PLANNER:-}" ] || echo 'The Planner kept its tab: it is told the new handles by a message ("Role handles changed"); if it does not pick them up, ask it to read its messages.';; esac
 KLOG="$GITDIR/orca-roles-kickoff.log"
-if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else : > "$KLOG"; fi   # launched by the relauncher: its log is appended to
+if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else [ ! -f "$KLOG" ] || mv -f "$KLOG" "$KLOG.1"; : > "$KLOG"; fi   # launched by the relauncher: its log is appended to; otherwise the previous launch's log is kept as .1
 ORCA_ROLES_SWITCH_FROM="$SWITCH_FROM" ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
 mkdir -p "$KICKOFFS" && printf '%s\n' "${NEW# }" > "$KICKOFFS/$!"
 echo "Role kickoff in progress (log: $KLOG)"

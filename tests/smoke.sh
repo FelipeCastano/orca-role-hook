@@ -4160,6 +4160,18 @@ R6="$(cat "$OG/orca-roles-kickoff.log" | tr '\n' ' '):$(grep -c '^OLD$' "$OG/orc
 ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo OLD > "$OG/orca-roles-kickoff.log"
 ol; poll grep -q KICK "$OG/orca-roles-kickoff.log"; sleep 0.2
 check "logs: launched by the relauncher it appends to orca-roles-relaunch.log and leaves the kickoff log alone; a plain launch truncates the kickoff log" "$R6:$(cat "$OG/orca-roles-kickoff.log" | tr '\n' ' '):$(cat "$TMP/okick.env")" "OLD :1:1:0:1:1:KICK :0:unset"
+# the previous plain launch's kickoff log is kept as .log.1 (the fake kickoff writes KICK; L1 and L2 stand for the lines of launches 1 and 2); a relauncher's launch touches neither kickoff file
+olk() { ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo '{"terminals":[]}' > "$TMP/olist"; "$@"; poll grep -q KICK "$OG/orca-roles-kickoff.log"; sleep 0.2; }
+okl() { tr '\n' ' ' < "$OG/$1" 2>/dev/null || printf none; }
+rm -f "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" "$OG/orca-roles-relaunch.log"
+olk ol; K6="$(okl orca-roles-kickoff.log):$(okl orca-roles-kickoff.log.1)"; echo L1 >> "$OG/orca-roles-kickoff.log"
+olk ol; K6="$K6|$(okl orca-roles-kickoff.log):$(okl orca-roles-kickoff.log.1)"; echo L2 >> "$OG/orca-roles-kickoff.log"
+olk ol; K6="$K6|$(okl orca-roles-kickoff.log):$(okl orca-roles-kickoff.log.1)"
+K6B="$(cat "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" 2>/dev/null | cksum)" || true
+ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo OLD > "$OG/orca-roles-relaunch.log"
+OREL=1 ol --reopen; poll grep -q KICK "$OG/orca-roles-relaunch.log"; sleep 0.2
+K6="$K6|$([ "$(cat "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" 2>/dev/null | cksum)" = "$K6B" ] && echo same || echo CHANGED):$(okl orca-roles-relaunch.log)"
+check "kickoff log: the first launch has no .log.1; the second keeps the first's lines in .log.1 and starts a new log; the third's .log.1 holds the second's lines only; a relauncher's launch leaves both kickoff files alone and appends to orca-roles-relaunch.log" "$K6" "KICK :none|KICK :KICK L1 |KICK :KICK L2 |same:OLD KICK "
 M6="$(for v in 1 ""; do for r in 2 1 0; do (export ORCA_ROLES_RELAUNCH=$v; planner_msg "$KIT/config.json" "planner dev" "$OG/orca-roles.env" "" "" $r | grep -c 'You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit.s settings)' || true); done; done | tr '\n' ' ')"
 check "planner_msg: the self-relaunch sentence only in the BACK message of a relaunched Planner" "$M6" "1 0 0 0 0 0 "
 rm -f "$KIT/prompts/programmer/tst.md" "$TMP/owaitfail"
@@ -4597,7 +4609,7 @@ wsl() {  # wsl <dir> <ORCA_WORKTREE_ID, empty = unset> <launch.sh args...>
   local d="$1" id="$2"; shift 2; : > "$WSL"
   OUT="$(cd "$d" && env ${id:+ORCA_WORKTREE_ID="$id"} HOME="$TMP/home" PATH="$WS/bin:$PATH" ORCA_ROLES_KICKOFF="$WS/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
 }
-wsreset() { rm -rf "$WSG"/orca-roles.* "$WSG"/orca-roles-*.log "$WS/curfail"; echo '{"ok":true,"result":{"worktree":{"id":"repo1::'"$WSP"'","path":"'"$WSP"'"}}}' > "$WS/cur.json"; }
+wsreset() { rm -rf "$WSG"/orca-roles.* "$WSG"/orca-roles-*.log* "$WS/curfail"; echo '{"ok":true,"result":{"worktree":{"id":"repo1::'"$WSP"'","path":"'"$WSP"'"}}}' > "$WS/cur.json"; }
 wscur() { grep -c '^worktree current' "$WSL" || true; }
 wsid() { cat "$WSG/orca-roles.wtid" 2>/dev/null; }
 wsmsg() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
