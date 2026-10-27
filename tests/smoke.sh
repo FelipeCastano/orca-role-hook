@@ -7991,9 +7991,9 @@ echo "\$*" >> "$DSL"
 case "\$1 \$2" in
   "orchestration dispatch") cat "$DS/dispatch.json"; exit "\$(cat "$DS/dispatch.rc")";;
   "worktree ps") n=\$(( \$(cat "$DS/pscount" 2>/dev/null || echo 0) + 1 )); echo \$n > "$DS/pscount"; mode="\$(cat "$DS/mode")"
-    if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$DS/entered" ]; }; then cat "$DS/ps.started"; else cat "$DS/ps.idle"; fi;;
+    if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$DS/entered" ]; } || { [ "\$mode" = lateenter ] && [ -e "$DS/entered" ] && [ \$n -ge \$(( \$(cat "$DS/entered") + 3 )) ]; }; then cat "$DS/ps.started"; else cat "$DS/ps.idle"; fi;;
   "terminal show") cat "$DS/show.json";;
-  "terminal send") : > "$DS/entered";;
+  "terminal send") cat "$DS/pscount" > "$DS/entered";;
   "orchestration send") exit "\$(cat "$DS/send.rc")";;
 esac
 exit 0
@@ -8006,7 +8006,7 @@ printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> [P
 dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the scratch repo and waits for its checker; RC, OUT, and the elapsed whole seconds of the call itself (DT)
   local mode="$1" show="$2" t0; shift 2
   echo "$mode" > "$DS/mode"; cp "$DS/show.$show" "$DS/show.json"; rm -f "$DS/entered" "$DS/pscount" "$DSG/orca-roles-dispatch.log"; : > "$DSL"
-  t0=$SECONDS; if OUT="$(cd "$DS/proj" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
+  t0=$SECONDS; if OUT="$(cd "${DDIR:-$DS/proj}" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
   local n=0; if [ -z "${DNOCHECKER:-}" ]; then   # the checker ends with one closing line in the log (a pgrep could run before it has even started)
     until grep -qE 'started$|told |could not tell|not checked' "$DSG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.2; n=$((n + 1)); done
     n=0; while pgrep -f -- "--watch task_abc123" >/dev/null 2>&1 && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
@@ -8044,6 +8044,29 @@ dsrun early plain --check-only --task task_abc123 --to h-w
 check "dispatch.sh --check-only: a worker that started sends nothing" "$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog)" "0:0:h-w: task_abc123 started/"
 G=""; for a in "--task task_abc123" "--to h-w" "--bogus" ""; do DNOCHECKER=1 dsrun early plain $a; G="$G $RC:$(wc -l < "$DS/err" | tr -d ' '):$(dsc 'orchestration dispatch')"; done
 check "dispatch.sh: a missing --task or --to, or an unknown option, is exit 2 with a usage line and no dispatch" "$G" " 2:1:0 2:1:0 2:1:0 2:1:0"
+# the wait after the Enter polls too (the row starts only on a later poll after the Enter), and the 'not started' body gives the measured seconds
+dsrun lateenter pasted --task task_abc123 --to h-w
+check "dispatch.sh: the Enter is followed by polling, not one look: a worker whose row starts only on a later poll after the Enter counts as started and no status is sent" "$RC:$(dsc 'terminal send --terminal h-w --enter'):$(dsc 'orchestration send'):$(dslog)" "0:1:0:h-w: task_abc123 unsent in its composer; Enter re-sent/h-w: Enter re-sent, task started/"
+secs() { grep 'orchestration send' "$DSL" | sed -n 's/.* after \([0-9][0-9]*\) s .*/\1/p'; }
+DTICK=1 DPOLLS=2 dsrun never plain --task task_abc123 --to h-w; W1="$(secs)"
+DTICK=1 DPOLLS=2 dsrun never pasted --task task_abc123 --to h-w; W2="$(secs)"
+check "dispatch.sh: the 'Dispatch not started' body gives the measured seconds: about one wait without a pasted preview (no Enter), about two with one (waits of 2 s here)" "$([ "$W1" -ge 2 ] && [ "$W1" -le 3 ] && echo one):$([ "$W2" -ge 4 ] && [ "$W2" -le 5 ] && echo two)" "one:two"
+# outside a git repository the log goes to the kit's tmp folder and nothing is written in the current folder
+mkdir -p "$DS/nogit"; KL="$TMP/home/.orca-roles/tmp/orca-roles-dispatch.log"; rm -f "$KL"
+DDIR="$DS/nogit" DNOCHECKER=1 dsrun never plain --task task_abc123 --to h-w; n=0; until grep -q 'told ' "$KL" 2>/dev/null || [ "$n" -ge 50 ]; do sleep 0.2; n=$((n + 1)); done
+check "dispatch.sh outside a git repository: the log goes to \$KIT/tmp/orca-roles-dispatch.log and nothing is written in the current folder; inside a repository it stays in the git dir" "$RC:$(ls -A "$DS/nogit" | wc -l | tr -d ' '):$(grep -c 'not started (Enter re-sent: no); told h-planner' "$KL"):$([ -e "$DSG/orca-roles-dispatch.log" ] && echo gitlog || echo none)" "0:0:1:none"
+dsrun early plain --task task_abc123 --to h-w
+check "dispatch.sh inside a repository: the log is in the git dir and not in \$KIT/tmp" "$([ -s "$DSG/orca-roles-dispatch.log" ] && echo gitlog):$([ "$(grep -c 'started$' "$KL")" = 0 ] && echo clean)" "gitlog:clean"
+# a role whose agent is neither claude nor codex gets no checker (Orca may have no ps row for its tab); claude, codex, an unset agent and a handle that is no role keep it
+printf 'DEV=h-w\nCU=h-cu\nOC=h-oc\nCL=h-cl\nCX=h-cx\n' > "$DSG/orca-roles.env"
+printf '{"defaults":{"agent":"claude"},"roles":{"dev":{},"cu":{"agent":"custom"},"oc":{"agent":"opencode"},"cl":{"agent":"claude"},"cx":{"agent":"codex"}}}' > "$DSG/orca-roles.config.json"
+N1=""; for h in h-cu h-oc h-cl h-cx h-w h-other; do
+  DNOCHECKER=1 dsrun early plain --task task_abc123 --to "$h"; N1="$N1 $h:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog)"
+done
+DNOCHECKER=1 dsrun early plain --check-only --task task_abc123 --to h-cu; N1="$N1 co-cu:$RC:$(dsc 'worktree ps'):$(dslog)"
+dsrun early plain --check-only --task task_abc123 --to h-cl; N1="$N1 co-cl:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog)"
+rm -f "$DSG/orca-roles.env" "$DSG/orca-roles.config.json"
+check "dispatch.sh: no start check (one log line, no worktree ps) for a custom or opencode role, also with --check-only; the checker runs for claude, codex, an unset agent and a handle that is no role" "$N1" " h-cu:0:0:h-cu: no start check for agent custom/ h-oc:0:0:h-oc: no start check for agent opencode/ h-cl:0:ps:h-cl: task_abc123 started/ h-cx:0:ps:h-cx: task_abc123 started/ h-w:0:ps:h-w: task_abc123 started/ h-other:0:ps:h-other: task_abc123 started/ co-cu:0:0:h-cu: no start check for agent custom/ co-cl:0:ps:h-cl: task_abc123 started/"
 # the three Planner prompts carry the same assign line and silent-worker bullet
 PM=""; for m in programmer academic-research pr-reviewer; do f="$ROOT/prompts/$m/planner.md"
   PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
