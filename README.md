@@ -99,7 +99,7 @@ Clone the repo and run the installer from the clone:
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role` and `roles-yaml` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings, and the mode `academic-writer` becomes `academic-research` (see the [note on the rename](#academic-research-mode)). Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
+It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role`, `roles-yaml` and `team-status` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings, and the mode `academic-writer` becomes `academic-research` (see the [note on the rename](#academic-research-mode)). Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
 
 ```bash
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
@@ -169,6 +169,22 @@ Create a worktree from the project's **"+"**. In a few seconds the Planner opens
 - **From a Jira ticket:** the kit reads the ticket Orca links to the worktree (`linkedWorkItem` in `orca worktree show`) and passes it to the Planner, which reads it and plans from there. If the worktree is not linked, it tries the branch, but only when the uppercase key starts the branch or one of its segments (`DEVGD-220-new-api`, `feature/DEVGD-220`), so `fix-123` or `release-1.4` are not taken for tickets. The session Orca creates by default with the ticket's name is interrupted and closes by itself.
 - **Where the hook does not run** (main checkout, folder projects, existing worktrees): run `roles` in a workspace terminal. It does not duplicate open tabs.
 - **Branch names:** if Orca names a new worktree's branch after your user, that is Orca's `branchPrefix` setting (`"git-username"`), not the kit; change it in Orca's settings.
+
+### Seeing what each role is doing: `team-status`
+
+`team-status` (or `~/.orca-roles/bin/team-status.sh [--json] [--run <run_id>] [<worktree folder>]`, from the worktree by default) shows, without asking any agent, what Orca tracks for each role of the team: one line per role with its title, state, how long it has been in it, the task id it is on, its last tool and the first line of its last message. It reads Orca once and writes nothing.
+
+| State | Meaning |
+|---|---|
+| `working` | The agent is running a turn. |
+| `waiting` | The agent waits for an answer or a permission (Orca's `waiting` and `blocked`): open its tab and answer the dialog, or tell the Planner. |
+| `done` | The turn ended; a role that only has its role message shows `role-message` as its task. |
+| `interrupted`, `failed` | The turn was interrupted, or ended with an error. |
+| `no-status` | Orca has no status for the tab (the agent never ran a turn, or its row expired). |
+| `no-tab` | The role has no saved tab: run `roles`. |
+| `undelivered` | Only with `--run <run_id>` (the Run the Planner dispatches in): the role is `done`, a dispatch of that Run to it is still open and never started, and its text sits in the composer because the Enter was lost. Press Enter in its tab, or dispatch the task again. |
+
+`--json` prints the same as a JSON array. The exit status is 0 whatever the states, and 2 when the folder has no team, or Orca does not answer or does not know the folder.
 
 ### Connecting Jira
 
@@ -928,6 +944,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── e2e-browser.sh           # checks and installs the E2E browser stack (pinned Playwright packages and Chromium) and checks saved sessions
 │   ├── e2e-run.sh               # runs an E2E flow (a Playwright script) on the pinned stack and writes its evidence
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
+│   ├── team-status.sh           # what each role is doing, from what Orca tracks (the team-status command)
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
 │   └── apply-hooks.sh           # explains at install time how to register the kit in each project

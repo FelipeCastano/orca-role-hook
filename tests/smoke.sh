@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -5462,6 +5462,7 @@ if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
 fi
 vrun
 check "install: a second install with no edits prints no WARNING and creates no backup" "$VRC:$(vwarn):$([ -e "$VK/backup" ] && echo backup || echo none)" "0:0:none"
+check "install: the team-status alias is added once (not again by a second install) and the final message names it" "$(cat "$VH"/.zshrc "$VH"/.bashrc "$VH"/.bash_profile "$VH"/.profile 2>/dev/null | grep -c '^alias team-status="\$HOME/.orca-roles/bin/team-status.sh"$'):$(printf '%s\n' "$VOUT" | grep -c "'roles', 'new-role', 'roles-yaml' and 'team-status' commands")" "1:1"
 # edit a prompt, add a file under bin/, delete another: edited and added are saved and warned; the deleted one is ignored
 echo "# my edit" >> "$VK/prompts/programmer/dev.md"; echo "echo mine" > "$VK/bin/mine.sh"; rm -f "$VK/prompts/programmer/tester.md"
 vrun; BKD="$(find "$VK/backup" -mindepth 1 -maxdepth 1 -type d | head -1)"
@@ -7905,6 +7906,78 @@ er one -- ; Q1="$RC:$(erv E2E_PARAMS)"; er one -- k=--v; Q2="$RC:$(erv E2E_PARAM
 PB=""; for b in novalue =x 1a=x -a=x --as=zz ''; do er one -- ok=1 "$b"; PB="$PB$RC:$(erran);"; done
 check "e2e-run params: an empty list gives {}; after -- nothing is an option; a pair not key=value with a key starting with a letter or _ -> exit 1 not run" "$Q1|$Q2|$PB" "0:{}|0:{\"k\":\"--v\"}::0|1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;1:not-run;"
 set -e
+}
+
+sec_team_status() {
+# team-status.sh: what each role is doing, from `orca worktree ps --json` (fake orca; the clock is fixed with ORCA_ROLES_NOW_MS)
+TS="$TMP/tstat"; rm -rf "$TS"; mkdir -p "$TS/bin" "$TS/proj"; git -C "$TS/proj" init -q -b main; TSG="$TS/proj/.git"; TSP="$(cd "$TS/proj" && pwd -P)"
+TNOW=1000000000000; TSL="$TS/orca.log"; : > "$TSL"
+cat > "$TS/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$TSL"
+case "\$1 \$2" in
+  "worktree ps") [ -e "$TS/psfail" ] && exit 1; cat "$TS/ps.json";;
+  "orchestration worker-list") cat "$TS/wl.json";;
+  "terminal show") h=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; shift; done; cat "$TS/show.\$h" 2>/dev/null || exit 1;;
+esac
+exit 0
+EOS
+chmod +x "$TS/bin/orca"
+L101="$(printf 'x%.0s' $(seq 101))"; L100="$(printf 'y%.0s' $(seq 100))"
+printf 'PLANNER=h-pl\nDEV=h-dev\nTST=h-tst\nAUD=h-aud\nDEP=h-dep\nGH=h-gh\nRM=h-rm\nDUP=h-dup\nUK=h-uk\nUD=h-ud\nUD2=h-ud2\nUD3=h-ud3\nUD4=h-ud4\nS1=h-s1\nS2=h-s2\nS3=h-s3\nS4=h-s4\nS5=h-s5\nS6=h-s6\n' > "$TSG/orca-roles.env"
+for r in PLANNER DEV TST AUD DEP RM DUP UK UD UD2 UD3 UD4 S1 S2 S3 S4 S5 S6; do printf '%s=tab-%s leaf-%s\n' "$r" "$r" "$r"; done > "$TSG/orca-roles.tabs"
+printf '{"roles":{"planner":{"title":"Planner"},"dev":{"title":"Dev"},"tst":{"title":"Tester"}}}' > "$TSG/orca-roles.config.json"
+tsa() {  # tsa <role var> <state> <ms ago, or null> <prompt> [extra jq object]: one agent row of the fake ps
+  local x="${5:-}"; [ -n "$x" ] || x='{}'
+  jq -n -c --arg k "tab-$1:leaf-$1" --arg st "$2" --arg pr "$4" --argjson ago "$3" --argjson now "$TNOW" --argjson x "$x" '{paneKey: $k, state: $st, prompt: $pr, stateStartedAt: (if $ago == null then null else $now - $ago end), updatedAt: 5} + $x'
+}
+{
+  tsa PLANNER working 45000 "do task_0f3a9c then task_bbb" "$(jq -n -c --arg m "$L101"$'\nsecond line' '{toolName: "Bash", lastAssistantMessage: $m}')"
+  tsa DEV blocked 720000 "no task here" "$(jq -n -c --arg m "$L100" '{lastAssistantMessage: $m}')"
+  tsa TST "done" 3900000 "Read /x/prompts/programmer/common-workers.md and then /x/prompts/programmer/tester.md" '{"interrupted":true,"lastAssistantMessage":""}'
+  tsa AUD "done" null "" "$(jq -n -c '{outcome: "failure", lastAssistantMessage: "a\tb\nsecond"}')"
+  tsa RM "done" 1000 "Read ~/.orca-roles/prompts/programmer/planner.md first" '{"outcome":"success"}'
+  tsa DUP working 9000 "old" '{"updatedAt":10}'; tsa DUP "done" 3000 "new task_0000aa" '{"updatedAt":20}'
+  tsa UK weird 5000 ""
+  for u in UD UD2 UD3; do tsa $u "done" 2000 "prompt of $u"; done
+  tsa UD4 "done" 2000 "prompt of UD4 with task_4444"
+  tsa S1 working 59999 ""; tsa S2 working 60000 ""; tsa S3 working 3599999 ""; tsa S4 working 3600000 ""; tsa S5 working -5000 ""; tsa S6 working 7260000 ""
+} | jq -s -c --arg p "$TSP" '{ok: true, result: {worktrees: [{path: "/elsewhere", agents: [{paneKey: "tab-DEP:leaf-DEP", state: "working"}]}, {path: $p, agents: .}]}}' > "$TS/ps.json"
+jq -n -c '{result: {workers: [
+  {taskId: "task_aaa111", agentTerminalHandle: "h-ud", dispatchStatus: "dispatched"},
+  {taskId: "task_aaa222", agentTerminalHandle: "h-ud2", dispatchStatus: "dispatched"},
+  {taskId: "task_aaa333", agentTerminalHandle: "h-ud3", dispatchStatus: "completed"},
+  {taskId: "task_4444", agentTerminalHandle: "h-ud4", dispatchStatus: "dispatched"},
+  {taskId: "task_aaa555", agentTerminalHandle: "h-pl", dispatchStatus: "dispatched"}]}}' > "$TS/wl.json"
+printf '{"result":{"terminal":{"preview":"> [Pasted text #1 +4 lines]"}}}' > "$TS/show.h-ud"; printf '{"result":{"terminal":{"preview":"> nothing pending"}}}' > "$TS/show.h-ud2"; cp "$TS/show.h-ud" "$TS/show.h-ud3"; cp "$TS/show.h-ud" "$TS/show.h-ud4"
+tst() { (cd "${TSD:-$TS/proj}" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_NOW_MS="$TNOW" "$ROOT/bin/team-status.sh" "$@" 2>"$TS/err"); }
+tsr() { if OUT="$(tst "$@")"; then RC=0; else RC=$?; fi; }
+tsl() { printf '%s\n' "$OUT" | tr '\t' '|'; }
+tsr; E1="$RC:$(tsl | tr '\n' '/')"
+check "team-status: one tab-separated line per role in orca-roles.env order: Title, state, since, task, tool, summary (working, waiting for blocked, interrupted, failed, no-status, no-tab, done, the latest row of a shared paneKey, an unknown state as is; the first task id of the prompt, role-message, -; 100 characters kept and 101 cut with an ellipsis, first line only, tabs as spaces, - when empty)" "$E1" "0:Planner|working|45s|task_0f3a9c|Bash|$(printf 'x%.0s' $(seq 100))…/Dev|waiting|12m|-|-|$L100/Tester|interrupted|1h05m|role-message|-|-/aud|failed|-|-|-|a b/dep|no-status|-|-|-|-/gh|no-tab|-|-|-|-/rm|done|1s|role-message|-|-/dup|done|3s|task_0000aa|-|-/uk|weird|5s|-|-|-/ud|done|2s|-|-|-/ud2|done|2s|-|-|-/ud3|done|2s|-|-|-/ud4|done|2s|task_4444|-|-/s1|working|59s|-|-|-/s2|working|1m|-|-|-/s3|working|59m|-|-|-/s4|working|1h00m|-|-|-/s5|working|0s|-|-|-/s6|working|2h01m|-|-|-/"
+tsr --json; J1="$RC:$(printf '%s' "$OUT" | jq -c 'length'):$(printf '%s' "$OUT" | jq -r '[.[] | keys_unsorted | join(",")] | unique | join(";")')"
+tsr; TXT="$OUT"; tsr --json; J2="$(printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")')"
+check "team-status --json: a valid array with role, title, handle, paneKey, state, since, sinceMs, task, tool, summary for every role, and the same content as the text form (no prompt field)" "$J1:$([ "$J2" = "$TXT" ] && echo same):$(printf '%s' "$OUT" | jq -c '[.[] | select(.role == "dev") | [.handle, .paneKey, .sinceMs]][0]')" '0:19:role,title,handle,paneKey,state,since,sinceMs,task,tool,summary:same:["h-dev","tab-DEV:leaf-DEV",720000]'
+: > "$TSL"; tsr; C0="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+: > "$TSL"; tsr --run run_1; C1="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+tsr --run run_1; R1="$(tsl | awk -F'|' '$1 ~ /^ud/ {printf "%s=%s ", $1, $2}')"
+check "team-status --run: a done role with a dispatch still open whose task its prompt never named AND a pasted text in its composer is undelivered; a closed dispatch, an unseen paste or a task its prompt names stays done" "$R1" "ud=undelivered ud2=done ud3=done ud4=done "
+check "team-status: Orca calls: one 'worktree ps' without --run; with --run also one 'worker-list' and one 'terminal show' per candidate (2 here), nothing else" "$C0|$C1" " 1 worktree ps,| 1 orchestration worker-list, 2 terminal show, 1 worktree ps,"
+tsr --run run_1; RA="$(tsl | awk -F'|' '$1 == "planner" || $1 == "Planner" {print $2}')"
+check "team-status --run: a working role with an open dispatch is not a candidate" "$RA" "working"
+S0="$(cat "$TSG"/orca-roles.* | cksum)"; : > "$TSL"; tsr --run run_1 >/dev/null; check "team-status is read-only: it writes nothing in the git dir and calls only worktree ps, worker-list and terminal show" "$([ "$(cat "$TSG"/orca-roles.* | cksum)" = "$S0" ] && echo unchanged):$(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')" "unchanged:orchestration worker-list,terminal show,worktree ps,"
+ln -s "$TS/proj" "$TS/link"; tsr "$TS/link"; X1="$RC:$(tsl | wc -l | tr -d ' ')"; TSD="$TS" tsr proj; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"; mkdir -p "$TS/proj/sub"; TSD="$TS/proj/sub" tsr; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"
+check "team-status: the worktree folder is found by its physical path whether it is the current folder, a relative or symlinked argument, or a subfolder" "$X1" "0:19:0:19:0:19"
+tsr; : > "$TSL"
+E2=""
+mkdir -p "$TS/nowt"; git -C "$TS/nowt" init -q -b main; tsr "$TS/nowt"; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' '):$(wc -c < "$TS/err" | tr -d ' ' | sed 's/^[1-9][0-9]*$/err/'):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"
+: > "$TS/psfail"; tsr; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' '):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"; rm -f "$TS/psfail"
+cp "$TS/ps.json" "$TS/ps.keep"; echo 'not json' > "$TS/ps.json"; tsr; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' ')"
+jq -c '.result.worktrees |= map(select(.path == "/elsewhere"))' "$TS/ps.keep" > "$TS/ps.json"; tsr; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' ')"; cp "$TS/ps.keep" "$TS/ps.json"
+tsr "$TS/nonexistent"; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' ')"; tsr --bogus; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' ')"
+check "team-status: exit 2 with exactly one stderr line and nothing on stdout for a folder without orca-roles.env, a failing or non-JSON worktree ps, no worktree row for the folder, a missing folder or an unknown option" "$E2" " 2:1:err:0 2:1:0 2:1 2:1 2:1 2:1"
+printf '{"ok":true,"result":{"worktrees":[{"path":"%s","agents":[]}]}}' "$TSP" > "$TS/ps.json"; tsr; E3="$RC:$(tsl | awk -F'|' '{print $2}' | sort -u | tr '\n' ',')"; tsr --run r; E3="$E3:$RC"; cp "$TS/ps.keep" "$TS/ps.json"
+check "team-status: a worktree row with no agents gives no-status for every role with a tab and no-tab for the rest, exit 0" "$E3" "0:no-status,no-tab,:0"
 }
 
 sec_cli() {
