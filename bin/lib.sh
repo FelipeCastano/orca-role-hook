@@ -96,12 +96,38 @@ close_unconfirmed() {  # close_unconfirmed <handle> <title>
   echo "Orca did not confirm closing the tab of $2 ($1)."; return 1
 }
 
+# Fills the git answers of the current directory (one git run); stores nothing when git fails or answers other than four lines.  git_here_init
+git_here_init() {
+  local out nl
+  GH_PWD=""
+  out="$(git rev-parse --show-toplevel --git-dir --git-common-dir --absolute-git-dir 2>/dev/null)" || return 0
+  nl="${out//[!$'\n']/}"; [ "${#nl}" = 3 ] || return 0
+  { IFS= read -r GH_TOP; IFS= read -r GH_GD; IFS= read -r GH_COMMON; IFS= read -r GH_ABS; } <<< "$out"
+  GH_PWD="$PWD"
+}
+# What `git rev-parse --<field>` prints in the current directory (toplevel, git-dir, common-dir or absolute-git-dir), answered from one git run per directory; same status as git.  git_here <field>
+git_here() {
+  case "$1" in toplevel|git-dir|common-dir|absolute-git-dir) ;; *) return 2;; esac
+  [ "${GH_PWD:-}" = "$PWD" ] || git_here_init
+  if [ "${GH_PWD:-}" = "$PWD" ]; then
+    case "$1" in
+      toplevel) printf '%s\n' "$GH_TOP";; git-dir) printf '%s\n' "$GH_GD";;
+      common-dir) printf '%s\n' "$GH_COMMON";; *) printf '%s\n' "$GH_ABS";;
+    esac
+    return 0
+  fi
+  case "$1" in
+    toplevel) git rev-parse --show-toplevel 2>/dev/null;; git-dir) git rev-parse --git-dir 2>/dev/null;;
+    common-dir) git rev-parse --git-common-dir 2>/dev/null;; *) git rev-parse --absolute-git-dir 2>/dev/null;;
+  esac
+}
+
 # OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id in the worktree's git dir; the kit
 # deletes that session when the role is closed or replaced (a closed `mini` tab does not stop the turn: it runs in OpenCode's service).
 # File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
 oc_session_file() {
   local gd="${2:-}"
-  [ -n "$gd" ] || gd="$(git rev-parse --git-dir 2>/dev/null)" || return 1
+  [ -n "$gd" ] || gd="$(git_here git-dir)" || return 1
   gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
   printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
 }
@@ -109,7 +135,7 @@ oc_session_file() {
 # <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
 oc_bounded() {
   local to="$1" out="$2" pid sl wt stop; shift 2
-  wt="$(git rev-parse --show-toplevel 2>/dev/null)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
   stop="$out.stop"; rm -f "$stop" "$out.to"
   ( cd "$wt" && exec opencode "$@" ) > "$out" 2>&1 < /dev/null & pid=$!
   ( n=0; while [ ! -e "$stop" ] && [ "$n" -lt $((to * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$stop" ] || { : > "$out.to"; kill_tree "$pid"; } ) > /dev/null 2>&1 & sl=$!
@@ -139,7 +165,7 @@ oc_retrack() {
   f="$(oc_session_file "$1" "${3:-}")" || return 0
   [ -f "$f" ] || return 0
   old="$(head -1 "$f" 2>/dev/null)"; new=""
-  wt="$(git rev-parse --show-toplevel 2>/dev/null)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
   if command -v opencode >/dev/null 2>&1 && tmp="$(mktemp)"; then
     oc_bounded 20 "$tmp" session list --format json
     [ "$OC_RC" != 0 ] || new="$(jq -r --arg d "$wt" --argjson s "$2" '[.[]? | select(.directory == $d and (.created // 0) >= $s)] | sort_by(.created) | reverse | .[0].id // empty' "$tmp" 2>/dev/null)"
@@ -173,10 +199,11 @@ merged_config() {  # $1 = project/worktree folder
 }
 # Path of the .orca-roles.json that applies to a folder (empty if none).  project_config <folder>
 project_config() {
-  local top common main
-  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  local top common main tcmd=(git -C "$1" rev-parse --show-toplevel) ccmd=(git rev-parse --git-common-dir)
+  case "$1" in .|"$PWD") tcmd=(git_here toplevel); ccmd=(git_here common-dir);; esac
+  top="$("${tcmd[@]}" 2>/dev/null)" || return 0
   [ -f "$top/.orca-roles.json" ] && { echo "$top/.orca-roles.json"; return 0; }
-  common="$(cd "$1" && git rev-parse --git-common-dir 2>/dev/null)" || return 0
+  common="$(cd "$1" && "${ccmd[@]}" 2>/dev/null)" || return 0
   main="$(cd "$1" && cd "$common/.." && pwd)"
   [ -f "$main/.orca-roles.json" ] && echo "$main/.orca-roles.json"
   return 0
@@ -635,7 +662,7 @@ telemetry_role_attribute() { [ "$(jq -r '(.settings.telemetry? | objects | .role
 # <git common dir>/orca-roles.coordinated/<worktree folder name>. Only the Planner's first start reads it, and kickoff.sh removes it then.
 coordinated_marker() {
   local common top
-  common="$(git rev-parse --git-common-dir 2>/dev/null)" && top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  common="$(git_here common-dir)" && top="$(git_here toplevel)" || return 1
   printf '%s/orca-roles.coordinated/%s' "$(cd "$common" && pwd)" "${top##*/}"
 }
 # The Run of the coordinator that opened this worktree: the id it wrote in its marker, or the copy kickoff.sh keeps beside the state
@@ -665,7 +692,7 @@ planner_msg() {
   params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
   msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of "$cfg")."
   [ "$(mode_of "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."
-  legacy_note="$(git rev-parse --git-dir 2>/dev/null)" && legacy_note="$legacy_note/orca-roles.legacy-note"
+  legacy_note="$(git_here git-dir)" && legacy_note="$legacy_note/orca-roles.legacy-note"
   [ -n "$legacy_note" ] && [ -s "$legacy_note" ] && msg="$msg Tell the user at startup, in one line: $(cat "$legacy_note")"
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
@@ -787,14 +814,14 @@ role_anchor() {
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
 # A role's extra instructions for this worktree only (the Planner saves them with its skill): <git dir>/orca-roles.notes/<role>.md
-notes_file() { local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
+notes_file() { local gd; gd="$(git_here git-dir)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
 # A worker's scratch folder: fixed per worktree and role, OUTSIDE the worktree ($KIT/tmp/<project>-<hash of the git dir>/<role>).
 # The agents reuse it and never delete anything in it; the kit never empties it. It is outside the worktree because
 # jest, vitest and eslint collect copies of the project that live inside it and none honors .gitignore.  scratch_dir <role>
 scratch_dir() {
   local gd h proj role="${1:-}"
   [ -n "$role" ] || return 1
-  gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || gd="$(pwd -P)"
+  gd="$(git_here absolute-git-dir)" || gd="$(pwd -P)"
   h="$(printf '%s' "$gd" | { shasum 2>/dev/null || sha1sum 2>/dev/null || cksum; } | cut -d' ' -f1 | cut -c1-10)"
   proj="$(project_name .)"
   case "$proj" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) proj="$(printf '%s\n' "$proj" | tr -c 'A-Za-z0-9._\n-' '_')";; esac
@@ -892,8 +919,9 @@ codex_mcp_overrides() {
 }
 # Project name: the main repo's folder (not the worktree's); if it is not a repo, the given folder.  project_name <folder>
 project_name() {
-  local common
-  if common="$(cd "$1" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)"; then
+  local common gcmd=(git rev-parse --git-common-dir)
+  case "$1" in .|"$PWD") gcmd=(git_here common-dir);; esac
+  if common="$(cd "$1" 2>/dev/null && "${gcmd[@]}" 2>/dev/null)"; then
     common="$(cd "$1" && cd "$common" && pwd)"; basename "$(dirname "$common")"
   else basename "$(cd "$1" && pwd)"; fi
 }

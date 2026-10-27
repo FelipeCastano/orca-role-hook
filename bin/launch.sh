@@ -40,8 +40,9 @@ if [ "$REOPEN" = 1 ]; then
   [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
   [ -z "$OTHERS" ] || { echo "ERROR: --reopen takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
 fi
+git_here_init
 # a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
-if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git_here toplevel)"; then
   A="${ORCA_WORKTREE_ID#*::}"; A="$(local_path "${A%%::workspace:*}")"
   if [ "$(cd "$A" 2>/dev/null && pwd -P)" != "$(cd "$TOP" && pwd -P)" ]; then
     CUR_ID="$(orca worktree current --json 2>/dev/null | jq -r '.result.worktree.id // empty' 2>/dev/null)"
@@ -55,7 +56,7 @@ if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git rev-parse
   fi
 fi
 WT="${WT:-${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}}"; WT="${WT:-active}"
-GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
+GITDIR="$(git_here git-dir || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 OVR="$GITDIR/orca-roles.overrides.json"  # this worktree's exceptions
 STATE="$GITDIR/orca-roles.env"
 KICKED="$GITDIR/orca-roles.kicked"       # the handle each role had when kickoff.sh sent it its message
@@ -248,7 +249,7 @@ NEWMODE="$(mode_of "$NEWCFG")"
 ASK=0
 if [ "$NEED" = 1 ] && [ "$(setting "$NEWCFG" enableAskModeOnStart true)" != false ]; then ASK=1; fi
 if [ "$ASK" = 0 ]; then
-  if [ "$NEWMODE" = academic-research ] && ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  if [ "$NEWMODE" = academic-research ] && ! git_here toplevel >/dev/null 2>&1; then
     fail "ERROR: mode academic-research needs the project to be a git repository (git init, then run roles again). Nothing was changed."
   fi
 fi
@@ -516,7 +517,7 @@ else
   echo "Mode: $NEWMODE"
   if [ "$NEWMODE" = academic-research ]; then
     echo "Phase: $(phase_of "$CFG")"
-    "$KIT/bin/academic-scaffold.sh" "$(git rev-parse --show-toplevel)" || echo "Warning: could not create the academic-research folders."
+    "$KIT/bin/academic-scaffold.sh" "$(git_here toplevel)" || echo "Warning: could not create the academic-research folders."
   fi
 fi
 
@@ -539,11 +540,11 @@ fi
 # The agents' working folders, ignored locally
 EVID="$(jq -r '.roles["e2e-tester"].params.evidenceDir // "qa-evidence"' "$CFG")"
 E2EDIR="$(jq -r '.roles["e2e-tester"].params.e2eDir // "qa-e2e"' "$CFG")"
-if COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"; then
+if COMMON="$(git_here common-dir)"; then
   mkdir -p "$COMMON/info"; touch "$COMMON/info/exclude"
   for p in research/ "$EVID/" "/$E2EDIR/"; do grep -qxF "$p" "$COMMON/info/exclude" || echo "$p" >> "$COMMON/info/exclude"; done
 fi
-if [ -n "$(git -C "$(git rev-parse --show-toplevel)" ls-files -- "$E2EDIR" 2>/dev/null | head -1)" ]; then
+if [ -n "$(git -C "$(git_here toplevel)" ls-files -- "$E2EDIR" 2>/dev/null | head -1)" ]; then
   echo "Warning: files under $E2EDIR/ are tracked by git; the kit's E2E flows folder should not be (it is kept out of git)."
 fi
 
@@ -729,7 +730,7 @@ start_relauncher() {
     echo "Cannot start the Planner's relauncher: this launch has no worktree id (ORCA_WORKTREE_ID is not set); run roles from another terminal of this worktree to reopen the Planner with the kit's settings and its conversation."
     return 0;;
   esac
-  if detached_start "$GITDIR/orca-roles-relaunch.log" "${ORCA_ROLES_RELAUNCHER:-$KIT/bin/relaunch-planner.sh}" "$WT" "$GITDIR" "$SELF_HANDLE" "$(git rev-parse --show-toplevel)"; then
+  if detached_start "$GITDIR/orca-roles-relaunch.log" "${ORCA_ROLES_RELAUNCHER:-$KIT/bin/relaunch-planner.sh}" "$WT" "$GITDIR" "$SELF_HANDLE" "$(git_here toplevel)"; then
     echo "The Planner's relauncher is waiting for its turn to end (log: $GITDIR/orca-roles-relaunch.log)."
   else
     echo "Cannot start the Planner's relauncher on this system: the Planner keeps working without the kit's settings; run roles from another terminal of this worktree to reopen it with them and its conversation."

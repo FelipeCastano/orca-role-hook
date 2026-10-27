@@ -83,6 +83,9 @@ cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x 
 . "$KIT/bin/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; }
+gshim() {  # gshim <dir> <log>: a git in <dir> that logs each rev-parse with the command line of the process that started it, then runs the real git
+  printf '#!/bin/sh\ncase "$*" in *rev-parse*) echo "$(ps -o command= -p $PPID)" >> "%s";; esac\nexec "%s" "$@"\n' "$2" "$(command -v git)" > "$1/git"; chmod +x "$1/git"; : > "$2"
+}
 blk_start() { F0=$FAIL; FAIL=0; }
 blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0; }
 try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
@@ -1381,6 +1384,19 @@ check "scratch_dir: a name with only A-Za-z0-9._- is kept" "$(cd "$SN/orca-role-
 mkdir -p "$TMP/trshim"; printf '#!/bin/sh\necho tr >> "%s/trspawned"\nexec /usr/bin/tr "$@"\n' "$TMP/trshim" > "$TMP/trshim/tr"; chmod +x "$TMP/trshim/tr"
 check "scratch_dir starts no tr when both names use only A-Za-z0-9._-, and starts one when a name needs cleaning" "$(cd "$SN/orca-role-hook" && PATH="$TMP/trshim:$PATH" scratch_dir 'a.b-C_9' >/dev/null; [ -e "$TMP/trshim/trspawned" ] && echo spawned || echo none):$(cd "$SN/my project" && PATH="$TMP/trshim:$PATH" scratch_dir dev >/dev/null; [ -e "$TMP/trshim/trspawned" ] && echo spawned || echo none)" "none:spawned"
 check "scratch_dir: an empty project name still fails" "$(cd "$SN/orca-role-hook" && project_name() { :; }; scratch_dir dev || echo fail)" "fail"
+# git_here answers like the single-flag git command (stdout and status) in a root, a subfolder, a linked worktree, outside a repo, inside .git, a bare repo, a repo whose folder name has a newline (the four-line answer guard) and after a cd to another repo in the same shell
+GHW="$TMP/gh"; mkdir -p "$GHW/out" "$GHW/main/sub/deep"; git -C "$GHW/main" init -q; git -C "$GHW/main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i; git -C "$GHW/main" worktree add -q "$GHW/linked" -b ghl; git init -q --bare "$GHW/bare.git"; git init -q "$GHW/n"$'\n'"l"; printf '{}\n' > "$GHW/main/.orca-roles.json"
+gh_ref() { local f c a r; for f in toplevel git-dir common-dir absolute-git-dir; do case $f in toplevel) c=--show-toplevel;; common-dir) c=--git-common-dir;; *) c=--$f;; esac; a="$(git_here $f 2>/dev/null; echo "rc=$?")"; r="$(git rev-parse $c 2>/dev/null; echo "rc=$?")"; [ "$a" = "$r" ] && printf same || printf 'DIFF(%s)' "$f"; done; }
+GHR=""; GHOLD="$PWD"; for d in main main/sub main/sub/deep linked main/.git main/.git/refs bare.git out main linked "n"$'\n'"l"; do cd "$GHW/$d"; GHR="$GHR$(gh_ref)"; git_here_init; GHR="$GHR/$(gh_ref) "; done; cd "$GHOLD"
+check "git_here: same stdout and status as the single-flag git command in every place, with the memo of the previous folder (cd) and with the memo of this one" "$GHR" "$(for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'samesamesamesame/samesamesamesame '; done)"
+check "git_here: an unknown field is status 2 with no output" "$(cd "$GHW/main" && git_here bogus; echo "rc=$?")" "rc=2"
+gh_pn() { local a r c; for x in . "$PWD"; do a="$(project_name "$x" 2>&1; echo "rc=$?")"; r="$( { if c="$(cd "$x" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)"; then c="$(cd "$x" && cd "$c" && pwd)"; basename "$(dirname "$c")"; else basename "$(cd "$x" && pwd)"; fi; } 2>&1; echo "rc=$?")"; [ "$a" = "$r" ] && printf same || printf 'DIFF'; done; }
+gh_pc() { local x t m r; for x in . "$PWD"; do r=""; if t="$(git -C "$x" rev-parse --show-toplevel 2>/dev/null)"; then if [ -f "$t/.orca-roles.json" ]; then r="$t/.orca-roles.json"; else m="$(cd "$x" && cd "$(git rev-parse --git-common-dir)/.." && pwd)"; [ -f "$m/.orca-roles.json" ] && r="$m/.orca-roles.json"; fi; fi; [ "$(project_config "$x")" = "$r" ] && printf same || printf 'DIFF'; done; }
+GHP=""; for d in main main/sub linked out; do GHP="$GHP$(cd "$GHW/$d" && gh_pn)$(cd "$GHW/$d" && gh_pc) "; done
+GHO=""; for d in main main/sub linked out; do GHO="${GHO}[$(cd "$GHW/out" && git_here_init; project_name "$GHW/$d"):$(cd "$GHW/main" && git_here_init; project_name "$GHW/$d"):$(cd "$GHW/main" && git_here_init; project_config "$GHW/$d")]"; done
+GHP_="$(cd "$GHW" && pwd -P)"
+check "project_name and project_config of another folder do not use the memo of the current directory" "$GHO" "[main:main:$GHP_/main/.orca-roles.json][main:main:$GHP_/main/.orca-roles.json][main:main:$GHP_/main/.orca-roles.json][out:out:]"
+check "project_name and project_config for . and \$PWD equal main's code (root, subfolder, linked worktree, outside a repo)" "$GHP" "samesamesamesame samesamesamesame samesamesamesame samesamesamesame "
 # New contract: the kit never empties a scratch folder; clean.sh leaves it intact and resends the role with scratchDir
 SD_DEV="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir dev)"; mkdir -p "$SD_DEV/sub"; touch "$SD_DEV/f" "$SD_DEV/sub/g" "$SD_DEV/.hidden"
 : > "$LOGF"; run_clean dev >/dev/null
@@ -3935,6 +3951,10 @@ ost() {  # ost <env text> <pty text>: the saved state of the team
 ost $'PLANNER=live-pl\nDEV=old-dev\nTST=\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"
 ol --reopen
 check "reopen: the lost tab is reopened, the live one untouched, the role with no saved tab left closed and not written as VAR=" "$RC:$(grep -c 'terminal create' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true):$(grep -c 'terminal close' "$OLOG" || true):$(tr '\n' ' ' < "$OG/orca-roles.env"):$(cut -d= -f1 "$OG/orca-roles.pty" | tr '\n' ' '):$(printf '%s\n' "$OUT" | grep -c 'Tst has no saved tab')" "0:1:1:0:PLANNER=live-pl DEV=new-Dev :PLANNER DEV :1"
+gshim "$TMP/obin" "$TMP/grp.log"
+ost $'PLANNER=live-pl\nDEV=old-dev\nTST=\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"
+ol --reopen; GRP="$(grep -c 'bin/launch.sh' "$TMP/grp.log" || true)"; rm -f "$TMP/obin/git"
+[ "$GRP" -le 2 ] && echo "ok   reopen: launch.sh itself starts at most 2 git rev-parse ($GRP)" || { echo "FAIL reopen: launch.sh started $GRP git rev-parse (max 2)"; FAIL=1; }
 # 2. --reopen takes no other option: refused before anything is changed or opened (any other option, in either order)
 ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
 R2=""; for a in "--mode pr-reviewer" "--reset" "--status" "--only dev" "--set roles.dev.model=x" "--enable tst" "--bogus"; do
@@ -4304,6 +4324,11 @@ OTH=other wl
 check "wake: asleep tabs are woken in the saved order before any close or open, the user's tab is switched back to once after the wakes, each woken role is announced and then reopened once (no second tab); Tst has no saved tab and is not woken; the new tabs' ids are saved" \
   "$RC:$(wev):$(wn 'Orca kept the tab of Planner asleep after a restart; woke it.'):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(find "$WG" -name 'orca-roles.tabs.tmp*' | wc -l | tr -d ' ')" \
   "0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner close:rs-dev create:Dev create:Tst :1:1:PLANNER=tab-new-Planner leaf-new-Planner|DEV=tab-new-Dev leaf-new-Dev|TST=tab-new-Tst leaf-new-Tst|:0"
+# launch.sh itself starts at most 2 git rev-parse (children run as separate scripts do not count)
+gshim "$TMP/wbin" "$TMP/grp.log"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2
+OTH=other wl; GRP="$(grep -c 'bin/launch.sh' "$TMP/grp.log" || true)"; rm -f "$TMP/wbin/git"
+[ "$GRP" -le 2 ] && echo "ok   wake: launch.sh itself starts at most 2 git rev-parse ($GRP)" || { echo "FAIL wake: launch.sh started $GRP git rev-parse (max 2)"; FAIL=1; }
 # 4. what is not woken
 wm() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c '^terminal switch' "$WOLOG" || true)"; }
 M=""
