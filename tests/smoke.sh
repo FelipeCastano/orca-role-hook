@@ -67,6 +67,7 @@ case "$JOBS" in ''|*[!0-9]*|0) JOBS=1;; esac
 if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
 unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
+export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
 export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and poll waits, and the stop tick of bounded(), shortened; a check that needs the real value sets it itself
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -83,6 +84,9 @@ cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x 
 . "$KIT/bin/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; }
+gshim() {  # gshim <dir> <log>: a git in <dir> that logs each rev-parse with the command line of the process that started it, then runs the real git
+  printf '#!/bin/sh\ncase "$*" in *rev-parse*) echo "$(ps -o command= -p $PPID)" >> "%s";; esac\nexec "%s" "$@"\n' "$2" "$(command -v git)" > "$1/git"; chmod +x "$1/git"; : > "$2"
+}
 blk_start() { F0=$FAIL; FAIL=0; }
 blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0; }
 try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
@@ -750,6 +754,12 @@ check "tab_title_of: a title already ending in the agent's name is unchanged in 
 check "tab_title_of: custom takes the first word of command that is not an assignment, basename, cut at the first dot, lowercased" "$(tt X custom 'opencode run {prompt}'):$(tt X custom 'FOO=1 BAR=2 /opt/bin/gemini --yolo'):$(tt X custom './bin/my-agent.sh --flag'):$(tt X custom 'Aider.EXE'):$(tt X custom '* --x')" "X (opencode):X (gemini):X (my-agent):X (aider):X (*)"
 check "tab_title_of: custom without a usable word in command adds no suffix" "$(tt X custom ''):$(tt X custom 'FOO=1'):$(tt X custom '.hidden'):$(tt X custom '   ')" "X:X:X:X"
 check "var_of" "$(var_of e2e-tester)" "E2E_TESTER"
+check "var_of: ids, edges and non-ids map as tr did" "$(var_of dev):$(var_of e2e-tester):$(var_of a--b):$(var_of -x-):$(var_of 9):[$(var_of '')]:$(var_of Dev):$(var_of a_b.c):$(var_of é-x)" "DEV:E2E_TESTER:A__B:_X_:9:[]:DEV:A_B.C:é_X"
+check "var_of: ends with one newline and never swallows an echo option" "$(var_of dev | od -An -c | tr -d ' '):$(var_of -n):$(var_of -e)" 'DEV\n:_N:_E'
+check "lower_ascii: A-Z only, no trailing newline, specials and non-ASCII untouched" "$(lower_ascii Claude):$(lower_ascii OPENCODE):$(lower_ascii 'Researcher (Claude)'):$(lower_ascii a1-B2_C3):[$(lower_ascii '')]:$(lower_ascii ÉX):$(lower_ascii 'A&B*[Q]\Z'):$(lower_ascii ABCDEFGHIJKLMNOPQRSTUVWXYZ)" 'claude:opencode:researcher (claude):a1-b2_c3:[]:Éx:a&b*[q]\z:abcdefghijklmnopqrstuvwxyz'
+NS="$TMP/nospawn"; mkdir -p "$NS/bin"; for c in tr jq cut; do printf '#!/bin/sh\necho %s >> "%s/spawned"\nexit 1\n' "$c" "$NS" > "$NS/bin/$c"; chmod +x "$NS/bin/$c"; done
+check "var_of, lower_ascii and canon_mode of a known mode start no tr, cut or jq" "$(PATH="$NS/bin:$PATH" bash -c 'source "$1/bin/lib.sh"; var_of a-b; lower_ascii AbC; canon_mode programmer; canon_mode pr-reviewer; canon_mode academic-research' _ "$ROOT" >/dev/null 2>&1; cat "$NS/spawned" 2>/dev/null | wc -l | tr -d ' ')" "0"
+check "canon_mode: known modes unchanged, legacy id mapped, unknown unchanged" "$(canon_mode programmer):$(canon_mode pr-reviewer):$(canon_mode academic-research):$(canon_mode academic-writer):$(canon_mode foo):[$(canon_mode '')]" "programmer:pr-reviewer:academic-research:academic-research:foo:[]"
 # Renamed role: visual-tester → e2e-tester, keeping the user's settings and position
 printf '{"roles":{"dev":{},"visual-tester":{"title":"Visual-Tester","enabled":false},"deployer":{}}}' > "$TMP/legacy.json"
 check "upgrade_config renames visual-tester" "$(upgrade_config "$ROOT/config.default.json" "$TMP/legacy.json" | jq -c '[(.roles | keys_unsorted | .[0:3]), .roles["e2e-tester"].title, .roles["e2e-tester"].enabled, (.roles | has("visual-tester"))]')" '[["dev","e2e-tester","deployer"],"E2E-Tester",false,false]'
@@ -1360,6 +1370,34 @@ case "$S1" in "$KIT/tmp/"?*/tester) echo "ok   scratch_dir is absolute, under \$
 check "scratch_dir differs per role" "$([ "$S1" != "$(cd "$SW/main" && scratch_dir dev)" ] && echo y)" "y"
 case "$S1" in "$SW"/*|"$(cd "$SW" && pwd -P)"/*) echo "FAIL scratch_dir inside the worktree: $S1"; FAIL=1;; *) echo "ok   scratch_dir is outside the worktree";; esac
 check "scratch_dir without a role fails" "$(cd "$SW/main" && scratch_dir "" || echo fail)" "fail"
+SN="$TMP/scratch names"; mkdir -p "$SN/orca-role-hook" "$SN/my project" "$SN/café" "$SN/a b.c-d"
+SNN="$SN/x
+y"; mkdir -p "$SNN" "$SN/a'b" "$SN/a-é"
+ref_names() { printf '%s/%s' "$(printf '%s\n' "$1" | tr -c 'A-Za-z0-9._\n-' '_')" "$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_')"; }
+sd_names() { sed 's|.*/tmp/||; s|-[0-9a-f]\{10\}/|/|'; }
+SDOUT=""; SDREF=""
+for LCX in en_US.UTF-8 C; do for d in orca-role-hook "my project" café "a b.c-d" "a'b" "a-é" "x
+y"; do for r in dev 'r/ö x' 'a b' 'é'; do
+  SDOUT="$SDOUT$(cd "$SN/$d" && LC_ALL=$LCX scratch_dir "$r" | sd_names)|"; SDREF="$SDREF$(LC_ALL=$LCX ref_names "$d" "$r")|"
+done; done; done
+check "scratch_dir: project and role names equal main's tr cleaning in en_US.UTF-8 and in C (cafe, slash, quote, newline, non-ASCII)" "$SDOUT" "$SDREF"
+check "scratch_dir: a name with only A-Za-z0-9._- is kept" "$(cd "$SN/orca-role-hook" && scratch_dir 'a.b-C_9' | sd_names)" "orca-role-hook/a.b-C_9"
+mkdir -p "$TMP/trshim"; printf '#!/bin/sh\necho tr >> "%s/trspawned"\nexec /usr/bin/tr "$@"\n' "$TMP/trshim" > "$TMP/trshim/tr"; chmod +x "$TMP/trshim/tr"
+check "scratch_dir starts no tr when both names use only A-Za-z0-9._-, and starts one when a name needs cleaning" "$(cd "$SN/orca-role-hook" && PATH="$TMP/trshim:$PATH" scratch_dir 'a.b-C_9' >/dev/null; [ -e "$TMP/trshim/trspawned" ] && echo spawned || echo none):$(cd "$SN/my project" && PATH="$TMP/trshim:$PATH" scratch_dir dev >/dev/null; [ -e "$TMP/trshim/trspawned" ] && echo spawned || echo none)" "none:spawned"
+check "scratch_dir: an empty project name still fails" "$(cd "$SN/orca-role-hook" && project_name() { :; }; scratch_dir dev || echo fail)" "fail"
+# git_here answers like the single-flag git command (stdout and status) in a root, a subfolder, a linked worktree, outside a repo, inside .git, a bare repo, a repo whose folder name has a newline (the four-line answer guard) and after a cd to another repo in the same shell
+GHW="$TMP/gh"; mkdir -p "$GHW/out" "$GHW/main/sub/deep"; git -C "$GHW/main" init -q; git -C "$GHW/main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i; git -C "$GHW/main" worktree add -q "$GHW/linked" -b ghl; git init -q --bare "$GHW/bare.git"; git init -q "$GHW/n"$'\n'"l"; printf '{}\n' > "$GHW/main/.orca-roles.json"
+gh_ref() { local f c a r; for f in toplevel git-dir common-dir absolute-git-dir; do case $f in toplevel) c=--show-toplevel;; common-dir) c=--git-common-dir;; *) c=--$f;; esac; a="$(git_here $f 2>/dev/null; echo "rc=$?")"; r="$(git rev-parse $c 2>/dev/null; echo "rc=$?")"; [ "$a" = "$r" ] && printf same || printf 'DIFF(%s)' "$f"; done; }
+GHR=""; GHOLD="$PWD"; for d in main main/sub main/sub/deep linked main/.git main/.git/refs bare.git out main linked "n"$'\n'"l"; do cd "$GHW/$d"; GHR="$GHR$(gh_ref)"; git_here_init; GHR="$GHR/$(gh_ref) "; done; cd "$GHOLD"
+check "git_here: same stdout and status as the single-flag git command in every place, with the memo of the previous folder (cd) and with the memo of this one" "$GHR" "$(for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'samesamesamesame/samesamesamesame '; done)"
+check "git_here: an unknown field is status 2 with no output" "$(cd "$GHW/main" && git_here bogus; echo "rc=$?")" "rc=2"
+gh_pn() { local a r c; for x in . "$PWD"; do a="$(project_name "$x" 2>&1; echo "rc=$?")"; r="$( { if c="$(cd "$x" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)"; then c="$(cd "$x" && cd "$c" && pwd)"; basename "$(dirname "$c")"; else basename "$(cd "$x" && pwd)"; fi; } 2>&1; echo "rc=$?")"; [ "$a" = "$r" ] && printf same || printf 'DIFF'; done; }
+gh_pc() { local x t m r; for x in . "$PWD"; do r=""; if t="$(git -C "$x" rev-parse --show-toplevel 2>/dev/null)"; then if [ -f "$t/.orca-roles.json" ]; then r="$t/.orca-roles.json"; else m="$(cd "$x" && cd "$(git rev-parse --git-common-dir)/.." && pwd)"; [ -f "$m/.orca-roles.json" ] && r="$m/.orca-roles.json"; fi; fi; [ "$(project_config "$x")" = "$r" ] && printf same || printf 'DIFF'; done; }
+GHP=""; for d in main main/sub linked out; do GHP="$GHP$(cd "$GHW/$d" && gh_pn)$(cd "$GHW/$d" && gh_pc) "; done
+GHO=""; for d in main main/sub linked out; do GHO="${GHO}[$(cd "$GHW/out" && git_here_init; project_name "$GHW/$d"):$(cd "$GHW/main" && git_here_init; project_name "$GHW/$d"):$(cd "$GHW/main" && git_here_init; project_config "$GHW/$d")]"; done
+GHP_="$(cd "$GHW" && pwd -P)"
+check "project_name and project_config of another folder do not use the memo of the current directory" "$GHO" "[main:main:$GHP_/main/.orca-roles.json][main:main:$GHP_/main/.orca-roles.json][main:main:$GHP_/main/.orca-roles.json][out:out:]"
+check "project_name and project_config for . and \$PWD equal main's code (root, subfolder, linked worktree, outside a repo)" "$GHP" "samesamesamesame samesamesamesame samesamesamesame samesamesamesame "
 # New contract: the kit never empties a scratch folder; clean.sh leaves it intact and resends the role with scratchDir
 SD_DEV="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir dev)"; mkdir -p "$SD_DEV/sub"; touch "$SD_DEV/f" "$SD_DEV/sub/g" "$SD_DEV/.hidden"
 : > "$LOGF"; run_clean dev >/dev/null
@@ -3914,6 +3952,10 @@ ost() {  # ost <env text> <pty text>: the saved state of the team
 ost $'PLANNER=live-pl\nDEV=old-dev\nTST=\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"
 ol --reopen
 check "reopen: the lost tab is reopened, the live one untouched, the role with no saved tab left closed and not written as VAR=" "$RC:$(grep -c 'terminal create' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true):$(grep -c 'terminal close' "$OLOG" || true):$(tr '\n' ' ' < "$OG/orca-roles.env"):$(cut -d= -f1 "$OG/orca-roles.pty" | tr '\n' ' '):$(printf '%s\n' "$OUT" | grep -c 'Tst has no saved tab')" "0:1:1:0:PLANNER=live-pl DEV=new-Dev :PLANNER DEV :1"
+gshim "$TMP/obin" "$TMP/grp.log"
+ost $'PLANNER=live-pl\nDEV=old-dev\nTST=\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"
+ol --reopen; GRP="$(grep -c 'bin/launch.sh' "$TMP/grp.log" || true)"; rm -f "$TMP/obin/git"
+[ "$GRP" -le 2 ] && echo "ok   reopen: launch.sh itself starts at most 2 git rev-parse ($GRP)" || { echo "FAIL reopen: launch.sh started $GRP git rev-parse (max 2)"; FAIL=1; }
 # 2. --reopen takes no other option: refused before anything is changed or opened (any other option, in either order)
 ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
 R2=""; for a in "--mode pr-reviewer" "--reset" "--status" "--only dev" "--set roles.dev.model=x" "--enable tst" "--bogus"; do
@@ -4283,6 +4325,11 @@ OTH=other wl
 check "wake: asleep tabs are woken in the saved order before any close or open, the user's tab is switched back to once after the wakes, each woken role is announced and then reopened once (no second tab); Tst has no saved tab and is not woken; the new tabs' ids are saved" \
   "$RC:$(wev):$(wn 'Orca kept the tab of Planner asleep after a restart; woke it.'):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(find "$WG" -name 'orca-roles.tabs.tmp*' | wc -l | tr -d ' ')" \
   "0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner close:rs-dev create:Dev create:Tst :1:1:PLANNER=tab-new-Planner leaf-new-Planner|DEV=tab-new-Dev leaf-new-Dev|TST=tab-new-Tst leaf-new-Tst|:0"
+# launch.sh itself starts at most 2 git rev-parse (children run as separate scripts do not count)
+gshim "$TMP/wbin" "$TMP/grp.log"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2
+OTH=other wl; GRP="$(grep -c 'bin/launch.sh' "$TMP/grp.log" || true)"; rm -f "$TMP/wbin/git"
+[ "$GRP" -le 2 ] && echo "ok   wake: launch.sh itself starts at most 2 git rev-parse ($GRP)" || { echo "FAIL wake: launch.sh started $GRP git rev-parse (max 2)"; FAIL=1; }
 # 4. what is not woken
 wm() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c '^terminal switch' "$WOLOG" || true)"; }
 M=""
@@ -4376,7 +4423,7 @@ check "wake of placeholders: a tab listed with its old handle and no agent proce
 "a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:1:0 b:0:W:tab-noid-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1 c:0:W:tab-dev switch:other create:Planner close:rs-dev create:Dev create:Tst  d:0:create:Planner close:h-noleaf create:Dev create:Tst :0:1:1"
 # e: the old handle is still listed (with a readable session and idle) while the new one has not appeared yet: the wait ignores it, so the tab reopened is the one under the new handle
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wdelay.tab-od-dev"; : > "$TMP/wsess.od-dev"; WB=8
-OTH=other wl; unset WB; sleep 3
+OTH=other wl; unset WB; for _ in $(seq 50); do grep -qF '"handle":"od-dev"' "$TMP/wbase" || break; sleep 0.1; done   # the delayed fake hook has dropped the old handle
 check "wake of a placeholder: while the old handle is still listed the readiness wait does not take it for the woken tab; the new handle is the one closed and reopened, the old one is never closed" "$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
 # f: a placeholder that cannot be woken (the helper says unavailable, 2, or fails, 1) is a tab whose agent is gone: closed by its old handle and replaced, never 'already open'
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; echo 2 > "$TMP/wrc.tab-od-dev"
@@ -4434,6 +4481,17 @@ T0=$(date +%s); WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; T1=$(date +%s
 M="$M b:$RC:$(wev):$(wn "$WGONE"):$([ $((T1 - T0)) -lt 5 ] && echo fast || echo slow)"
 check "wake of a listed tab that never gets a new handle: it waits only ORCA_ROLES_WAKE_LISTED_BUDGET (fast when it is the only one, the unlisted one in the same run still keeps ORCA_ROLES_WAKE_BUDGET), prints the 'has no agent running and Orca did not resume it' line, then the 'agent is gone' path closes it by its old handle and opens a new one; the unlisted one is 'treated as closed'; never 'Could not wake' for the listed one" "$M" \
 "a:0:W:tab-pl W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:1:1:0:slow b:0:W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:fast"
+# m2: the pause between passes is ORCA_ROLES_WAKE_TICK, one second when it is unset (the suite sets a short one); the CLI watchdog is off for these runs so its own sleeps stay out of the log
+printf '#!/bin/bash\necho "$1" >> %s\nexec /bin/sleep "$1"\n' "$TMP/wsleep.log" > "$TMP/wbin/sleep"; chmod +x "$TMP/wbin/sleep"
+M2=""
+for tick in unset 0.3; do
+  wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; printf '%s\n{"handle":"od-dev","ptyId":"wt@@p2"}\n' "$WOTHER" > "$TMP/wbase"; : > "$TMP/wnoproc.od-dev"; : > "$TMP/wsleep.log"
+  if [ "$tick" = unset ]; then unset ORCA_ROLES_WAKE_TICK; else export ORCA_ROLES_WAKE_TICK=$tick; fi
+  ORCA_ROLES_CLI_TIMEOUT=0 WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; export ORCA_ROLES_WAKE_TICK=0.2
+  M2="$M2 $tick:$(sort -u "$TMP/wsleep.log" | tr '\n' ',')"
+done
+rm -f "$TMP/wbin/sleep"
+check "wake: the pause between passes of the wait loop is ORCA_ROLES_WAKE_TICK when set and exactly 1 second when it is unset" "$M2" " unset:1, 0.3:0.3,"
 # n: the old handle of a woken placeholder keeps answering 'terminal show' (and stays listed) after the wake: the role is not 'gone'; its restored tab is reopened from the new handle with its conversation and the old handle is never closed (role loop and mode switch)
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
 mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
