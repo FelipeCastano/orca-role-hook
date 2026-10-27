@@ -73,6 +73,8 @@ SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has c
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
 # Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
 # An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
+# A live claude or codex process for the handle counts as alive even when Orca flags the tab orphaned (it also does for tabs it has not
+# bound yet) or shows no agent identity (idle Claude often does); an orphaned one sets ROLE_DETACHED=1 so the caller can say it kept it.
 # The pid of the claude or codex process whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
 agent_pid_of_handle() {
   [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
@@ -87,6 +89,7 @@ agent_pid_of_handle() {
 }
 agent_in()   { local js rc; js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"; rc=$?; printf '%s' "$js" | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; return "$rc"; }
 role_alive() {  # role_alive <role> <handle>
+  ROLE_DETACHED=0
   [ -n "${2:-}" ] || return 1
   local js rc code; js="$(orca terminal show --terminal "$2" --json 2>/dev/null)"; rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -94,8 +97,12 @@ role_alive() {  # role_alive <role> <handle>
     [ "$code" = terminal_handle_stale ] && return 1
     ROLE_ALIVE_CODE="${code:-no-response}"; return 4
   fi
-  printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1 && return 3
-  case "$(rstr "$CFG" "$1" agent)" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts; Orca sets agentIdentity only after mini's first message
+  local ag; ag="$(rstr "$CFG" "$1" agent)"
+  if printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1; then
+    case "$ag" in claude|codex|"") [ -z "$(agent_pid_of_handle "$2")" ] || { ROLE_DETACHED=1; return 0; };; esac
+    return 3
+  fi
+  case "$ag" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts; Orca sets agentIdentity only after mini's first message
   local i ai; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
     ai="$(agent_in "$2")" || { ROLE_ALIVE_CODE=no-response; return 4; }
     if [ -n "$ai" ]; then
@@ -105,6 +112,7 @@ role_alive() {  # role_alive <role> <handle>
     fi
     [ "$i" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
   done
+  [ -z "$(agent_pid_of_handle "$2")" ] || return 0
   return 2
 }
 if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launch log
@@ -572,6 +580,7 @@ kicked_of() { grep "^$1=" "$KICKED" 2>/dev/null | head -1 | cut -d= -f2-; }
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
   role_state "$v" "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
+  [ "$st" != 0 ] || [ "$ROLE_DETACHED" != 1 ] || echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles."
   [ "$st" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE) for $t: no tab was closed or opened. Run roles again once Orca is ready."
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
@@ -741,7 +750,7 @@ if [ -z "$NEW" ]; then echo "All roles are already open."; start_relauncher; exi
 [ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; the Planner will recover the previous state and give you a summary."
 case " $NEW " in *" planner "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${PLANNER:-}" ] || echo 'The Planner kept its tab: it is told the new handles by a message ("Role handles changed"); if it does not pick them up, ask it to read its messages.';; esac
 KLOG="$GITDIR/orca-roles-kickoff.log"
-if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else : > "$KLOG"; fi   # launched by the relauncher: its log is appended to
+if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else [ ! -f "$KLOG" ] || mv -f "$KLOG" "$KLOG.1"; : > "$KLOG"; fi   # launched by the relauncher: its log is appended to; otherwise the previous launch's log is kept as .1
 ORCA_ROLES_SWITCH_FROM="$SWITCH_FROM" ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
 mkdir -p "$KICKOFFS" && printf '%s\n' "${NEW# }" > "$KICKOFFS/$!"
 echo "Role kickoff in progress (log: $KLOG)"

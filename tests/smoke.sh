@@ -78,7 +78,7 @@ trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
 # where set -e ended the script: the failing command of the main shell (not of a $(...) or a subshell, where its status shows up on the line that ran it); only recorded while errexit is on
 set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINENO: $BASH_COMMAND";; esac' ERR
 KIT="$TMP/kit"; mkdir -p "$KIT"   # not exported: the scripts under test find their kit through the fake HOME, as in real use
-printf '#!/bin/sh\necho 4242\n' > "$TMP/agent-pid"; chmod +x "$TMP/agent-pid"; export ORCA_ROLES_AGENT_PID="$TMP/agent-pid"   # by default every fake tab with an agent identity has a live agent process behind it; a test that needs "no process" points the hook at a script that prints nothing
+printf '#!/bin/sh\n[ -e "%s/nopid.$1" ] || echo 4242\n' "$TMP" > "$TMP/agent-pid"; chmod +x "$TMP/agent-pid"; export ORCA_ROLES_AGENT_PID="$TMP/agent-pid"   # by default every fake tab with an agent identity has a live agent process behind it; a handle with a nopid.<handle> file in $TMP has none (a test that needs another answer points the hook at its own script)
 export ORCA_ROLES_SUPERPOWERS_FETCH=skip   # install.sh must never reach the network from the suite (the fetch tests put a fake git first on the PATH and clear this)
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
@@ -2660,7 +2660,7 @@ try status --status; check "status: no state" "$RC:$(printf '%s' "$OUT" | tr '\n
 : > "$G/orca-roles.env"; try status --status; check "status: empty state" "$RC:$(printf '%s' "$OUT" | tr '\n' '/')" "0:Kit: unknown (unknown)/No team launched in this worktree."
 jq '.settings.mode = "programmer"' "$KIT/config.json" > "$G/orca-roles.config.json"
 jq '.roles.dev.model = "m-dev"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
-printf 'PLANNER=h-up\nDEV=h-none\nDEPLOYER=h-gone\n' > "$G/orca-roles.env"
+touch "$TMP/nopid.h-gone"; printf 'PLANNER=h-up\nDEV=h-none\nDEPLOYER=h-gone\n' > "$G/orca-roles.env"
 printf 'XDEV=m-x\nPLANNER=m-ok\nDEPLOYER=FAILED:m-bad\n' > "$G/orca-roles.models"
 printf 'PLANNER=pty-1\n' > "$G/orca-roles.pty"; printf '{"only":["dev"],"enable":[],"disable":[],"set":[]}' > "$G/orca-roles.overrides.json"
 ssum() { cat "$G/orca-roles.config.json" "$G/orca-roles.overrides.json" "$G/orca-roles.env" "$G/orca-roles.pty" "$G/orca-roles.models" | cksum; ls "$G" | cksum; }
@@ -2683,9 +2683,10 @@ esac
 exit 0
 EOS
 jq '.roles.dev.agent = "custom" | .roles.dev.command = "c" | .settings.mode = "programmer"' "$G/orca-roles.config.json" > "$G/c.tmp" && mv "$G/c.tmp" "$G/orca-roles.config.json"
-printf 'PLANNER=h-orph\nDEV=h-cust\nGHOST=h-cust\n' > "$G/orca-roles.env"; rm -f "$G/orca-roles.models"; S0="$(ssum 2>/dev/null)"
+touch "$TMP/nopid.h-orph" "$TMP/nopid.h-cust"; printf 'PLANNER=h-orph\nDEV=h-cust\nGHOST=h-cust\n' > "$G/orca-roles.env"; rm -f "$G/orca-roles.models"; S0="$(ssum 2>/dev/null)"
 try status --status
 check "status: orphaned, custom agent alive, role missing from the config (checked like claude)" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-orph|orphaned|-|-|-|-/Dev|h-cust|alive|m-dev|-|-|-/ghost|h-cust|agent gone|-|-|-|-"
+rm -f "$TMP/nopid.h-gone" "$TMP/nopid.h-orph" "$TMP/nopid.h-cust"
 mv "$G/orca-roles.config.json" "$G/cfg.saved"
 printf '{"roles":{"dev":{"title":"Developer","model":"m-proj"}},"settings":{"mode":"programmer"}}' > "$S/.orca-roles.json"
 printf 'DEV=h-none\n' > "$G/orca-roles.env"
@@ -3594,6 +3595,36 @@ D1="$RC:$(printf '%s\n' "$OUT" | head -1):$(cut -d= -f1 "$TMP/state.env" | tr '\
 printf 'PLANNER=t1\nDEV=t6\n' > "$TMP/state.env"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 try closerole dev
 D1="$D1|$RC:$(printf '%s' "$OUT" | tr '\n' '/'):$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')"
 check "close-role: a close with no answer (124): the tab gone afterwards counts as closed, no message; still there -> 'did not confirm' then 'could not close its tab', RC 1 and its state line kept" "$D1" "0:Dev: tab closed (t5).:PLANNER |1:Orca did not confirm closing the tab of Dev (t6)./Dev: could not close its tab (t6).:PLANNER DEV "
+# an orphaned handle (a session Orca keeps without a tab) is ended like launch.sh does: the plain close first, --tab only when that fails; a handle that is not orphaned gets the single --tab close
+mkdir -p "$TMP/fakebin2"; CR2="$TMP/crorca2.log"
+cat > "$TMP/fakebin2/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$CR2"
+k="\$1\$2"; h=""; tab=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; [ "\$1" = --tab ] && tab=1; shift; done
+case "\$k" in
+  terminalshow) case "\$h" in
+      n1) echo '{"result":{"terminal":{"orphaned":false}}}';;
+      o4) [ -e "$TMP/o4gone" ] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }; echo '{"result":{"terminal":{"orphaned":true}}}';;
+      *) echo '{"result":{"terminal":{"orphaned":true}}}';; esac;;
+  terminalclose) case "\$h" in
+      o2) [ -n "\$tab" ] || exit 3;;
+      o3) exit 3;;
+      o4) : > "$TMP/o4gone"; exit 124;;
+      o5) exit 124;;
+      n1) [ -n "\$tab" ] || exit 3;; esac;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/fakebin2/orca"
+closerole2() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin2:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" ORCA_ROLES_CLI_TIMEOUT=60 "$TMP/home/.orca-roles/bin/close-role.sh" "$@" 2>&1); }
+cr2case() {  # cr2case <handle>: RC, the output, the close calls (p = plain, t = --tab) and whether the DEV lines are left in the state files
+  : > "$CR2"; rm -f "$TMP/o4gone"; printf 'PLANNER=t1\nDEV=%s\n' "$1" > "$TMP/state.env"; printf 'DEV=pty-%s\n' "$1" > "$TMP/orca-roles.pty"; printf 'DEV=tab-%s\n' "$1" > "$TMP/orca-roles.tabs"
+  try closerole2 dev
+  echo "$RC:$(printf '%s' "$OUT" | grep -v 'still enabled' | tr '\n' '/'):$(grep 'terminal close' "$CR2" | sed 's/.*--tab.*/t/; s/terminal close.*/p/' | tr -d '\n'):$(cat "$TMP/state.env" "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" | grep -c '^DEV=')"
+}
+CR2R="$(cr2case o1)|$(cr2case o2)|$(cr2case o3)|$(cr2case o4)|$(cr2case o5)|$(cr2case n1)"
+check "close-role: an orphaned handle gets the plain close first and --tab only if it fails (plain ok -> no --tab, handle forgotten; plain fails and --tab ok -> closed; both fail -> 'could not close its tab', RC 1, handle kept; a 124 goes to the confirm step, which counts it gone or 'did not confirm'); a handle that is not orphaned gets the single --tab close" "$CR2R" "0:Dev: tab closed (o1)./:p:0|0:Dev: tab closed (o2)./:pt:0|1:Dev: could not close its tab (o3)./:pt:3|0:Dev: tab closed (o4)./:p:0|1:Orca did not confirm closing the tab of Dev (o5)./Dev: could not close its tab (o5)./:p:3|0:Dev: tab closed (n1)./:t:0"
+rm -f "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" "$TMP/o4gone"
 try closerole planner; check "close-role: never the planner" "$RC" "1"
 try closerole nobody; check "close-role: unknown role" "$RC" "1"
 rm -f "$TMP/fakebin/orca"
@@ -3672,6 +3703,7 @@ cat > "$KIT/config.json" <<'J'
   "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "cu": { "title": "Custom", "agent": "custom", "command": "x" }, "tst": { "title": "Tst" } } }
 J
 for r in cu tst; do : > "$KIT/prompts/programmer/$r.md"; done   # fake roles need a prompt file to be launched (removed at the end of the section)
+touch "$TMP/nopid.t-dev" "$TMP/nopid.t-orp"
 OUT="$(cd "$DP" && HOME="$TMP/home" PATH="$TMP/dbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"The agent in the tab of Dev (t-dev) is gone"*) echo "ok   dead agent: detected in a live tab";; *) echo "FAIL dead agent: $OUT"; FAIL=1;; esac
 check "dead agent: its old tab is closed" "$(grep -c 'terminal close --terminal t-dev --tab' "$DLOG")" "1"
@@ -3679,9 +3711,59 @@ check "dead agent: a new tab replaces it" "$(cut -d= -f2 "$DP/.git/orca-roles.en
 check "dead agent: custom agents are not checked" "$(grep -c 'terminal close --terminal t-cu' "$DLOG" || true)" "0"
 case "$OUT" in *"The tab of Tst (t-orp) was closed but Orca kept its session running"*) echo "ok   orphaned session: detected";; *) echo "FAIL orphaned: $OUT"; FAIL=1;; esac
 check "orphaned session: ended" "$(grep -c 'terminal close --terminal t-orp' "$DLOG")" "1"
+rm -f "$TMP/nopid.t-dev" "$TMP/nopid.t-orp"
+# a live claude or codex process wins over Orca's flags: orphaned or without agentIdentity but with a process -> kept (the orphaned one says so once), no close, no create; no process -> closed and reopened as before; a custom agent is never looked up
+DK="$TMP/dkeep"; mkdir -p "$DK" "$TMP/dkbin"; git -C "$DK" init -q -b main
+printf 'PLANNER=t-ok\nDEV=t-op-live\nTST=t-op-dead\nAA=t-ei-live\nBB=t-ei-dead\nCU=t-oc\n' > "$DK/.git/orca-roles.env"
+DKL="$TMP/dkorca.log"; : > "$DKL"; : > "$TMP/dkpid.log"
+cat > "$TMP/dkbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$DKL"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal show") case "\$*" in *t-ei-*) echo '{"result":{"terminal":{"agentIdentity":null}}}';; *t-op-*|*t-oc*) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\necho "$1" >> "%s"\n[ -e "%s/nopid.$1" ] || echo 4242\n' "$TMP/dkpid.log" "$TMP" > "$TMP/dkbin/agent-pid"; chmod +x "$TMP/dkbin/orca" "$TMP/dkbin/agent-pid"; touch "$TMP/nopid.t-op-dead" "$TMP/nopid.t-ei-dead"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" }, "aa": { "title": "Aa" }, "bb": { "title": "Bb" }, "cu": { "title": "Cu", "agent": "custom", "command": "x" } } }
+J
+for r in tst aa bb cu; do : > "$KIT/prompts/programmer/$r.md"; done   # removed at the end of the section
+dkrun() { (cd "$DK" && HOME="$TMP/home" PATH="$TMP/dkbin:$PATH" ORCA_ROLES_AGENT_PID="$TMP/dkbin/agent-pid" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+DKS="$(dkrun --status | awk -F'\t' '$2 ~ /^t-/ {printf "%s=%s ", $2, $3}')"
+check "status: a live agent process keeps a tab alive when Orca flags it orphaned or shows no agent identity; no process -> orphaned / agent gone; a custom agent flagged orphaned stays orphaned" "$DKS" "t-ok=alive t-op-live=alive t-op-dead=orphaned t-ei-live=alive t-ei-dead=agent gone t-oc=orphaned "
+OUT="$(dkrun)"
+dkn() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
+dkc() { grep -c "terminal $1 .*$2" "$DKL" || true; }
+check "live process wins over Orca's flags: orphaned + process is kept with the 'detached but its agent is running' line once, identity-less + process is kept without a line; none of them is closed or reopened" "$(dkn "Orca reports the tab of Dev (t-op-live) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles."):$(printf '%s\n' "$OUT" | grep -c 'as detached but its agent is running' || true):$(dkc close 't-op-live'):$(dkc close 't-ei-live'):$(dkc close 't-ok'):$(dkc create '--title Dev'):$(dkc create '--title Aa'):$(dkc create '--title Planner')" "1:1:0:0:0:0:0:0"
+check "no process: an orphaned tab is ended and reopened (the 'kept its session running' line), an identity-less one takes the 'agent is gone' path; neither is called detached" "$(dkn 'The tab of Tst (t-op-dead) was closed but Orca kept its session running; ending it and opening a new one.'):$(dkn 'The agent in the tab of Bb (t-ei-dead) is gone; closing that tab and opening a new one.'):$(dkc close 't-op-dead'):$(dkc close 't-ei-dead'):$(dkc create '--title Tst'):$(dkc create '--title Bb')" "1:1:1:1:1:1"
+check "a custom role flagged orphaned is handled as before (ended and reopened): no process lookup for it" "$(grep -c 't-oc' "$TMP/dkpid.log" || true):$(dkc close 't-oc'):$(dkc create '--title Cu')" "0:1:1"
+rm -f "$TMP/nopid.t-op-dead" "$TMP/nopid.t-ei-dead"
+# back to back (relaunch-role.sh's shape: close one role, launch): a fake that flags every tab the previous launch created as orphaned while its agent runs ends none of the others
+jq '.settings.mode = "programmer" | .settings.enableAskModeOnStart = false' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"
+DR="$TMP/drel"; mkdir -p "$DR" "$TMP/drbin"; git -C "$DR" init -q -b main; DRL="$TMP/drorca.log"; : > "$DRL"; : > "$TMP/drclosed"
+cat > "$TMP/drbin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$DRL"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal close") grep -qx "\$4" "$TMP/drclosed" || echo "\$4" >> "$TMP/drclosed";;
+  "terminal show") if grep -qx "\$4" "$TMP/drclosed"; then echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; fi; echo '{"result":{"terminal":{"agentIdentity":null,"orphaned":true,"connected":false}}}';;
+esac
+exit 0
+EOS
+chmod +x "$TMP/drbin/orca"
+drl() { (cd "$DR" && HOME="$TMP/home" PATH="$TMP/drbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$@" 2>&1); }
+drl "$TMP/home/.orca-roles/bin/launch.sh" >/dev/null || true; DRA="$(grep -c 'terminal create' "$DRL" || true)"
+drl "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null || true; DRC="$(grep -c 'terminal close' "$DRL" || true)"
+drl "$TMP/home/.orca-roles/bin/launch.sh" >/dev/null || true
+check "relaunching back to back with every earlier claude tab flagged orphaned while its agent runs: the second launch ends none of Planner, Tst, Aa or Bb (nothing closed or reopened for them), reopens the role that was closed, and the custom role flagged orphaned is ended and reopened as before" "$DRA:$DRC:$(grep -c 'terminal close --terminal h-\(Planner\|Tst\|Aa\|Bb\)' "$DRL" || true):$(grep -c -- '--title \(Planner\|Tst\|Aa\|Bb\)' "$DRL" || true):$(grep -c -- '--title Dev' "$DRL" || true):$(grep -c 'terminal close --terminal h-Cu' "$DRL" || true):$(grep -c -- '--title Cu' "$DRL" || true)" "6:1:0:4:2:1:2"
 check "E1: non-Claude workers run Orca's commands in the foreground" "$(worker_msg "$KIT/config.json" cu | grep -c 'in the foreground')" "1"
 check "E1: Claude workers get no extra instruction" "$(worker_msg "$KIT/config.json" dev | grep -c 'in the foreground' || true)" "0"
-rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/tst.md"
+rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/tst.md" "$KIT/prompts/programmer/aa.md" "$KIT/prompts/programmer/bb.md"
 }
 
 sec_agent_flags() {
@@ -4024,22 +4106,22 @@ ost "$SELFS" "$SELFP"; : > "$TMP/owaitfail"; OSES=session-none OTH=other-tab ol;
 Z1="$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- '--title Planner' "$OLOG" || true):$(grep -c 'terminal wait --terminal rs-pl' "$OLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'is busy: not reopened now' || true):$(printf '%s\n' "$OUT" | grep -c 'Resuming workspace: planner.*start without memory' || true)"
 check "busy check needs a session: no session and a failing wait -> the restored Planner tab is closed and a new Planner opened (no memory), no wait is asked, not reported busy" "$Z1" "0:1:1:0:0:1"
 # n14 step 2: a close of a role's tab that gets no answer (124) is checked with terminal show: stale = done, else "Orca did not confirm closing the tab of <Title> (<handle>)." and the launch goes on; the two-step st=3 close does not try the other form after a 124
-oclr() { rm -f "$TMP"/ost.* "$TMP"/och.* "$TMP"/ochn.* "$TMP"/ocf.*; }
+oclr() { rm -f "$TMP"/ost.* "$TMP"/och.* "$TMP"/ochn.* "$TMP"/ocf.* "$TMP"/nopid.*; }
 oclosed() { grep -c "terminal close --terminal $1" "$OLOG" || true; }
 omsg() { printf '%s\n' "$OUT" | grep -cxF "Orca did not confirm closing the tab of $1." || true; }
 OSEED=$'PLANNER=live-pl\nDEV=ng-dev\n'; OSEEDP=$'PLANNER=wt@@a\nDEV=wt@@b\n'
 oseed2() { ost "$OSEED" "$OSEEDP"; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; }
 echo '{"terminals":[]}' > "$TMP/olist"
-oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/ochn.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; : > "$TMP/ochn.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
 C1="$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c -- '--title Dev' "$OLOG" || true)"
-oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/och.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; : > "$TMP/och.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
 C1="$C1|$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c -- '--title Dev' "$OLOG" || true)"
 check "st=2 close with no answer: still there -> one 'did not confirm' line, no retry, the new tab opened anyway; gone afterwards -> no message, new tab opened" "$C1" "0:1:1:1|0:0:1:1"
-oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/ochn.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; : > "$TMP/ochn.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
 C2="$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c 'terminal close --terminal ng-dev --tab' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true)"
-oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/och.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
+oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; : > "$TMP/och.ng-dev"; oseed2; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 ol
 C2="$C2|$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c 'terminal close --terminal ng-dev --tab' "$OLOG" || true)"
-oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/ocf.ng-dev"; oseed2; ol
+oclr; echo orphan > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; : > "$TMP/ocf.ng-dev"; oseed2; ol
 C2="$C2|$RC:$(omsg 'Dev (ng-dev)'):$(oclosed ng-dev):$(grep -c 'terminal close --terminal ng-dev --tab' "$OLOG" || true):$(grep -c -- '--title Dev' "$OLOG" || true)"
 check "st=3 close: a 124 is not retried in the other form (message if the tab is still there, none if gone); a plain close that fails otherwise still falls back to --tab" "$C2" "0:1:1:0:1|0:0:1:0|0:0:2:1:1"
 printf '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"}]}\n' > "$TMP/olist"
@@ -4052,10 +4134,10 @@ check "restored worker tab close with no answer: still there -> 'did not confirm
 oclr; echo '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@p2","title":"y"}]}' > "$TMP/olist"
 BERR() { printf '%s\n' "$OUT" | grep -cxF "ERROR: roles was run from the tab of $1, which has to be reopened; run roles from the Planner's tab or another terminal of this worktree. No tab was closed or opened." || true; }
 bfacts() { echo "$RC:$(BERR "$1"):$(grep -c 'terminal close\|terminal create' "$OLOG" || true):$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum | cmp -s - <(echo "$HB") && echo same || echo CHANGED)"; }
-echo noagent > "$TMP/ost.ng-dev"; oseed2; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=ng-dev ol; B1="$(bfacts Dev)"
-oclr; echo noagent > "$TMP/ost.ng-pl"; ost $'PLANNER=ng-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=ng-pl\n' > "$OG/orca-roles.kicked"; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=ng-pl ol; B1="$B1|$(bfacts Planner)"
+echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; oseed2; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=ng-dev ol; B1="$(bfacts Dev)"
+oclr; echo noagent > "$TMP/ost.ng-pl"; : > "$TMP/nopid.ng-pl"; ost $'PLANNER=ng-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=ng-pl\n' > "$OG/orca-roles.kicked"; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=ng-pl ol; B1="$B1|$(bfacts Planner)"
 oclr; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@p2\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; HB="$(cat "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"; OTH=rs-dev ol; B1="$B1|$(bfacts Dev)"
-oclr; echo noagent > "$TMP/ost.ng-dev"; oseed2; OTH=other-tab ol; B1="$B1|$RC:$(BERR Dev):$(oclosed ng-dev)"
+oclr; echo noagent > "$TMP/ost.ng-dev"; : > "$TMP/nopid.ng-dev"; oseed2; OTH=other-tab ol; B1="$B1|$RC:$(BERR Dev):$(oclosed ng-dev)"
 oclr; ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@p2\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; OTH=live-pl ol; B1="$B1|$RC:$(BERR Dev):$(oclosed rs-dev)"
 check "B5: run from the tab of a worker whose agent is gone (st=2), of the Planner whose agent is gone, or of a worker's restored tab -> refused with the C16 message, nothing closed or opened, state unchanged; from another tab, or from a live tab that closes nothing of its own -> no refusal" "$B1" "1:1:0:same|1:1:0:same|1:1:0:same|0:0:1|0:0:1"
 # the close limit: ORCA_ROLES_CLOSE_TIMEOUT applies to 'orca terminal close' only, ORCA_ROLES_CLI_TIMEOUT to every other call; CLI_TIMEOUT=0 disables both
@@ -4108,6 +4190,18 @@ R6="$(cat "$OG/orca-roles-kickoff.log" | tr '\n' ' '):$(grep -c '^OLD$' "$OG/orc
 ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo OLD > "$OG/orca-roles-kickoff.log"
 ol; poll grep -q KICK "$OG/orca-roles-kickoff.log"; sleep 0.2
 check "logs: launched by the relauncher it appends to orca-roles-relaunch.log and leaves the kickoff log alone; a plain launch truncates the kickoff log" "$R6:$(cat "$OG/orca-roles-kickoff.log" | tr '\n' ' '):$(cat "$TMP/okick.env")" "OLD :1:1:0:1:1:KICK :0:unset"
+# the previous plain launch's kickoff log is kept as .log.1 (the fake kickoff writes KICK; L1 and L2 stand for the lines of launches 1 and 2); a relauncher's launch touches neither kickoff file
+olk() { ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo '{"terminals":[]}' > "$TMP/olist"; "$@"; poll grep -q KICK "$OG/orca-roles-kickoff.log"; sleep 0.2; }
+okl() { tr '\n' ' ' < "$OG/$1" 2>/dev/null || printf none; }
+rm -f "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" "$OG/orca-roles-relaunch.log"
+olk ol; K6="$(okl orca-roles-kickoff.log):$(okl orca-roles-kickoff.log.1)"; echo L1 >> "$OG/orca-roles-kickoff.log"
+olk ol; K6="$K6|$(okl orca-roles-kickoff.log):$(okl orca-roles-kickoff.log.1)"; echo L2 >> "$OG/orca-roles-kickoff.log"
+olk ol; K6="$K6|$(okl orca-roles-kickoff.log):$(okl orca-roles-kickoff.log.1)"
+K6B="$(cat "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" 2>/dev/null | cksum)" || true
+ost $'PLANNER=live-pl\nDEV=old-dev\n' $'PLANNER=wt@@a\nDEV=wt@@b\n'; printf 'PLANNER=live-pl\n' > "$OG/orca-roles.kicked"; echo OLD > "$OG/orca-roles-relaunch.log"
+OREL=1 ol --reopen; poll grep -q KICK "$OG/orca-roles-relaunch.log"; sleep 0.2
+K6="$K6|$([ "$(cat "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" 2>/dev/null | cksum)" = "$K6B" ] && echo same || echo CHANGED):$(okl orca-roles-relaunch.log)"
+check "kickoff log: the first launch has no .log.1; the second keeps the first's lines in .log.1 and starts a new log; the third's .log.1 holds the second's lines only; a relauncher's launch leaves both kickoff files alone and appends to orca-roles-relaunch.log" "$K6" "KICK :none|KICK :KICK L1 |KICK :KICK L2 |same:OLD KICK "
 M6="$(for v in 1 ""; do for r in 2 1 0; do (export ORCA_ROLES_RELAUNCH=$v; planner_msg "$KIT/config.json" "planner dev" "$OG/orca-roles.env" "" "" $r | grep -c 'You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit.s settings)' || true); done; done | tr '\n' ' ')"
 check "planner_msg: the self-relaunch sentence only in the BACK message of a relaunched Planner" "$M6" "1 0 0 0 0 0 "
 rm -f "$KIT/prompts/programmer/tst.md" "$TMP/owaitfail"
@@ -4398,13 +4492,14 @@ wcfgp() {  # wcfgp <phase>: academic-research with one role per phase
   "roles": { "planner": { "title": "Planner" }, "expr": { "title": "Expr", "modes": ["academic-research"], "phases": ["experiment"] }, "wrt": { "title": "Wrt", "modes": ["academic-research"], "phases": ["writing"] } } }
 J
 }
+WPAR="$TMP/wake-ar-prompts"; rm -rf "$WPAR"; [ ! -d "$KIT/prompts/academic-research" ] || cp -R "$KIT/prompts/academic-research" "$WPAR"
 mkdir -p "$KIT/prompts/academic-research"; : > "$KIT/prompts/academic-research/expr.md"; : > "$KIT/prompts/academic-research/wrt.md"
 wcfgp experiment; wst $'EXPR=old-expr
 ' $'EXPR=wt@@p7
 ' $'EXPR=tab-expr leaf-expr
 '; wcfgp writing; wadd tab-expr rs-expr wt@@p7; S0="$(wsum)"
 OTH=other wl; check "wake on an academic-research phase change: the asleep role of the old phase is woken although the new phase does not have it, so the phase guard refuses naming it, with nothing closed or opened and the saved state untouched" "$RC:$(wev):$(wn "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Expr is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)" "1:W:tab-expr switch:other :1:same"
-rm -rf "$KIT/prompts/academic-research"; wcfg
+rm -rf "$KIT/prompts/academic-research"; [ ! -d "$WPAR" ] || cp -R "$WPAR" "$KIT/prompts/academic-research"; wcfg
 # 8c. placeholders: after a restart Orca can list a role's tab, with its old handle, ptyId and often a stale agent identity, with no agent process behind it; waking it makes Orca resume the conversation under a new handle
 WPT=$'PLANNER=tab-pl leaf-pl\nDEV=tab-dev leaf-dev\n'
 wpn() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c 'terminal close' "$WOLOG" || true)"; }
@@ -4544,7 +4639,7 @@ wsl() {  # wsl <dir> <ORCA_WORKTREE_ID, empty = unset> <launch.sh args...>
   local d="$1" id="$2"; shift 2; : > "$WSL"
   OUT="$(cd "$d" && env ${id:+ORCA_WORKTREE_ID="$id"} HOME="$TMP/home" PATH="$WS/bin:$PATH" ORCA_ROLES_KICKOFF="$WS/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
 }
-wsreset() { rm -rf "$WSG"/orca-roles.* "$WSG"/orca-roles-*.log "$WS/curfail"; echo '{"ok":true,"result":{"worktree":{"id":"repo1::'"$WSP"'","path":"'"$WSP"'"}}}' > "$WS/cur.json"; }
+wsreset() { rm -rf "$WSG"/orca-roles.* "$WSG"/orca-roles-*.log* "$WS/curfail"; echo '{"ok":true,"result":{"worktree":{"id":"repo1::'"$WSP"'","path":"'"$WSP"'"}}}' > "$WS/cur.json"; }
 wscur() { grep -c '^worktree current' "$WSL" || true; }
 wsid() { cat "$WSG/orca-roles.wtid" 2>/dev/null; }
 wsmsg() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
