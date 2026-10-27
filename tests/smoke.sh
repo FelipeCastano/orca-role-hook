@@ -3595,6 +3595,36 @@ D1="$RC:$(printf '%s\n' "$OUT" | head -1):$(cut -d= -f1 "$TMP/state.env" | tr '\
 printf 'PLANNER=t1\nDEV=t6\n' > "$TMP/state.env"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 try closerole dev
 D1="$D1|$RC:$(printf '%s' "$OUT" | tr '\n' '/'):$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')"
 check "close-role: a close with no answer (124): the tab gone afterwards counts as closed, no message; still there -> 'did not confirm' then 'could not close its tab', RC 1 and its state line kept" "$D1" "0:Dev: tab closed (t5).:PLANNER |1:Orca did not confirm closing the tab of Dev (t6)./Dev: could not close its tab (t6).:PLANNER DEV "
+# an orphaned handle (a session Orca keeps without a tab) is ended like launch.sh does: the plain close first, --tab only when that fails; a handle that is not orphaned gets the single --tab close
+mkdir -p "$TMP/fakebin2"; CR2="$TMP/crorca2.log"
+cat > "$TMP/fakebin2/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$CR2"
+k="\$1\$2"; h=""; tab=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; [ "\$1" = --tab ] && tab=1; shift; done
+case "\$k" in
+  terminalshow) case "\$h" in
+      n1) echo '{"result":{"terminal":{"orphaned":false}}}';;
+      o4) [ -e "$TMP/o4gone" ] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }; echo '{"result":{"terminal":{"orphaned":true}}}';;
+      *) echo '{"result":{"terminal":{"orphaned":true}}}';; esac;;
+  terminalclose) case "\$h" in
+      o2) [ -n "\$tab" ] || exit 3;;
+      o3) exit 3;;
+      o4) : > "$TMP/o4gone"; exit 124;;
+      o5) exit 124;;
+      n1) [ -n "\$tab" ] || exit 3;; esac;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/fakebin2/orca"
+closerole2() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin2:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" ORCA_ROLES_CLI_TIMEOUT=60 "$TMP/home/.orca-roles/bin/close-role.sh" "$@" 2>&1); }
+cr2case() {  # cr2case <handle>: RC, the output, the close calls (p = plain, t = --tab) and whether the DEV lines are left in the state files
+  : > "$CR2"; rm -f "$TMP/o4gone"; printf 'PLANNER=t1\nDEV=%s\n' "$1" > "$TMP/state.env"; printf 'DEV=pty-%s\n' "$1" > "$TMP/orca-roles.pty"; printf 'DEV=tab-%s\n' "$1" > "$TMP/orca-roles.tabs"
+  try closerole2 dev
+  echo "$RC:$(printf '%s' "$OUT" | grep -v 'still enabled' | tr '\n' '/'):$(grep 'terminal close' "$CR2" | sed 's/.*--tab.*/t/; s/terminal close.*/p/' | tr -d '\n'):$(cat "$TMP/state.env" "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" | grep -c '^DEV=')"
+}
+CR2R="$(cr2case o1)|$(cr2case o2)|$(cr2case o3)|$(cr2case o4)|$(cr2case o5)|$(cr2case n1)"
+check "close-role: an orphaned handle gets the plain close first and --tab only if it fails (plain ok -> no --tab, handle forgotten; plain fails and --tab ok -> closed; both fail -> 'could not close its tab', RC 1, handle kept; a 124 goes to the confirm step, which counts it gone or 'did not confirm'); a handle that is not orphaned gets the single --tab close" "$CR2R" "0:Dev: tab closed (o1)./:p:0|0:Dev: tab closed (o2)./:pt:0|1:Dev: could not close its tab (o3)./:pt:3|0:Dev: tab closed (o4)./:p:0|1:Orca did not confirm closing the tab of Dev (o5)./Dev: could not close its tab (o5)./:p:3|0:Dev: tab closed (n1)./:t:0"
+rm -f "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" "$TMP/o4gone"
 try closerole planner; check "close-role: never the planner" "$RC" "1"
 try closerole nobody; check "close-role: unknown role" "$RC" "1"
 rm -f "$TMP/fakebin/orca"

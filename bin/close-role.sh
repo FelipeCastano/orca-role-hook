@@ -36,10 +36,15 @@ for x in "$@"; do
   # An OpenCode role's session keeps running in OpenCode's service after its tab is gone: delete it first (this also stops its turn)
   [ "$(rstr "$CFG" "$id" agent)" = opencode ] && oc_session_delete "$id" "$GITDIR"
   if [ "$src" -eq 0 ]; then
-    orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1 || {
-      if [ $? = 124 ]; then close_unconfirmed "$h" "$t" || { echo "$t: could not close its tab ($h)."; RC=1; continue; }
-      else echo "$t: could not close its tab ($h)."; RC=1; continue; fi
-    }
+    if printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1; then
+      # a session Orca keeps without a tab (orphaned) is ended like launch.sh does: the plain close first, --tab only when that fails
+      orca terminal close --terminal "$h" --json >/dev/null 2>&1; crc=$?
+      [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1; crc=$?; }
+    else
+      orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1; crc=$?
+    fi
+    if [ "$crc" = 124 ]; then close_unconfirmed "$h" "$t" || { echo "$t: could not close its tab ($h)."; RC=1; continue; }
+    elif [ "$crc" != 0 ]; then echo "$t: could not close its tab ($h)."; RC=1; continue; fi
     echo "$t: tab closed ($h)."
   else
     echo "$t: its tab ($h) was already gone."
