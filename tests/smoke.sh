@@ -4481,13 +4481,13 @@ T0=$(date +%s); WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; T1=$(date +%s
 M="$M b:$RC:$(wev):$(wn "$WGONE"):$([ $((T1 - T0)) -lt 5 ] && echo fast || echo slow)"
 check "wake of a listed tab that never gets a new handle: it waits only ORCA_ROLES_WAKE_LISTED_BUDGET (fast when it is the only one, the unlisted one in the same run still keeps ORCA_ROLES_WAKE_BUDGET), prints the 'has no agent running and Orca did not resume it' line, then the 'agent is gone' path closes it by its old handle and opens a new one; the unlisted one is 'treated as closed'; never 'Could not wake' for the listed one" "$M" \
 "a:0:W:tab-pl W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:1:1:0:slow b:0:W:tab-od-dev switch:other create:Planner close:od-dev create:Dev create:Tst :1:fast"
-# m2: the pause between passes is ORCA_ROLES_WAKE_TICK, one second when it is unset (the suite sets a short one)
+# m2: the pause between passes is ORCA_ROLES_WAKE_TICK, one second when it is unset (the suite sets a short one); the CLI watchdog is off for these runs so its own sleeps stay out of the log
 printf '#!/bin/bash\necho "$1" >> %s\nexec /bin/sleep "$1"\n' "$TMP/wsleep.log" > "$TMP/wbin/sleep"; chmod +x "$TMP/wbin/sleep"
 M2=""
 for tick in unset 0.3; do
   wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; printf '%s\n{"handle":"od-dev","ptyId":"wt@@p2"}\n' "$WOTHER" > "$TMP/wbase"; : > "$TMP/wnoproc.od-dev"; : > "$TMP/wsleep.log"
   if [ "$tick" = unset ]; then unset ORCA_ROLES_WAKE_TICK; else export ORCA_ROLES_WAKE_TICK=$tick; fi
-  WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; export ORCA_ROLES_WAKE_TICK=0.2
+  ORCA_ROLES_CLI_TIMEOUT=0 WB=6 ORCA_ROLES_WAKE_LISTED_BUDGET=1 OTH=other wl; export ORCA_ROLES_WAKE_TICK=0.2
   M2="$M2 $tick:$(sort -u "$TMP/wsleep.log" | tr '\n' ',')"
 done
 rm -f "$TMP/wbin/sleep"
