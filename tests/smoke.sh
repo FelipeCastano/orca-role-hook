@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -7978,6 +7978,74 @@ tsr "$TS/nonexistent"; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' ')"; tsr --bogu
 check "team-status: exit 2 with exactly one stderr line and nothing on stdout for a folder without orca-roles.env, a failing or non-JSON worktree ps, no worktree row for the folder, a missing folder or an unknown option" "$E2" " 2:1:err:0 2:1:0 2:1 2:1 2:1 2:1"
 printf '{"ok":true,"result":{"worktrees":[{"path":"%s","agents":[]}]}}' "$TSP" > "$TS/ps.json"; tsr; E3="$RC:$(tsl | awk -F'|' '{print $2}' | sort -u | tr '\n' ',')"; tsr --run r; E3="$E3:$RC"; cp "$TS/ps.keep" "$TS/ps.json"
 check "team-status: a worktree row with no agents gives no-status for every role with a tab and no-tab for the rest, exit 0" "$E3" "0:no-status,no-tab,:0"
+}
+
+sec_dispatch() {
+# dispatch.sh: dispatches like orca does and checks in the background that the worker started (fake orca; the checker's waits are shortened with ORCA_ROLES_DISPATCH_TICK / _POLLS)
+DS="$TMP/disp"; rm -rf "$DS"; mkdir -p "$DS/bin" "$DS/proj"; git -C "$DS/proj" init -q -b main; DSG="$DS/proj/.git"; DSL="$DS/orca.log"
+cat > "$DS/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$DSL"
+case "\$1 \$2" in
+  "orchestration dispatch") cat "$DS/dispatch.json"; exit "\$(cat "$DS/dispatch.rc")";;
+  "worktree ps") n=\$(( \$(cat "$DS/pscount" 2>/dev/null || echo 0) + 1 )); echo \$n > "$DS/pscount"; mode="\$(cat "$DS/mode")"
+    if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$DS/entered" ]; }; then cat "$DS/ps.started"; else cat "$DS/ps.idle"; fi;;
+  "terminal show") cat "$DS/show.json";;
+  "terminal send") : > "$DS/entered";;
+  "orchestration send") exit "\$(cat "$DS/send.rc")";;
+esac
+exit 0
+EOS
+chmod +x "$DS/bin/orca"
+printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"done","prompt":"Read the role message"}]}]}}' > "$DS/ps.idle"
+printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"working","prompt":"do task_abc123 now"}]}]}}' > "$DS/ps.started"
+printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$DS/dispatch.json"; echo 0 > "$DS/dispatch.rc"; echo 0 > "$DS/send.rc"
+printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> [Pasted text #1 +3 lines]"}}}' > "$DS/show.pasted"; printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> idle"}}}' > "$DS/show.plain"
+dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the scratch repo and waits for its checker; RC, OUT, and the elapsed whole seconds of the call itself (DT)
+  local mode="$1" show="$2" t0; shift 2
+  echo "$mode" > "$DS/mode"; cp "$DS/show.$show" "$DS/show.json"; rm -f "$DS/entered" "$DS/pscount" "$DSG/orca-roles-dispatch.log"; : > "$DSL"
+  t0=$SECONDS; if OUT="$(cd "$DS/proj" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
+  local n=0; while pgrep -f -- "--watch task_abc123" >/dev/null 2>&1 && [ "$n" -lt 100 ]; do sleep 0.2; n=$((n + 1)); done
+}
+dsc() { grep -c -- "$1" "$DSL" || true; }
+dslog() { sed 's/^[0-9-]* [0-9:]* //' "$DSG/orca-roles-dispatch.log" 2>/dev/null | tr '\n' '/'; }
+EXP_JSON="$(cat "$DS/dispatch.json")"
+dsrun early plain --task task_abc123 --to h-w --run run_1
+A="$RC:$([ "$OUT" = "$EXP_JSON" ] && echo same):$(dsc 'orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json'):$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog)"
+check "dispatch.sh: the same JSON and exit status as orca's dispatch (--run passed on), the worker started within the first polls -> nothing sent and one log line" "$A" "0:same:1:0:0:h-w: task_abc123 started/"
+dsrun enter pasted --task task_abc123 --to h-w
+B="$RC:$(dsc 'orchestration dispatch'):$(dsc 'terminal send --terminal h-w --enter'):$(dsc 'orchestration send'):$(dslog)"
+check "dispatch.sh: a brief left unsent ('[Pasted text' in the preview) gets exactly one Enter, and when the worker starts then no message is sent" "$B" "0:1:1:0:h-w: task_abc123 unsent in its composer; Enter re-sent/h-w: Enter re-sent, task started/"
+dsrun never pasted --task task_abc123 --to h-w
+C="$RC:$(dsc 'terminal send'):$(dsc 'orchestration send --to h-planner --type status --subject Dispatch not started'):$(grep 'orchestration send' "$DSL" | grep -c 'h-w has not started task_abc123'):$(dsc 'orchestration send'):$(dslog)"
+check "dispatch.sh: still not started after the Enter -> exactly one Enter and exactly one 'Dispatch not started' status to the dispatch's creator whose body names the worker" "$C" "0:1:1:1:1:h-w: task_abc123 unsent in its composer; Enter re-sent/h-w: task_abc123 not started (Enter re-sent: yes); told h-planner/"
+dsrun never plain --task task_abc123 --to h-w
+D="$RC:$(dsc 'terminal send'):$(dsc 'orchestration send --to h-planner --type status --subject Dispatch not started'):$(dsc 'orchestration send'):$(dslog)"
+check "dispatch.sh: not started and nothing pasted in the composer -> no Enter, one status" "$D" "0:0:1:1:h-w: task_abc123 not started (Enter re-sent: no); told h-planner/"
+echo 1 > "$DS/dispatch.rc"; printf '{"ok":false,"error":{"code":"dispatch_failed"}}' > "$DS/dispatch.json"; FJ="$(cat "$DS/dispatch.json")"
+dsrun early plain --task task_abc123 --to h-w
+E="$RC:$([ "$OUT" = "$FJ" ] && echo same):$(dsc 'worktree ps'):$(dsc 'terminal'):$(dsc 'orchestration send'):$([ -e "$DSG/orca-roles-dispatch.log" ] && echo log || echo nolog)"
+check "dispatch.sh: a failed dispatch keeps orca's output and exit status and starts no checker" "$E" "1:same:0:0:0:nolog"
+echo 0 > "$DS/dispatch.rc"; printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w"}}}' > "$DS/dispatch.json"
+dsrun never plain --task task_abc123 --to h-w
+check "dispatch.sh: a dispatch result without creator_handle falls back to \$ORCA_TERMINAL_HANDLE for the status" "$(dsc 'orchestration send --to h-me --type status')" "1"
+printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$DS/dispatch.json"
+DTICK=2 DPOLLS=1 dsrun never plain --task task_abc123 --to h-w
+check "dispatch.sh returns at once: with the checker's waits at 2 s the call itself takes under 2 s, and the checker still finishes by itself" "$RC:$([ "$DT" -lt 2 ] && echo fast || echo slow):$(dsc 'orchestration send')" "0:fast:1"
+dsrun never pasted --check-only --task task_abc123 --to h-w
+F="$RC:$(dsc 'orchestration dispatch'):$(dsc 'terminal send --terminal h-w --enter'):$(dsc 'orchestration send --to h-me --type status --subject Dispatch not started'):$(dsc 'orchestration send')"
+check "dispatch.sh --check-only: no dispatch, only the checker (pane key from terminal show, creator = \$ORCA_TERMINAL_HANDLE): one Enter and one status to the creator" "$F" "0:0:1:1:1"
+dsrun early plain --check-only --task task_abc123 --to h-w
+check "dispatch.sh --check-only: a worker that started sends nothing" "$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog)" "0:0:h-w: task_abc123 started/"
+G=""; for a in "--task task_abc123" "--to h-w" "--bogus" ""; do dsrun early plain $a; G="$G $RC:$(wc -l < "$DS/err" | tr -d ' '):$(dsc 'orchestration dispatch')"; done
+check "dispatch.sh: a missing --task or --to, or an unknown option, is exit 2 with a usage line and no dispatch" "$G" " 2:1:0 2:1:0 2:1:0 2:1:0"
+# the three Planner prompts carry the same assign line and silent-worker bullet
+PM=""; for m in programmer academic-research pr-reviewer; do f="$ROOT/prompts/$m/planner.md"
+  PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
+done
+check "planner prompts (programmer, academic-research, pr-reviewer): the same assign line (dispatch.sh) and the same silent-worker bullet (team-status.sh --run: waiting, stopped without reporting, undelivered), no worker-start --task left" "$PM" " programmer:1:1:1:0 academic-research:1:1:1:0 pr-reviewer:1:1:1:0"
+L1="$(grep '^- Assign with `~/.orca-roles/bin/dispatch.sh' "$ROOT"/prompts/{programmer,academic-research,pr-reviewer}/planner.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"; L2="$(grep 'Watch for silent workers' "$ROOT"/prompts/{programmer,academic-research,pr-reviewer}/planner.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"
+check "planner prompts: the assign line and the silent-worker bullet are word for word the same in the three modes" "$L1:$L2" "1:1"
 }
 
 sec_cli() {
