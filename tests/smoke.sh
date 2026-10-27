@@ -4450,13 +4450,14 @@ wcfgp() {  # wcfgp <phase>: academic-research with one role per phase
   "roles": { "planner": { "title": "Planner" }, "expr": { "title": "Expr", "modes": ["academic-research"], "phases": ["experiment"] }, "wrt": { "title": "Wrt", "modes": ["academic-research"], "phases": ["writing"] } } }
 J
 }
+WPAR="$TMP/wake-ar-prompts"; rm -rf "$WPAR"; [ ! -d "$KIT/prompts/academic-research" ] || cp -R "$KIT/prompts/academic-research" "$WPAR"
 mkdir -p "$KIT/prompts/academic-research"; : > "$KIT/prompts/academic-research/expr.md"; : > "$KIT/prompts/academic-research/wrt.md"
 wcfgp experiment; wst $'EXPR=old-expr
 ' $'EXPR=wt@@p7
 ' $'EXPR=tab-expr leaf-expr
 '; wcfgp writing; wadd tab-expr rs-expr wt@@p7; S0="$(wsum)"
 OTH=other wl; check "wake on an academic-research phase change: the asleep role of the old phase is woken although the new phase does not have it, so the phase guard refuses naming it, with nothing closed or opened and the saved state untouched" "$RC:$(wev):$(wn "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Expr is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)" "1:W:tab-expr switch:other :1:same"
-rm -rf "$KIT/prompts/academic-research"; wcfg
+rm -rf "$KIT/prompts/academic-research"; [ ! -d "$WPAR" ] || cp -R "$WPAR" "$KIT/prompts/academic-research"; wcfg
 # 8c. placeholders: after a restart Orca can list a role's tab, with its old handle, ptyId and often a stale agent identity, with no agent process behind it; waking it makes Orca resume the conversation under a new handle
 WPT=$'PLANNER=tab-pl leaf-pl\nDEV=tab-dev leaf-dev\n'
 wpn() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c 'terminal close' "$WOLOG" || true)"; }
