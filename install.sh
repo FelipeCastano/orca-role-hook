@@ -178,6 +178,15 @@ if is_wsl && [ -e "$KIT/shim/orca" ]; then
   esac
 fi
 
+# Claude Code SessionStart hook: re-binds a reopened tab's Orca Runs (bin/session-hook.sh); settings.sessionHook false removes it
+if [ "$(setting "$CONF" sessionHook true)" = false ]; then
+  remove_session_hook
+else
+  ensure_session_hook_or_warn --backup
+  # shellcheck disable=SC2154
+  [ "${SESSION_HOOK_CHANGED:-0}" != 1 ] || echo "Claude Code SessionStart hook: added to ~/.claude/settings.json (re-binds Orca Runs when a tab reopens)."
+fi
+
 # Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
 if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
   while IFS= read -r wt; do

@@ -270,7 +270,7 @@ The essentials, so you do not forget:
 - New roles are created with `~/.orca-roles/bin/new-role.sh --from-json`, never by editing the configuration by hand. Roles the user created are removed with `new-role.sh --remove <id>`; default roles are disabled, not removed. A role removed from the flow also has its tab closed (`close-role.sh`), unless the user wants to keep it.
 
 ## Choosing and switching the mode
-A new worktree may start with only you and a message saying that no mode has been chosen yet: ask the user which mode to use, as that message says, and run the command it gives. The kit then opens that mode's team and sends you your role message for it.
+A new worktree may start with only you and a message saying that no mode has been chosen yet: ask the user which mode to use, as that message says, as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option), and run the command it gives once they answer. The kit then opens that mode's team and sends you your role message for it.
 
 To switch the mode later, only when the user asks for it and never while a task is in flight:
 1. Tell the user that the switch closes every worker of the current mode and clears your conversation, and ask whether to save a summary of the work so far first.

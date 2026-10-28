@@ -470,6 +470,7 @@ check_config() {
         ($s | objs("oracle"; "settings.oracle";
           (if got("enabled") and (.enabled != true and .enabled != false) then P + "settings.oracle.enabled must be true or false" else empty end),
           (. as $o | ("maxLoad", "waitMax", "timeout", "retries") as $k | select($o | got($k) and (.[$k] | nn | not)) | P + "settings.oracle.\($k) must be a non-negative number"))),
+        ($s | if got("sessionHook") and (.sessionHook != true and .sessionHook != false) then P + "settings.sessionHook must be true or false" else empty end),
         ($s | objs("telemetry"; "settings.telemetry";
           (if got("roleAttribute") and (.roleAttribute != true and .roleAttribute != false) then P + "settings.telemetry.roleAttribute must be true or false" else empty end))),
         ($s | objs("metrics"; "settings.metrics";
@@ -768,7 +769,7 @@ planner_ask_msg() {
     list="${list:+$list; }$id ($one)"
   done
   sug="$(mode_of --saved "$cfg" 2>/dev/null)" || sug=programmer
-  msg="$msg Ask the user, in one question, which mode to use: $list. Suggested: $sug."
+  msg="$msg Ask the user which mode to use as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option), listing: $list. Suggested: $sug. Then end your turn and wait for the user's typed answer."
   msg="$msg Do not start any work before the answer."
   msg="$msg When the user answers, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn: the kit opens that mode's team and sends you your role message for it."
   printf '%s' "$msg"
@@ -1050,6 +1051,54 @@ safe_json_edit() (
   fi
   exit "$status"
 )
+# The kit's Claude Code SessionStart hook (bin/session-hook.sh: re-binds a reopened tab's Orca Runs), registered in the user-level settings.json
+# because a tab Orca resumes itself carries none of the kit's flags. settings.sessionHook (global config, true if unset) turns it off.
+session_hook_enabled() {
+  local c="$KIT/config.json"; [ -f "$c" ] || c="$KIT/config.default.json"
+  [ "$(setting "$c" sessionHook true 2>/dev/null)" != false ]
+}
+SESSION_HOOK_ADD='($dir + "/bin/session-hook.sh") as $c
+  | if ([.hooks.SessionStart[]?.hooks[]? | select((.command // "") | endswith("/bin/session-hook.sh"))] | length) > 0
+    then .hooks.SessionStart |= map(if (.hooks | type) == "array" then .hooks |= map(if ((.command // "") | endswith("/bin/session-hook.sh")) then .command = $c else . end) else . end)
+    else .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $c, timeout: 15}]}]) end'
+SESSION_HOOK_DEL='if (.hooks.SessionStart? | type) == "array" then
+    .hooks.SessionStart |= (map(if (.hooks | type) == "array" then .hooks |= map(select(((.command // "") | endswith("/bin/session-hook.sh")) | not)) else . end)
+      | map(select((.hooks | type) != "array" or (.hooks | length) > 0)))
+    | (if (.hooks.SessionStart | length) == 0 then del(.hooks.SessionStart) else . end)
+    | (if (.hooks | length) == 0 then del(.hooks) else . end)
+  else . end'
+# Adds (or points to this kit) the SessionStart entry in ${ORCA_ROLES_CLAUDE_SETTINGS:-~/.claude/settings.json}, keeping everything else.  0 = it is there
+# (SESSION_HOOK_CHANGED=1 if this call wrote it); 1 = the file is not valid JSON or could not be written (nothing is lost).  ensure_session_hook [--backup]
+ensure_session_hook() {
+  local f="${ORCA_ROLES_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}" backup=0 kit rc=0
+  [ "${1:-}" = --backup ] && backup=1
+  SESSION_HOOK_CHANGED=0   # read by install.sh
+  [ -e "$KIT/.installed" ] || return 0   # only an installed kit registers itself: a clone must not take the entry over
+  kit="$(cd "$KIT" 2>/dev/null && pwd)" || kit="$KIT"
+  if [ ! -e "$f" ]; then mkdir -p "$(dirname "$f")" 2>/dev/null && printf '{}\n' > "$f" || return 1; fi
+  jq -e 'type == "object"' "$f" >/dev/null 2>&1 || return 1
+  if [ "$(jq -S -c . "$f")" = "$(jq -S -c --arg dir "$kit" "$SESSION_HOOK_ADD" "$f" 2>/dev/null)" ]; then return 0; fi
+  [ "$backup" = 0 ] || cp "$f" "$f.orca-roles-bak" 2>/dev/null || true
+  safe_json_edit "$f" "$SESSION_HOOK_ADD" "$kit" "$f.lock" || rc=$?
+  # shellcheck disable=SC2034
+  case "$rc" in 0) SESSION_HOOK_CHANGED=1;; 3) ;; *) return 1;; esac
+  return 0
+}
+# ensure_session_hook with the WARNING a failure deserves (the callers go on either way).  ensure_session_hook_or_warn [--backup]
+ensure_session_hook_or_warn() {
+  local f="${ORCA_ROLES_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+  ensure_session_hook "$@" && return 0
+  if [ -f "$f" ] && ! jq -e 'type == "object"' "$f" >/dev/null 2>&1; then echo "WARNING: $f is not valid JSON; the kit's SessionStart hook was not added."
+  else echo "WARNING: could not write $f; the kit's SessionStart hook was not added."; fi
+  return 0
+}
+# Removes the kit's SessionStart entry (and the arrays it empties); nothing if the file is missing or invalid.  remove_session_hook
+remove_session_hook() {
+  local f="${ORCA_ROLES_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}" rc=0   # rc: a failed edit leaves the file as it was
+  [ -f "$f" ] && jq -e 'type == "object"' "$f" >/dev/null 2>&1 || return 0
+  safe_json_edit "$f" "$SESSION_HOOK_DEL" "" "$f.lock" || rc=$?
+  return 0
+}
 # Whether the kit marks the worktree as trusted: "worktree" (it does) or "never" (the agents ask the user). settings.trust if set; without it,
 # "worktree" in every mode, as before settings.trust existed ("never" is opt-in, e.g. for other people's branches in pr-reviewer).
 # An invalid value is a warning on stderr and counts as "never".  trust_of <config>

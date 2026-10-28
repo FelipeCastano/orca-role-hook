@@ -526,6 +526,7 @@ if [ "$ASK" = 1 ]; then
   echo "No mode chosen yet: only the Planner is opened; it asks which mode to use (settings.enableAskModeOnStart)."
 fi
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
+if session_hook_enabled; then ensure_session_hook_or_warn; fi   # the SessionStart hook that re-binds a reopened tab's Runs
 if [ "$(trust_of "$CFG")" = never ]; then
   echo "The folder is not marked as trusted (settings.trust is \"never\"): the agents will ask you to trust it; answer in each tab."
 else

@@ -904,7 +904,7 @@ rm -f "$TMP/orca-roles.coordinator"
 check "planner_msg: no marker and no kept Run -> byte-identical" "$(cpm 0)" "$MC0"
 # planner_ask_msg: the five sentences in order, the modes whose planner prompt exists in MODE_IDS order, the suggested mode, the language rule of planner_msg
 ASK1='You are the Planner of the orca-roles kit in this worktree, and no mode has been chosen yet.'
-ASK3='Ask the user, in one question, which mode to use: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers); academic-research (write a research paper: experiments first, then the writing phase). Suggested: programmer.'
+ASK3='Ask the user which mode to use as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option), listing: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers); academic-research (write a research paper: experiments first, then the writing phase). Suggested: programmer. Then end your turn and wait for the user'"'"'s typed answer.'
 ASK45='Do not start any work before the answer. When the user answers, run `~/.orca-roles/bin/launch.sh --mode <mode>` from the worktree and end your turn: the kit opens that mode'"'"'s team and sends you your role message for it.'
 check "planner_ask_msg: exact message with every mode available and language auto, one line, no trailing newline" "$(planner_ask_msg "$KIT/config.default.json"; printf x)" "$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"x
 jq '.settings.language = "Spanish"' "$KIT/config.default.json" > "$TMP/askl.json"; jq '.settings.language = ""' "$KIT/config.default.json" > "$TMP/askl2.json"
@@ -914,7 +914,7 @@ mkdir -p "$PK/prompts/pr-reviewer"; echo "# planner" > "$PK/prompts/pr-reviewer/
 AQ1="$(KIT="$PK" planner_ask_msg "$PKC")"
 rm "$PK/prompts/programmer/planner.md"
 AQ2="$(KIT="$PK" planner_ask_msg "$PKC")"
-check "planner_ask_msg: an unavailable mode is left out of the list, in MODE_IDS order; with settings.mode unavailable the suggestion is programmer" "$(printf '%s' "$AQ1" | grep -o 'which mode to use: .*Suggested: [a-z-]*\.'):$(printf '%s' "$AQ2" | grep -o 'which mode to use: .*Suggested: [a-z-]*\.')" "which mode to use: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer.:which mode to use: pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer."
+check "planner_ask_msg: an unavailable mode is left out of the list, in MODE_IDS order; with settings.mode unavailable the suggestion is programmer" "$(printf '%s' "$AQ1" | grep -o 'listing: .*Suggested: [a-z-]*\.'):$(printf '%s' "$AQ2" | grep -o 'listing: .*Suggested: [a-z-]*\.')" "listing: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer.:listing: pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer."
 jq '.settings.mode = "pr-reviewer"' "$KIT/config.default.json" > "$TMP/askm.json"; jq '.settings.mode = "nope"' "$KIT/config.default.json" > "$TMP/askm2.json"
 check "planner_ask_msg: Suggested is the configuration's mode, programmer when it is invalid" "$(planner_ask_msg "$TMP/askm.json" | grep -o 'Suggested: [a-z-]*'):$(planner_ask_msg "$TMP/askm2.json" | grep -o 'Suggested: [a-z-]*')" "Suggested: pr-reviewer:Suggested: programmer"
 # planner_msg resume 4 (after a mode switch): both modes, the summary file, the still-there sentence only for a planner that cannot be cleared; 0-3 do not change
@@ -5454,6 +5454,56 @@ PY2="$TMP/pyi"; rm -rf "$PY2"; mkdir -p "$PY2/h"; cp -R "$ROOT/bin" "$PY2/bin"; 
 for d in prompts plugin README.md config.default.json VERSION grafana pw; do if [ -e "$ROOT/$d" ]; then cp -R "$ROOT/$d" "$PY2/$d"; fi; done
 (cd "$TMP" && HOME="$PY2/h" bash "$PY2/install.sh" </dev/null >/dev/null 2>&1) || true
 check "bytecode: verify_task.py, loop.py and spec_lint.py leave no __pycache__ when run, an install of a bin/ that has one does not copy it into the kit, and .gitignore lists __pycache__/" "$(find "$PY1" -name __pycache__ | wc -l | tr -d ' '):$(find "$PY2/h/.orca-roles/bin" -name __pycache__ | wc -l | tr -d ' '):$([ -x "$PY2/h/.orca-roles/bin/launch.sh" ] && echo installed):$(grep -c '^__pycache__/$' "$ROOT/.gitignore" || true)" "0:0:installed:1"
+# the SessionStart hook that re-binds a reopened tab's Orca Runs (bin/session-hook.sh) and its registration in Claude Code's settings.json (temp HOME/KIT, a fake orca that logs its arguments)
+SH="$TMP/shk"; rm -rf "$SH"; mkdir -p "$SH/bin" "$SH/h/.orca-roles"; cp -R "$ROOT/bin" "$SH/h/.orca-roles/bin"; SHK="$SH/h/.orca-roles"; JQD="$(dirname "$(command -v jq)")"
+cat > "$SH/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$SH/orca.log"
+case "\$1 \$2" in
+  "terminal list") [ ! -e "$SH/hang" ] || sleep $((UT + 3)); cat "$SH/tl.json";;
+  "orchestration run-list") cat "$SH/rl.json";;
+  "orchestration run-use") [ ! -e "$SH/fail.\$4" ] || exit 1; echo '{"ok":true}';;
+  "orchestration check") echo '{"result":{"count":2}}';;
+esac
+exit 0
+EOS
+chmod +x "$SH/bin/orca"
+printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; printf '{"result":{"runs":[{"id":"run_a","coordinator_handle":"t1"},{"id":"run_b","coordinator_handle":"t1"},{"id":"run_c","coordinator_handle":"t9"}]}}' > "$SH/rl.json"
+shk() {  # shk <session id> [handle]: one hook start; SHO, SHR (exit status), SHT (seconds)
+  local t0=$SECONDS; : > "$SH/orca.log"
+  if SHO="$(printf '{"session_id":"%s","source":"resume"}' "$1" | env -i HOME="$SH/h" PATH="$SH/bin:$JQD:/usr/bin:/bin" ${2:+ORCA_TERMINAL_HANDLE="$2"} bash "$SHK/bin/session-hook.sh" 2>&1)"; then SHR=0; else SHR=$?; fi; SHT=$((SECONDS - t0))
+}
+shl() { grep -c -e "$1" "$SH/orca.log" || true; }
+shrec() { cat "$SHK/state/session-handles/$1" 2>/dev/null || echo none; }
+shk s0; H0="$SHR:${SHO:-quiet}:$([ -e "$SHK/state" ] && echo state || echo nostate)"
+shk s1 t1; H1="$SHR:${SHO:-quiet}:$(shrec s1):$(wc -l < "$SH/orca.log" | tr -d ' ')"; shk s1 t1; H1="$H1:${SHO:-quiet}:$(shrec s1):$(wc -l < "$SH/orca.log" | tr -d ' ')"
+shk s1 t2; H2="$SHR:$(printf '%s\n' "$SHO" | grep -c '^orca-roles: this tab reopened with a new terminal handle; re-bound Run(s) run_a, run_b to it\. 4 message(s) waiting'):$(shl 'run-use --id run_a'):$(shl 'run-use --id run_b'):$(shl 'run-use --id run_c'):$(shrec s1)"
+printf 't1\n' > "$SHK/state/session-handles/s2"; printf '{"result":{"terminals":[{"handle":"t1"},{"handle":"t2"}]}}' > "$SH/tl.json"; shk s2 t2; H3="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s2)"
+printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; printf 't1\n' > "$SHK/state/session-handles/s3"; : > "$SH/fail.run_a"; shk s3 t2
+H4="$SHR:$(printf '%s\n' "$SHO" | grep -c 're-bound Run(s) run_b to it'):$(shrec s3):$(grep -c 'run-use run_a failed' "$SHK/state/session-hook.log" || true)"; rm -f "$SH/fail.run_a"
+shk '../x' t2; H5="$SHR:${SHO:-quiet}:$(find "$SHK/state/session-handles" -type f ! -name '.*' | wc -l | tr -d ' ')"
+printf 't1\n' > "$SHK/state/session-handles/s4"; : > "$SH/hang"; shk s4 t2; H6="$SHR:$([ "$SHT" -le 12 ] && echo in-time):${SHO:-quiet}:$(shrec s4):$(pgrep -f "sleep $((UT + 3))" | wc -l | tr -d ' ' || true)"; pkill -f "sleep $((UT + 3))" 2>/dev/null || true; rm -f "$SH/hang"
+printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":true}}' > "$SH/tl.json"; printf 't1\n' > "$SHK/state/session-handles/s5"; shk s5 t2; H7="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s5)"
+printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":false,"hostScope":{"omittedHostIds":["x"]}}}' > "$SH/tl.json"; printf 't1\n' > "$SHK/state/session-handles/s6"; shk s6 t2; H8="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s6)"; printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":false,"hostScope":{"omittedHostIds":[]}}}' > "$SH/tl.json"
+SH2="$TMP/shk2/.orca-roles"; rm -rf "$TMP/shk2"; mkdir -p "$SH2"; cp -R "$ROOT/bin" "$SH2/bin"; printf '{"session_id":"s7","source":"resume"}' | env -i HOME="$SH/h" KIT="$SHK" PATH="$SH/bin:$JQD:/usr/bin:/bin" ORCA_TERMINAL_HANDLE=t1 bash "$SH2/bin/session-hook.sh" >/dev/null 2>&1; H9="$(cat "$SH2/state/session-handles/s7" 2>/dev/null || echo none):$(shrec s7)"
+check "session hook: no terminal handle -> nothing read or written; first start records the handle, no orca call; same handle again -> nothing; a new handle whose old one is gone takes exactly the Runs bound to the old one (a, b, not c), one line naming both with the waiting count, record updated; an old handle that still lives -> no run-use, no output, record updated; a failing run-use -> only the others are named, the record is kept, one log line; a bad session id writes nothing; a hanging orca -> exit 0 within 12 s, nothing kept running, record kept; a terminal list that is truncated or omits a host proves nothing (no run-use, record kept); the hook uses the kit that holds the script, not \$KIT" "$H0|$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9" "0:quiet:nostate|0:quiet:t1:0:quiet:t1:0|0:1:1:1:0:t2|0:quiet:0:t2|0:1:t1:1|0:quiet:3|0:in-time:quiet:t1:0|0:quiet:0:t1|0:quiet:0:t1|t1:none"
+# ensure_session_hook / remove_session_hook (the settings.json of Claude Code: everything else is kept)
+SF="$TMP/shs"; rm -rf "$SF"; mkdir -p "$SF"; KB="$(cd "$KIT" && pwd)"; : > "$KIT/.installed"   # only an installed kit registers the hook
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/a/settings.json"; ensure_session_hook; E1="$(jq -c .hooks.SessionStart "$SF/a/settings.json")"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/b.json"; printf '{"theme":"dark","hooks":{"SessionStart":[{"matcher":"x","hooks":[{"type":"command","command":"orca-hook.sh"}]}]}}' > "$SF/b.json"; ensure_session_hook --backup; C1="$(cksum < "$SF/b.json")"; B1="$(cat "$SF/b.json.orca-roles-bak")"; rm -f "$SF/b.json.orca-roles-bak"; ensure_session_hook --backup
+E2="$(jq -c '[.theme, (.hooks.SessionStart | length), .hooks.SessionStart[0].hooks[0].command]' "$SF/b.json"):$([ "$C1" = "$(cksum < "$SF/b.json")" ] && echo same):$([ -e "$SF/b.json.orca-roles-bak" ] && echo bak || echo nobak):$(printf '%s' "$B1" | jq -c '.theme')"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/c.json"; printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/old/kit/bin/session-hook.sh","timeout":20}]}]}}' > "$SF/c.json"; ensure_session_hook; E3="$(jq -c '[(.hooks.SessionStart | length), .hooks.SessionStart[0].hooks[0].command, .hooks.SessionStart[0].hooks[0].timeout]' "$SF/c.json")"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/d.json"; printf '{nope' > "$SF/d.json"; E4="$(ensure_session_hook; echo "rc=$?")"; E4="$E4:$(cat "$SF/d.json"):$(ensure_session_hook_or_warn | grep -c 'is not valid JSON; the kit.s SessionStart hook was not added' || true)"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/b.json"; remove_session_hook; E5="$(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionStart[0].hooks[0].command)]' "$SF/b.json")"; export ORCA_ROLES_CLAUDE_SETTINGS="$SF/a/settings.json"; remove_session_hook; E6="$(jq -c . "$SF/a/settings.json")"; rm -f "$KIT/.installed"; export ORCA_ROLES_CLAUDE_SETTINGS="$SF/clone.json"; ensure_session_hook; E7="$?:$([ -e "$SF/clone.json" ] && echo created || echo untouched)"; unset ORCA_ROLES_CLAUDE_SETTINGS
+check "ensure_session_hook: a missing settings.json is created with only the hook; an existing one keeps its other keys and entries, gets the entry once (a second call is byte-identical and writes no backup; --backup copies the old file only when it writes), an entry of another kit path is replaced in place keeping its other fields, invalid JSON is left as it is (return 1, the WARNING line); remove_session_hook drops only the kit's entry and the arrays it empties; from a clone (no .installed) it registers nothing" "$E1|$E2|$E3|$E4|$E5|$E6|$E7" "[{\"hooks\":[{\"type\":\"command\",\"command\":\"$KB/bin/session-hook.sh\",\"timeout\":15}]}]|[\"dark\",2,\"orca-hook.sh\"]:same:nobak:\"dark\"|[1,\"$KB/bin/session-hook.sh\",20]|rc=1:{nope:1|[\"dark\",1,\"orca-hook.sh\"]|{}|0:untouched"
+IH="$TMP/ihook"; rm -rf "$IH"; mkdir -p "$IH"; ihi() { (cd "$TMP" && HOME="$IH" ORCA_ROLES_CLAUDE_SETTINGS="$IH/.claude/settings.json" bash "$ROOT/install.sh" </dev/null 2>&1); }
+IA="$(ihi | grep -c '^Claude Code SessionStart hook: added to ~/.claude/settings.json (re-binds Orca Runs when a tab reopens)\.$' || true)"; IB="$(jq -c '[.hooks.SessionStart[].hooks[].command | select(endswith("/bin/session-hook.sh"))] | length' "$IH/.claude/settings.json")"
+IC="$(ihi | grep -c 'SessionStart hook' || true):$(jq -c '[.hooks.SessionStart[].hooks[].command | select(endswith("/bin/session-hook.sh"))] | length' "$IH/.claude/settings.json")"
+jq '.settings.sessionHook = false' "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; ID="$(ihi | grep -c 'SessionStart hook' || true):$(jq -c '.hooks // "nohooks"' "$IH/.claude/settings.json")"
+jq '.settings.sessionHook = "yes"' "$ROOT/config.default.json" > "$IH/bad.json"; IE="$(check_config "$IH/bad.json" | grep -c 'settings.sessionHook' || true)"
+check "SessionStart hook install: the install adds the entry to settings.json once and says so once (a second install is silent and keeps one entry); settings.sessionHook false removes it, silently; a non-boolean value is an ERROR" "$IA:$IB|$IC|$ID|$IE" "1:1|0:1|0:\"nohooks\"|1"
+PM1="$(planner_ask_msg "$KIT/config.default.json")"; PH="$(for m in programmer pr-reviewer academic-research; do grep -c 'AskUserQuestion' "$ROOT/prompts/$m/planner.md"; done | tr '\n' ' ')"
+check "mode asked in plain text and Runs re-bound: planner_ask_msg says plain text and names AskUserQuestion only in its 'never' sentence; the three Planner prompts carry the same rule; the coordinator prompt tells it to take a Run bound to a dead handle (run-show, run-use) and never silences the check ack" "$(printf '%s' "$PM1" | grep -o 'plain text' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -o 'AskUserQuestion' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -c 'never with the AskUserQuestion tool'):$PH:$(grep -c 'run-use' "$ROOT/prompts/coordinator.md"):$(grep -c 'Never silence' "$ROOT/prompts/coordinator.md" || true)" "1:1:1:1 1 1 :1:1"
 }
 
 sec_coordinator() {
@@ -5644,6 +5694,7 @@ check "kit-path: relaunch-planner.sh sources the lib.sh of KIT" "$RC:$(grep -c S
 KPNO=""; KPPIN=""
 for f in "$ROOT"/bin/*.sh; do
   [ "$(basename "$f")" = lib.sh ] && continue
+  [ "$(basename "$f")" = session-hook.sh ] && continue   # the hook takes the kit that holds the script (it is registered by absolute path), not $KIT
   if grep -qE '\$KIT|\$\{KIT' "$f" && ! grep -qF 'KIT="${KIT:-' "$f"; then KPNO="$KPNO $(basename "$f")"; fi
 done
 for f in "$ROOT"/bin/*.sh; do grep -qF 'KIT="$HOME/.orca-roles"' "$f" && KPPIN="$KPPIN $(basename "$f")"; done

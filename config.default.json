@@ -9,6 +9,7 @@
     "language": "auto",
     "mode": "programmer",
     "oracle": { "enabled": false, "maxLoad": 0.8, "waitMax": 300, "timeout": 600, "retries": 1 },
+    "sessionHook": true,
     "telemetry": { "roleAttribute": false },
     "metrics": { "enabled": true, "otlpEndpoint": "http://127.0.0.1:4318/v1/metrics", "prometheusUrl": "http://127.0.0.1:9090", "intervalSeconds": 60, "retentionDays": 90, "allowRemote": false },
     "enableAskModeOnStart": true,

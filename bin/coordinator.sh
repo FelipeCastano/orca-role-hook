@@ -29,6 +29,7 @@ if [ "$(trust_of "$CFG")" = worktree ]; then
   esac
 fi
 rm -f "$CFG"
+if session_hook_enabled; then ensure_session_hook_or_warn; fi   # the SessionStart hook that re-binds a reopened tab's Runs
 ARGS=(); [ -n "$MODEL" ] && ARGS+=(--model "$MODEL"); [ -n "$PERM" ] && ARGS+=(--permission-mode "$PERM")
 # The message goes first: --add-dir takes several values and would swallow it as one more folder.
 exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\"." ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts"
