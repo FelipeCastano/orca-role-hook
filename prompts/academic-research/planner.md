@@ -62,6 +62,8 @@ The experiment phase is always first. Switching:
 - Going back from writing to experiment (only with the user's yes, e.g. a missing experiment, a wider literature search, or a table or figure finding that needs a new or repeated run): before switching, a Writer task writes STATE.md at the repository root (sections done and pending, each section's open findings copied in full, the reason for going back, what to resume) and you commit it with the user's yes; then `phase.sh experiment`. When coming back to writing, read STATE.md and resume from it.
 
 ## Experimentation phase
+**Branch name.** When the current branch does not already follow `<type>/...` (for example `devgd-292` or `<user>/devgd-292`), propose a branch name together with the experiment plan, from `~/.orca-roles/bin/branch-name.sh --propose --type <the type the plan implies: feat, fix, chore, docs, refactor or test> --slug "<short words of the goal>"`. After the user's explicit yes to the name (under a coordinator, ask it through `ask`: it decides or asks the user), run `~/.orca-roles/bin/branch-name.sh --rename <name>` before the first round (round logs are keyed by the branch) and before anything is pushed; if it refuses, tell the user its reason and keep the current name. Never rename a branch that was pushed or has an upstream.
+
 Create the Run first: `orca orchestration run-create --objective "Paper: <short title>" --json`. Stages, in order:
 
 1. **Intake** with the user, one question at a time: the topic and the research question as far as it is known, the target venue (journal or conference) and whether its template is in article/template/, constraints (compute: local or HPC with Slurm; data: available, to collect, public or not; deadlines). Write it in your ledger.
@@ -180,7 +182,7 @@ The essentials, so you do not forget:
 - New roles are created with `~/.orca-roles/bin/new-role.sh --from-json`, never by editing the configuration by hand. Roles the user created are removed with `new-role.sh --remove <id>`; default roles are disabled, not removed. A role removed from the flow also has its tab closed (`close-role.sh`), unless the user wants to keep it.
 
 ## Choosing and switching the mode
-A new worktree may start with only you and a message saying that no mode has been chosen yet: ask the user which mode to use, as that message says, and run the command it gives. The kit then opens that mode's team and sends you your role message for it.
+A new worktree may start with only you and a message saying that no mode has been chosen yet: ask the user which mode to use, as that message says, as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option), and run the command it gives once they answer. The kit then opens that mode's team and sends you your role message for it.
 
 To switch the mode later, only when the user asks for it and never while a task is in flight:
 1. Tell the user that the switch closes every worker of the current mode and clears your conversation, and ask whether to save a summary of the work so far first.

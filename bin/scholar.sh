@@ -229,12 +229,19 @@ search_openalex() {
 
 ax_error() { head -n 1 "$TMP/ax.err" | sed 's/^ERROR[[:space:]]*//'; }
 
+ARXIV_STOP="a an and are as at be by for from in is it of on or that the to was with all you your we our this these those not no"   # best effort: arXiv's own stop-word list is not published
 search_arxiv() {
-  local sq code body="$TMP/ax.xml" sortby a b
+  local sq code body="$TMP/ax.xml" sortby a b nw date="" second=""
+  nw="$(jq -rn --arg q "$QUERY" '$q | [splits("\\s+") | select(length > 0)] | length')"
   sq="$(jq -rn --arg q "$QUERY" '$q | [splits("\\s+") | select(length > 0) | "all:" + @uri] | join("+AND+")')"
+  if [ "${nw:-0}" -ge 2 ]; then
+    sq="all:%22$(jq -rn --arg q "$QUERY" '$q | [splits("\\s+") | select(length > 0) | @uri] | join("+")')%22"
+    second="$(jq -rn --arg q "$QUERY" --arg stop "$ARXIV_STOP" '($stop | split(" ")) as $s | [$q | splits("\\s+") | select(length > 0) | select((ascii_downcase) as $w | $s | index($w) | not) | "all:" + @uri] | join("+AND+")')"
+  fi
   if [ -n "$FROM$TO" ]; then
     a="${FROM:-1991-01-01}"; b="${TO:-2099-12-31}"
-    sq="$sq+AND+submittedDate:%5B$(printf '%s' "$a" | tr -d -)0000+TO+$(printf '%s' "$b" | tr -d -)2359%5D"
+    date="+AND+submittedDate:%5B$(printf '%s' "$a" | tr -d -)0000+TO+$(printf '%s' "$b" | tr -d -)2359%5D"
+    sq="$sq$date"; [ -n "$second" ] && second="$second$date"
   fi
   case "$SORT" in
     date) sortby=submittedDate;;
@@ -245,6 +252,12 @@ search_arxiv() {
   if [ "$code" != 200 ]; then SRC_CODE="$code"; return 1; fi
   awk -f "$AXAWK" "$body" > "$TMP/ax.tsv" 2> "$TMP/ax.err"
   if [ -s "$TMP/ax.err" ]; then SRC_MSG="returned an error: $(ax_error)"; return 1; fi
+  if [ ! -s "$TMP/ax.tsv" ] && [ "${nw:-0}" -ge 2 ] && [ -n "$second" ]; then   # the phrase found nothing: the words without stop words, ANDed
+    code="$(arxiv_get "https://export.arxiv.org/api/query?search_query=$second&start=0&max_results=$LIMIT&sortBy=$sortby&sortOrder=descending" "$body")"
+    if [ "$code" != 200 ]; then SRC_CODE="$code"; return 1; fi
+    awk -f "$AXAWK" "$body" > "$TMP/ax.tsv" 2> "$TMP/ax.err"
+    if [ -s "$TMP/ax.err" ]; then SRC_MSG="returned an error: $(ax_error)"; return 1; fi
+  fi
   awk -F'\t' -v OFS='\t' -v lim="$LIMIT" '
     function f(x) { return x == "" ? "-" : x }
     NR <= lim { au = $10; p = index(au, "; "); if (p > 0) au = substr(au, 1, p - 1)

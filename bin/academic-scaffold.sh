@@ -36,13 +36,13 @@ for d in $DIRS; do
   case " $UNTRACKED " in *" $d "*) continue;; esac
   : > "$TOP/$d/.gitkeep" && echo "Created $d/.gitkeep"
 done
-GI="$TOP/.gitignore"; HEADER="# orca-roles academic-research"; OLDHEADER="# orca-roles academic-writer"; CHANGED=0
+GI="$TOP/.gitignore"; HEADER="# orca-roles academic-research"; CHANGED=0
 [ -f "$GI" ] || { : > "$GI" || exit 1; echo "Created .gitignore"; }
 while IFS= read -r line; do
   grep -qxF -- "$line" "$GI" && continue
   if [ "$CHANGED" = 0 ]; then
     [ -z "$(tail -c1 "$GI")" ] || echo >> "$GI"
-    if ! grep -qxF -- "$HEADER" "$GI" && ! grep -qxF -- "$OLDHEADER" "$GI"; then
+    if ! grep -qxF -- "$HEADER" "$GI"; then
       [ -s "$GI" ] && [ -n "$(tail -n1 "$GI")" ] && echo >> "$GI"
       echo "$HEADER" >> "$GI"
     fi

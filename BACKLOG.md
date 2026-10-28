@@ -9,7 +9,6 @@ Known pending work for the kit. Each entry says what to do and why; remove it wh
 - **T5 and the Run coordinator keeping an old Planner handle.** Planned for the next PR ("handles").
 - **`upgrade_config` with a config that has no `roles` key** (X2 of the live checks).
 - **arXiv search with several words** in `scholar.sh`.
-- **The installer leaves `prompts/academic-writer` behind** after the role was removed or renamed.
 - **CI check of the `plugin.json` version** against the kit's version.
 - **An extra agent tab after a mode switch typed in the Planner's tab** (T6/T7 of the live checks). The checks now attach the worktree's terminals when it happens; find the cause from that output.
 - **Tabs Orca resumes by itself lack the kit's shim in their PATH** until `roles` reopens them.

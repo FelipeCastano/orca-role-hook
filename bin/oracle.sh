@@ -2,6 +2,8 @@
 # Optional executable oracle for Dev's work: runs the task spec's acceptance command (allowlisted) in this worktree and checks that the
 # tests were not cheated (deleted, skipped, weakened) against the base. The Planner runs it after a Dev worker_done.
 # Usage (from the worktree):  oracle.sh --task <id> [--spec-file <file>] [--base <ref>] [--dry-run] [--no-wait]
+# With both --task and --spec-file the file's sha256 is compared with the `spec-sha256: <hex>` line of the task's spec (spec_check in the result;
+# a mismatch is status spec_tampered and nothing runs).
 # Reads settings.oracle {enabled, maxLoad, waitMax, timeout, retries} from the worktree's configuration. It runs even when
 # "enabled" is false (it is a tool; "enabled" only makes the Planner use it) and says so on stderr.
 # Result: JSON on stdout and verify.json under ${ORCA_ROLES_ORACLE_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/orca-roles/oracle}/<task>/.
@@ -21,7 +23,7 @@ while [ $# -gt 0 ]; do
     --spec-file) [ $# -ge 2 ] || { echo "oracle.sh: --spec-file needs a value" >&2; exit 2; }; SPEC="$2"; shift 2;;
     --base) [ $# -ge 2 ] || { echo "oracle.sh: --base needs a value" >&2; exit 2; }; BASE="$2"; shift 2;;
     --dry-run|--no-wait) EXTRA+=("$1"); shift;;
-    -h|--help) sed -n 2,9p "$0"; exit 0;;
+    -h|--help) sed -n 2,11p "$0"; exit 0;;
     *) echo "oracle.sh: unknown option: $1" >&2; exit 2;;
   esac
 done

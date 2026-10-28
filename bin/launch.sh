@@ -119,14 +119,15 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
   kv="$(head -1 "$KIT/VERSION" 2>/dev/null)"; ki="$(head -1 "$KIT/.installed" 2>/dev/null)"   # what the installer recorded
   echo "Kit: ${kv:-unknown} (${ki:-unknown})"
   if [ ! -s "$STATE" ]; then echo "No team launched in this worktree."; exit 0; fi
-  SCFG="$CFG"
+  SCFG="$CFG"; SAVEDSRC=1
   if [ ! -f "$CFG" ]; then   # no saved copy: the effective configuration, built aside and removed on exit
-    SCFG="$(mktemp "${TMPDIR:-/tmp}/orca-roles-status.XXXXXX")"; trap 'rm -f "$SCFG" "$SCFG.x"' EXIT
+    SAVEDSRC=0; SCFG="$(mktemp "${TMPDIR:-/tmp}/orca-roles-status.XXXXXX")"; trap 'rm -f "$SCFG" "$SCFG.x"' EXIT
     merged_config . > "$SCFG" 2>/dev/null || echo '{}' > "$SCFG"
     if [ -f "$OVR" ] && apply_overrides "$SCFG" "$OVR" > "$SCFG.x" 2>/dev/null; then mv "$SCFG.x" "$SCFG"; fi
   fi
   CFG="$SCFG"
-  SMODE="$(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"; SMODE="$(canon_mode "$SMODE")"
+  SMODE="$(jq -r '.settings.mode // "programmer"' "$SCFG" 2>/dev/null || echo programmer)"
+  [ "$SAVEDSRC" = 1 ] && [ "$SMODE" = academic-writer ] && SMODE=academic-research   # configs saved by kits before v1.4
   if [ -e "$MARKER" ]; then echo "Mode: not chosen yet (suggested: $SMODE)"
   else
     echo "Mode: $SMODE"
@@ -185,17 +186,8 @@ fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; sw=
   echo "$m"; exit 1; }
 merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
 PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
-[ -z "$PREV_MODE" ] || PREV_MODE="$(canon_mode "$PREV_MODE")"   # a team open under an old mode id is the same mode
-# The saved exceptions used in this run; one that still names an old mode id is used through a normalized copy ($OVR.canon),
-# so the saved file only changes (to the new id) once the launch succeeds
-OVRUSE=""; OVR_LEGACY=0
-if [ -f "$OVR" ] && [ "$RESET" != 1 ]; then
-  OVRUSE="$OVR"
-  if legacy_mode_in "$OVR"; then
-    OVR_LEGACY=1; canon_overrides "$OVR" > "$OVR.canon" || fail "ERROR: could not read the saved exceptions ($OVR)"
-    OVRUSE="$OVR.canon"
-  fi
-fi
+[ "$PREV_MODE" != academic-writer ] || PREV_MODE=academic-research   # configs saved by kits before v1.4
+OVRUSE=""; if [ -f "$OVR" ] && [ "$RESET" != 1 ]; then OVRUSE="$OVR"; fi
 FRESH=0; [ -s "$STATE" ] || FRESH=1     # first launch in this worktree (not a resume)
 PENDING=0; [ -e "$MARKER" ] && PENDING=1
 # A mode named by this run's options or by the saved exceptions was chosen by the user: nothing to ask
@@ -233,7 +225,7 @@ if [ ${#FLAGS[@]} -gt 0 ]; then
   # the options add to the saved ones (the same option replaces its saved value; --reset forgets them first)
   if [ -n "$OVRUSE" ]; then
     # role selections belong to a mode: compare the new mode with the one the saved options gave this worktree
-    PREV_EFF_MODE="$(apply_overrides "$NEWCFG" "$OVRUSE" > "$NEWCFG.prev" 2>/dev/null && mode_of "$NEWCFG.prev" 2>/dev/null)" || PREV_EFF_MODE=""
+    PREV_EFF_MODE="$(apply_overrides "$NEWCFG" "$OVRUSE" > "$NEWCFG.prev" 2>/dev/null && mode_of --saved "$NEWCFG.prev" 2>/dev/null)" || PREV_EFF_MODE=""
     rm -f "$NEWCFG.prev"; [ -n "$PREV_EFF_MODE" ] || PREV_EFF_MODE="programmer"
     if jq -e --slurpfile n "$NEWOVR" --arg p "$PREV_EFF_MODE" '($n[0].mode // null) as $m | $m != null and $m != $p and ((.only // []) + (.enable // []) + (.disable // []) | length) > 0' "$OVRUSE" >/dev/null 2>&1; then
       echo "Mode changed to $(jq -r .mode "$NEWOVR"): this worktree's saved role selections (--only/--enable/--disable) were dropped."
@@ -246,7 +238,6 @@ if [ ${#FLAGS[@]} -gt 0 ]; then
 elif [ -n "$OVRUSE" ]; then
   echo "Applying this worktree's saved exceptions ($OVR)."
   OVRSRC="$OVR"
-  if [ "$OVR_LEGACY" = 1 ]; then cp "$OVRUSE" "$NEWOVR" && OVRSRC="$NEWOVR" || fail "ERROR: could not read the saved exceptions ($OVR)"; fi
 fi
 if [ -n "$OVRSRC" ]; then
   apply_overrides "$NEWCFG" "$OVRSRC" > "$NEWCFG.tmp" && mv "$NEWCFG.tmp" "$NEWCFG" || fail "ERROR: could not apply the exceptions in $OVRSRC"
@@ -261,33 +252,6 @@ if [ "$ASK" = 0 ]; then
     fail "ERROR: mode academic-research needs the project to be a git repository (git init, then run roles again). Nothing was changed."
   fi
 fi
-# A mode renamed between versions still works under its old id: say where the old id is still used
-LEGACY_SRC=""
-legacy_src_add() { LEGACY_SRC="${LEGACY_SRC:+$LEGACY_SRC; }$1"; }
-# shellcheck disable=SC2088
-[ -f "$KIT/config.json" ] && legacy_mode_in "$KIT/config.json" && legacy_src_add '~/.orca-roles/config.json'
-PROJ_CFG="$(project_config .)"
-[ -n "$PROJ_CFG" ] && legacy_mode_in "$PROJ_CFG" && legacy_src_add ".orca-roles.json ($PROJ_CFG)"
-[ "$OVR_LEGACY" = 1 ] && legacy_src_add "this worktree's saved options ($OVR)"
-fx=0; fv=""
-while [ "$fx" -lt ${#FLAGS[@]} ]; do
-  fv=""
-  case "${FLAGS[$fx]}" in
-    --mode=*) fv="${FLAGS[$fx]#--mode=}";;
-    --set=settings.mode=*) fv="${FLAGS[$fx]#--set=settings.mode=}";;
-    --mode) fv="${FLAGS[$((fx + 1))]:-}"; fx=$((fx + 1));;
-    --set) case "${FLAGS[$((fx + 1))]:-}" in settings.mode=*) fv="${FLAGS[$((fx + 1))]#settings.mode=}";; esac; fx=$((fx + 1));;
-    --only|--enable|--disable) fx=$((fx + 1));;
-  esac
-  [ "$(canon_mode "$fv")" != "$fv" ] && { legacy_src_add "the options of this run (--mode or the setup script in orca.yaml)"; break; }
-  fx=$((fx + 1))
-done
-LEGACY_NOTE=""
-if [ -n "$LEGACY_SRC" ]; then
-  LEGACY_NOTE="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: $LEGACY_SRC. Update it to academic-research."
-  echo "$LEGACY_NOTE"
-fi
-
 handle_of() { jq -r '[.. | .handle? // empty] | first // empty'; }
 pty_of_handle() { orca terminal show --terminal "$1" --json 2>/dev/null | jq -r '[.. | objects | select(has("ptyId")) | .ptyId] | first // empty' 2>/dev/null; }
 saved_pty() { grep "^$1=" "$PTY" 2>/dev/null | head -1 | cut -d= -f2-; }
@@ -506,7 +470,6 @@ mv "$NEWCFG" "$CFG"
 CHOSEN=0
 if [ "$ASK" = 1 ]; then : > "$MARKER"
 elif [ "$PENDING" = 1 ] && [ "$REOPEN" = 0 ]; then rm -f "$MARKER"; CHOSEN=1; echo "Mode chosen: $NEWMODE."; fi
-if [ -n "$LEGACY_NOTE" ]; then printf '%s\n' "$LEGACY_NOTE" > "$GITDIR/orca-roles.legacy-note"; else rm -f "$GITDIR/orca-roles.legacy-note"; fi
 if [ "$RESET" = 1 ]; then rm -f "$OVR"; echo "This worktree's exceptions were forgotten."; fi
 [ "$OVRSRC" = "$NEWOVR" ] && mv "$NEWOVR" "$OVR"
 if [ -f "$OVR" ]; then
@@ -563,6 +526,7 @@ if [ "$ASK" = 1 ]; then
   echo "No mode chosen yet: only the Planner is opened; it asks which mode to use (settings.enableAskModeOnStart)."
 fi
 for id in $ROLES; do d="$(scratch_dir "$id")" && mkdir -p "$d"; done   # each role's scratch folder (outside the worktree)
+if session_hook_enabled; then ensure_session_hook_or_warn; fi   # the SessionStart hook that re-binds a reopened tab's Runs
 if [ "$(trust_of "$CFG")" = never ]; then
   echo "The folder is not marked as trusted (settings.trust is \"never\"): the agents will ask you to trust it; answer in each tab."
 else

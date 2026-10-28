@@ -759,8 +759,7 @@ check "var_of: ids, edges and non-ids map as tr did" "$(var_of dev):$(var_of e2e
 check "var_of: ends with one newline and never swallows an echo option" "$(var_of dev | od -An -c | tr -d ' '):$(var_of -n):$(var_of -e)" 'DEV\n:_N:_E'
 check "lower_ascii: A-Z only, no trailing newline, specials and non-ASCII untouched" "$(lower_ascii Claude):$(lower_ascii OPENCODE):$(lower_ascii 'Researcher (Claude)'):$(lower_ascii a1-B2_C3):[$(lower_ascii '')]:$(lower_ascii ÉX):$(lower_ascii 'A&B*[Q]\Z'):$(lower_ascii ABCDEFGHIJKLMNOPQRSTUVWXYZ)" 'claude:opencode:researcher (claude):a1-b2_c3:[]:Éx:a&b*[q]\z:abcdefghijklmnopqrstuvwxyz'
 NS="$TMP/nospawn"; mkdir -p "$NS/bin"; for c in tr jq cut; do printf '#!/bin/sh\necho %s >> "%s/spawned"\nexit 1\n' "$c" "$NS" > "$NS/bin/$c"; chmod +x "$NS/bin/$c"; done
-check "var_of, lower_ascii and canon_mode of a known mode start no tr, cut or jq" "$(PATH="$NS/bin:$PATH" bash -c 'source "$1/bin/lib.sh"; var_of a-b; lower_ascii AbC; canon_mode programmer; canon_mode pr-reviewer; canon_mode academic-research' _ "$ROOT" >/dev/null 2>&1; cat "$NS/spawned" 2>/dev/null | wc -l | tr -d ' ')" "0"
-check "canon_mode: known modes unchanged, legacy id mapped, unknown unchanged" "$(canon_mode programmer):$(canon_mode pr-reviewer):$(canon_mode academic-research):$(canon_mode academic-writer):$(canon_mode foo):[$(canon_mode '')]" "programmer:pr-reviewer:academic-research:academic-research:foo:[]"
+check "var_of and lower_ascii start no tr, cut or jq" "$(PATH="$NS/bin:$PATH" bash -c 'source "$1/bin/lib.sh"; var_of a-b; lower_ascii AbC' _ "$ROOT" >/dev/null 2>&1; cat "$NS/spawned" 2>/dev/null | wc -l | tr -d ' ')" "0"
 # Renamed role: visual-tester → e2e-tester, keeping the user's settings and position
 printf '{"roles":{"dev":{},"visual-tester":{"title":"Visual-Tester","enabled":false},"deployer":{}}}' > "$TMP/legacy.json"
 check "upgrade_config renames visual-tester" "$(upgrade_config "$ROOT/config.default.json" "$TMP/legacy.json" | jq -c '[(.roles | keys_unsorted | .[0:3]), .roles["e2e-tester"].title, .roles["e2e-tester"].enabled, (.roles | has("visual-tester"))]')" '[["dev","e2e-tester","deployer"],"E2E-Tester",false,false]'
@@ -792,6 +791,8 @@ pwu() { echo "{\"roles\":{},\"mcpServers\":{\"playwright\":$1}}" > "$TMP/pw-user
 OLDPW='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 check "upgrade_config: the exact previous playwright default moves to the new default entry" "$(pwu "$OLDPW")" "$(jq -c '.mcpServers.playwright' "$D")"
 check "upgrade_config: the old default with a flag added or removed is kept" "$(pwu "$(echo "$OLDPW" | jq -c '.args += ["--viewport-size=1x1"]')" | jq -c '.args | length'):$(pwu "$(echo "$OLDPW" | jq -c '.args |= map(select(. != "--isolated"))')" | jq -r '.command + (.args | length | tostring)')" "9:npx7"
+for c in '{}' '{"settings":{"mode":"programmer"}}' '{"roles":null}' '{"roles":"x","a":1}'; do printf '%s' "$c" > "$TMP/nr.json"; UNR="${UNR:-}$(upgrade_config "$ROOT/config.default.json" "$TMP/nr.json" | jq -c --slurpfile d "$ROOT/config.default.json" '[(.roles | keys_unsorted) == ($d[0].roles | keys_unsorted), .settings.mode, .a] | tostring' 2>/dev/null || echo ERR)|"; done
+check "upgrade_config: a config with no roles (missing key, null or not an object) is upgraded to the default roles in their order, the user's other keys kept (no error)" "$UNR" '"[true,\"programmer\",null]"|"[true,\"programmer\",null]"|"[true,\"programmer\",null]"|"[true,\"programmer\",1]"|'
 check "upgrade_config: a custom playwright entry keeps its command and args, and one differing only in order or extra key is not migrated" "$(pwu '{"command":"mine","args":["a"]}' | jq -c '[.command, .args]'):$(pwu "$(echo "$OLDPW" | jq -c '.args = (.args[2:] + .args[0:2])')" | jq -r .command):$(pwu "$(echo "$OLDPW" | jq -c '.env = {"X":"1"}')" | jq -r .command)" '["mine",["a"]]:npx:npx'
 check "upgrade_config: an unrelated user config gets the default playwright entry" "$(echo '{"roles":{}}' > "$TMP/pw-none.json"; upgrade_config "$D" "$TMP/pw-none.json" | jq -c '.mcpServers.playwright')" "$(jq -c '.mcpServers.playwright' "$D")"
 # settings.artifacts: an object with only plans, designs, research, deployment, each a non-empty relative path inside the worktree (no absolute, no ~, no '..' segment)
@@ -903,7 +904,7 @@ rm -f "$TMP/orca-roles.coordinator"
 check "planner_msg: no marker and no kept Run -> byte-identical" "$(cpm 0)" "$MC0"
 # planner_ask_msg: the five sentences in order, the modes whose planner prompt exists in MODE_IDS order, the suggested mode, the language rule of planner_msg
 ASK1='You are the Planner of the orca-roles kit in this worktree, and no mode has been chosen yet.'
-ASK3='Ask the user, in one question, which mode to use: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers); academic-research (write a research paper: experiments first, then the writing phase). Suggested: programmer.'
+ASK3='Ask the user which mode to use as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option), listing: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers); academic-research (write a research paper: experiments first, then the writing phase). Suggested: programmer. Then end your turn and wait for the user'"'"'s typed answer.'
 ASK45='Do not start any work before the answer. When the user answers, run `~/.orca-roles/bin/launch.sh --mode <mode>` from the worktree and end your turn: the kit opens that mode'"'"'s team and sends you your role message for it.'
 check "planner_ask_msg: exact message with every mode available and language auto, one line, no trailing newline" "$(planner_ask_msg "$KIT/config.default.json"; printf x)" "$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"x
 jq '.settings.language = "Spanish"' "$KIT/config.default.json" > "$TMP/askl.json"; jq '.settings.language = ""' "$KIT/config.default.json" > "$TMP/askl2.json"
@@ -913,7 +914,7 @@ mkdir -p "$PK/prompts/pr-reviewer"; echo "# planner" > "$PK/prompts/pr-reviewer/
 AQ1="$(KIT="$PK" planner_ask_msg "$PKC")"
 rm "$PK/prompts/programmer/planner.md"
 AQ2="$(KIT="$PK" planner_ask_msg "$PKC")"
-check "planner_ask_msg: an unavailable mode is left out of the list, in MODE_IDS order; with settings.mode unavailable the suggestion is programmer" "$(printf '%s' "$AQ1" | grep -o 'which mode to use: .*Suggested: [a-z-]*\.'):$(printf '%s' "$AQ2" | grep -o 'which mode to use: .*Suggested: [a-z-]*\.')" "which mode to use: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer.:which mode to use: pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer."
+check "planner_ask_msg: an unavailable mode is left out of the list, in MODE_IDS order; with settings.mode unavailable the suggestion is programmer" "$(printf '%s' "$AQ1" | grep -o 'listing: .*Suggested: [a-z-]*\.'):$(printf '%s' "$AQ2" | grep -o 'listing: .*Suggested: [a-z-]*\.')" "listing: programmer (plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)); pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer.:listing: pr-reviewer (review a pull request with a team of reviewers). Suggested: programmer."
 jq '.settings.mode = "pr-reviewer"' "$KIT/config.default.json" > "$TMP/askm.json"; jq '.settings.mode = "nope"' "$KIT/config.default.json" > "$TMP/askm2.json"
 check "planner_ask_msg: Suggested is the configuration's mode, programmer when it is invalid" "$(planner_ask_msg "$TMP/askm.json" | grep -o 'Suggested: [a-z-]*'):$(planner_ask_msg "$TMP/askm2.json" | grep -o 'Suggested: [a-z-]*')" "Suggested: pr-reviewer:Suggested: programmer"
 # planner_msg resume 4 (after a mode switch): both modes, the summary file, the still-there sentence only for a planner that cannot be cleared; 0-3 do not change
@@ -999,7 +1000,9 @@ rm -rf "$KIT/tmp"
 
 sec_oracle() {
 # Optional oracle: bin/oracle/*.py (acceptance command + test integrity) and bin/oracle.sh; planner_msg only changes with settings.oracle.enabled
-OR="$TMP/or"; rm -rf "$OR"; mkdir -p "$OR/specs"
+OR="$TMP/or"; rm -rf "$OR"; mkdir -p "$OR/specs" "$OR/nobin"
+# verify_task.py asks orca for the task's spec when it gets --task and --spec-file: the whole section runs with an orca of its own that knows no Run (never the real one)
+printf '#!/bin/sh\necho '"'"'{"ok":true,"result":{"runs":[],"tasks":[]}}'"'"'\n' > "$OR/nobin/orca"; chmod +x "$OR/nobin/orca"; export PATH="$OR/nobin:$PATH"
 oracle_repo() {   # <name>: a git repo with a base commit on main (a test, a subject and its test), then branch feat
   local p="$OR/$1"; mkdir -p "$p/tests" "$p/src"
   git -C "$p" init -q; git -C "$p" checkout -q -b main 2>/dev/null || true
@@ -1040,6 +1043,26 @@ bash test.sh
   check "oracle pass: verify.json written under ORCA_ROLES_ORACLE_OUT" "$(jq -r .status "$OR/out/t1/verify.json" 2>&1)" "pass"
   check "oracle pass: nothing written in the repo" "$(git -C "$P" status --porcelain)" ""
   check "oracle pass: config_sha is the sha1 of the config" "$(st .config_sha)" "$(shasum "$OCFG" | cut -d' ' -f1)"
+  # the spec file against the sha256 the Planner put in the Orca task (a fake orca answers run-list and task-list): verified, tampered (nothing runs), unverified (no hash, orca failing or absent, unknown task: runs as given)
+  SPXN=0; SPX="$OR/spx"; rm -rf "$SPX"; mkdir -p "$SPX/bin"; printf '#!/bin/sh\n[ ! -e "%s/fail" ] || { echo garbage; exit 1; }\ncase "$2" in run-list) cat "%s/rl.json";; task-list) cat "%s/tl.json";; esac\n' "$SPX" "$SPX" "$SPX" > "$SPX/bin/orca"; chmod +x "$SPX/bin/orca"
+  printf '{"result":{"runs":[{"id":"run_1"}]}}' > "$SPX/rl.json"
+  spx_task() {  # spx_task <spec text or empty for a task with no hash>: the task "th" of the fake run
+    jq -cn --arg s "$1" '{result: {tasks: [{id: "th", spec: $s}]}}' > "$SPX/tl.json"
+  }
+  spx_run() {  # spx_run <path var for orca: fake|none> <spec file> [task id]: one oracle run in a repo whose acceptance command is bash test.sh; $OUT, $RC, $OR/err
+    local P2 pth; SPXN=$((SPXN + 1)); P2="$(oracle_repo "spx$SPXN")"
+    case "$1" in fake) pth="$SPX/bin:$PATH";; *) pth="$(dirname "$(command -v "$PYB")"):/usr/bin:/bin";; esac
+    PATH="$pth" oracle_run "$P2" "${3:-th}" "$2"
+  }
+  SPF="$(oracle_spec '`bash test.sh`')"; SPH="$(shasum -a 256 "$SPF" | cut -d' ' -f1)"
+  spx_task "$(printf 'Do it.\nspec-sha256: %s' "$SPH")"; rm -f "$SPX/fail"; spx_run fake "$SPF"; X1="$RC:$(st '.spec_check'):$(st .status):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
+  printf 'weakened\n' >> "$SPF"; spx_run fake "$SPF"; X2="$RC:$(st '.spec_check'):$(st .status):$(st .cheat):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'does not match the hash in task th (task .*, file .*): not run' "$OR/err" || true):$(jq -r .status "$OR/out/th/verify.json" 2>/dev/null || true)"
+  spx_task "Do it, no hash here"; spx_run fake "$SPF"; X3="$(st '.spec_check'):$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'spec not verified (no_hash)' "$OR/err" || true)"
+  : > "$SPX/fail"; spx_run fake "$SPF"; X4="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"; rm -f "$SPX/fail"
+  spx_run none "$SPF"; X5="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
+  spx_task "$(printf 'Do it.\nspec-sha256: %s' "$SPH")"; spx_run fake "$SPF" other-task; X6="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
+  P3="$(oracle_repo spxo)"; XO="$(cd "$P3" && ORCA_ROLES_ORACLE_OUT="$OR/out" "$PYB" -B "$PYF/verify_task.py" --spec-file "$SPF" --no-wait --dry-run 2>/dev/null | jq -r 'has("spec_check")' || true)"
+  check "oracle spec hash: the spec file's sha256 against the spec-sha256 line of the Orca task: a match is spec_check verified and the commands run; a changed file is spec_tampered (exit 1, cheat, nothing runs, the stderr line, saved in verify.json); a task without the line, a failing or missing orca and an unknown task id run the file as given with spec_check unverified and the reason no_hash, orca_unreachable (twice) or task_not_found; --spec-file alone has no spec_check" "$X1|$X2|$X3|$X4|$X5|$X6|$XO" "0:verified:pass:ran|1:tampered:spec_tampered:true:norun:1:spec_tampered|unverified:no_hash:ran:1|orca_unreachable:ran|orca_unreachable:ran|task_not_found:ran|false"
   # fail, flaky, persistent red
   P="$(oracle_repo fail)"; printf 'exit 1\n' > "$P/test.sh"; oracle_run "$P" t2 "$(oracle_spec '`bash test.sh`')"
   check "oracle fail: exit 1, status fail, retried once (2 attempts)" "$RC:$(st .status):$(st .pass):$(st '.commands[0].attempts')" "1:fail:false:2"
@@ -1221,6 +1244,90 @@ case "$OM" in "${BASEP%Start with the startup.}"*"Start with the startup.") echo
 jq '.settings.mode = "pr-reviewer"' "$C" > "$OR/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.oracle = {enabled: true}' "$C" > "$OR/p1.json"
 check "oracle enabled in pr-reviewer: planner_msg unchanged" "$(PM "$OR/p1.json")" "$(PM "$OR/p0.json")"
 rm -rf "$OR"
+# the oracle's integrity gaps, table-driven on temp repos (each case builds a repo, changes it and asks verify_task.integrity whether the change is a cheat): install hooks, runner .sh files, symlinked tests, hidden test config
+cat > "$TMP/ocases.py" <<'PYE'
+import os, sys, subprocess, tempfile, json, shutil
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+os.environ['HOME'] = tempfile.mkdtemp(prefix='s5home-'); os.environ.pop('XDG_CONFIG_HOME', None); os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+import verify_task as V
+def sh(wt, *a): subprocess.run(a, cwd=wt, check=True, capture_output=True)
+def w(wt, rel, text='x\n'):
+    p = os.path.join(wt, rel); os.makedirs(os.path.dirname(p), exist_ok=True); open(p, 'w').write(text)
+def mk(base_files, after, cmds, gitignore=None):
+    wt = tempfile.mkdtemp(prefix='s5x5-')
+    sh(wt, 'git', 'init', '-q'); sh(wt, 'git', 'config', 'user.email', 'a@b'); sh(wt, 'git', 'config', 'user.name', 'n')
+    for k, v in base_files.items(): w(wt, k, v)
+    sh(wt, 'git', 'add', '-A'); sh(wt, 'git', 'commit', '-qm', 'base')
+    base = subprocess.run(['git', '-C', wt, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    after(wt)
+    r = V.integrity(wt, base, cmds)
+    shutil.rmtree(wt, ignore_errors=True)
+    return r
+def kinds(r): return sorted({(f['kind'], f.get('file') or f.get('script')) for f in r['findings']})
+def pkg(scripts): return json.dumps({'scripts': scripts})
+res = []
+def case(name, expect, r):
+    ok = bool(r['cheat']) == expect
+    res.append(ok)
+    if not ok: print('WRONG', name, kinds(r))
+# --- cheat true
+def post(wt): w(wt, 'package.json', pkg({'test': 'jest', 'postinstall': 'node patch.js'}))
+B = {'package.json': pkg({'test': 'jest'}), 'x.js': '1'}
+for c in ['npm ci && npm test', 'npm it', 'pnpm install', 'yarn', 'yarn install', 'CI=1 npm ci', 'npm i']:
+    case('postinstall + ' + c, True, mk(B, post, [c]))
+def post2(wt): w(wt, 'package.json', pkg({'test': 'jest', 'prepare': 'node patch.js'}))
+case('prepare + npm ci', True, mk(B, post2, ['npm ci']))
+def chg(wt): w(wt, 'run tests.sh', 'echo changed')
+B2 = {'package.json': pkg({'test': 'bash "run tests.sh" && bash ci.sh'}), 'run tests.sh': 'a', 'ci.sh': 'b'}
+case('script with spaced .sh changed', True, mk(B2, chg, ['npm test']))
+for c in ['bash -o pipefail ci.sh', 'bash --norc ci.sh', 'CI=1 bash ci.sh', 'CI=1 ./ci.sh', "sh -c 'cd x && bash ci.sh'", 'npx cross-env CI=1 bash ci.sh', 'node x.js | tee && ci.sh', 'bash -lc "./ci.sh"', 'bash -- ci.sh', 'sudo -E bash ci.sh']:
+    case('acceptance: ' + c, True, mk({'ci.sh': 'a', 'x.js': '1'}, lambda wt: w(wt, 'ci.sh', 'changed'), [c]))
+case('unbalanced quote -> any .sh changed', True, mk({'ci.sh': 'a'}, lambda wt: w(wt, 'ci.sh', 'changed'), ["bash 'ci.sh"]))
+def sym(wt):
+    os.remove(os.path.join(wt, 'tests/test_a.py')); os.symlink('/etc/hostname', os.path.join(wt, 'tests/test_a.py'))
+case('tests/test_a.py -> symlink', True, mk({'tests/test_a.py': 'def test(): pass\n', 'a.py': '1'}, sym, []))
+case('new symlink tests/test_b.py', True, mk({'a.py': '1'}, lambda wt: (os.makedirs(wt + '/tests', exist_ok=True), os.symlink('/etc/hostname', wt + '/tests/test_b.py')), []))
+case('conftest via .git/info/exclude', True, mk({'a.py': '1'}, lambda wt: (open(wt + '/.git/info/exclude', 'a').write('conftest.py\n'), w(wt, 'conftest.py')), []))
+case('untracked tests/.gitignore + new conftest', True, mk({'a.py': '1'}, lambda wt: (w(wt, 'tests/.gitignore', '.gitignore\nconftest.py\n'), w(wt, 'tests/conftest.py')), []))
+def trk(wt): w(wt, '.gitignore', 'dist/\nconftest.py\n'); w(wt, 'conftest.py')
+case('tracked .gitignore changed hides new conftest', True, mk({'.gitignore': 'dist/\n', 'a.py': '1'}, trk, []))
+# --- cheat false
+def ex(wt):
+    for p in ['node_modules/x/jest.config.js', 'dist/vitest.config.mjs', '.venv/lib/site-packages/a.pth', '.venv/lib/python3/site-packages/conftest.py']:
+        w(wt, p)
+Bf = {'.gitignore': 'node_modules/\ndist/\n.venv/\n', 'a.py': '1'}
+# files exist (ignored) before base too; created after base here but the .gitignore is unchanged
+case('ignored files, unchanged .gitignore', False, mk(Bf, ex, ['npm test']))
+def venv(wt):
+    w(wt, '.venv/.gitignore', '*\n'); w(wt, '.venv/pyvenv.cfg', 'home = /x'); w(wt, '.venv/lib/python3.12/site-packages/a.pth'); w(wt, '.venv/lib/python3.12/site-packages/pkg/conftest.py')
+case("venv's own .gitignore", False, mk({'a.py': '1'}, venv, []))
+def fakevenv(wt): w(wt, 'tests/.gitignore', '*\n'); w(wt, 'tests/pyvenv.cfg', ''); w(wt, 'tests/conftest.py')
+case('fake venv dir under tests (pyvenv.cfg + .gitignore *)', True, mk({'tests/test_a.py': 'def test(): pass\n', 'a.py': '1'}, fakevenv, []))
+def venvtop(wt): w(wt, '.venv/.gitignore', '*\n'); w(wt, '.venv/pyvenv.cfg', 'home = /x'); w(wt, '.venv/conftest.py')
+case('conftest directly in .venv (not under site-packages)', True, mk({'a.py': '1'}, venvtop, []))
+def trackedvenv(wt): w(wt, 'tests/.gitignore', '*\n'); w(wt, 'tests/pyvenv.cfg', ''); w(wt, 'tests/lib/python3.12/site-packages/conftest.py')
+case('venv layout inside a tracked tests/ dir (pyvenv.cfg + .gitignore * + site-packages/conftest.py)', True, mk({'tests/test_a.py': 'def test(): pass\n', 'a.py': '1'}, trackedvenv, []))
+def pypyvenv(wt): w(wt, '.venv/.gitignore', '*\n'); w(wt, '.venv/pyvenv.cfg', 'home = /x'); w(wt, '.venv/lib/pypy3.10/site-packages/a.pth')
+case('an untracked .venv with a pypy site-packages', False, mk({'a.py': '1'}, pypyvenv, []))
+def decoys(wt):
+    os.makedirs(wt + '/node_modules/a')
+    for i in range(5001): open(wt + '/node_modules/a/%d.pth' % i, 'w').close()
+    open(wt + '/.git/info/exclude', 'a').write('conftest.py\n'); w(wt, 'conftest.py')
+case('5001 ignored decoys do not hide a conftest hidden by info/exclude', True, mk({'.gitignore': 'node_modules/\n', 'a.py': '1'}, decoys, []))
+def citscript(wt): w(wt, 'package.json', pkg({'test': 'node evil.js'}))
+case('npm cit with a changed test script', True, mk({'package.json': pkg({'test': 'jest'}), 'x.js': '1'}, citscript, ['npm cit']))
+case("sh -c 'echo hi'", False, mk({'a.py': '1', 'ci.sh': 'a'}, lambda wt: w(wt, 'ci.sh', 'changed'), ["sh -c 'echo hi'"]))
+case('plain source change', False, mk({'a.py': '1', 'package.json': pkg({'test': 'jest'})}, lambda wt: w(wt, 'a.py', '2'), ['npm test']))
+case('unicode/space path test file modified normally', False, mk({'tests/é x.py': 'a', 'a.py': '1'}, lambda wt: w(wt, 'a.py', '2'), []))
+def gx(wt):
+    g = os.path.join(wt, '..', os.path.basename(wt) + '-gx'); open(g, 'w').write('conftest.py\n'); sh(wt, 'git', 'config', 'core.excludesFile', g); w(wt, 'conftest.py')
+case('conftest hidden by the global excludes file', True, mk({'a.py': '1'}, gx, []))
+print('%d/%d' % (sum(res), len(res)))
+PYE
+OC="$(cd "$TMP" && python3 -B "$TMP/ocases.py" "$ROOT/bin/oracle" 2>&1 | tail -5 | tr '\n' '|')"
+check "oracle integrity: install commands follow the lifecycle hooks (npm ci/it/i, pnpm install, yarn, CI=1 npm ci: a new postinstall is a cheat); a changed runner .sh tied to a script or an acceptance command is a cheat however it is run (bash with options, env prefixes, ./x.sh, sh -c, npx cross-env, after a pipe, sudo -E, a quoted name with spaces; an unbalanced quote counts every changed .sh); a test file turned into a symlink or a new symlink under tests/ is a cheat; a test config hidden by .git/info/exclude, the global excludes file, an untracked tests/.gitignore or a .gitignore changed since the base is a cheat; ignored files that were ignored before (node_modules, dist, .venv, a venv's own .gitignore), sh -c 'echo hi', a plain source change and a non-ASCII test path are not" "$OC" "37/37|"
+PATH="${PATH#"$OR/nobin:"}"   # the orca of this section goes out of the PATH
 }
 
 sec_loop() {
@@ -2103,36 +2210,6 @@ yfor local-only "npm i"; M="$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr
 check "roles-yaml: ROLES_YAML_RESULT skipped:local-only-policy" "$M" "ROLES_YAML_RESULT=skipped:local-only-policy"
 yfor local-only "$KITL"; check "roles-yaml: ROLES_YAML_RESULT skipped:local-script, exit 0" "$RC:$(printf '%s\n' "$OUT" | tail -n 1)" "0:ROLES_YAML_RESULT=skipped:local-script"
 check "roles-yaml --check and --remove print no result line" "$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --check 2>&1 | grep -c ROLES_YAML_RESULT || true)$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --remove 2>&1 | grep -c ROLES_YAML_RESULT || true)" "00"
-# the old mode id (academic-writer) is an alias of academic-research in roles-yaml (single project, --all, --dry-run); --check and --remove stay as they were
-YN="$TMP/yalias"; rm -rf "$YN"; mkdir -p "$YN/bin" "$YN/show"; cp "$YA/bin/orca" "$YN/bin/orca"
-for n in k1 k2 k3 fo tr one; do mkdir -p "$YN/$n"; git -C "$YN/$n" init -q; git -C "$YN/$n" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; done
-ynsingle() { (cd "$YN/$1" && shift && PATH="$YN/bin:$PATH" FAKE_LIST="$YN/list.json" FAKE_SHOW="$YN/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>"$YN/err" || true); }
-ynall() { try env PATH="$YN/bin:$PATH" FAKE_LIST="$YN/list.json" FAKE_SHOW="$YN/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>"$YN/err"; }
-ynold() { sed 's/--mode academic-research/--mode academic-writer/' "$YN/$1/orca.yaml" > "$YN/t.yaml"; cat "$YN/t.yaml" > "$YN/$1/orca.yaml"; }
-ynmode() { sed -n 's/^.*launch\.sh//p' "$YN/$1/orca.yaml" | tr -d ' '; }
-ynhash() { (cd "$YN" && find . -type f -not -path './bin/*' -not -path './show/*' -not -name err -not -name t.yaml -not -name list.json | LC_ALL=C sort | xargs shasum) | shasum; }
-jq -nc --arg d "$YN" '{ok:true,result:{repos:(["k1","k2","k3","fo","tr"] | map({displayName:., path:($d + "/" + .), kind:"git"}))}}' > "$YN/list.json"
-NOTE_AW="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: --mode. Update it to academic-research."
-# single project: --mode academic-writer writes the new id, one note, same result line; --dry-run writes nothing
-OUT1="$(ynsingle one --mode academic-writer)"; E1="$(cat "$YN/err")"
-check "roles-yaml alias: --mode academic-writer writes academic-research and prints one note on stderr; the result line is the one of the new id" "$(printf '%s' "$OUT1" | tail -n 1):$(ynmode one):$(printf '%s\n' "$E1" | grep -c '^Note:'):$([ "$E1" = "$NOTE_AW" ] && echo exact)" "ROLES_YAML_RESULT=created:--modeacademic-research:1:exact"
-rm -f "$YN/one/orca.yaml" "$YN/one/.worktreeinclude"; : > "$YN/one/.git/info/exclude"; H0="$(ynhash)"
-OLDD="$(ynsingle one --mode academic-writer --dry-run)"; NEWD="$(ynsingle one --mode academic-research --dry-run)"
-check "roles-yaml alias: --mode academic-writer --dry-run prints what the new id prints and writes nothing" "$([ "$OLDD" = "$NEWD" ] && echo same):$([ "$(ynhash)" = "$H0" ] && echo unchanged):$(ls -A "$YN/one" | tr '\n' ' ')" "same:unchanged:.git "
-# --all: kit orca.yaml files with the old id are renamed (dry run: announced only); the repair path, a tracked file and someone else's file
-for n in k1 k2 k3; do ynsingle "$n" --mode academic-research >/dev/null; ynold "$n"; done
-rm -f "$YN/k2/.worktreeinclude"; printf 'scripts:\n  setup: echo academic-writer\n' > "$YN/fo/orca.yaml"
-ynsingle tr --mode academic-research >/dev/null; ynold tr; git -C "$YN/tr" add -f orca.yaml; git -C "$YN/tr" -c user.name=t -c user.email=t@t commit -q -m yaml
-printf '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$YN/show/k3"
-H1="$(ynhash)"; ynall --all --dry-run; DR="$RC:$(printf '%s\n' "$OUT" | grep -c '^k[123] (.*): would update (mode renamed to academic-research)$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -c '^Note:' "$YN/err" || true):$([ "$(ynhash)" = "$H1" ] && echo unchanged || echo CHANGED)"
-ynall --all; AL="$RC:$(printf '%s\n' "$OUT" | grep -c '^k[12] (.*): updated (mode renamed to academic-research)$'):$(printf '%s\n' "$OUT" | grep -c '^k3 (.*): skipped: local-only-policy$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(ynmode k1)/$(ynmode k2)/$(ynmode k3):$(grep -cx orca.yaml "$YN/k2/.worktreeinclude"):$(ynmode tr):$(tr -d ' \n' < "$YN/fo/orca.yaml")"
-check "roles-yaml alias: --all --dry-run announces the rename of the kit's old lines and writes nothing; --all renames them (repairing k2) and reports a child that skips (local-only policy) as skipped; a tracked kit file and someone else's file are not touched" "$DR|$AL" "0:3:Summary: 0 created, 3 updated, 0 unchanged, 2 skipped, 0 errors:0:unchanged|0:2:1:Summary: 0 created, 2 updated, 0 unchanged, 3 skipped, 0 errors:--modeacademic-research/--modeacademic-research/--modeacademic-writer:1:--modeacademic-writer:scripts:setup:echoacademic-writer"
-# --all --mode academic-writer: one note, every project gets the new id; --check and --remove print what they printed and need no mode
-ynold k1; ynold k2; H2="$(ynhash)"; ynall --all --mode academic-writer --dry-run; D2="$RC:$(grep -c '^Note:' "$YN/err" || true):$(printf '%s\n' "$OUT" | grep -c 'would update to mode academic-research'):$([ "$(ynhash)" = "$H2" ] && echo unchanged || echo CHANGED)"
-ynall --all --mode academic-writer; A2="$RC:$(grep -c '^Note:' "$YN/err" || true):$(printf '%s\n' "$OUT" | grep -c ': updated to mode academic-research$'):$(ynmode k1)/$(ynmode k2)"
-check "roles-yaml alias: --all --mode academic-writer (also --dry-run) prints the note once and writes the new id in every project" "$D2|$A2" "0:1:2:unchanged|0:1:2:--modeacademic-research/--modeacademic-research"
-ynold k1; CK1="$(ynsingle k1 --check)"; CKE="$(cat "$YN/err")"; ynsingle k1 --mode academic-research >/dev/null; CK2="$(ynsingle k1 --check)"; ynsingle k1 --remove >/dev/null; RME="$(cat "$YN/err")"
-check "roles-yaml alias: --check prints the same with the old line as with the new one and no note, --remove no note and removes the file" "$([ "$CK1" = "$CK2" ] && echo same):$CKE:$RME:$([ -e "$YN/k1/orca.yaml" ] && echo left)" "same:::"
 }
 
 sec_launch_overrides() {
@@ -3065,6 +3142,12 @@ for v in false null 5 '["programmer"]' '"programmer\n"' '""'; do
   try env KIT="$PK" bash -c '. "$KIT/bin/lib.sh"; mode_of "$1" 2>/dev/null' _ "$TMP/m-bad.json"; check "mode_of rejects settings.mode $v" "$RC" "1"
 done
 jq 'del(.settings.mode)' "$MC" > "$TMP/m-nokey.json"; check "mode_of: missing settings.mode = programmer" "$(KIT="$PK" mode_of "$TMP/m-nokey.json")" "programmer"
+# the old mode id academic-writer is gone: the renamed error for the user's own settings, mapped silently only for a config the kit saved (mode_of --saved)
+jq '.settings.mode = "academic-writer"' "$MC" > "$TMP/m-w.json"; jq '.settings.mode = "academic-research"' "$MC" > "$TMP/m-r.json"; jq '.roles.dev.modes = ["programmer", "academic-writer"]' "$MC" > "$TMP/m-wr.json"
+try env KIT="$PK" bash -c '. "$KIT/bin/lib.sh"; mode_of "$1" 2>&1' _ "$TMP/m-w.json"; RN1="$OUT
+rc=$RC"; RN2="$(KIT="$PK" mode_of --saved "$TMP/m-w.json" 2>&1 || true)"; RN3="$(KIT="$PK" mode_of "$TMP/m-r.json" 2>&1 || true)"
+check "academic-writer is gone: mode_error and mode_of give the renamed message and exit 1 (the user's config.json, .orca-roles.json or --mode); mode_of --saved reads a saved config as academic-research (the same answer as for the new id); check_config names the rename for settings.mode and for a role's modes list" "$(KIT="$PK" mode_error academic-writer)|$RN1|$([ "$RN2" = "$RN3" ] && echo saved-same)|$(KIT="$PK" check_config "$TMP/m-w.json" | grep -c "mode 'academic-writer' was renamed: use academic-research" || true)|$(KIT="$PK" check_config "$TMP/m-wr.json" | grep -c 'modes has unknown mode ids (academic-writer).*(academic-writer was renamed: use academic-research)' || true)" "mode 'academic-writer' was renamed: use academic-research|mode 'academic-writer' was renamed: use academic-research
+rc=1|saved-same|1|1"
 # an open team blocks a mode change
 ml --reset >/dev/null; : > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
 try ml --mode pr-reviewer; check "open team: a mode change is rejected, nothing changes" "$RC:$(mcreates):$(mstate):$(mmode)" "1:$N:$B:programmer"
@@ -3389,24 +3472,6 @@ try nrm common-workers; check "modes: --remove common-workers without a local ro
 # --help prints the header comment only
 HELP="$(cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --help 2>&1)"; HRC=$?
 check "new-role --help: exit 0, first and last header lines, only comment lines" "$HRC:$(printf '%s\n' "$HELP" | head -1 | grep -c '^# Wizard to create a new role'):$(printf '%s\n' "$HELP" | tail -1 | grep -c '^#     Each mode has its own prompt file'):$(printf '%s\n' "$HELP" | grep -vc '^#')" "0:1:1:0"
-# the old mode id (academic-writer) is an alias of academic-research: same result as the new id plus one note, and nothing is written or deleted under the old name
-AWN="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version."
-mkdir -p "$PK/roles/academic-research"; echo live > "$PK/roles/academic-research/ali-keep.md"; ln -sfn academic-research "$PK/roles/academic-writer"
-printf '%s' '{"id":"ali","description":"d","modes":"academic-writer","phases":["writing"],"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "alias from-json: modes academic-writer (and phases) is saved as academic-research, one note naming the JSON file, prompt only in the new folder" "$RC:$(jq -c '.roles.ali | [.modes, .phases, (.prompt | keys)]' "$NRC"):$(printf '%s\n' "$OUT" | grep -c "^$AWN Found in: $TMP/nj.json. Update it to academic-research.\$"):$(ls "$PK/roles/academic-research/ali.md" 2>/dev/null | wc -l | tr -d ' ')" '0:[["academic-research"],["writing"],["academic-research"]]:1:1'
-printf '%s' '{"id":"ali","description":"d","modes":"academic-writer","overwrite":true,"prompt":"# a2\n## Report\n"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "alias from-json: overwriting a role that stays in academic-research keeps its prompt, though the old folder name is a symlink to the new one" "$RC:$(head -n1 "$PK/roles/academic-research/ali.md"):$(cat "$PK/roles/academic-research/ali-keep.md")" "0:# a2:live"
-rm -f "$PK/roles/academic-writer" "$PK/roles/academic-research/ali-keep.md"
-printf '%s' '{"id":"alp","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# old\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; R1="$RC:$(head -n1 "$PK/roles/academic-research/alp.md"):$(printf '%s\n' "$OUT" | grep -c '^Note: mode .academic-writer.'):$([ -e "$PK/roles/academic-writer" ] && echo oldfolder || true)"
-printf '%s' '{"id":"alq","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# old\n## Report\n","academic-research":"# new\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; R2="$RC:$(head -n1 "$PK/roles/academic-research/alq.md"):$(jq -c '.roles.alq.prompt | keys' "$NRC")"
-printf '%s' '{"id":"aln","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# new\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; R3="$RC:$(printf '%s\n' "$OUT" | grep -c 'Note: mode .academic-writer' || true)"
-check "alias from-json: a prompt keyed by the old id is written for academic-research (one note, no old folder); with both keys the new one wins; no old id, no note" "$R1|$R2|$R3" '0:# old:1:|0:# new:["academic-research","pr-reviewer","programmer"]|0:0'
-printf '%s' '{"id":"alb","description":"d","modes":"pr-reviewer","phases":["writing"],"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"; S5="$(snap)"
-try nrj "$TMP/nj.json"; check "alias from-json: phases outside academic-research says academic-research and writes nothing" "$RC:$(printf '%s\n' "$OUT" | grep -c '^phases is only for mode academic-research (the other modes have no phases)$'):$([ "$(snap)" = "$S5" ] && echo unchanged)" "1:1:unchanged"
-nrw_ph al-wiz 2 academic-writer 1; check "alias wizard: typing academic-writer as the mode saves academic-research, prints one note and asks the phases" "$RC:$(jq -c '.roles["al-wiz"] | [.modes, .phases]' "$NRC"):$(printf '%s\n' "$OUT" | grep -c "^$AWN Found in: the mode typed. Update it to academic-research.\$"):$(printf '%s\n' "$OUT" | grep -c 'Phases (academic-research)')" '0:[["academic-research"],["experiment"]]:1:1'
 rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy is shared with other sections
 }
 
@@ -3554,6 +3619,21 @@ check "orca alias: calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA
 orca worktree list")" "orca-ide:worktree list"
 check "orca alias: nothing outside Orca" "$(PATH="/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c "shopt -s expand_aliases; $ALIAS_LINE
 command -v orca || echo none")" "none"
+# the orca shim for the tabs Orca resumes on WSL: a link in ~/.local/bin when that is on the PATH, else one marked line in ~/.profile (fake WSL: a version file naming Microsoft, our own wslpath and orca-ide, a temp HOME)
+W="$TMP/wslh"; rm -rf "$W"; mkdir -p "$W/bin" "$W/ide"; JQD="$(dirname "$(command -v jq)")"
+printf 'Linux version 5.15.0-microsoft-standard-WSL2\n' > "$W/ver"; printf 'Linux version 6.1 generic\n' > "$W/ver-linux"
+printf '#!/bin/sh\necho x\n' > "$W/bin/wslpath"; printf '#!/usr/bin/env bash\necho ide\n' > "$W/ide/orca-ide"; chmod +x "$W/bin/wslpath" "$W/ide/orca-ide"
+wins() {  # wins <home> <version file> [extra PATH dir]: one install under the fake WSL; WOUT
+  mkdir -p "$1"; WOUT="$(cd "$TMP" && env -i HOME="$1" PATH="${3:+$3:}$W/bin:$JQD:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$2" ORCA_WSL_CLI_DIR="$W/ide" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$W/sch.log" ORCA_ROLES_SUPERPOWERS_FETCH=skip bash "$ROOT/install.sh" </dev/null 2>&1)" || true
+}
+wmark() { local n; n="$(grep -c '# orca-roles: orca shim' "$1/.profile" 2>/dev/null || true)"; echo "${n:-0}"; }
+HA="$W/ha"; wins "$HA" "$W/ver" "$HA/.local/bin"; WA1="$(readlink "$HA/.local/bin/orca" || true):$(wmark "$HA")"; wins "$HA" "$W/ver" "$HA/.local/bin"; WA2="$(readlink "$HA/.local/bin/orca" || true):$(wmark "$HA"):$(printf '%s\n' "$WOUT" | grep -c '^Note: ~/.local/bin/orca' || true)"
+rm -f "$HA/.local/bin/orca"; mkdir -p "$HA/.local/bin"; printf '#!/bin/sh\necho mine\n' > "$HA/.local/bin/orca"; wins "$HA" "$W/ver" "$HA/.local/bin"; WC="$(tail -1 "$HA/.local/bin/orca"):$([ -L "$HA/.local/bin/orca" ] && echo link || echo file):$(printf '%s\n' "$WOUT" | grep -c "^Note: ~/.local/bin/orca exists and is not the kit's shim; left as is\.\$" || true)"
+HB="$W/hb"; mkdir -p "$HB"; printf 'export A=1\n' > "$HB/.profile"; wins "$HB" "$W/ver"; WB1="$(wmark "$HB"):$([ -e "$HB/.local/bin/orca" ] && echo link || echo nolink):$(head -1 "$HB/.profile")"
+sed -i.bak 's|^\[ -x .*# orca-roles: orca shim$|echo old # orca-roles: orca shim|' "$HB/.profile"; rm -f "$HB/.profile.bak"; wins "$HB" "$W/ver"; WB2="$(wmark "$HB"):$(grep -c '^\[ -x "$HOME/.orca-roles/shim/orca" \] && case' "$HB/.profile" || true):$(grep -c '^echo old' "$HB/.profile" || true):$(head -1 "$HB/.profile")"
+HD="$W/hd"; wins "$HD" "$W/ver-linux" "$HD/.local/bin"; WD="$([ -e "$HD/.local/bin/orca" ] && echo link || echo nolink):$(wmark "$HD")"
+HE="$W/he"; mkdir -p "$W/own"; printf '#!/bin/sh\necho own\n' > "$W/own/orca"; chmod +x "$W/own/orca"; wins "$HE" "$W/ver" "$W/own"; WE="$([ -e "$HE/.local/bin/orca" ] && echo link || echo nolink):$(wmark "$HE"):$([ -e "$HE/.orca-roles/shim/orca" ] && echo shim || echo noshim)"
+check "orca shim on WSL: with ~/.local/bin on the PATH the install links it to the kit's shim (a second install changes nothing, no .profile line), a user's own file there is left with one note; without it one marked line goes into ~/.profile (other lines kept, a second install keeps one, an old marked line is replaced in place); off WSL, or with an orca that already resolves, nothing is written" "$WA1|$WA2|$WC|$WB1|$WB2|$WD|$WE" "$HA/.orca-roles/shim/orca:0|$HA/.orca-roles/shim/orca:0:0|echo mine:file:1|1:nolink:export A=1|1:1:0:export A=1|nolink:0|nolink:0:noshim"
 }
 
 sec_remove_role() {
@@ -3639,6 +3719,27 @@ check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/
 check "defaults: Tester maxSelfMutants and baseCheck, Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.tester.params.baseCheck, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,true,"high"]'
 check "defaults: every default Tester parameter is listed in tester.md's Parameters" "$(jq -r '.roles.tester.params | keys[]' "$ROOT/config.default.json" | while IFS= read -r k; do awk '/^## Parameters/{f=1;next} /^## /{f=0} f' "$ROOT/prompts/programmer/tester.md" | grep -qF -- "- \`$k\`:" || echo "$k"; done)" ""
 echo "ok   marketplace and defaults"
+# bin/branch-name.sh: <type>/<KEY>-<slug> proposals and the guarded rename of the current branch (temp repos and local bare remotes, no orca on the PATH)
+BN="$TMP/bn"; rm -rf "$BN"; mkdir -p "$BN"; BJQ="$(dirname "$(command -v jq)")"
+bnrun() { (cd "$1" && shift && env -i HOME="$TMP/home" PATH="$BJQ:/usr/bin:/bin" KIT="$KIT" bash "$KIT/bin/branch-name.sh" "$@" 2>&1; echo "rc=$?") | sed -e "s#/private$BN#B#g" -e "s#$BN#B#g" | tr '\n' ' '; }
+bnrepo() {  # bnrepo <dir name> <branch>: a repo with one commit on <branch>
+  local d="$BN/$1"; mkdir -p "$d"; git -C "$d" init -q -b "$2"; git -C "$d" config user.email t@t; git -C "$d" config user.name t; echo x > "$d/f"; git -C "$d" add f; git -C "$d" commit -qm base
+}
+bnrepo devgd-292 w/devgd-292; bnrepo scratch main
+SL60="abcdefghij abcdefghij abcdefghij abcdefghij abcdefghij abcdefghij"
+BP="$(bnrun "$BN/devgd-292" --propose --type feat --key devgd-292 --slug 'Tax classifier: MODELO -> TIPO')|$(bnrun "$BN/devgd-292" --propose --type feat --slug 'Tax classifier')|$(bnrun "$BN/scratch" --propose --type feat --slug 'Hello World')|$(bnrun "$BN/scratch" --propose --type feat --key k-1 --slug "$SL60")|$(bnrun "$BN/scratch" --propose --type fix --key DEVGD-292 --slug 'devgd-292 fix x')|$(bnrun "$BN/scratch" --propose --type bug --slug a | grep -c 'rc=2'):$(bnrun "$BN/scratch" --propose --type feat --slug '!!!' | grep -c 'rc=2')"
+check "branch-name.sh --propose: <type>/<KEY>-<slug> with the key from --key or from a folder named like devgd-292 (uppercased), no key without either, the slug lowercased with runs of other characters as one dash and cut to 40, a slug that repeats the key loses it, an unknown type or an empty slug is exit 2" "$BP" "feat/DEVGD-292-tax-classifier-modelo-tipo rc=0 |feat/DEVGD-292-tax-classifier rc=0 |feat/hello-world rc=0 |feat/K-1-abcdefghij-abcdefghij-abcdefghij-abcdefg rc=0 |fix/DEVGD-292-fix-x rc=0 |1:1"
+git init -q --bare "$BN/bare.git"
+bnrepo r1 w/a; R1="$(bnrun "$BN/r1" --rename feat/DEVGD-1-x):$(git -C "$BN/r1" branch --show-current)"
+bnrepo r2 w/a; git -C "$BN/r2" remote add origin "$BN/bare.git"; git -C "$BN/r2" push -q -u origin w/a 2>/dev/null; R2="$(bnrun "$BN/r2" --rename feat/n):$(git -C "$BN/r2" branch --show-current)"
+bnrepo r3 w/b; git -C "$BN/r3" remote add origin "$BN/bare.git"; git -C "$BN/r3" push -q origin w/b 2>/dev/null; R3="$(bnrun "$BN/r3" --rename feat/n):$(git -C "$BN/r3" branch --show-current)"
+bnrepo r4 w/c; git -C "$BN/r4" worktree add -q --force "$BN/r4wt" w/c 2>/dev/null; R4="$(bnrun "$BN/r4" --rename feat/n):$(git -C "$BN/r4" branch --show-current)"
+bnrepo r5 w/d; git -C "$BN/r5" branch feat/x; R5="$(bnrun "$BN/r5" --rename feat/x)"
+bnrepo r6 w/e; R6="$(bnrun "$BN/r6" --rename 'feat/..x')$(bnrun "$BN/r6" --rename 'feat/a b')$(bnrun "$BN/r6" --rename -x):$(git -C "$BN/r6" branch --show-current)"
+bnrepo r7 w/f; git -C "$BN/r7" checkout -q --detach; R7="$(bnrun "$BN/r7" --rename feat/n)"
+bnrepo r8 w/g; git -C "$BN/r8" remote add origin "$BN/none/x.git"; R8="$(bnrun "$BN/r8" --rename feat/n):$(git -C "$BN/r8" branch --show-current)"
+bnrepo r9 feat/same; R9="$(bnrun "$BN/r9" --rename feat/same)"
+check "branch-name.sh --rename: a plain local branch is renamed; one with an upstream, one that exists on a remote, one checked out in another worktree, a target that exists, an invalid name (feat/..x, a space, a leading dash) and a detached HEAD are refused with one line and nothing changed; an unreachable remote warns and renames; the same name is already" "$R1|$R2|$R3|$R4|$R5|$R6|$R7|$R8|$R9" "renamed w/a -> feat/DEVGD-1-x rc=0 :feat/DEVGD-1-x|branch-name.sh: not renamed: it tracks origin/w/a rc=1 :w/a|branch-name.sh: not renamed: it exists on origin rc=1 :w/b|branch-name.sh: not renamed: checked out in B/r4wt rc=1 :w/c|branch-name.sh: not renamed: feat/x already exists rc=1 |branch-name.sh: not renamed: invalid name rc=1 branch-name.sh: not renamed: invalid name rc=1 branch-name.sh: not renamed: invalid name rc=1 :w/e|branch-name.sh: not renamed: detached HEAD rc=1 |branch-name.sh: could not check remote origin; renaming anyway renamed w/g -> feat/n rc=0 :feat/n|already feat/same rc=0 "
 }
 
 sec_composer_tab() {
@@ -5408,46 +5509,11 @@ check "fetch_superpowers: without git only a warning (install exits 0, no folder
 }
 
 sec_install_migration() {
-# install.sh migrates the renamed mode academic-writer: config, prompt paths, roles folder and the compatibility links
-MH="$TMP/mig-home"; MK="$MH/.orca-roles"; rm -rf "$MH"; mkdir -p "$MK"
-mrun() { if MOUT="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC=0; else MRC=$?; fi; MREN="$(printf '%s\n' "$MOUT" | grep -c '^Renamed mode academic-writer to academic-research in your configuration ' || true)"; MMOV="$(printf '%s\n' "$MOUT" | grep -c '^Moved your academic-writer roles' || true)"; MWARN="$(printf '%s\n' "$MOUT" | grep -c '^WARNING: .*was not moved' || true)"; }
-mstate() { ( cd "$MK" && { shasum config.json; find roles -print 2>/dev/null | sort | xargs -I{} sh -c 'if [ -L "{}" ]; then echo "{} -> $(readlink "{}")"; else echo "{}"; fi'; find roles -type f 2>/dev/null | sort | xargs shasum 2>/dev/null; } | shasum ); }
-cat > "$MK/config.json" <<J
-{ "settings": { "mode": "academic-writer", "phase": "writing" }, "roles": {
-    "zeta": { "title": "Zeta", "modes": ["academic-writer", "programmer"], "prompt": { "academic-writer": "{kit}/roles/academic-writer/z.md", "programmer": "{kit}/roles/zeta-p.md" } },
-    "k1": { "title": "K1", "prompt": "$MK/roles/academic-writer/a.md" },
-    "k2": { "title": "K2", "prompt": "~/.orca-roles/prompts/academic-writer/b.md" },
-    "k3": { "title": "K3", "prompt": "{home}/.orca-roles/roles/academic-writer/sub/c.md" },
-    "k4": { "title": "K4", "prompt": "~/notes/roles/academic-writer/x.md" },
-    "k5": { "title": "K5", "prompt": "{kit}/roles/academic-writer-extra/x.md" },
-    "k6": { "title": "K6", "prompt": "{kit}/roles/foo/roles/academic-writer/x.md" },
-    "k7": { "title": "K7", "prompt": "/data/prompts/academic-writer/x.md" } } }
-J
-mkdir -p "$MK/roles/academic-writer/sub"; echo A > "$MK/roles/academic-writer/a.md"; echo H > "$MK/roles/academic-writer/.hid"; echo C > "$MK/roles/academic-writer/sub/c.md"
-mrun
-MR1="$MRC:$MREN"
-check "install migration: exit 0 and the Renamed line once; settings.mode, role modes and prompt key renamed, phase kept" "$MR1:$(jq -c '[.settings.mode, .settings.phase, .roles.zeta.modes, (.roles.zeta.prompt | keys)]' "$MK/config.json")" '0:1:["academic-research","writing",["academic-research","programmer"],["academic-research","programmer"]]'
-check "install migration: prompt paths in the four prefix forms are rewritten, only that segment" "$(jq -r '[.roles.zeta.prompt["academic-research"], .roles.k1.prompt, .roles.k2.prompt, .roles.k3.prompt] | join(" ")' "$MK/config.json")" "{kit}/roles/academic-research/z.md $MK/roles/academic-research/a.md ~/.orca-roles/prompts/academic-research/b.md {home}/.orca-roles/roles/academic-research/sub/c.md"
-# shellcheck disable=SC2088
-check "install migration: paths outside the kit or not at the folder boundary are untouched, role order kept" "$(jq -r '[.roles.k4.prompt, .roles.k5.prompt, .roles.k6.prompt, .roles.k7.prompt] | join(" ")' "$MK/config.json"):$(jq -r '.roles | keys_unsorted | .[0:3] | join(",")' "$MK/config.json")" "~/notes/roles/academic-writer/x.md {kit}/roles/academic-writer-extra/x.md {kit}/roles/foo/roles/academic-writer/x.md /data/prompts/academic-writer/x.md:zeta,k1,k2"
-check "install migration: the user's roles move (hidden and nested included), the old path is a relative link, Moved line once" "$MMOV:$(readlink "$MK/roles/academic-writer"):$(cat "$MK/roles/academic-research/a.md" "$MK/roles/academic-research/.hid" "$MK/roles/academic-research/sub/c.md" | tr '\n' ' '):$(cat "$MK/roles/academic-writer/a.md")" "1:academic-research:A H C :A"
-check "install migration: prompts/academic-writer is a relative link to prompts/academic-research and resolves" "$(readlink "$MK/prompts/academic-writer"):$(cmp -s "$MK/prompts/academic-writer/planner.md" "$ROOT/prompts/academic-research/planner.md" && echo same)" "academic-research:same"
-S1="$(mstate)"; mrun
-check "install migration: a second install prints none of the migration lines and changes nothing" "$MRC:$MREN:$MMOV:$MWARN:$([ "$(mstate)" = "$S1" ] && echo same)" "0:0:0:0:same"
-# a conflict keeps both, warns per entry, leaves the old folder without a link; once merged by hand the next install links it
-rm -rf "$MK/roles"; mkdir -p "$MK/roles/academic-writer" "$MK/roles/academic-research"; echo OLD > "$MK/roles/academic-writer/a.md"; echo NEW > "$MK/roles/academic-research/a.md"; echo B > "$MK/roles/academic-writer/b.md"; echo OLD2 > "$MK/roles/academic-writer/.h"; echo NEW2 > "$MK/roles/academic-research/.h"
-mrun
-check "install migration conflict: both versions kept, one WARNING per kept entry naming both paths, Moved for the rest, no link" "$MMOV:$MWARN:$(cat "$MK/roles/academic-writer/a.md" "$MK/roles/academic-research/a.md" "$MK/roles/academic-writer/.h" "$MK/roles/academic-research/.h" | tr '\n' ' '):$(cat "$MK/roles/academic-research/b.md"):$([ -L "$MK/roles/academic-writer" ] && echo link || echo dir):$(ls -A "$MK/roles/academic-writer" | tr '\n' ' '):$(printf '%s\n' "$MOUT" | grep -c "^WARNING: $MK/roles/academic-writer/a.md was not moved: $MK/roles/academic-research/a.md already exists. Any prompt path in your configuration that named the old file now names the new one. Merge them by hand, then run install.sh again.$")" "1:2:OLD NEW OLD2 NEW2 :B:dir:.h a.md :1"
-rm -f "$MK/roles/academic-writer/a.md" "$MK/roles/academic-writer/.h"; mrun
-check "install migration conflict: after the manual merge the next install links the old path, no warning" "$MRC:$MWARN:$(readlink "$MK/roles/academic-writer")" "0:0:academic-research"
-# a link to somewhere else is replaced, a user without the old mode sees no change and no new output
-rm -rf "$MK/roles"; mkdir -p "$MK/roles/elsewhere"; ln -s elsewhere "$MK/roles/academic-writer"; mrun
-check "install migration: an old link pointing elsewhere is replaced by the right one, the folder it pointed to is untouched" "$(readlink "$MK/roles/academic-writer"):$([ -d "$MK/roles/elsewhere" ] && echo kept)" "academic-research:kept"
-rm -rf "$MK/roles"; cat > "$MK/config.json" <<J
-{ "settings": { "mode": "programmer" }, "roles": { "foo": { "title": "Foo", "prompt": "{kit}/roles/foo.md" }, "k": { "title": "K", "prompt": "~/notes/roles/academic-writer/x.md" } } }
-J
-mrun; B1="$(shasum < "$MK/config.json")"; mrun
-check "install migration: without the old mode nothing is printed, no roles folder or link appears, config stable" "$MRC:$MREN:$MMOV:$MWARN:$([ -e "$MK/roles/academic-writer" ] || [ -L "$MK/roles/academic-writer" ] || [ -e "$MK/roles/academic-research" ] && echo present || echo none):$([ "$(shasum < "$MK/config.json")" = "$B1" ] && echo same):$(jq -r '.roles.foo.prompt, .roles.k.prompt' "$MK/config.json" | tr '\n' ' ')" "0:0:0:0:none:same:{kit}/roles/foo.md ~/notes/roles/academic-writer/x.md "
+# the academic-writer alias is gone: install.sh keeps the mode id the user wrote (the renamed message is shown), links nothing and moves no roles folder
+MH="$TMP/mig-home"; MK="$MH/.orca-roles"; rm -rf "$MH"; mkdir -p "$MK/roles/academic-writer"; echo A > "$MK/roles/academic-writer/a.md"
+printf '%s' '{ "settings": { "mode": "academic-writer" }, "roles": {} }' > "$MK/config.json"
+if MOUT="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC=0; else MRC=$?; fi
+check "install: a config that still says academic-writer keeps it (exit 0, the renamed message shown, no 'Renamed mode' line), prompts/academic-writer is not linked and the user's roles/academic-writer is left where it is" "$MRC:$(jq -r .settings.mode "$MK/config.json"):$(printf '%s\n' "$MOUT" | grep -c "^mode 'academic-writer' was renamed: use academic-research\$" || true):$(printf '%s\n' "$MOUT" | grep -c '^Renamed mode' || true):$([ -e "$MK/prompts/academic-writer" ] || [ -L "$MK/prompts/academic-writer" ] && echo linked || echo nolink):$([ -d "$MK/roles/academic-writer" ] && [ ! -L "$MK/roles/academic-writer" ] && cat "$MK/roles/academic-writer/a.md")" "0:academic-writer:1:0:nolink:A"
 }
 
 sec_install() {
@@ -5509,6 +5575,62 @@ drun ORCA_ROLES_REF=$SHA40
 check "install download: a 40-hex ref records the sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@$SHA40 $SHA40"
 drun ORCA_ROLES_REF=0123456
 check "install download: a short hex ref is not taken for a full sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@0123456"
+# bytecode: the oracle scripts leave no __pycache__ next to themselves, and install.sh drops one that came along with the copy of bin/
+PY1="$TMP/pyc"; rm -rf "$PY1"; cp -R "$ROOT/bin/oracle" "$PY1"; for f in verify_task loop spec_lint; do python3 -I "$PY1/$f.py" --help </dev/null >/dev/null 2>&1 || true; done
+PY2="$TMP/pyi"; rm -rf "$PY2"; mkdir -p "$PY2/h"; cp -R "$ROOT/bin" "$PY2/bin"; mkdir -p "$PY2/bin/oracle/__pycache__"; : > "$PY2/bin/oracle/__pycache__/x.pyc"; cp "$ROOT/install.sh" "$PY2/"
+for d in prompts plugin README.md config.default.json VERSION grafana pw; do if [ -e "$ROOT/$d" ]; then cp -R "$ROOT/$d" "$PY2/$d"; fi; done
+(cd "$TMP" && HOME="$PY2/h" bash "$PY2/install.sh" </dev/null >/dev/null 2>&1) || true
+check "bytecode: verify_task.py, loop.py and spec_lint.py leave no __pycache__ when run, an install of a bin/ that has one does not copy it into the kit, and .gitignore lists __pycache__/" "$(find "$PY1" -name __pycache__ | wc -l | tr -d ' '):$(find "$PY2/h/.orca-roles/bin" -name __pycache__ | wc -l | tr -d ' '):$([ -x "$PY2/h/.orca-roles/bin/launch.sh" ] && echo installed):$(grep -c '^__pycache__/$' "$ROOT/.gitignore" || true)" "0:0:installed:1"
+# the SessionStart hook that re-binds a reopened tab's Orca Runs (bin/session-hook.sh) and its registration in Claude Code's settings.json (temp HOME/KIT, a fake orca that logs its arguments)
+SH="$TMP/shk"; rm -rf "$SH"; mkdir -p "$SH/bin" "$SH/h/.orca-roles"; cp -R "$ROOT/bin" "$SH/h/.orca-roles/bin"; SHK="$SH/h/.orca-roles"; JQD="$(dirname "$(command -v jq)")"
+cat > "$SH/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$SH/orca.log"
+case "\$1 \$2" in
+  "terminal list") [ ! -e "$SH/hang" ] || sleep $((UT + 3)); cat "$SH/tl.json";;
+  "orchestration run-list") cat "$SH/rl.json";;
+  "orchestration run-use") [ ! -e "$SH/fail.\$4" ] || exit 1; echo '{"ok":true}';;
+  "orchestration check") echo '{"result":{"count":2}}';;
+esac
+exit 0
+EOS
+chmod +x "$SH/bin/orca"
+printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; printf '{"result":{"runs":[{"id":"run_a","coordinator_handle":"t1"},{"id":"run_b","coordinator_handle":"t1"},{"id":"run_c","coordinator_handle":"t9"}]}}' > "$SH/rl.json"
+shk() {  # shk <session id> [handle]: one hook start; SHO, SHR (exit status), SHT (seconds)
+  local t0=$SECONDS; : > "$SH/orca.log"
+  if SHO="$(printf '{"session_id":"%s","source":"resume"}' "$1" | env -i HOME="$SH/h" PATH="$SH/bin:$JQD:/usr/bin:/bin" ${2:+ORCA_TERMINAL_HANDLE="$2"} bash "$SHK/bin/session-hook.sh" 2>&1)"; then SHR=0; else SHR=$?; fi; SHT=$((SECONDS - t0))
+}
+shl() { grep -c -e "$1" "$SH/orca.log" || true; }
+shrec() { cat "$SHK/state/session-handles/$1" 2>/dev/null || echo none; }
+shk s0; H0="$SHR:${SHO:-quiet}:$([ -e "$SHK/state" ] && echo state || echo nostate)"
+shk s1 t1; H1="$SHR:${SHO:-quiet}:$(shrec s1):$(wc -l < "$SH/orca.log" | tr -d ' ')"; shk s1 t1; H1="$H1:${SHO:-quiet}:$(shrec s1):$(wc -l < "$SH/orca.log" | tr -d ' ')"
+shk s1 t2; H2="$SHR:$(printf '%s\n' "$SHO" | grep -c '^orca-roles: this tab reopened with a new terminal handle; re-bound Run(s) run_a, run_b to it\. 4 message(s) waiting'):$(shl 'run-use --id run_a'):$(shl 'run-use --id run_b'):$(shl 'run-use --id run_c'):$(shrec s1)"
+printf 't1\n' > "$SHK/state/session-handles/s2"; printf '{"result":{"terminals":[{"handle":"t1"},{"handle":"t2"}]}}' > "$SH/tl.json"; shk s2 t2; H3="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s2)"
+printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; printf 't1\n' > "$SHK/state/session-handles/s3"; : > "$SH/fail.run_a"; shk s3 t2
+H4="$SHR:$(printf '%s\n' "$SHO" | grep -c 're-bound Run(s) run_b to it'):$(shrec s3):$(grep -c 'run-use run_a failed' "$SHK/state/session-hook.log" || true)"; rm -f "$SH/fail.run_a"
+shk '../x' t2; H5="$SHR:${SHO:-quiet}:$(find "$SHK/state/session-handles" -type f ! -name '.*' | wc -l | tr -d ' ')"
+printf 't1\n' > "$SHK/state/session-handles/s4"; : > "$SH/hang"; shk s4 t2; H6="$SHR:$([ "$SHT" -le 12 ] && echo in-time):${SHO:-quiet}:$(shrec s4):$(pgrep -f "sleep $((UT + 3))" | wc -l | tr -d ' ' || true)"; pkill -f "sleep $((UT + 3))" 2>/dev/null || true; rm -f "$SH/hang"
+printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":true}}' > "$SH/tl.json"; printf 't1\n' > "$SHK/state/session-handles/s5"; shk s5 t2; H7="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s5)"
+printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":false,"hostScope":{"omittedHostIds":["x"]}}}' > "$SH/tl.json"; printf 't1\n' > "$SHK/state/session-handles/s6"; shk s6 t2; H8="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s6)"; printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":false,"hostScope":{"omittedHostIds":[]}}}' > "$SH/tl.json"
+SH2="$TMP/shk2/.orca-roles"; rm -rf "$TMP/shk2"; mkdir -p "$SH2"; cp -R "$ROOT/bin" "$SH2/bin"; printf '{"session_id":"s7","source":"resume"}' | env -i HOME="$SH/h" KIT="$SHK" PATH="$SH/bin:$JQD:/usr/bin:/bin" ORCA_TERMINAL_HANDLE=t1 bash "$SH2/bin/session-hook.sh" >/dev/null 2>&1; H9="$(cat "$SH2/state/session-handles/s7" 2>/dev/null || echo none):$(shrec s7)"
+check "session hook: no terminal handle -> nothing read or written; first start records the handle, no orca call; same handle again -> nothing; a new handle whose old one is gone takes exactly the Runs bound to the old one (a, b, not c), one line naming both with the waiting count, record updated; an old handle that still lives -> no run-use, no output, record updated; a failing run-use -> only the others are named, the record is kept, one log line; a bad session id writes nothing; a hanging orca -> exit 0 within 12 s, nothing kept running, record kept; a terminal list that is truncated or omits a host proves nothing (no run-use, record kept); the hook uses the kit that holds the script, not \$KIT" "$H0|$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9" "0:quiet:nostate|0:quiet:t1:0:quiet:t1:0|0:1:1:1:0:t2|0:quiet:0:t2|0:1:t1:1|0:quiet:3|0:in-time:quiet:t1:0|0:quiet:0:t1|0:quiet:0:t1|t1:none"
+# ensure_session_hook / remove_session_hook (the settings.json of Claude Code: everything else is kept)
+SF="$TMP/shs"; rm -rf "$SF"; mkdir -p "$SF"; KB="$(cd "$KIT" && pwd)"; : > "$KIT/.installed"   # only an installed kit registers the hook
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/a/settings.json"; ensure_session_hook; E1="$(jq -c .hooks.SessionStart "$SF/a/settings.json")"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/b.json"; printf '{"theme":"dark","hooks":{"SessionStart":[{"matcher":"x","hooks":[{"type":"command","command":"orca-hook.sh"}]}]}}' > "$SF/b.json"; ensure_session_hook --backup; C1="$(cksum < "$SF/b.json")"; B1="$(cat "$SF/b.json.orca-roles-bak")"; rm -f "$SF/b.json.orca-roles-bak"; ensure_session_hook --backup
+E2="$(jq -c '[.theme, (.hooks.SessionStart | length), .hooks.SessionStart[0].hooks[0].command]' "$SF/b.json"):$([ "$C1" = "$(cksum < "$SF/b.json")" ] && echo same):$([ -e "$SF/b.json.orca-roles-bak" ] && echo bak || echo nobak):$(printf '%s' "$B1" | jq -c '.theme')"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/c.json"; printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/old/kit/bin/session-hook.sh","timeout":20}]}]}}' > "$SF/c.json"; ensure_session_hook; E3="$(jq -c '[(.hooks.SessionStart | length), .hooks.SessionStart[0].hooks[0].command, .hooks.SessionStart[0].hooks[0].timeout]' "$SF/c.json")"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/d.json"; printf '{nope' > "$SF/d.json"; E4="$(ensure_session_hook; echo "rc=$?")"; E4="$E4:$(cat "$SF/d.json"):$(ensure_session_hook_or_warn | grep -c 'is not valid JSON; the kit.s SessionStart hook was not added' || true)"
+export ORCA_ROLES_CLAUDE_SETTINGS="$SF/b.json"; remove_session_hook; E5="$(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionStart[0].hooks[0].command)]' "$SF/b.json")"; export ORCA_ROLES_CLAUDE_SETTINGS="$SF/a/settings.json"; remove_session_hook; E6="$(jq -c . "$SF/a/settings.json")"; rm -f "$KIT/.installed"; export ORCA_ROLES_CLAUDE_SETTINGS="$SF/clone.json"; ensure_session_hook; E7="$?:$([ -e "$SF/clone.json" ] && echo created || echo untouched)"; unset ORCA_ROLES_CLAUDE_SETTINGS
+check "ensure_session_hook: a missing settings.json is created with only the hook; an existing one keeps its other keys and entries, gets the entry once (a second call is byte-identical and writes no backup; --backup copies the old file only when it writes), an entry of another kit path is replaced in place keeping its other fields, invalid JSON is left as it is (return 1, the WARNING line); remove_session_hook drops only the kit's entry and the arrays it empties; from a clone (no .installed) it registers nothing" "$E1|$E2|$E3|$E4|$E5|$E6|$E7" "[{\"hooks\":[{\"type\":\"command\",\"command\":\"$KB/bin/session-hook.sh\",\"timeout\":15}]}]|[\"dark\",2,\"orca-hook.sh\"]:same:nobak:\"dark\"|[1,\"$KB/bin/session-hook.sh\",20]|rc=1:{nope:1|[\"dark\",1,\"orca-hook.sh\"]|{}|0:untouched"
+IH="$TMP/ihook"; rm -rf "$IH"; mkdir -p "$IH"; ihi() { (cd "$TMP" && HOME="$IH" ORCA_ROLES_CLAUDE_SETTINGS="$IH/.claude/settings.json" bash "$ROOT/install.sh" </dev/null 2>&1); }
+IA="$(ihi | grep -c '^Claude Code SessionStart hook: added to ~/.claude/settings.json (re-binds Orca Runs when a tab reopens)\.$' || true)"; IB="$(jq -c '[.hooks.SessionStart[].hooks[].command | select(endswith("/bin/session-hook.sh"))] | length' "$IH/.claude/settings.json")"
+IC="$(ihi | grep -c 'SessionStart hook' || true):$(jq -c '[.hooks.SessionStart[].hooks[].command | select(endswith("/bin/session-hook.sh"))] | length' "$IH/.claude/settings.json")"
+jq '.settings.sessionHook = false' "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; ID="$(ihi | grep -c 'SessionStart hook' || true):$(jq -c '.hooks // "nohooks"' "$IH/.claude/settings.json")"
+jq '.settings.sessionHook = "yes"' "$ROOT/config.default.json" > "$IH/bad.json"; IE="$(check_config "$IH/bad.json" | grep -c 'settings.sessionHook' || true)"
+check "SessionStart hook install: the install adds the entry to settings.json once and says so once (a second install is silent and keeps one entry); settings.sessionHook false removes it, silently; a non-boolean value is an ERROR" "$IA:$IB|$IC|$ID|$IE" "1:1|0:1|0:\"nohooks\"|1"
+PM1="$(planner_ask_msg "$KIT/config.default.json")"; PH="$(for m in programmer pr-reviewer academic-research; do grep -c 'AskUserQuestion' "$ROOT/prompts/$m/planner.md"; done | tr '\n' ' ')"
+check "mode asked in plain text and Runs re-bound: planner_ask_msg says plain text and names AskUserQuestion only in its 'never' sentence; the three Planner prompts carry the same rule; the coordinator prompt tells it to take a Run bound to a dead handle (run-show, run-use) and never silences the check ack" "$(printf '%s' "$PM1" | grep -o 'plain text' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -o 'AskUserQuestion' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -c 'never with the AskUserQuestion tool'):$PH:$(grep -c 'run-use' "$ROOT/prompts/coordinator.md"):$(grep -c 'Never silence' "$ROOT/prompts/coordinator.md" || true)" "1:1:1:1 1 1 :1:1"
 }
 
 sec_coordinator() {
@@ -5699,6 +5821,7 @@ check "kit-path: relaunch-planner.sh sources the lib.sh of KIT" "$RC:$(grep -c S
 KPNO=""; KPPIN=""
 for f in "$ROOT"/bin/*.sh; do
   [ "$(basename "$f")" = lib.sh ] && continue
+  [ "$(basename "$f")" = session-hook.sh ] && continue   # the hook takes the kit that holds the script (it is registered by absolute path), not $KIT
   if grep -qE '\$KIT|\$\{KIT' "$f" && ! grep -qF 'KIT="${KIT:-' "$f"; then KPNO="$KPNO $(basename "$f")"; fi
 done
 for f in "$ROOT"/bin/*.sh; do grep -qF 'KIT="$HOME/.orca-roles"' "$f" && KPPIN="$KPPIN $(basename "$f")"; done
@@ -7075,47 +7198,14 @@ touch "$TMP/aw-alive"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" "$PKL/bin/close-role.sh" nop 2>&1) > "$TMP/aw-h1.out"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
 check "phase.sh refuses outside academic-research; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-research (this worktree: programmer):1:1:0"
-# the renamed mode keeps its old id as an alias: old ids in persisted state read as the new mode, with a note; the saved state moves to the new id only when a launch succeeds
+# a worktree configuration saved by a kit that still wrote the old mode id is read as academic-research (mode_of --saved)
 LC="$TMP/aw-lc"; mkdir -p "$LC"
-jq -c '.settings.mode="academic-writer" | .roles.exp.modes=["academic-writer"] | .roles.wr.prompt={"academic-writer":"/old/wr.md"} | .roles.both.prompt={"academic-writer":"/old/both.md","academic-research":"/new/both.md"}' "$AC" > "$LC/old.json"
-jq -c '.roles.exp.modes=["academic-wirter"]' "$AC" > "$LC/typo.json"
-mkdir -p "$LC/proj"; git -C "$LC/proj" init -q; printf '%s' '{"settings":{"mode":"academic-writer"},"roles":{"both":{"modes":["academic-writer","programmer"],"prompt":{"academic-writer":"/old/both.md","academic-research":"/new/both.md"}},"wr":{"prompt":{"academic-writer":"/old/wr.md"}}}}' > "$LC/proj/.orca-roles.json"
-LM="$(cd "$LC/proj" && KIT="$PK" merged_config . | jq -c '[.settings.mode, .roles.both.modes, .roles.both.prompt, .roles.wr.prompt]')"
-check "legacy id: a config saved under the old mode id reads as academic-research (mode, roles, prompt keys; merged with a project config the new key wins) and the library accepts it; a typo is still rejected" "$(KIT="$PK" mode_of "$LC/old.json"):$(KIT="$PK" enabled_roles "$LC/old.json" | tr '\n' ' '):$(KIT="$PK" prompt_of "$LC/old.json" wr):$(KIT="$PK" prompt_of "$LC/old.json" both):[$(KIT="$PK" check_config "$LC/old.json")]:$(KIT="$PK" check_config "$LC/typo.json" | grep -c 'unknown mode ids'):$(canon_mode academic-writer)|$(canon_mode Academic-Writer)|$(canon_mode academic-research):$LM" "academic-research:planner exp both nop :/old/wr.md:/new/both.md:[]:1:academic-research|Academic-Writer|academic-research:[\"academic-research\",[\"academic-research\",\"programmer\"],{\"academic-research\":\"/new/both.md\"},{\"academic-research\":\"/old/wr.md\"}]"
-LY=""; i=0; for j in '{"settings":{"mode":"academic-writer"}}' '{"roles":{"x":{"modes":["programmer","academic-writer"]}}}' '{"roles":{"x":{"prompt":{"academic-writer":"p"}}}}' '{"mode":"academic-writer"}' '{"set":[{"path":["settings","mode"],"value":"academic-writer"}]}' '{"settings":{"mode":"academic-research"},"roles":{"x":{"modes":["academic-research"],"prompt":{"academic-research":"p"}}},"mode":"pr-reviewer","set":[{"path":["roles","x","model"],"value":"academic-writer"}]}' '{"roles":{"x":{"modes":"all"}}}' garbage; do
-  i=$((i + 1)); printf '%s' "$j" > "$LC/ly$i.json"; if legacy_mode_in "$LC/ly$i.json"; then LY="${LY}y"; else LY="${LY}n"; fi
-done
-if legacy_mode_in "$LC/missing.json"; then LY="${LY}y"; else LY="${LY}n"; fi
-check "legacy id: legacy_mode_in finds the old id in settings.mode, a role's modes, a prompt key, .mode and a settings.mode entry of .set, and nothing else (missing or invalid file: no)" "$LY" "yyyyynnnn"
-printf '%s' '{"only":["a"],"set":[{"path":["settings","mode"],"value":"academic-writer"},{"path":["roles","x","model"],"value":"academic-writer"}],"mode":"academic-writer"}' > "$LC/ov.json"
-check "legacy id: --mode, --mode=, --set settings.mode= and --set=settings.mode= are stored as academic-research; canon_overrides maps .mode and the settings.mode entry of .set only" "$(for a in "--mode academic-writer" "--mode=academic-writer" "--set settings.mode=academic-writer" "--set=settings.mode=academic-writer" "--mode Academic-Writer"; do overrides_from_args $a | jq -r .mode; done | tr '\n' ' ')$(canon_overrides "$LC/ov.json" | jq -c '[.mode, .set[0].value, .set[1].value, .only]')" "academic-research academic-research academic-research academic-research Academic-Writer [\"academic-research\",\"academic-research\",\"academic-writer\",[\"a\"]]"
-# launch under the old id
 LG="$TMP/aw-leg"; mkdir -p "$LG"; git -C "$LG" init -q -b main; LGG="$LG/.git"
 aln() { (cd "$LG" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
-lgh() { cut -d= -f1 "$LGG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
-lgmsg() { (cd "$LG" && KIT="$PK" planner_msg "$LGG/orca-roles.config.json" "planner exp" "$LGG/orca-roles.env" "" "" 0); }
-rm -f "$TMP/aw-alive"; printf '{ "settings": { "mode": "academic-writer" } }' > "$LG/.orca-roles.json"
-try aln --mode academic-writer
-check "legacy id: the old id in .orca-roles.json and --mode launches the academic-research team, prints one note naming both sources, keeps a copy for the Planner, saves only the new id, and the Planner is told to relay it" "$RC:$(lgh):$(printf '%s\n' "$OUT" | grep -c "^Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: .orca-roles.json (.*/.orca-roles.json); the options of this run (--mode or the setup script in orca.yaml). Update it to academic-research.$"):$(printf '%s\n' "$OUT" | grep -c 'academic-writer'):$(printf '%s\n' "$OUT" | grep -c '^Mode: academic-research$'):$([ "$(cat "$LGG/orca-roles.legacy-note")" = "$(printf '%s\n' "$OUT" | grep '^Note: ')" ] && echo same):$(jq -r .mode "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json"):$(lgmsg | grep -c 'Tell the user at startup, in one line: Note: mode .academic-writer. is now called')" "0:PLANNER EXP BOTH NOP :1:1:1:same:academic-research:academic-research:1"
-rm -f "$LG/.orca-roles.json" "$LGG/orca-roles.env"
+rm -f "$TMP/aw-alive"; rm -f "$LG/.orca-roles.json" "$LGG/orca-roles.env"
 try aln --reset --mode academic-research
-check "legacy id: with the new name nothing about the alias shows (no note, no copy for the Planner, nothing in its message)" "$RC:$(lgh):$(printf '%s\n' "$OUT" | grep -c 'academic-writer\|^Note:'):$([ -e "$LGG/orca-roles.legacy-note" ] && echo present):$(lgmsg | grep -c 'Tell the user')" "0:PLANNER EXP BOTH NOP :0::0"
-rm -f "$LGG/orca-roles.env"; printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"
-try aln
-check "legacy id: saved options with the old mode id still select the same team, are rewritten to the new id with the role selection kept, and are named in the note; no normalized copy is left" "$RC:$(lgh):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(printf '%s\n' "$OUT" | grep -c "^Note: .*Found in: this worktree's saved options (.*orca-roles.overrides.json)\. Update it to academic-research\.$"):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' '):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:PLANNER EXP :[\"academic-research\",[\"exp\"]]:1:0:academic-research"
-# a team open under the old id is the same mode
 jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
-printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; touch "$TMP/aw-alive"
-try aln --mode academic-research
-check "legacy id: a team open under the old id is the same mode: no open-team refusal, no dropped role selection" "$RC:$(printf '%s\n' "$OUT" | grep -c 'team is open in mode\|Mode changed'):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:0:[\"academic-research\",[\"exp\"]]:academic-research"
-# a failed launch changes nothing; --status reads the old id
-printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
-LB="$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" 2>/dev/null | cksum || true)"
-try aln --only nonexist
-check "legacy id: a launch that fails leaves the saved options, config, handles and note as they were, and no normalized copy" "$RC:$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" | cksum):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' ')" "1:$LB:0"
 check "legacy id: --status reads a worktree configuration saved under the old id as academic-research, with its phase" "$(aln --status | grep '^Mode:\|^Phase:' | tr '\n' ' ')" "Mode: academic-research Phase: experiment "
-SG="$TMP/aw-sc4"; mkdir -p "$SG"; printf '# orca-roles academic-writer\nmy\n' > "$SG/.gitignore"; try "$SC" "$SG"
-check "legacy id: the scaffold treats a .gitignore with the old header as having the block: no second header, old header untouched" "$RC:$(grep -c '^# orca-roles' "$SG/.gitignore"):$(head -2 "$SG/.gitignore" | tr '\n' ' ')" "0:1:# orca-roles academic-writer my "
 rm -f "$TMP/aw-alive"
 rm -rf "$PK/prompts/academic-research"   # the other sections reuse this kit and expect the mode unavailable
 }
@@ -7219,7 +7309,7 @@ case "$url" in
   *api.openalex.org/works?*) kind=oa; body=oa_search.json;;
   *api.openalex.org/publishers?*) kind=oa; case "$url" in *search=nomatch*) body=empty.json;; *) body=pub.json;; esac;;
   *api.openalex.org/sources?*) kind=oa; case "$url" in *search=zzz*) body=empty.json;; *) body=src.json;; esac;;
-  *export.arxiv.org*) kind=ax; case "$url" in *id_list=9999*) body=ax_empty.xml;; *id_list=err*) body=ax_err.xml;; *id_list=*) body=ax_show.xml;; *) body=ax_search.xml;; esac;;
+  *export.arxiv.org*) kind=ax; case "$url" in *id_list=9999*) body=ax_empty.xml;; *id_list=err*) body=ax_err.xml;; *id_list=*) body=ax_show.xml;; *search_query=all:%22*) if [ -e "$SCH_FX/phrase_empty" ]; then body=ax_empty.xml; else body=ax_search.xml; fi;; *) body=ax_search.xml;; esac;;
   *api.semanticscholar.org*) kind=s2; body=s2.json;;
   *) kind=x; body=empty.json;;
 esac
@@ -7247,20 +7337,29 @@ sch_setup
 # search, all sources without a key: rows, cleaning, ids, limit, cross-source dedupe, one call per source
 sch_codes; sc search "graph neural" --limit 3
 EXP="$(printf 'source\tid\tyear\tfirst_author\tvenue\tcitations\toa\ttitle\nopenalex\tdoi:10.1000/abc.1\t2023\tAlma Larkin\tNature\t42\tyes\tDeep Learning for Tabs\nopenalex\tarxiv:2401.00001\t2024\t-\t-\t0\tno\tArx paper\nopenalex\topenalex:W3\t-\t-\t-\t-\tno\tNo doi\narxiv\tarxiv:2402.00002\t2024\tBob Smith\tarXiv cs.CL\t-\tyes\tTitle & more\narxiv\tarxiv:hep-th/9901001\t2024\tOld Author\tarXiv hep-th\t-\tyes\tOld style')"
-check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:graph+AND+all:neural&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
+check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:%22graph+neural%22&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
 # filters per source
 sch_codes
 sc search "rag models" --from 2023-01-01 --to 2024-12-31 --type proceedings --oa --sort citations --limit 05 --source openalex
 R1="$(cat "$SCH/rc"):$(scu 'filter=from_publication_date:2023-01-01,to_publication_date:2024-12-31,type:conference-paper,is_oa:true&sort=cited_by_count:desc&per_page=5&select='):$(scn)"
 sc search "x y" --type article --source openalex; R2="$(scu 'filter=type:article&sort='):$(scu 'filter=type:preprint')"
 sc search "x" --type preprint --source openalex; R2="$R2:$(scu 'filter=type:preprint&sort=')"
-sc search "graph neural" --from 2023-01-01 --source arxiv --sort date --limit 4; R3="$(scu 'search_query=all:graph+AND+all:neural+AND+submittedDate:%5B202301010000+TO+209912312359%5D&start=0&max_results=4&sortBy=submittedDate&sortOrder=descending')"
+sc search "graph neural" --from 2023-01-01 --source arxiv --sort date --limit 4; R3="$(scu 'search_query=all:%22graph+neural%22+AND+submittedDate:%5B202301010000+TO+209912312359%5D&start=0&max_results=4&sortBy=submittedDate&sortOrder=descending')"
 sc search "graph" --to 2024-12-31 --source arxiv --sort citations; R3="$R3:$(scu 'submittedDate:%5B199101010000+TO+202412312359%5D&start=0&max_results=10&sortBy=relevance&'):$(cat "$SCH/err")"
 sc search "big" --publisher big --venue NeurIPS --source openalex
 R4="$(cat "$SCH/rc"):$(scu 'publishers?search=big&per_page=25&select=id,display_name,lineage,works_count'):$(scu 'sources?search=Neural%20Information%20Processing%20Systems&per_page=10&select=id,display_name,works_count'):$(scu 'filter=primary_location.source.publisher_lineage:P2,primary_location.source.id:S2&sort='):$(cat "$SCH/err" | tr '\n' '|')"
 sc search "q" --publisher nomatch --source openalex; R5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu 'api.openalex.org/works?')"
 sc search "q" --venue "zzz" --source openalex; R5="$R5:$(cat "$SCH/rc"):$(cat "$SCH/err")"
 check "scholar search filters: OpenAlex filters/sort/per_page, arXiv dates and sort, notes" "$R1:$R2:$R3:$R4:$R5" "0:1:1:1:0:1:1:1:note: arxiv has no citation counts; sorted by relevance:0:1:1:1:note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|note: venue 'NeurIPS' -> neural information processing systems (S2)|note: other candidates: Other Conf (S1), NIPS Workshop (S3)|:1:scholar.sh: no OpenAlex publisher matches 'nomatch':0:1:scholar.sh: no OpenAlex venue matches 'zzz'"
+# several-word arXiv search: the phrase first; when it finds nothing, the words without stop words ANDed (one word, or all stop words: no second call; an HTTP error: no second call)
+sch_codes; rm -f "$FX/phrase_empty"
+sc search "transformer" --source arxiv --limit 3; X1="$(scn):$(scu 'search_query=all:transformer&')"
+sc search "attention is all you need" --source arxiv; X2="$(scn):$(scu 'search_query=all:%22attention+is+all+you+need%22&')"
+: > "$FX/phrase_empty"
+sc search "attention is all you need" --source arxiv; X3="$(scn):$(scu 'search_query=all:attention+AND+all:need&')"
+sc search "is all the" --source arxiv; X4="$(scn)"
+rm -f "$FX/phrase_empty"; echo 500 > "$FX/code.ax"; sc search "attention is all you need" --source arxiv; X5="$(scn)"; sch_codes
+check "scholar search arXiv several words: one word is one call (all:word); several words ask the phrase first (1 call when it has entries); a phrase with no entries gets one more call with the words that are not stop words ANDed (attention need); only stop words or an HTTP error on the first call: no second call" "$X1|$X2|$X3|$X4|$X5" "1:1|1:1|2:1|1|1"
 
 sch_codes
 sc search "q" --sort date --source openalex; D1="$(cat "$SCH/rc"):$(scu 'sort=publication_date:desc&per_page=10&'):$(scu 'sort=relevance_score'):$(cat "$SCH/err")"

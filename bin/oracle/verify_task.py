@@ -8,6 +8,7 @@
 Statuses: pass, pass_flaky, fail, no_acceptance_command, command_not_allowed, env_not_runnable, dry_run.
 Exit 0 only on pass (or pass_flaky) and no cheat."""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+sys.dont_write_bytecode = True
 import tempfile
 import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,11 +29,15 @@ SECRET = re.compile(r'(sk-[A-Za-z0-9_\-]{16,}|eyJ[A-Za-z0-9_\-]{20,}|gh[pousr]_\
 
 
 def git(wt, *a):
-    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True, text=True)
+    return subprocess.run(['git', '-c', 'core.quotePath=false', '-C', wt] + list(a), capture_output=True, text=True, errors='replace')
 
 
 def git_env(wt, env, *a):
-    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True, text=True, env=env)
+    return subprocess.run(['git', '-c', 'core.quotePath=false', '-C', wt] + list(a), capture_output=True, text=True, errors='replace', env=env)
+
+
+def git_bytes(wt, *a, **kw):
+    return subprocess.run(['git', '-c', 'core.quotePath=false', '-C', wt] + list(a), capture_output=True, **kw)
 
 
 def pick_base(wt, given):
@@ -79,22 +85,119 @@ def package_scripts(text):
     return scripts if isinstance(scripts, dict) else {}
 
 
-def script_name(tokens):
-    """The package script a command runs, or None when it is not one of the recognised forms."""
+INSTALL_HOOKS = ['preinstall', 'install', 'postinstall', 'prepare', 'preprepare', 'postprepare']
+NPM_INSTALL = {'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt',
+               'isnta', 'isntal', 'isntall', 'add', 'rebuild', 'rb'}
+NPM_INSTALL_TEST = {'install-test', 'it', 'install-ci-test', 'cit', 'clean-install-test', 'sit'}
+PNPM_INSTALL = {'install', 'i', 'add', 'rebuild', 'rb'}
+WRAPPERS = {'npx', 'cross-env', 'env', 'exec', 'time', 'nice', 'nohup', 'command', 'sudo'}
+SHELLS = {'bash', 'sh', 'zsh', 'dash'}
+ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+
+def skip_prefix(tokens):
+    """The command's tokens without leading NAME=value words and wrapper commands (npx, cross-env, env, exec, time, nice, nohup, command, sudo -E) with their options."""
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if ASSIGN.match(t):
+            i += 1
+        elif os.path.basename(t) in WRAPPERS:
+            i += 1
+            while i < len(tokens) and tokens[i].startswith('-'):
+                i += 2 if tokens[i] == '-n' else 1
+        else:
+            break
+    return tokens[i:]
+
+
+def script_names(tokens):
+    """The package scripts a command runs (install commands run their lifecycle hooks), or [] when it is not one of the recognised forms."""
+    tokens = skip_prefix(tokens)
+    if not tokens:
+        return []
+    tool = tokens[0]
+    if tool == 'yarn' and all(t.startswith('-') for t in tokens[1:]):
+        return list(INSTALL_HOOKS)
     if len(tokens) < 2:
-        return None
-    tool, a1 = tokens[0], tokens[1]
+        return []
+    a1 = tokens[1]
     if tool == 'npm':
         if a1 in ('test', 't'):
-            return 'test'
+            return ['test']
         if a1 in ('run', 'run-script') and len(tokens) > 2:
-            return tokens[2]
+            return [tokens[2]]
+        if a1 in NPM_INSTALL:
+            return list(INSTALL_HOOKS)
+        if a1 in NPM_INSTALL_TEST:
+            return INSTALL_HOOKS + ['test']
     elif tool in ('pnpm', 'yarn'):
         if a1 == 'run':
-            return tokens[2] if len(tokens) > 2 else None
+            return [tokens[2]] if len(tokens) > 2 else []
+        if tool == 'pnpm' and a1 in PNPM_INSTALL or tool == 'yarn' and a1 in ('install', 'add'):
+            return list(INSTALL_HOOKS)
         if not a1.startswith('-'):
-            return a1
-    return None
+            return [a1]
+    return []
+
+
+def segments(text):
+    """The simple commands of a command line as token lists (split at && || ; | & outside quotes), or None when it cannot be tokenised."""
+    lex = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    out, cur = [], []
+    try:
+        for t in lex:
+            if t and all(c in '();&|<>' for c in t):
+                if any(c in ';&|' for c in t) and cur:
+                    out.append(cur)
+                    cur = []
+            else:
+                cur.append(t)
+    except ValueError:
+        return None
+    if cur:
+        out.append(cur)
+    return out
+
+
+def seg_files(seg, depth=0):
+    """The .sh file one simple command runs (directly, or as the script of bash/sh/zsh/dash, also inside -c '...'), as (files, ok)."""
+    toks = skip_prefix(seg)
+    if not toks:
+        return [], True
+    if os.path.basename(toks[0]) not in SHELLS:
+        return ([toks[0]] if toks[0].endswith('.sh') else []), True
+    files, ok, j = [], True, 1
+    while j < len(toks):
+        t = toks[j]
+        if t == '--':
+            j += 1
+            break
+        if t in ('-o', '-O', '+o', '+O', '--rcfile', '--init-file'):
+            j += 2
+        elif re.match(r'^-[A-Za-z]+$', t) and 'c' in t:   # -c, -lc, -ec: the next word is a script line
+            if j + 1 < len(toks) and depth < 3:
+                files, ok = sh_files(toks[j + 1], depth + 1)
+            return files, ok
+        elif t.startswith(('-', '+')):
+            j += 1
+        else:
+            break
+    return [t for t in toks[j:] if t.endswith('.sh')][:1], True
+
+
+def sh_files(text, depth=0):
+    """The .sh files a command line or script text runs, by tokens (the SH_REF patterns find others): (files, ok); ok False when the text cannot be tokenised."""
+    segs = segments(text)
+    if segs is None:
+        return [], False
+    files, ok = [], True
+    for seg in segs:
+        f, o = seg_files(seg, depth)
+        files += f
+        ok = ok and o
+    return files, ok
 
 
 def reached_scripts(start, scripts):
@@ -135,15 +238,26 @@ def runner_findings(wt, base, cmds, changed):
         if path in changed and not any(f.get('file') == path for f in findings):
             findings.append(dict(kind='runner_file_changed', file=path))
 
+    def any_sh_changed():
+        for path in sorted(changed):
+            if path.endswith('.sh'):
+                file_changed(path)
+
     reported = []
     for cmd in cmds:
-        for part in split_and(cmd):
-            try:
-                tokens = shlex.split(part)
-            except ValueError:
-                continue
-            start = script_name(tokens)
-            if start:
+        segs = segments(cmd)
+        if segs is None:   # cannot be read by tokens: every changed .sh counts
+            any_sh_changed()
+            parts = []
+            for part in split_and(cmd):
+                try:
+                    parts.append(shlex.split(part))
+                except ValueError:
+                    continue
+        else:
+            parts = segs
+        for tokens in parts:
+            for start in script_names(tokens):
                 names = reached_scripts(start, now) + [n for n in reached_scripts(start, old)]
                 names = [n for i, n in enumerate(names) if n not in names[:i]]
                 texts = []
@@ -157,8 +271,92 @@ def runner_findings(wt, base, cmds, changed):
                     for rx in SH_REF:
                         for m in rx.finditer(text):
                             file_changed(m.group(1))
-            elif len(tokens) > 1 and tokens[0] == 'bash' and tokens[1].endswith('.sh'):
-                file_changed(tokens[1])
+                    fs, ok = sh_files(text)
+                    for f in fs:
+                        file_changed(f)
+                    if not ok:
+                        any_sh_changed()
+        if segs is not None:
+            for seg in segs:
+                fs, ok = seg_files(seg)
+                for f in fs:
+                    file_changed(f)
+                if not ok:
+                    any_sh_changed()
+    return findings
+
+
+HIDDEN_NAMES = {'conftest.py', 'pytest.ini', 'setup.cfg', 'tox.ini', 'sitecustomize.py', 'usercustomize.py'}
+
+
+def hidden_candidate(path):
+    name = os.path.basename(path)
+    return name in HIDDEN_NAMES or name.endswith('.pth') or name.startswith(('jest.config.', 'vitest.config.'))
+
+
+def global_excludes(wt):
+    r = git(wt, 'config', 'core.excludesFile').stdout.strip()
+    if not r:
+        r = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
+    return os.path.realpath(os.path.expanduser(r))
+
+
+SITE_PACKAGES = re.compile(r'^(?:lib|lib64)/(?:python|pypy)[0-9.]+/site-packages/|^Lib/site-packages/')
+
+
+def hidden_test_config(wt, base, env):
+    """Ignored files that configure the test runner, hidden by a rule the worker may have added.
+    A rule from .git/info/exclude, the global excludes file or a .gitignore that is new or changed since base is flagged; an unchanged .gitignore
+    (node_modules/, dist/, .venv/ that were there before) is not. A real venv is exempt: the folder with the .gitignore holds pyvenv.cfg, has no
+    tracked file at base or in the worktree, and the candidate lies under lib/pythonX.Y/site-packages/ (or Lib/site-packages/) in it.
+    env: the environment of the temporary index (what the worktree holds, ignored files left out)."""
+    listed = git_bytes(wt, 'ls-files', '-o', '-i', '--exclude-standard', '-z', text=False).stdout.decode('utf-8', 'replace').split('\0')
+    cands = [p for p in listed if p and hidden_candidate(p)]
+    if not cands:
+        return []
+    r = git_bytes(wt, 'check-ignore', '-v', '--no-index', '-z', '--stdin', text=False, input=('\0'.join(cands) + '\0').encode('utf-8', 'surrogateescape'))
+    out = r.stdout.decode('utf-8', 'replace').split('\0')
+    info_ex = os.path.realpath(os.path.join(wt, git(wt, 'rev-parse', '--git-path', 'info/exclude').stdout.strip() or '.git/info/exclude'))
+    glob_ex = global_excludes(wt)
+    changed_cache = {}
+    venv_cache = {}
+
+    def real_venv_dir(d):
+        """d (relative, '.' for the root) holds pyvenv.cfg and nothing tracked at base or in the worktree."""
+        if d not in venv_cache:
+            ok = d != '.' and os.path.isfile(os.path.join(wt, d, 'pyvenv.cfg'))
+            if ok:
+                ok = (not git(wt, 'ls-tree', '-r', '--name-only', base, '--', d).stdout.strip()
+                      and not git_env(wt, env, 'ls-files', '--', d).stdout.strip())
+            venv_cache[d] = ok
+        return venv_cache[d]
+
+    def gitignore_changed(src):
+        if src not in changed_cache:
+            if git(wt, 'cat-file', '-e', '%s:%s' % (base, src)).returncode != 0:
+                changed_cache[src] = True
+            else:
+                old = git_bytes(wt, 'show', '%s:%s' % (base, src), text=False).stdout
+                try:
+                    with open(os.path.join(wt, src), 'rb') as fh:
+                        changed_cache[src] = fh.read() != old
+                except OSError:
+                    changed_cache[src] = True
+        return changed_cache[src]
+    findings = []
+    for k in range(0, len(out) - 3, 4):   # source NUL line NUL pattern NUL path NUL
+        src, path = out[k], out[k + 3]
+        real = os.path.realpath(os.path.join(wt, src))
+        if real == info_ex or real == glob_ex:
+            findings.append(dict(kind='hidden_test_config', file=path, source=src))
+        elif os.path.basename(src) == '.gitignore':
+            nsrc = os.path.normpath(src)
+            d = os.path.dirname(nsrc) or '.'
+            rel = os.path.normpath(os.path.relpath(path, d)).replace(os.sep, '/')
+            if real_venv_dir(d) and SITE_PACKAGES.match(rel):
+                continue
+            if gitignore_changed(nsrc):
+                findings.append(dict(kind='hidden_test_config', file=path, source=src))
     return findings
 
 
@@ -179,21 +377,24 @@ def integrity(wt, base, cmds=None):
 
 
 def integrity_diff(wt, base, cmds, env):
-    ns = git_env(wt, env, 'diff', '--cached', '--name-status', base)  # base -> worktree
+    ns = git_env(wt, env, 'diff', '--cached', '--name-status', '-z', '--no-renames', base)  # base -> worktree
     findings = []
     deleted = []
     modified = []
     all_deleted = []
     changed = {}
-    for l in git_env(wt, env, 'diff', '--cached', '--raw', '--no-abbrev', '--no-renames', base).stdout.splitlines():
-        meta, _, paths = l.partition('\t')
-        fields = meta.lstrip(':').split(' ')
+    raw = git_env(wt, env, 'diff', '--cached', '--raw', '-z', '--no-abbrev', '--no-renames', base).stdout.split('\0')
+    for k in range(0, len(raw) - 1, 2):   # ":<mode> <mode> <sha> <sha> <status>" NUL path NUL
+        fields = raw[k].lstrip(':').split(' ')
+        path = raw[k + 1]
         st = fields[4][0]
         if st in 'MARCT' and (st == 'A' or fields[2] != fields[3]):
-            changed[paths.split('\t')[-1]] = st
-    for l in ns.stdout.splitlines():
-        parts = l.split('\t')
-        st, path = parts[0][0], parts[-1]
+            changed[path] = st
+        if TEST_PATH.search(path) and (st == 'T' or (st == 'A' and fields[1] == '120000')):
+            findings.append(dict(kind='test_symlinked', file=path))
+    nsf = ns.stdout.split('\0')
+    for k in range(0, len(nsf) - 1, 2):   # status NUL path NUL
+        st, path = nsf[k][0], nsf[k + 1]
         if st == 'D':
             all_deleted.append(path)
         if not TEST_PATH.search(path):
@@ -222,6 +423,7 @@ def integrity_diff(wt, base, cmds, env):
         findings.append(dict(kind='tests_weakened', detail='%d test lines removed against %d added' % (removed, added)))
     runner = runner_findings(wt, base, cmds, changed) if cmds else []
     findings += runner
+    findings += hidden_test_config(wt, base, env)
     reported_files = {f['file'] for f in runner if f['kind'] == 'runner_file_changed'}
     script_hit = any(f['kind'] == 'runner_script_changed' for f in runner)
     config = sorted(p for p, st in changed.items()
@@ -332,6 +534,38 @@ def run_cmd(wt, cmd, timeout, retries=1):
                 flaky_isolated_files=isolated, tail=SECRET.sub('[REDACTED]', '\n'.join(out))[-600:])
 
 
+SPEC_HASH = re.compile(r'(?m)^\s*spec-sha256:\s*([0-9a-f]{64})\s*$')
+
+
+def check_spec_hash(task, run, file_hash):
+    """The spec file against the sha256 the Planner put in the task (workers cannot change the Orca task): ('verified', None),
+    ('tampered', {'task': hex, 'file': hex}) or ('unverified', reason: orca_unreachable, task_not_found or no_hash)."""
+    try:
+        text = load_task_spec(task, run)
+    except SystemExit as e:
+        msg = str(e)
+        return 'unverified', ('task_not_found' if 'not found' in msg and 'did not return JSON' not in msg else 'orca_unreachable')
+    except Exception:
+        return 'unverified', 'orca_unreachable'
+    m = SPEC_HASH.search(text or '')
+    if not m:
+        return 'unverified', 'no_hash'
+    if m.group(1) == file_hash:
+        return 'verified', None
+    return 'tampered', {'task': m.group(1), 'file': file_hash}
+
+
+def save_result(res, task, dry_run):
+    if dry_run:
+        return
+    root = os.environ.get('ORCA_ROLES_ORACLE_OUT') or os.path.join(
+        os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'orca-roles', 'oracle')
+    d = os.path.join(root, re.sub(r'[^A-Za-z0-9_.-]', '_', task))
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, 'verify.json'), 'w') as fh:
+        json.dump(res, fh, indent=1, ensure_ascii=False)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='verify_task.py')
     ap.add_argument('--worktree', default='.')
@@ -354,8 +588,9 @@ def main(argv):
         return 2
     wt = os.path.abspath(a.worktree)
     if a.spec_file:
-        with open(a.spec_file) as fh:
-            spec = fh.read()
+        with open(a.spec_file, 'rb') as fh:
+            raw = fh.read()
+        spec = raw.decode('utf-8', errors='replace')
     elif a.task:
         spec = load_task_spec(a.task, a.run)
     else:
@@ -363,6 +598,21 @@ def main(argv):
     task = a.task or os.path.basename(a.spec_file)
     cmds = acceptance_commands(spec)
     res = dict(task=task, worktree=os.path.basename(wt), pass_=False, cheat=False, status=None, commands=[], integrity=None)
+    if a.spec_file and a.task:
+        check, detail = check_spec_hash(a.task, a.run, hashlib.sha256(raw).hexdigest())
+        if check == 'tampered':
+            res.update(status='spec_tampered', spec_check='tampered', spec_hash=detail, cheat=True, pass_=False,
+                       verified_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))
+            res['pass'] = res.pop('pass_')
+            print('verify_task.py: the spec file does not match the hash in task %s (task %s…, file %s…): not run' % (
+                a.task, detail['task'][:12], detail['file'][:12]), file=sys.stderr)
+            save_result(res, task, a.dry_run)
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+            return 1
+        res['spec_check'] = check
+        if check == 'unverified':
+            res['spec_check_reason'] = detail
+            print('verify_task.py: spec not verified (%s); running the spec file as given' % detail, file=sys.stderr)
     load_before = round(os.getloadavg()[0], 1)
     waited, load_start, reached = (0.0, load_before, True)
     if not a.no_wait and not a.dry_run:
@@ -396,13 +646,7 @@ def main(argv):
                load1=round(load, 1), ncpu=ncpu, high_load=load > ncpu, duration_s=round(time.time() - t0, 1),
                agent=a.agent, model=a.model, config_sha=a.config_sha, verified_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))
     res['pass'] = res.pop('pass_') and not res['cheat']
-    if not a.dry_run:
-        root = os.environ.get('ORCA_ROLES_ORACLE_OUT') or os.path.join(
-            os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'orca-roles', 'oracle')
-        d = os.path.join(root, re.sub(r'[^A-Za-z0-9_.-]', '_', task))
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, 'verify.json'), 'w') as fh:
-            json.dump(res, fh, indent=1, ensure_ascii=False)
+    save_result(res, task, a.dry_run)
     print(json.dumps(res, ensure_ascii=False, indent=1))
     return 0 if res['pass'] else 1
 

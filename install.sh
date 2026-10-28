@@ -88,8 +88,8 @@ if [ -f "$KIT/.manifest" ]; then
 fi
 rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp" "${KIT:?}/grafana"   # regenerated; config.json and roles/ are not touched
 cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
+find "$KIT/bin" -name __pycache__ -type d -prune -exec rm -rf {} +
 if [ -d "$SRC/grafana" ]; then cp -R "$SRC/grafana" "$KIT/"; fi
-ln -s academic-research "$KIT/prompts/academic-writer"   # old path of the renamed mode, regenerated with prompts/
 chmod +x "$KIT/bin/"*.sh
 if [ -f "$SRC/VERSION" ]; then cp "$SRC/VERSION" "$KIT/VERSION"; else rm -f "$KIT/VERSION"; fi   # refs older than the VERSION file have none
 echo "$SOURCE@$INST_REF${INST_SHA:+ $INST_SHA}" > "$KIT/.installed"
@@ -134,28 +134,10 @@ if [ ! -f "$CONF" ]; then
 else
   # Adds new roles or keys from the installed version without overwriting what you already have (or the order of your roles)
   TMPC="$(mktemp)"
-  RENAMED=0; ! config_has_old_mode "$CONF" || RENAMED=1
   upgrade_config "$KIT/config.default.json" "$CONF" "$KIT" > "$TMPC"
   mv "$TMPC" "$CONF"
-  [ "$RENAMED" = 0 ] || echo "Renamed mode academic-writer to academic-research in your configuration ($CONF)."
 fi
 jq empty "$CONF" || { echo "ERROR: $CONF is not valid JSON" >&2; exit 1; }
-
-# Your roles of the renamed mode: roles/academic-writer/ moves to roles/academic-research/, and the old path becomes a link to it
-OLDR="$KIT/roles/academic-writer"; NEWR="$KIT/roles/academic-research"
-if [ -L "$OLDR" ]; then
-  [ "$(readlink "$OLDR")" = academic-research ] || { rm "$OLDR"; ln -s academic-research "$OLDR"; }
-elif [ -d "$OLDR" ]; then
-  mkdir -p "$NEWR"; MOVED=0; KEPT=""
-  while IFS= read -r n; do
-    if [ -e "$NEWR/$n" ] || [ -L "$NEWR/$n" ]; then KEPT="$KEPT$n"$'\n'; else mv "$OLDR/$n" "$NEWR/$n"; MOVED=1; fi
-  done < <(find "$OLDR" -mindepth 1 -maxdepth 1 -exec basename {} \;)
-  if [ -z "$KEPT" ]; then rmdir "$OLDR"; ln -s academic-research "$OLDR"; fi
-  [ "$MOVED" = 0 ] || echo "Moved your academic-writer roles to $NEWR."
-  while IFS= read -r n; do
-    [ -z "$n" ] || echo "WARNING: $OLDR/$n was not moved: $NEWR/$n already exists. Any prompt path in your configuration that named the old file now names the new one. Merge them by hand, then run install.sh again."
-  done <<<"$KEPT"
-fi
 
 # Aliases 'roles', 'new-role', 'roles-yaml' and 'team-status' (once)
 # zsh → ~/.zshrc; bash → ~/.bashrc (on macOS, ~/.bash_profile, which is what Terminal reads); other shells → ~/.profile
@@ -170,6 +152,40 @@ grep -q 'alias roles-yaml=' "$RC" 2>/dev/null || echo 'alias roles-yaml="$HOME/.
 grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME/.orca-roles/bin/team-status.sh"' >> "$RC"
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
+
+# On WSL, tabs Orca resumes itself (a bare 'claude --resume' in a fresh shell) do not get the orca shim that agent.sh puts on the PATH: link it into
+# ~/.local/bin when that is on the PATH, else add a marked line to ~/.profile. Nothing happens off WSL or when orca already resolves (no shim).
+if is_wsl && [ -e "$KIT/shim/orca" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*)
+      OLNK="$HOME/.local/bin/orca"
+      if [ -e "$OLNK" ] || [ -L "$OLNK" ]; then
+        [ -L "$OLNK" ] && [ "$(readlink "$OLNK")" = "$KIT/shim/orca" ] || echo "Note: ~/.local/bin/orca exists and is not the kit's shim; left as is."
+      else
+        mkdir -p "$HOME/.local/bin" && ln -sfn "$KIT/shim/orca" "$OLNK"
+      fi;;
+    *)
+      OMARK="# orca-roles: orca shim"
+      if [ "$KIT" = "$HOME/.orca-roles" ]; then OP='$HOME/.orca-roles'; else OP="$(printf '%s' "$KIT" | sed 's/[\\"$`]/\\&/g')"; fi
+      OLINE="[ -x \"$OP/shim/orca\" ] && case \":\$PATH:\" in *\":$OP/shim:\"*) ;; *) PATH=\"$OP/shim:\$PATH\";; esac   $OMARK"
+      OPROF="$HOME/.profile"
+      if grep -qxF -- "$OLINE" "$OPROF" 2>/dev/null; then :
+      elif grep -qF -- "$OMARK" "$OPROF" 2>/dev/null; then
+        OTMP="$(mktemp)" && OL="$OLINE" OM="$OMARK" awk 'index($0, ENVIRON["OM"]) { print ENVIRON["OL"]; next } { print }' "$OPROF" > "$OTMP" && cat "$OTMP" > "$OPROF"; rm -f "$OTMP"
+      else
+        printf '%s\n' "$OLINE" >> "$OPROF"
+      fi;;
+  esac
+fi
+
+# Claude Code SessionStart hook: re-binds a reopened tab's Orca Runs (bin/session-hook.sh); settings.sessionHook false removes it
+if [ "$(setting "$CONF" sessionHook true)" = false ]; then
+  remove_session_hook
+else
+  ensure_session_hook_or_warn --backup
+  # shellcheck disable=SC2154
+  [ "${SESSION_HOOK_CHANGED:-0}" != 1 ] || echo "Claude Code SessionStart hook: added to ~/.claude/settings.json (re-binds Orca Runs when a tab reopens)."
+fi
 
 # Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
 if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then

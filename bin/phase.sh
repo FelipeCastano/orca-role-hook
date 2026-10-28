@@ -14,7 +14,7 @@ TARGET="$1"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
 STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 [ -f "$STATE" ] && [ -f "$CFG" ] || { echo "$STATE or $CFG not found: run this from the worktree where the roles were opened." >&2; exit 1; }
-MODE="$(mode_of "$CFG")" || exit 1
+MODE="$(mode_of --saved "$CFG")" || exit 1
 [ "$MODE" = academic-research ] || { echo "phase.sh: only for mode academic-research (this worktree: $MODE)" >&2; exit 1; }
 CURRENT="$(phase_of "$CFG")"
 [ "$CURRENT" != "$TARGET" ] || { echo "Already in phase $TARGET."; exit 0; }
