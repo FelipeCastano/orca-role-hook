@@ -5646,6 +5646,45 @@ echo '{"projects":{"'"$(cd "$CO/wt" && pwd -P)"'":{"allowedTools":["Bash(ls)"],"
 check "coordinator.sh: a folder Claude already knows keeps its entry, gets the flag and is not recorded for forget-trust.sh" "$(jq -c --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d]' "$CO/home/.claude.json") $(( $(grep -c . "$KIT/trusted.list" 2>/dev/null || true) - ${n0:-0} ))" '{"allowedTools":["Bash(ls)"],"hasTrustDialogAccepted":true} 0'
 co --model opus; check "coordinator.sh: --model wins" "$(sed -n 3p "$CO/argv")" "opus"
 check "coordinator.sh: unknown option -> exit 1" "$(co --nope; echo $?)" "1"
+# Orca's nested worker depth: coordinator.sh reads it from a temp Orca profile (sqlite or JSON source), tells the coordinator, warns below 2
+ND="$CO/nd"; rm -rf "$ND"; mkdir -p "$ND"
+nd_profile() { # nd_profile <dir> <authority|-> -> the profile dir with an active profile "p1"
+  rm -rf "$1"; mkdir -p "$1/profiles/p1"; printf '{"activeProfileId":"p1"}' > "$1/orca-profile-index.json"
+  if [ "$2" != - ]; then printf '%s\n' "$2" > "$1/profiles/p1/profile-state.db.authority"; fi
+}
+nd_db() { # nd_db <dir> <settings JSON | ->: the sqlite profile-state db; "-" = no settings row
+  python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]+"/profiles/p1/profile-state.db"); c.execute("create table profile_state_documents(domain text, payload text)"); c.execute("insert into profile_state_documents values(?,?)", ("other","{\"nestedWorkerMaxDepth\":9}"))
+if sys.argv[2] != "-": c.execute("insert into profile_state_documents values(?,?)", ("settings", sys.argv[2]))
+c.commit()' "$1" "$2"
+}
+nd_run() { # nd_run <dir> [extra env...] -> the argv[1] sentence tail and the terminal warning count
+  rm -f "$CO/argv"; (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" ORCA_USER_DATA_PATH="$1" ORCA_ROLES_PROC_VERSION=/nonexistent "${@:2}" /bin/bash "$KIT/bin/coordinator.sh" > "$CO/out" 2>&1)
+  printf '%s/%s' "$(sed -n 1p "$CO/argv" | grep -o "Start with \"When you start\"\..*" | sed 's/^[^.]*\.//;s/^ //')" "$(grep -c '^coordinator.sh: Orca.s Nested worker depth is' "$CO/out" || true)"
+}
+ND_R=""; for v in '{"nestedWorkerMaxDepth":2}' '{"nestedWorkerMaxDepth":3}' '{"nestedWorkerMaxDepth":1}' '{"nestedWorkerMaxDepth":2.0}' '{}' '{"nestedWorkerMaxDepth":0}' '{"nestedWorkerMaxDepth":-1}' '{"nestedWorkerMaxDepth":"x"}' '{"nestedWorkerMaxDepth":"2"}' '{"nestedWorkerMaxDepth":1.5}' '{"nestedWorkerMaxDepth":1e20}' '{"nestedWorkerMaxDepth":null}' -; do
+  nd_profile "$ND/s" sqlite; nd_db "$ND/s" "$v"; ND_R="$ND_R$(nd_run "$ND/s")|"
+done
+check "coordinator.sh depth, sqlite source: 2, 3 and 2.0 are read (no terminal warning); 1, a missing key, 0, -1, a string, 1.5, 1e20, null and no settings row read as 1 with the warning line; argv[1] always carries the sentence" "$ND_R" "Orca's nested worker depth is 2./0|Orca's nested worker depth is 3./0|Orca's nested worker depth is 1./1|Orca's nested worker depth is 2./0|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|Orca's nested worker depth is 1./1|"
+ND_R=""; for a in - json sqlitex ''; do
+  for v in '{"settings":{"nestedWorkerMaxDepth":2}}' '{"settings":{"nestedWorkerMaxDepth":2.0}}' '{"settings":{}}'; do nd_profile "$ND/j" "$a"; printf '%s' "$v" > "$ND/j/profiles/p1/orca-data.json"; ND_R="$ND_R$(nd_run "$ND/j" | sed "s/^Orca's nested worker depth is \([0-9]*\)\..*/\1/"),"; done
+done
+nd_profile "$ND/j" -; printf '{"settings":{"nestedWorkerMaxDepth":2' > "$ND/j/profiles/p1/orca-data.json"; ND_R="$ND_R$(nd_run "$ND/j")"
+check "coordinator.sh depth, JSON source (authority missing or not sqlite): 2 and 2.0 read as 2, no key as 1 (warning), a malformed file as unknown" "$ND_R" "2,2,1,2,2,1,2,2,1,2,2,1,Orca's nested worker depth could not be read./0"
+ND_U="could not be read./0"; ND_R=""
+ND_R="$ND_R$(nd_run "$ND/none")|"
+rm -rf "$ND/n"; mkdir -p "$ND/n"; ND_R="$ND_R$(nd_run "$ND/n")|"
+nd_profile "$ND/n" -; printf '{"activeProfileId":""}' > "$ND/n/orca-profile-index.json"; ND_R="$ND_R$(nd_run "$ND/n")|"
+nd_profile "$ND/n" sqlite; ND_R="$ND_R$(nd_run "$ND/n")|"
+nd_profile "$ND/n" sqlite; nd_db "$ND/n" '{"nestedWorkerMaxDepth":2}'; mkdir -p "$ND/nobin"; ln -sf "$(command -v jq)" "$ND/nobin/jq"; ND_R="$ND_R$(d="$(PATH="$ND/nobin" ORCA_USER_DATA_PATH="$ND/n" orca_nested_depth)"; [ -z "$d" ] && printf 'Orca'"'"'s nested worker depth could not be read./0' || printf 'depth=%s' "$d")|"
+printf '#!/bin/sh\necho "$1"\n' > "$CO/bin/wslpath"; chmod +x "$CO/bin/wslpath"; printf 'Linux version 5.15 microsoft-standard-WSL2\n' > "$ND/pv"; ND_R="$ND_R$(nd_run "$ND/n" ORCA_ROLES_PROC_VERSION="$ND/pv")"; rm -f "$CO/bin/wslpath"
+check "coordinator.sh depth unknown (no data dir, no profile index, empty activeProfileId, sqlite authority without a db, no sqlite3 on PATH, WSL even with a valid db): 'could not be read', no warning line" "$ND_R" "Orca's nested worker depth $ND_U|Orca's nested worker depth $ND_U|Orca's nested worker depth $ND_U|Orca's nested worker depth $ND_U|Orca's nested worker depth $ND_U|Orca's nested worker depth $ND_U"
+ND_R=""; for nm in 'a b' 'q?x' 'h#x' 'p%41'; do nd_profile "$ND/$nm" sqlite; nd_db "$ND/$nm" '{"nestedWorkerMaxDepth":2}'; ND_R="$ND_R$(nd_run "$ND/$nm")|"; done
+check "coordinator.sh depth: a data dir path with a space, ?, # or % still reads the db" "$ND_R" "Orca's nested worker depth is 2./0|Orca's nested worker depth is 2./0|Orca's nested worker depth is 2./0|Orca's nested worker depth is 2./0|"
+nd_profile "$ND/s" sqlite; nd_db "$ND/s" '{"nestedWorkerMaxDepth":3}'; printf '{"settings":{"nestedWorkerMaxDepth":1}}' > "$ND/s/profiles/p1/orca-data.json"; ND_B="$(find "$ND/s" -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum)"
+ND_R="$(nd_run "$ND/s")"; ND_A="$(find "$ND/s" -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum)"
+nd_profile "$ND/s2" sqlite; nd_db "$ND/s2" '{"nestedWorkerMaxDepth":3}'; ND_L1="$(find "$ND/s2" | wc -l | tr -d ' ')"; nd_run "$ND/s2" >/dev/null; ND_L2="$(find "$ND/s2" | wc -l | tr -d ' ')"
+check "coordinator.sh depth: with the sqlite authority orca-data.json is ignored (db says 3, JSON says 1), and the profile dir keeps the same files (no -wal, -journal or new files)" "$ND_R $([ "$ND_B" = "$ND_A" ] && echo same || echo changed) $([ "$ND_L1" = "$ND_L2" ] && echo same || echo changed)" "Orca's nested worker depth is 3./0 same same"
+check "coordinator prompt step 2 and CI: the coordinator warns only when the startup message says below 2 or could not be read; the CI version step runs sqlite3 --version" "$(grep -c '^2\. Your startup message says Orca.s nested worker depth.*below 2 or could not be read.*at 2 or more, say nothing about it' "$ROOT/prompts/coordinator.md") $(grep -c 'run: bash --version | head -1 && jq --version && sqlite3 --version$' "$ROOT/.github/workflows/ci.yml")" "1 1"
 check "coordinator prompt: marks the worktree before creating it, checks the Planner's tab beyond tui-idle, and recovers agent_prompt_blocked without cancelling, delegating or leaving the dispatch" "$(grep -c 'orca-roles.coordinated"; mkdir -p "$d" && printf .%s\\n. <run_id> > "$d/<name>"`, with your Run.s id' "$ROOT/prompts/coordinator.md") $(grep -c '`tui-idle` alone is not enough' "$ROOT/prompts/coordinator.md") $(grep -c 'fails with `agent_prompt_blocked`.*Never press Esc.*never ask the user to type in a tab for you.*retry `worker-start` once with `--retry-of <dispatch_id>`.*do not poll its tab in place of reading your messages' "$ROOT/prompts/coordinator.md")" "1 1 1"
 check "coordinator prompt: the task is created before the worktree, the marker before orca worktree create" "$(awk '/task-create --spec/{t=NR} /> "\$d\/<name>"/{m=NR} /^   Then `orca worktree create/{c=NR} END{print (t && m && c && t < m && m < c) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "ordered"
 check "coordinator prompt: the worktree name is restricted, its basename is checked after creation, the marker goes once the role is sent" "$(grep -c '\^\[a-z0-9\]\[a-z0-9-\]{0,39}\$' "$ROOT/prompts/coordinator.md") $(grep -c 'basename of that path equals `<name>`; if not, tell the user.*do not rename anything' "$ROOT/prompts/coordinator.md") $(grep -c 'removes the marker once it has sent the Planner its role message' "$ROOT/prompts/coordinator.md")" "1 1 1"

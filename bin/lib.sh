@@ -32,6 +32,28 @@ orca_ide_path() {
 is_wsl() {
   grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null && command -v wslpath >/dev/null 2>&1
 }
+# Orca's "Nested worker depth" (nestedWorkerMaxDepth) as Orca resolves it: an integer >= 1, or nothing when it cannot be read (WSL, no profile, no sqlite3).  orca_nested_depth
+orca_nested_depth() {
+  local d id p a="" v u
+  is_wsl && return 0
+  d="${ORCA_USER_DATA_PATH:-}"
+  if [ -z "$d" ]; then case "$OSTYPE" in darwin*) d="$HOME/Library/Application Support/orca";; esac; fi
+  [ -n "$d" ] && [ -d "$d" ] || return 0
+  id="$(jq -r '.activeProfileId // empty' "$d/orca-profile-index.json" 2>/dev/null)" || return 0
+  [ -n "$id" ] || return 0
+  p="$d/profiles/$id"
+  { IFS= read -r a < "$p/profile-state.db.authority"; } 2>/dev/null || true
+  a="${a//[[:space:]]/}"
+  if [ "$a" = sqlite ]; then
+    command -v sqlite3 >/dev/null 2>&1 || return 0
+    u="$p/profile-state.db"; u="${u//%/%25}"; u="${u//\?/%3f}"; u="${u//#/%23}"
+    v="$(run_limited 5 orca-depth sqlite3 -readonly "file:$u?mode=ro" "select case when typeof(v) in ('integer','real') and v = cast(v as integer) then cast(v as integer) else '' end from (select json_extract(payload,'\$.nestedWorkerMaxDepth') as v from profile_state_documents where domain='settings')" 2>/dev/null)" || return 0
+  else
+    v="$(jq -r '.settings.nestedWorkerMaxDepth | if type == "number" and . == floor then floor else "" end' "$p/orca-data.json" 2>/dev/null)" || return 0
+  fi
+  case "$v" in ''|*[!0-9]*|0) v=1;; esac
+  printf '%s\n' "$v"
+}
 orca_shim() {
   local dir="$KIT/shim" tmp ide cur
   cur="$(type -P orca 2>/dev/null)" || cur=""

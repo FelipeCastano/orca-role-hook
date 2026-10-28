@@ -2,7 +2,7 @@
 # Starts the coordinator above the worktrees in this terminal: Claude Code with prompts/coordinator.md as its role. It opens worktrees
 # (each one starts its orca-roles team), gives each Planner its feature as an Orca dispatch and talks to the user (see README, Coordinator).
 # Usage (in an Orca terminal, e.g. in a project's main checkout):  coordinator.sh [--model <model>]
-# Model and permission mode: --model, else the Planner's in the configuration. Trusts this folder for Claude Code as launch.sh does.
+# Model and permission mode: --model, else the Planner's in the configuration. Trusts this folder for Claude Code as launch.sh does. Reads Orca's nested worker depth (lib.sh orca_nested_depth) and tells the coordinator.
 set -euo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 MODEL=""
@@ -29,7 +29,12 @@ if [ "$(trust_of "$CFG")" = worktree ]; then
   esac
 fi
 rm -f "$CFG"
+DEPTH="$(orca_nested_depth)"
+if [ -n "$DEPTH" ] && [ "$DEPTH" -lt 2 ]; then
+  echo "coordinator.sh: Orca's Nested worker depth is $DEPTH; Planners need 2 (Settings → Orchestration → \"Nested worker depth\")."
+fi
 if session_hook_enabled; then ensure_session_hook_or_warn; fi   # the SessionStart hook that re-binds a reopened tab's Runs
 ARGS=(); [ -n "$MODEL" ] && ARGS+=(--model "$MODEL"); [ -n "$PERM" ] && ARGS+=(--permission-mode "$PERM")
 # The message goes first: --add-dir takes several values and would swallow it as one more folder.
-exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\"." ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts"
+if [ -n "$DEPTH" ]; then DEPTH_MSG=" Orca's nested worker depth is $DEPTH."; else DEPTH_MSG=" Orca's nested worker depth could not be read."; fi
+exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\".$DEPTH_MSG" ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts"
