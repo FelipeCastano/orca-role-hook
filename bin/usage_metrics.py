@@ -295,6 +295,17 @@ def git_commit_in(cmd):
     return any(is_git_commit(command_words(c)) for c in cs)
 
 
+def clean_role_of(cmd):
+    """-> the role id of a Bash `<path>/bin/clean.sh --msg <role>` command (how a /clear-ed session gets its role message), or ""."""
+    if "clean.sh" not in cmd:
+        return ""
+    for c in simple_commands(cmd) or []:
+        w = command_words(c)
+        if len(w) >= 3 and w[0].endswith("/bin/clean.sh") and w[1] == "--msg" and re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", w[2]):
+            return w[2]
+    return ""
+
+
 def worker_done_of(cmd):
     """-> (verdict, task id) of a Bash `orca orchestration send ... --type worker_done` command, or None."""
     if "worker_done" not in cmd or "orchestration" not in cmd:
@@ -418,6 +429,8 @@ def feed(S, o, is_sub, mapped_cwd):
             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
             if name == "Bash" and isinstance(inp.get("command"), str):
                 cmd = inp["command"]
+                if not S["role"] and not is_sub:
+                    S["role"] = clean_role_of(cmd)
                 wd = worker_done_of(cmd)
                 if wd is not None:
                     t0 = S["taskPrompts"].get(wd[1])

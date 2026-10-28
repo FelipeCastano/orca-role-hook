@@ -8347,6 +8347,12 @@ K1="$(for k in k1 k2 k3 k4 k5 k6 k7 k8; do ku $k; done)"
 printf '%s\n' '{"ts":"2026-10-27T12:00:00Z","path":"/unmapped/y","physical":"/unmapped/y","project":"p2","task":"late"}' >> "$PM/worktrees.jsonl"; umpass; K2="$(ku k4)$(ku k6)"
 K3="$(jq -r '[.sessions | keys[]] | join(",")' "$PM/state.json" 2>/dev/null || true)"
 check "usage parse: kit sessions only: cwd under a mapped worktree (the longest path gives the task, a sibling folder that only shares the prefix is not under it), a first-prompt role message with an unmapped cwd (task empty), a dispatch start with no role message (role empty), the role from the second prompt; a plain session in an unmapped folder, or whose role message is not its first prompt, is absent; a worktree mapped later brings an ignored session in; absent sessions keep no totals in state" "$K1|$K2|$K3" "devgd-292//medium/1 outer//medium/1 /tester/medium/1 absent devgd-292//medium/1 absent absent devgd-292/dev/medium/1 |late//medium/1 absent |k1,k2,k3,k4,k5,k8"
+W="/w/a/devgd-300/src"; umpk; CL="/k/bin/clean.sh --msg planner"
+pu "$PD/c1.jsonl" 2026-10-27T10:00:00.000Z "$W" "hello"; pb "$PD/c1.jsonl" 2026-10-27T10:00:05.000Z cb1 "$CL" "$W"
+pu "$PD/c2.jsonl" 2026-10-27T10:00:00.000Z "$W" "Read /k/prompts/programmer/dev.md and adopt that role."; pb "$PD/c2.jsonl" 2026-10-27T10:00:05.000Z cb2 "$CL" "$W"
+pu "$PD/c3.jsonl" 2026-10-27T10:00:00.000Z "$W" "hello"; pb "$PD/c3.jsonl" 2026-10-27T10:00:05.000Z cb3 "echo \"$CL\"" "$W"
+umpass; CR="$(usf c1 .orca_roles_role)|$(usf c2 .orca_roles_role)|$(usf c3 .orca_roles_role)"
+check "usage parse: a session restarted with /clear gets its role from the first main-session Bash call of <path>/bin/clean.sh --msg <role> (planner), a role message still wins (dev), and clean.sh inside a quoted string gives no role" "$CR" "planner|dev|"
 # worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the prompt naming the task, and the commits of Bash tool calls
 umpk; W="/w/a/devgd-300/src"; F5="$PD/vd.jsonl"; WD='orca orchestration send --from term_x --type worker_done'
 pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Please do task_abcdef01 now"
@@ -8774,6 +8780,10 @@ epts() { pbody "$1" '.resourceMetrics[0].scopeMetrics[0].metrics[] | .name as $n
 umpass; V1="$(fposts):$(epts 1)"
 V2="$(pbody 1 '[(.resourceMetrics | length), ([.resourceMetrics[0].resource.attributes[] | "\(.key)=\(.value.stringValue)"] | join(",")), ([.. | objects | select(has("sum")) | .sum | [.isMonotonic, .aggregationTemporality]] | unique | tostring)] | join("|")')"
 check "usage kit events push: the first pass pushes one resource (service.name=claude-code only, no session.id) with orca_roles.dispatch.outcomes (outcome, role, task, project) and orca_roles.kit.events (event, role, task, project) as cumulative monotonic sums; counts per event and role, task and project from worktrees.jsonl by the longest path (an unmapped worktree has no task or project label); an unknown event, a line whose worktree is not a string and a half-written last line are not counted" "$V1|$V2" "1:orca_roles.dispatch.outcomes|outcome=dispatch,project=svc,role=dev,task=devgd-292|2 orca_roles.dispatch.outcomes|outcome=no-check,project=svc,role=oc,task=outer|1 orca_roles.dispatch.outcomes|outcome=not-started,project=svc,role=dev,task=devgd-292|1 orca_roles.dispatch.outcomes|outcome=started,project=svc,role=dev,task=devgd-292|1 orca_roles.kit.events|event=launch,project=svc,task=devgd-292|1 orca_roles.kit.events|event=launch|1 orca_roles.kit.events|event=reopened,project=svc,role=dev,task=devgd-292|1 |1|service.name=claude-code|[[true,2]]"
+umpk; fstop; fstart; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
+head -1 "$PM/events.jsonl" > "$PM/events.tmp" && mv "$PM/events.tmp" "$PM/events.jsonl"; umpass; ev /w/a/devgd-300 launch ""; umpass; S2="$(fposts)"
+ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 launch ""; umpass; S3="$(fposts):$(epts 2 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
+check "usage kit events push floor: when events.jsonl is rewritten shorter its counts are read again but nothing lower than what was pushed is sent (3 pushed, 1 and 2 counted: no push), and a count above the floor is pushed (4)" "$S1|$S2|$S3" "1|1|2:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|4"
 RM="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
 rd() { printf '%s\n' "$RM" | grep -cF -e "$1" || true; }
 RK="$(for k in enabled otlpEndpoint prometheusUrl intervalSeconds retentionDays allowRemote prometheusContainer; do printf '%s ' "$(printf '%s\n' "$RM" | grep -c "^  | \`$k\` |" || true)"; done)"
