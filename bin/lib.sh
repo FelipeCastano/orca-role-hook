@@ -352,7 +352,7 @@ config_has_old_mode() {
   jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
 }
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, default $KIT] → stdout
-  jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "${3:-${KIT:-}}" --arg home "$HOME" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | legacy($l) | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) as $u | ($d * $u) as $m
+  jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "${3:-${KIT:-}}" --arg home "$HOME" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l) | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)

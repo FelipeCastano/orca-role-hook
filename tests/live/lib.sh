@@ -188,7 +188,7 @@ c_upgrade_no_roles() {  # upgrade_config on a user config without "roles" (#37: 
   t="$(mktemp -d)"; echo '{"settings":{"language":"auto"}}' > "$t/config.json"
   out="$(bash -c '. "$1/bin/lib.sh"; upgrade_config "$1/config.default.json" "$2/config.json" "$1"' _ "$LIVE_ROOT" "$t" 2>&1)"; rc=$?
   if [ $rc = 0 ] && printf '%s' "$out" | jq -e '.roles.planner' >/dev/null 2>&1; then ok "$id" "upgrade_config on a config with no roles key works"
-  else fail "$id" "upgrade_config on a config with no roles key: rc=$rc $(printf '%s' "$out" | head -2) (known since #37)"; fi
+  else fail "$id" "upgrade_config on a config with no roles key: rc=$rc $(printf '%s' "$out" | head -2)"; fi
   rm -rf "$t"
 }
 c_scholar() {  # scholar.sh against the live APIs (#28)
@@ -199,7 +199,7 @@ c_scholar() {  # scholar.sh against the live APIs (#28)
   out="$("$s" search "transformer" --source arxiv --limit 2 2>&1)"
   printf '%s' "$out" | grep -q '^arxiv' && ok "$id.arxiv" "search on arXiv" || fail "$id.arxiv" "$(printf '%s' "$out" | tail -2)"
   out="$("$s" search "attention is all you need" --source arxiv --limit 2 2>&1)"
-  printf '%s' "$out" | grep -q '^arxiv' && ok "$id.arxiv-phrase" "a several-word search on arXiv finds results" || fail "$id.arxiv-phrase" "a several-word search on arXiv returns nothing (one word works)"
+  printf '%s' "$out" | grep -q '^arxiv' && ok "$id.arxiv-phrase" "a several-word search on arXiv finds results" || fail "$id.arxiv-phrase" "a several-word search on arXiv returns nothing"
   out="$("$s" search "attention is all you need" --source s2 --limit 2 2>&1)"
   if printf '%s' "$out" | grep -qi attention; then ok "$id.s2" "search on Semantic Scholar$([ -n "${S2_API_KEY:-}" ] && echo ' (with key)' || echo ' (no key)')"
   else info "$id.s2" "Semantic Scholar: $(printf '%s' "$out" | tail -1) (set S2_API_KEY to test with a key)"; fi

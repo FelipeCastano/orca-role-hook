@@ -32,8 +32,8 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | Id | What it proves | From |
 |---|---|---|
 | X1 | The smoke sections that once failed together (`launch restart reopen wake worktree-select`) pass in one run | #29 |
-| X2 | `upgrade_config` on a user config without a `roles` key. Expected FAIL today ("null has no keys"): a known bug, left for a later PR | #37 |
-| X3 | `scholar.sh` against the live APIs: OpenAlex, arXiv (one word and a phrase), Semantic Scholar (with `S2_API_KEY` if set), Crossref and DataCite DOIs through doi.org, `verify`, a real PDF download under the size limit. Known FAIL: a several-word arXiv search returns nothing | #28 |
+| X2 | `upgrade_config` on a user config without a `roles` key (or with `"roles": null`): it returns the upgraded config with the default roles | #37 |
+| X3 | `scholar.sh` against the live APIs: OpenAlex, arXiv (one word and a phrase), Semantic Scholar (with `S2_API_KEY` if set), Crossref and DataCite DOIs through doi.org, `verify`, a real PDF download under the size limit | #28 |
 | X4 | `roles-yaml --all --dry-run` over the projects registered in your Orca; nothing is written; fails when every project was skipped | #32 |
 | X5 | A fresh install into a temporary HOME: the real superpowers fetch from GitHub, a Claude session that loads its skills, and `project-plugins.sh install` doing a real `claude plugin marketplace add` and `install` (in a temporary Claude config) | #39 |
 | X6 | The new-role wizard typed by you, in that temporary kit | #28 |

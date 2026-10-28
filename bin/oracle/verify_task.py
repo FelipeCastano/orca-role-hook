@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+sys.dont_write_bytecode = True
 import tempfile
 import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

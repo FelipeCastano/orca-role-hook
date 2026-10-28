@@ -792,6 +792,8 @@ pwu() { echo "{\"roles\":{},\"mcpServers\":{\"playwright\":$1}}" > "$TMP/pw-user
 OLDPW='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 check "upgrade_config: the exact previous playwright default moves to the new default entry" "$(pwu "$OLDPW")" "$(jq -c '.mcpServers.playwright' "$D")"
 check "upgrade_config: the old default with a flag added or removed is kept" "$(pwu "$(echo "$OLDPW" | jq -c '.args += ["--viewport-size=1x1"]')" | jq -c '.args | length'):$(pwu "$(echo "$OLDPW" | jq -c '.args |= map(select(. != "--isolated"))')" | jq -r '.command + (.args | length | tostring)')" "9:npx7"
+for c in '{}' '{"settings":{"mode":"programmer"}}' '{"roles":null}' '{"roles":"x","a":1}'; do printf '%s' "$c" > "$TMP/nr.json"; UNR="${UNR:-}$(upgrade_config "$ROOT/config.default.json" "$TMP/nr.json" | jq -c --slurpfile d "$ROOT/config.default.json" '[(.roles | keys_unsorted) == ($d[0].roles | keys_unsorted), .settings.mode, .a] | tostring' 2>/dev/null || echo ERR)|"; done
+check "upgrade_config: a config with no roles (missing key, null or not an object) is upgraded to the default roles in their order, the user's other keys kept (no error)" "$UNR" '"[true,\"programmer\",null]"|"[true,\"programmer\",null]"|"[true,\"programmer\",null]"|"[true,\"programmer\",1]"|'
 check "upgrade_config: a custom playwright entry keeps its command and args, and one differing only in order or extra key is not migrated" "$(pwu '{"command":"mine","args":["a"]}' | jq -c '[.command, .args]'):$(pwu "$(echo "$OLDPW" | jq -c '.args = (.args[2:] + .args[0:2])')" | jq -r .command):$(pwu "$(echo "$OLDPW" | jq -c '.env = {"X":"1"}')" | jq -r .command)" '["mine",["a"]]:npx:npx'
 check "upgrade_config: an unrelated user config gets the default playwright entry" "$(echo '{"roles":{}}' > "$TMP/pw-none.json"; upgrade_config "$D" "$TMP/pw-none.json" | jq -c '.mcpServers.playwright')" "$(jq -c '.mcpServers.playwright' "$D")"
 # settings.artifacts: an object with only plans, designs, research, deployment, each a non-empty relative path inside the worktree (no absolute, no ~, no '..' segment)
@@ -5509,6 +5511,12 @@ drun ORCA_ROLES_REF=$SHA40
 check "install download: a 40-hex ref records the sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@$SHA40 $SHA40"
 drun ORCA_ROLES_REF=0123456
 check "install download: a short hex ref is not taken for a full sha" "$DRC:$DINS" "0:FelipeCastano/orca-role-hook@0123456"
+# bytecode: the oracle scripts leave no __pycache__ next to themselves, and install.sh drops one that came along with the copy of bin/
+PY1="$TMP/pyc"; rm -rf "$PY1"; cp -R "$ROOT/bin/oracle" "$PY1"; for f in verify_task loop spec_lint; do python3 -I "$PY1/$f.py" --help </dev/null >/dev/null 2>&1 || true; done
+PY2="$TMP/pyi"; rm -rf "$PY2"; mkdir -p "$PY2/h"; cp -R "$ROOT/bin" "$PY2/bin"; mkdir -p "$PY2/bin/oracle/__pycache__"; : > "$PY2/bin/oracle/__pycache__/x.pyc"; cp "$ROOT/install.sh" "$PY2/"
+for d in prompts plugin README.md config.default.json VERSION grafana pw; do if [ -e "$ROOT/$d" ]; then cp -R "$ROOT/$d" "$PY2/$d"; fi; done
+(cd "$TMP" && HOME="$PY2/h" bash "$PY2/install.sh" </dev/null >/dev/null 2>&1) || true
+check "bytecode: verify_task.py, loop.py and spec_lint.py leave no __pycache__ when run, an install of a bin/ that has one does not copy it into the kit, and .gitignore lists __pycache__/" "$(find "$PY1" -name __pycache__ | wc -l | tr -d ' '):$(find "$PY2/h/.orca-roles/bin" -name __pycache__ | wc -l | tr -d ' '):$([ -x "$PY2/h/.orca-roles/bin/launch.sh" ] && echo installed):$(grep -c '^__pycache__/$' "$ROOT/.gitignore" || true)" "0:0:installed:1"
 }
 
 sec_coordinator() {
@@ -7219,7 +7227,7 @@ case "$url" in
   *api.openalex.org/works?*) kind=oa; body=oa_search.json;;
   *api.openalex.org/publishers?*) kind=oa; case "$url" in *search=nomatch*) body=empty.json;; *) body=pub.json;; esac;;
   *api.openalex.org/sources?*) kind=oa; case "$url" in *search=zzz*) body=empty.json;; *) body=src.json;; esac;;
-  *export.arxiv.org*) kind=ax; case "$url" in *id_list=9999*) body=ax_empty.xml;; *id_list=err*) body=ax_err.xml;; *id_list=*) body=ax_show.xml;; *) body=ax_search.xml;; esac;;
+  *export.arxiv.org*) kind=ax; case "$url" in *id_list=9999*) body=ax_empty.xml;; *id_list=err*) body=ax_err.xml;; *id_list=*) body=ax_show.xml;; *search_query=all:%22*) if [ -e "$SCH_FX/phrase_empty" ]; then body=ax_empty.xml; else body=ax_search.xml; fi;; *) body=ax_search.xml;; esac;;
   *api.semanticscholar.org*) kind=s2; body=s2.json;;
   *) kind=x; body=empty.json;;
 esac
@@ -7247,20 +7255,29 @@ sch_setup
 # search, all sources without a key: rows, cleaning, ids, limit, cross-source dedupe, one call per source
 sch_codes; sc search "graph neural" --limit 3
 EXP="$(printf 'source\tid\tyear\tfirst_author\tvenue\tcitations\toa\ttitle\nopenalex\tdoi:10.1000/abc.1\t2023\tAlma Larkin\tNature\t42\tyes\tDeep Learning for Tabs\nopenalex\tarxiv:2401.00001\t2024\t-\t-\t0\tno\tArx paper\nopenalex\topenalex:W3\t-\t-\t-\t-\tno\tNo doi\narxiv\tarxiv:2402.00002\t2024\tBob Smith\tarXiv cs.CL\t-\tyes\tTitle & more\narxiv\tarxiv:hep-th/9901001\t2024\tOld Author\tarXiv hep-th\t-\tyes\tOld style')"
-check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:graph+AND+all:neural&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
+check "scholar search all: rows (cleaned, 8 columns, ids, limit, dedupe, order), empty stderr, exit 0, one call per source" "$(cat "$SCH/rc"):$(cat "$SCH/out"):$(cat "$SCH/err"):$(scn):$(scu 'https://api.openalex.org/works?search=graph%20neural&sort=relevance_score:desc&per_page=3&select=id,doi,title,publication_year,type,authorships,primary_location,cited_by_count,open_access'):$(scu 'https://export.arxiv.org/api/query?search_query=all:%22graph+neural%22&start=0&max_results=3&sortBy=relevance&sortOrder=descending'):$(awk -F'\t' '{print NF}' "$SCH/out" | sort -u | tr '\n' ,)" "0:$EXP::2:1:1:8,"
 # filters per source
 sch_codes
 sc search "rag models" --from 2023-01-01 --to 2024-12-31 --type proceedings --oa --sort citations --limit 05 --source openalex
 R1="$(cat "$SCH/rc"):$(scu 'filter=from_publication_date:2023-01-01,to_publication_date:2024-12-31,type:conference-paper,is_oa:true&sort=cited_by_count:desc&per_page=5&select='):$(scn)"
 sc search "x y" --type article --source openalex; R2="$(scu 'filter=type:article&sort='):$(scu 'filter=type:preprint')"
 sc search "x" --type preprint --source openalex; R2="$R2:$(scu 'filter=type:preprint&sort=')"
-sc search "graph neural" --from 2023-01-01 --source arxiv --sort date --limit 4; R3="$(scu 'search_query=all:graph+AND+all:neural+AND+submittedDate:%5B202301010000+TO+209912312359%5D&start=0&max_results=4&sortBy=submittedDate&sortOrder=descending')"
+sc search "graph neural" --from 2023-01-01 --source arxiv --sort date --limit 4; R3="$(scu 'search_query=all:%22graph+neural%22+AND+submittedDate:%5B202301010000+TO+209912312359%5D&start=0&max_results=4&sortBy=submittedDate&sortOrder=descending')"
 sc search "graph" --to 2024-12-31 --source arxiv --sort citations; R3="$R3:$(scu 'submittedDate:%5B199101010000+TO+202412312359%5D&start=0&max_results=10&sortBy=relevance&'):$(cat "$SCH/err")"
 sc search "big" --publisher big --venue NeurIPS --source openalex
 R4="$(cat "$SCH/rc"):$(scu 'publishers?search=big&per_page=25&select=id,display_name,lineage,works_count'):$(scu 'sources?search=Neural%20Information%20Processing%20Systems&per_page=10&select=id,display_name,works_count'):$(scu 'filter=primary_location.source.publisher_lineage:P2,primary_location.source.id:S2&sort='):$(cat "$SCH/err" | tr '\n' '|')"
 sc search "q" --publisher nomatch --source openalex; R5="$(cat "$SCH/rc"):$(cat "$SCH/err"):$(scu 'api.openalex.org/works?')"
 sc search "q" --venue "zzz" --source openalex; R5="$R5:$(cat "$SCH/rc"):$(cat "$SCH/err")"
 check "scholar search filters: OpenAlex filters/sort/per_page, arXiv dates and sort, notes" "$R1:$R2:$R3:$R4:$R5" "0:1:1:1:0:1:1:1:note: arxiv has no citation counts; sorted by relevance:0:1:1:1:note: publisher 'big' -> Big Child (P2)|note: other candidates: Mid (P3), Small Pub (P1)|note: venue 'NeurIPS' -> neural information processing systems (S2)|note: other candidates: Other Conf (S1), NIPS Workshop (S3)|:1:scholar.sh: no OpenAlex publisher matches 'nomatch':0:1:scholar.sh: no OpenAlex venue matches 'zzz'"
+# several-word arXiv search: the phrase first; when it finds nothing, the words without stop words ANDed (one word, or all stop words: no second call; an HTTP error: no second call)
+sch_codes; rm -f "$FX/phrase_empty"
+sc search "transformer" --source arxiv --limit 3; X1="$(scn):$(scu 'search_query=all:transformer&')"
+sc search "attention is all you need" --source arxiv; X2="$(scn):$(scu 'search_query=all:%22attention+is+all+you+need%22&')"
+: > "$FX/phrase_empty"
+sc search "attention is all you need" --source arxiv; X3="$(scn):$(scu 'search_query=all:attention+AND+all:need&')"
+sc search "is all the" --source arxiv; X4="$(scn)"
+rm -f "$FX/phrase_empty"; echo 500 > "$FX/code.ax"; sc search "attention is all you need" --source arxiv; X5="$(scn)"; sch_codes
+check "scholar search arXiv several words: one word is one call (all:word); several words ask the phrase first (1 call when it has entries); a phrase with no entries gets one more call with the words that are not stop words ANDed (attention need); only stop words or an HTTP error on the first call: no second call" "$X1|$X2|$X3|$X4|$X5" "1:1|1:1|2:1|1|1"
 
 sch_codes
 sc search "q" --sort date --source openalex; D1="$(cat "$SCH/rc"):$(scu 'sort=publication_date:desc&per_page=10&'):$(scu 'sort=relevance_score'):$(cat "$SCH/err")"

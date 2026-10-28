@@ -88,6 +88,7 @@ if [ -f "$KIT/.manifest" ]; then
 fi
 rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp" "${KIT:?}/grafana"   # regenerated; config.json and roles/ are not touched
 cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
+find "$KIT/bin" -name __pycache__ -type d -prune -exec rm -rf {} +
 if [ -d "$SRC/grafana" ]; then cp -R "$SRC/grafana" "$KIT/"; fi
 ln -s academic-research "$KIT/prompts/academic-writer"   # old path of the renamed mode, regenerated with prompts/
 chmod +x "$KIT/bin/"*.sh
