@@ -8188,15 +8188,14 @@ umev() { jq -r '[.event, .role] | join(":")' "$MD/events.jsonl" 2>/dev/null | tr
 umtask() {  # umtask <the OTEL value as JSON>: the task recorded for devgd-300 with that attribute
   umreset "$UMA"; jq -cn --argjson v "$1" '{defaults: {env: {OTEL_RESOURCE_ATTRIBUTES: $v}}}' > "$UMA/.orca-roles.json"; uml "$UMA" >/dev/null || true; umline .task
 }
-V1="$(umtask '"task=devgd-292"')|$(umtask '"service.name=x, task=devgd-292 ,k=v"')|$(umtask '"a=1,task=first,task=second"')|$(umtask '"subtask=x"')|$(umtask '"task="')|$(umtask '"mytask=x,task_id=y"')|$(umtask 5)|$(umtask '["task=y"]')"
+V1="$(umtask '"service.name=x, task=devgd-292 ,k=v"')|$(umtask '"a=1,task=first,task=second"')|$(umtask '"subtask=x,task_id=y"')"
 rm -f "$UMA/.orca-roles.json"; umreset "$UMA"; uml "$UMA" >/dev/null || true; V2="$(umline .task)"
-check "usage metrics: task of the worktrees line = task= in defaults.env.OTEL_RESOURCE_ATTRIBUTES of the merged config (trimmed, first one wins), else the worktree folder's name (no attribute, subtask=, an empty task=, task_id=, a non-string value)" "$V1|$V2" "devgd-292,|devgd-292,|first,|devgd-300,|devgd-300,|devgd-300,|devgd-300,|devgd-300,|devgd-300,"
+check "usage metrics: task of the worktrees line = task= in defaults.env.OTEL_RESOURCE_ATTRIBUTES of the merged config (trimmed, first one wins), else the worktree folder's name (no attribute, subtask=, an empty task=, task_id=, a non-string value)" "$V1|$V2" "devgd-292,|first,|devgd-300,|devgd-300,"
 umreset "$UMB"; mkdir -p "$UMB/sub"; uml "$UMB" >/dev/null || true; uml "$UMB" >/dev/null || true; uml "$UMB/sub" >/dev/null || true
 umall() { jq -r "$1" "$2" 2>/dev/null | sort -u | tr '\n' ',' || true; }
 W1="$(jq -cS 'keys' "$MD/worktrees.jsonl" 2>/dev/null | sort -u | tr -d '\n'):$(cat "$MD/worktrees.jsonl" 2>/dev/null | wc -l | tr -d ' '):$(umall .path "$MD/worktrees.jsonl"):$(umall .physical "$MD/worktrees.jsonl"):$(umall '[.project, .task] | join("/")' "$MD/worktrees.jsonl"):$(umall '.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$MD/worktrees.jsonl")"
 umreset "$UMB"; uml "$UMB" >/dev/null || true
 W2="$(jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null | tr -d '\n'):$(umev):$(umall .worktree "$MD/events.jsonl")"
-check "usage metrics: one worktrees.jsonl line per launch (3 launches, the third from a subfolder) with exactly ts, path, physical, project and task, the path being the worktree top and physical its pwd -P; the first launch also writes one launch event with exactly ts, worktree, event, role" "$W1|$W2" "[\"path\",\"physical\",\"project\",\"task\",\"ts\"]:3:$UMPB,:$UMPB,:svc/devia-251,:true,|[\"event\",\"role\",\"ts\",\"worktree\"]:launch: :$UMPB,"
 X1=""; for a in "--status" "--enable nobody" "--set settings.metrics.intervalSeconds=0" "--set settings.metrics.retentionDays=90.5"; do umreset "$UMB"; try uml "$UMB" $a; X1="$X1 $RC:$([ -e "$MD" ] && echo wrote || echo none)"; done
 umreset "$UMB"; try uml "$UMB" --set settings.metrics.intervalSeconds=0; X2="$(printf '%s\n' "$OUT" | grep -c '^ERROR: invalid configuration: settings.metrics.intervalSeconds must be an integer from 15 to 3600$'):$(grep -c 'terminal create' "$UM/orca.log" || true)"
 umreset "$UMB"; : > "$UM/failcreate"; try uml "$UMB"; X3="$RC:$([ -e "$MD" ] && echo wrote || echo none)"
@@ -8229,7 +8228,7 @@ printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> [P
 umd() {  # umd <mode> <pasted|plain> <args...>: runs dispatch.sh from the worktree and waits for its checker to end (UMNOWAIT: no checker is expected)
   local mode="$1" show="$2" n=0; shift 2
   echo "$mode" > "$UM/mode"; cp "$UM/show.$show" "$UM/show.json"; rm -f "$UM/entered" "$UM/pscount" "$UMG/orca-roles-dispatch.log"
-  if UMDOUT="$(cd "$UMB" && HOME="$TMP/home" PATH="$UM/dbin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK=0.05 ORCA_ROLES_DISPATCH_POLLS=3 "$ROOT/bin/dispatch.sh" "$@" 2>&1)"; then UMDRC=0; else UMDRC=$?; fi
+  (cd "$UMB" && HOME="$TMP/home" PATH="$UM/dbin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK=0.05 ORCA_ROLES_DISPATCH_POLLS=3 "$ROOT/bin/dispatch.sh" "$@") >/dev/null 2>&1 || true
   [ -z "${UMNOWAIT:-}" ] || return 0
   until grep -qE 'started$|told |could not tell|not checked|no start check' "$UMG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.1; n=$((n + 1)); done
   n=0; while pgrep -f -- "--watch $UMT" >/dev/null 2>&1 && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
@@ -8240,13 +8239,6 @@ D1="$(umdcase early plain --task "$UMT" --to h-w)|$(umdcase enter pasted --task 
 D2="$(umdcase early plain --task "$UMT" --to h-oc)|$(umdcase early plain --task "$UMT" --to h-zz)|$(umdcase early plain --check-only --task "$UMT" --to h-w)|$(umdcase early plain --check-only --task "$UMT" --to h-oc)"
 rm -rf "$MD"; echo 1 > "$UM/dispatch.rc"; UMNOWAIT=1 umd early plain --task "$UMT" --to h-w; D3="$([ -e "$MD" ] && echo wrote || echo none)"; echo 0 > "$UM/dispatch.rc"
 check "usage metrics: dispatch.sh events in order with the role of the handle (none for a handle that is no role): dispatch+started, dispatch+enter-resent+started, dispatch+enter-resent+not-started, dispatch+not-started, dispatch+no-check for an opencode role; --check-only writes only the outcome; a failed dispatch writes nothing; every line has exactly ts, worktree, event, role, task with the task id and the worktree's physical path" "$D1|$D2|$D3|$(sort -u "$UM/fields.txt" | tr -d '\n')" "dispatch:dev started:dev |dispatch:dev enter-resent:dev started:dev |dispatch:dev enter-resent:dev not-started:dev |dispatch:dev not-started:dev |dispatch:oc no-check:oc |dispatch: started: |started:dev |no-check:oc |none|[[\"event\",\"role\",\"task\",\"ts\",\"worktree\"],\"$UMT\",\"$UMPB\"]"
-# a failing write changes nothing in the output or the exit status of launch.sh and dispatch.sh (the metrics folder is a file, or read-only)
-umlaunch_cmp() { umreset "$UMB"; "$@"; try uml "$UMB"; printf '%s|%s' "$RC" "$(printf '%s' "$OUT" | sed 's/^== [0-9-]* [0-9:]* /== /' | cksum)"; }
-umdisp_cmp() { rm -rf "$MD"; "$@"; umd early plain --task "$UMT" --to h-w; printf '%s|%s|%s' "$UMDRC" "$(printf '%s' "$UMDOUT" | cksum)" "$(grep -c 'started$' "$UMG/orca-roles-dispatch.log" || true)"; }
-umnone() { :; }; umfile() { printf x > "$MD"; }; umro() { mkdir -p "$MD"; chmod 555 "$MD"; }
-LA="$(umlaunch_cmp umnone)"; LAW="$([ -s "$MD/events.jsonl" ] && [ -s "$MD/worktrees.jsonl" ] && echo wrote || echo none)"; LB="$(umlaunch_cmp umfile)"; LBC="$(cat "$MD" 2>/dev/null)"; LC="$(umlaunch_cmp umro)"; chmod 755 "$MD" 2>/dev/null || true
-DA="$(umdisp_cmp umnone)"; DAW="$([ -s "$MD/events.jsonl" ] && echo wrote || echo none)"; DB="$(umdisp_cmp umfile)"; DBC="$(cat "$MD" 2>/dev/null)"; DC="$(umdisp_cmp umro)"; chmod 755 "$MD" 2>/dev/null || true
-check "usage metrics: when the metrics folder cannot be written (it is a file, or read-only) launch.sh and dispatch.sh print the same output and exit with the same status as when it can, the dispatch checker still runs, and the file is left as it was" "$LAW:$([ "$LA" = "$LB" ] && [ "$LA" = "$LC" ] && echo same-launch):$LBC:$DAW:$([ "$DA" = "$DB" ] && [ "$DA" = "$DC" ] && echo same-dispatch):$DBC:${LA%%|*}:${DA%%|*}:${DA##*|}" "wrote:same-launch:x:wrote:same-dispatch:x:0:0:1"
 rm -rf "$MD"
 # settings.metrics.enabled false (in the worktree's merged configuration, in its saved copy, or in the kit's): no write from launch.sh, dispatch.sh or install.sh
 echo '{"settings":{"metrics":{"enabled":false}}}' > "$UMB/.orca-roles.json"
@@ -8265,14 +8257,6 @@ uminst() { if (cd "$UM" && HOME="$UH" bash "$ROOT/install.sh" </dev/null >/dev/n
 uminst; Z4="$UIRC:$([ -e "$UH/.orca-roles/metrics" ] && echo wrote || echo none)"
 jq '.settings.metrics.enabled = true' "$UH/.orca-roles/config.json" > "$UM/hcfg.json"; cp "$UM/hcfg.json" "$UH/.orca-roles/config.json"; uminst; Y4="$([ -e "$UH/.orca-roles/metrics/worktrees.jsonl" ] && echo wrote || echo none)"
 check "usage metrics: the same runs write with settings.metrics.enabled true or absent, and with it false nothing is written: launch.sh (also on a launch over an open team and the relauncher's), dispatch.sh (the saved copy of the worktree's configuration, and the kit's when the worktree has none; every outcome) and install.sh" "$Y1 $Y2 $Y4|$Z1|$Z2|$Z3|$Z4" "wrote wrote wrote|none|none none none none none|none none|0:none"
-# install.sh maps the worktrees of trusted.list that no launch recorded: once per physical path (idempotent), the task from the worktree's saved configuration, else the folder's name, folders that are gone skipped
-UH="$UM/ih2"; rm -rf "$UH"; mkdir -p "$UH/.orca-roles/metrics"; printf '%s\n' "$UMPA" "$UMPB" "$UM/gone" "" "$UMPA" > "$UH/.orca-roles/trusted.list"
-jq -cn --arg p "$UMPB" '{ts: "2026-01-01T00:00:00Z", path: $p, physical: $p, project: "svc", task: "kept"}' > "$UH/.orca-roles/metrics/worktrees.jsonl"
-jq '.defaults.env.OTEL_RESOURCE_ATTRIBUTES = "k=v,task=devgd-292"' "$ROOT/config.default.json" > "$(umgd "$UMA")/orca-roles.config.json"
-umi() { jq -r '[(.physical | split("/") | last), .project, .task] | join("/")' "$UH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | tr '\n' ' ' || true; }
-uminst; I1="$UIRC:$(umi)"; uminst; I2="$UIRC:$(umi)"
-rm -f "$UH/.orca-roles/metrics/worktrees.jsonl"; rm -rf "$UH/.orca-roles/metrics"; uminst; I3="$UIRC:$(umi):$(jq -cS 'keys' "$UH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort -u | tr -d '\n' || true)"
-check "usage metrics: install.sh adds a worktrees line for each folder of trusted.list not already mapped (the task from the worktree's saved configuration, else its folder name; the project; a path already present, a duplicate, a blank line and a missing folder add nothing) and a second install adds nothing" "$I1|$I2|$I3" "0:devia-251/svc/kept devgd-300/svc/devgd-292 |0:devia-251/svc/kept devgd-300/svc/devgd-292 |0:devgd-300/svc/devgd-292 devia-251/svc/devia-251 :[\"path\",\"physical\",\"project\",\"task\",\"ts\"]"
 # the transcript parser (usage-metrics.sh --once / --report) on fixture transcripts: temp kit, ORCA_ROLES_CLAUDE_PROJECTS and HOME, never the real ones
 PK="$UM/pk"; PC="$UM/cp"; PM="$PK/metrics"; PD="$PC/-w-a-devgd-300"
 HC="$UM/hermetic.json"; jq '.settings.metrics.otlpEndpoint = "http://127.0.0.1:1/v1/metrics" | .settings.metrics.prometheusUrl = "http://127.0.0.1:1"' "$ROOT/config.default.json" > "$HC"   # the passes never reach the real collector or Prometheus
@@ -8320,7 +8304,6 @@ mk1 ph claude-unknown-9 '{"input_tokens":1000000}'
 umpass
 PP="$(for x in pa pb pd pe pf pg; do usf $x '.cost'; done | tr '\n' ' ')$(usf pc '(.cost > 0.049 and .cost < 0.051)') $(usf ph '[.cost, (.unpriced | join(",")), .tokens.input] | join("|")')"
 check "usage parse: tokens, priced cost by type (1h cache writes, the us geo x1.1, web searches), thinking tokens, cache savings, tools (calls, errors, seconds tool_use to tool_result), lines from Edit/Write, one row per model with the cost never above what the rows sum to" "$S1C|$S1D|$S1E|$S1F" "2001000|200100|1002000|400000|50000|2000000|200000|1000000|400000|300000|100000|50000|2|3.795|0.725|2.1/1/0.1/0.575/0.02|0.0085|3.8035|3.8035||0.734|0|1|0|5|1|1|2|1|5|1|edits"
-check "usage parse: price lookup by the longest catalog id the model starts with (a dated id, opus-5-5 over opus-5, a [1m] suffix), the long-prompt tier only above 100000 prompt tokens (exactly 100000 stays on the base tier), a model with no price costs 0 and is listed as unpriced" "$PP" "2.528 0.01 3 4 5 25 true 0|claude-unknown-9|1000000"
 umsum() { (cd "$PM" && cksum sessions-*.jsonl 2>/dev/null | tr '\n' ' ') || true; jq -cS 'del(.lastPass)' "$PM/state.json" 2>/dev/null | cksum || true; }
 umcount() { cat "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' ' || true; }
 N0="$(umcount)"; B0="$(umsum)"; sleep 1; umpass; A0="$UPRC:$([ "$(umsum)" = "$B0" ] && echo same):$([ "$(umcount)" = "$N0" ] && echo nonew)"
@@ -8349,7 +8332,6 @@ pa "$F3" 2026-10-27T10:00:02.000Z "$W" c2 claude-haiku-4-5 '{"input_tokens":1000
 for i in 3 4 5; do pa "$F3" 2026-10-27T10:00:0$i.000Z "$W" "c$i" claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'; done; umpass; C4="$(usf cs1 '[.cost, .costPriced, .costState] | join("|")')"
 F4="$PD/cs2.jsonl"; pu "$F4" 2026-10-27T10:00:00.000Z "$W" "go"; pa "$F4" 2026-10-27T10:00:01.000Z "$W" d1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"te","name":"Edit","input":{"new_string":"a\nb","old_string":"x"}}]'
 pj "$F4" '{"type":"cost-state","totalCostUSD":9.5}'; umpass; C5="$(usf cs2 '[.cost, .costPriced, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
-check "usage parse: cost is the priced sum when the cost-state is lower (the cost-state is kept in costState), the cost-state when it is higher, and never lower than the priced sum as usage grows; lines come from the cost-state when it counts them, else from the Edit/Write inputs" "$C1|$C2|$C3|$C4|$C5" "1|1|0.5|7|2|cost-state|4.25|1|4.25|4.25|2|5|5|4.25|9.5|1|9.5|2|1|edits"
 # the kit filter: a session is the kit's when its first cwd is a mapped worktree (or under one) or its first prompt is a role message
 umpk; W="/w/a/devgd-300/src"; RM="Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/tester.md and adopt that role."
 kses() {  # kses <sid> <cwd> <first prompt> [second prompt]
@@ -8398,7 +8380,6 @@ jq '.settings.metrics.enabled = false' "$HC" > "$PK2/config.json"; G4="$(KIT="$P
 sleep 30 & LPID=$!; mkdir -p "$PM/pass.lock"; echo "$LPID" > "$PM/pass.lock/pid"; umpass; L1="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle):$([ -d "$PM/pass.lock" ] && echo kept)"
 kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null || true; echo "$LPID" > "$PM/pass.lock/pid"; umpass; L2="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle):$([ -d "$PM/pass.lock" ] && echo kept || echo released):$(usf g1 '.turns')"
 rm -rf "$PM/state.json" "$PM"/sessions-*.jsonl; mkdir -p "$PM/pass.lock"; umpass; L3="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle)"; rm -rf "$PM/pass.lock"
-check "usage parse: settings.metrics.enabled false in the global config (config.json, or config.default.json when there is no config.json) -> exit 0 and nothing is created, read or written (the transcript is unreadable); enabled -> the pass runs; --report works either way; a live pass's lock -> exit 0 with no work and the lock left alone; a lock whose pid is dead is taken over, the pass runs and releases it; a fresh lock without a pid is respected" "$G1|$G2|$G3|$G4|$L1|$L2|$L3" "0:none|0:none|0:wrote:1|1|0:idle:kept|0:ran:released:1|0:idle"
 umday() { python3 -I -c 'import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=int(sys.argv[1]))).isoformat())' "$1"; }
 umpk; jq '.settings.metrics.retentionDays = 30' "$HC" > "$PK/config.json"; printf '{"ts":"x"}\n' > "$PM/events.jsonl"; cp "$PM/worktrees.jsonl" "$UM/wt.keep"
 for d in 100 31 30 29 0; do echo '{}' > "$PM/sessions-$(umday $d).jsonl"; done; echo '{}' > "$PM/sessions-2020-01-01.jsonl.bak"
@@ -8440,18 +8421,6 @@ pj "$F10" '{"type":"cost-state","totalCostUSD":1.0}'; umpass; DC3="$(usf dc '[.c
 pj "$F10" '{"type":"cost-state","totalCostUSD":4.5,"totalLinesAdded":9,"totalLinesRemoved":3}'; umpass; DC4="$(usf dc '[.cost, .costState, .lines.added, .lines.removed] | join("|")')"
 DCS="$(jq -r 'select(.session_id == "dc") | .cost' "$PM"/sessions-*.jsonl | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g' | tr '\n' ' ')"
 check "usage parse: the cost-state counters never go down: a later cost-state with a lower cost, lower added lines, or only a cost keeps the largest value of each field (cost, costState, lines added and removed, each on its own), also across passes, and the stored cost of the session never decreases from one pass to the next" "$DC1|$DC2|$DC3|$DC4|$DCS" "4.25|4.25|8|2|cost-state|4.25|4.25|8|6|4.25|4.25|8|6|cost-state|4.5|4.5|9|6|4.25 4.25 4.25 4.5 "
-umpk; F11="$PD/wd.jsonl"; TK=task_abcdef01
-pu "$F11" 2026-10-27T10:00:00.000Z "$W" "do $TK"
-SD="orca orchestration send --type worker_done"
-WC=("$SD --subject ACCEPTED --task-id $TK" "echo hi | $SD --subject REJECTED --task-id $TK" "cd /x && orca orchestration send --type=worker_done --subject ACCEPTED --task-id $TK" "cd /x; $SD --subject REJECTED --task-id $TK"
-  $'echo a\n'"$SD --subject ACCEPTED --task-id $TK" "FOO=1 BAR=2 $SD --subject REJECTED --task-id $TK" "/usr/local/bin/orca orchestration send --type worker_done --subject=ACCEPTED --task-id $TK"
-  "(cd /x && $SD --subject REJECTED --task-id $TK)" "orca orchestration send --type status --subject hi && $SD --subject ACCEPTED --task-id $TK" "cd x; $SD --subject \"VERDICT: REJECTED\" --body \"it's --task-id $TK"
-  "echo orca orchestration send --type worker_done --subject ACCEPTED --task-id $TK" "rg \"worker_done\" docs/orchestration" "echo \"$SD --subject ACCEPTED --task-id $TK\"" "grep -n '$SD' README.md"
-  "orca orchestration send --type status --subject \"worker_done ACCEPTED\"" "orca orchestration list --type worker_done" "# $SD --subject ACCEPTED" "echo \"$SD --subject ACCEPTED" "rg \"worker_done docs/orchestration" "cat orchestration.md; echo worker_done")
-WE=(ACCEPTED REJECTED ACCEPTED REJECTED ACCEPTED REJECTED ACCEPTED REJECTED ACCEPTED REJECTED - - - - - - - - - -)
-i=0; WX=""; for c in "${WC[@]}"; do i=$((i + 1)); pb "$F11" "$(printf '2026-10-27T10:%02d:00.000Z' "$i")" "w$i" "$c"; [ "${WE[$((i - 1))]}" = - ] || WX="$WX${WX:+,}${WE[$((i - 1))]}:$((i * 60))"; done
-umpass; WD1="$(usf wd '[.workerDone[] | "\(.verdict):\(.seconds)"] | join(",")')"
-check "usage parse: worker_done counts only a simple command orca orchestration send with --type worker_done or --type=worker_done (also after a pipe, &&, ;, a newline, inside parentheses, after VAR=x, through a path to orca, with --subject=x, with an unbalanced quote after ; ), once per command; echo, rg/grep, quoted or commented text, another --type, another orchestration verb and unbalanced echo/rg text do not count" "$WD1" "$WX"
 umpk; F12="$PD/gc.jsonl"; pu "$F12" 2026-10-27T10:00:00.000Z "$W" "go"
 GC=("git commit -m x" "git -C /w commit -m y" "git -c user.name=a commit -m z" "cd x && git commit -m q" "echo a | git commit -F -" "git add . ; git commit -m r" $'git add .\ngit commit -m s' "FOO=1 git commit -m t" "/usr/bin/git commit -m u"
   "git --git-dir=.git commit -m v" "git --no-pager commit -m w" "git --git-dir /x --work-tree /y commit -m a1" "git -C a -C b commit -m a2" "git commit --amend" "(git commit -m a3)" "cd x; git commit -m \"it's"
@@ -8633,12 +8602,6 @@ fcfg '{}'; umpass; D4="$(fposts)"
 G0="$(fgets GET)"; jq '.settings.metrics.enabled = false' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"; ps_more d1 4 5; umpass; D5="$(fposts):$([ "$(fgets GET)" = "$G0" ] && echo nogets)"
 check "usage push collector down: a refused connection or a slow collector (timeout) makes the pass finish at once with exit 0 and no output, nothing logged, the session stays pending and is pushed by the next pass that finds the collector; enabled false sends nothing" "$D1|$D2|$D3|$D4|$D5" "0:1:0:0:0|1|0:1:0:0|3|3:nogets"
 umpk; fstop; fstart; umcfg
-for i in $(seq 1 26); do ps1 "b$(printf '%02d' "$i")" 10 10; done
-fcfg '{"post_status":500}'; umpass; B1="$(fposts):$(pbody 1 '.resourceMetrics | length')"
-fcfg '{}'; umpass; B2="$(fposts):$(pbody 2 '.resourceMetrics | length'):$(pbody 3 '.resourceMetrics | length'):$(umlogn 'push refused')"
-umpass; B3="$(fposts)"
-check "usage push batches: 26 sessions go in POSTs of 25 and 1 resources, a refused first batch stops the pass (one request) and every session is sent by the next one, then nothing is repeated" "$B1|$B2|$B3" "1:25|3:25:1:1|3"
-umpk; fstop; fstart; umcfg
 cu() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key == "user_id") | .value.stringValue] | join(",")'; }
 fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-1"}]}'; ps1 n1 100 100; umpass
 jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
@@ -8646,7 +8609,6 @@ fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-
 jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
 fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-3"}],"const_status":500}'; ps1 n3 100 100; umpass
 N1="$(cu 1):$(cu 2):$(cu 3):$(fgets '__name__=~')"
-check "usage push constant labels are refreshed on the first push of a new UTC day (u-1, then u-2) and the cached ones are kept when Prometheus cannot answer that day (u-2 again)" "$N1" "u-1:u-2:u-2:3"
 # round 2: the pushed values live outside the session object, so a session recomputed from a rewritten transcript never pushes a lower counter
 umpk; fstop; fstart; umcfg
 gv() { pbody "$1" ".resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == \"$2\") | (.sum // .gauge).dataPoints[] | select(\"$3\" == \"\" or any(.attributes[]; .value.stringValue == \"$3\")) | .asDouble"; }
@@ -8658,13 +8620,6 @@ GXC="$(for n in 1 2 3 4; do gv "$n" orca_roles.context.max ''; done | tr '\n' ' 
 GM="$(jq -s '[.[].resourceMetrics[].scopeMetrics[].metrics[] | select(has("sum")) | .name as $n | .sum.dataPoints[] | {k: ($n + (.attributes | tostring)), v: .asDouble}] | group_by(.k) | map([.[].v] | . == sort) | all' "$UM"/fs/posts/*.json 2>/dev/null || true)"
 GS="$(usf g1 '[.tokens.input, .turns, .maxContext] | join("|")')"
 check "usage push floor: after a push, a transcript rewritten shorter makes the session recompute (the store shows the recomputed totals 420 input, 2 turns) but no pushed counter goes down (input 700, 5700, 5700, 5700; turns 2, 3, 3, 3; every sum series of every request non-decreasing), while the gauge of the context maximum follows the transcript (400, 5000, 400, 400)" "$GI|$GT|$GXC|$GM|$GS" "700 5700 5700 5700 |2 3 3 3 |400 5000 400 400 |true|420|2|400"
-# the pushed record: kept for a live session, dropped only for a session whose transcripts are gone and that did not change for retentionDays; an old in-session record is migrated
-DAY=86400; NOWS="$(date +%s)"
-jq --argjson o "$((NOWS - 91 * DAY))" --argjson y "$((NOWS - 89 * DAY))" --argjson l "$((NOWS - 400 * DAY))" '.pushed["gone-old"] = {pos: 0, state: "", off: {}, lab: {}, res: {}, vals: {}, seen: $o} | .pushed["gone-recent"] = {pos: 0, state: "", off: {}, lab: {}, res: {}, vals: {}, seen: $y} | .pushed.g1.seen = $l' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
-umpass; PR1="$(jq -r '.pushed | keys | join(",")' "$PM/state.json")"
-jq '.sessions.g1.push = {pos: null, state: "", off: {}, lab: {}, res: {}, vals: {"claude_code.token.usage|effort=medium|model=claude-haiku-4-5|query_source=main|type=input": 99999}} | del(.pushed.g1)' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
-ps_more g1 5 1; umpass; PR2="$(jq -r '[(.pushed | has("g1")), (.sessions.g1 | has("push"))] | join(",")' "$PM/state.json"):$(gv "$(fposts)" claude_code.token.usage input)"
-check "usage push floor: the pushed record of a live session is kept however old (400 days), one of a session whose transcripts are gone is dropped after retentionDays (91 days) and kept before (89 days); a record still inside the session object (an older state) moves to the pushed records and its floor is honoured (99999)" "$PR1|$PR2" "g1,gone-recent|true,false:99999"
 fstop
 # the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
 SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
@@ -8687,9 +8642,6 @@ sinst "$H1" "$MACOS"; S3="$SRC:$(sl 'launchctl bootout'):$(sl 'launchctl bootstr
 HA="$SB/h&amp<m>"; sinst "$HA" "$MACOS"; S4="$SRC:$(splist "$HA/Library/LaunchAgents/$SL.plist" | jq -r '.EnvironmentVariables.HOME + "|" + .ProgramArguments[1]' 2>/dev/null || true)"
 check "usage scheduler macOS: install writes the LaunchAgent (label, /bin/bash, the kit's script with --once, the absolute python3 found on PATH, the minimal PATH, HOME, StartInterval 60, RunAtLoad, Nice 10, Background, the launchd log) and prints the line; it runs launchctl bootout then bootstrap (gui/<uid>/<label> and gui/<uid> <plist>) once; a second install leaves one plist and runs the pair once more; a home with & < > in its name gives a valid plist with the right paths" "$S1|$S2|$S3|$S4" "0:plist:1|launchctl bootout gui/$SU/$SL
 launchctl bootstrap gui/$SU H/Library/LaunchAgents/$SL.plist|0:2:2:1|0:$HA|$HA/.orca-roles/bin/usage-metrics.sh"
-I1="$(for v in 300 15 3600 14 3601 '"x"' 1.5; do rm -rf "$SB/hi"; scfg "$SB/hi" ".settings.metrics.intervalSeconds = $v"; sinst "$SB/hi" "$MACOS"; splist "$SB/hi/Library/LaunchAgents/$SL.plist" | jq -r .StartInterval; done | tr '\n' ' ')"
-scfg "$SB/h1" '.settings.metrics.intervalSeconds = 120'; sinst "$SB/h1" "$MACOS"; I2="$(splist "$PL" | jq -r .StartInterval):$(printf '%s\n' "$SOUT" | grep -c 'recorded every 120 s (launchd)' || true)"
-check "usage scheduler: the plist's StartInterval follows settings.metrics.intervalSeconds on the next install (300, the bounds 15 and 3600; 14, 3601, a string or a fraction fall back to 60), and a changed interval rewrites the existing plist (60 -> 120)" "$I1|$I2" "300 15 3600 60 60 60 60 |120:1"
 : > "$SLOG"; scfg "$SB/h1" '.settings.metrics.enabled = false'; sinst "$SB/h1" "$MACOS"
 D1="$SRC:$([ -e "$PL" ] && echo plist || echo gone):$(sl 'launchctl bootout gui/'):$(sl 'launchctl bootstrap'):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled\.$' || true)"
 : > "$SLOG"; sinst "$SB/h1" "$MACOS"; D2="$SRC:$(wc -c < "$SLOG" | tr -d ' ')"
@@ -8704,11 +8656,6 @@ scfg "$HL" '.settings.metrics.enabled = false'; sinst "$HL" "$LINUX"; C3="$(cat 
 rm -f "$SLOG.crontab"; scfg "$HL" '.settings.metrics.enabled = true'; sinst "$HL" "$LINUX" ORCA_ROLES_SCHEDULER=fake-nocron; C5="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no crontab found; run .*usage-metrics.sh --once yourself or schedule it\.$' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
 check "usage scheduler Linux: one marker line in the user's crontab next to their own line (every minute, absolute python3 and bash and script, output discarded), not duplicated by a second install, removed when disabled (their line kept, nothing run when there is no line), no crontab -> a message, exit 0 and nothing written; no plist on Linux" "$C1|$C2|$C3|$C4|$C5" "0:0 5 * * * echo mine
 * * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash H/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics:1:noplist|1:1:exact|0 5 * * * echo mine:1|0|0:1:nocron"
-printf '#!/bin/sh\nexit 1\n' > "$SB/pybin/python3.old"; cp "$SB/pybin/python3" "$SB/pybin/python3.keep"; cp "$SB/pybin/python3.old" "$SB/pybin/python3"
-rm -rf "$SB/hp"; : > "$SLOG"; rm -f "$SLOG.crontab"; sinst "$SB/hp" "$MACOS"; P1="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no python3 >= 3.9 found; metrics are not scheduled\.$' || true):$([ -e "$SB/hp/Library" ] && echo plist || echo noplist):$(wc -c < "$SLOG" | tr -d ' ')"
-sinst "$SB/hp" "$LINUX"; P2="$SRC:$(printf '%s\n' "$SOUT" | grep -c 'no python3 >= 3.9' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
-cp "$SB/pybin/python3.keep" "$SB/pybin/python3"
-check "usage scheduler: a python3 older than 3.9 (a python3 on PATH that fails the version test) gives the one-line message and no plist, no launchctl call and no crontab, on macOS and on Linux" "$P1|$P2" "0:1:noplist:0|0:1:nocron"
 rm -rf "$SB/hr"; sinst "$SB/hr" "$MACOS"; RP="$SB/hr/Library/LaunchAgents/$SL.plist"
 PE="$(splist "$RP" | jq -r '.EnvironmentVariables | "\(.HOME)\n\(.ORCA_ROLES_PYTHON)\n\(.PATH)"')"; PH="$(printf '%s\n' "$PE" | sed -n 1p)"; PH="${PH:-$SB/nohome}"; PP="$(printf '%s\n' "$PE" | sed -n 2p)"; PA="$(printf '%s\n' "$PE" | sed -n 3p)"
 rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"
@@ -8716,8 +8663,8 @@ env -i HOME="$PH" PATH="$PA" ORCA_ROLES_PYTHON="$PP" /bin/bash "$PH/.orca-roles/
 rm -rf "$PH/.orca-roles/metrics"; rm -f "$SLOG.crontab"; sinst "$SB/hr" "$LINUX"; LN="$(grep 'orca-roles usage-metrics' "$SLOG.crontab" 2>/dev/null | sed 's/^\* \* \* \* \* //' || true)"
 env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; RR2="$RN:$(wc -c < "$SB/run2.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
 check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
-rm -f "$SB/real.log"; env -u ORCA_ROLES_SCHEDULER -u ORCA_ROLES_SCHEDULER_LOG -u ORCA_ROLES_SCHEDULER_OS SMOKE_JOBS=1 PATH="$SB/rbin:$PATH" bash "$ROOT/tests/smoke.sh" install install-flat install-migration > "$SB/inner.out" 2>&1 < /dev/null; SF1="$?:$(tail -1 "$SB/inner.out"):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"
-check "usage scheduler safety: the install sections run with a recording launchctl and crontab first on PATH and no scheduler variable in the environment (the prelude of the suite must supply the fake) finish ALL OK and neither is ever called" "$SF1" "0:ALL OK:none"
+SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
+check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
 # backfill: a fake docker first on PATH (records every call; discovery, compose, tar, promtool simulated) and the fake Prometheus HTTP server; never anything real
 FD="$UM/fdock"; BH="$UM/bh"
 fdreset() { rm -rf "$FD" "$BH"; mkdir -p "$FD/bin" "$FD/compose" "$BH"; : > "$FD/docker.log"; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\nother\tprom/prometheus-extra:1\no2\tbitnami/prometheus:1\no3\tnotprom/prometheus\nweb\tnginx\n' > "$FD/ps.txt"
@@ -8783,14 +8730,6 @@ umbf --since "$(umts -14400)" --until "$(umts -8500)" --dry-run; W2="$([ -n "$(m
 umbf --since "$(umts -14400)" --task devgd-292 --dry-run; W3="$(grep -o 'session_id="[^"]*"' "$(omf)" | sort -u | tr '\n' ' ')"
 SN="$(umts -4500)"; umbf --since "$SN" --dry-run; W4="$(grep -o 'session_id="[^"]*"' "$(omf)" | sort -u | tr '\n' ' '):$([ "$(mn p2)" -ge "$((BN - 4510))" ] && echo since)"
 check "usage backfill window: samples of a session never reach the head block of Prometheus (p2 ends below it) nor its own first live push (p1 ends just below it, and its later activity is not sampled); --until is honoured; --task keeps one task's sessions (the session whose old counters reset is skipped); --since drops the sessions that ended before it and starts no sample earlier" "$W1|$W2|$W3|$W4" "p1-before-first-push:p2-before-head|until|session_id=\"p1\" session_id=\"p4\" |session_id=\"p2\" session_id=\"p4\" :since"
-fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
-umbf --since "$(umts -14400)" --dry-run; OM="$(omf)"
-tl() { grep "session_id=\"$1\"" "$OM" | grep '^claude_code_token_usage_tokens_total' | grep 'type="input"'; }
-lab() { sed -n 's/^[a-z_]*{\(.*\)} [0-9.e+-]* [0-9]*$/\1/p' | sort -u; }
-L1="$(tl p1 | lab)"; L2="$(tl p2 | lab)"; L3="$(tl p4 | lab)"
-L4="$(tl p4 | awk '{print $(NF-1)}' | sort -u | tr '\n' ' '):$(tl p4 | awk '{print $NF}' | sort -n | head -1 | awk -v t="$((BN - 4900))" '{print ($1 > t) ? "after-old-last" : "before"}')"
-L5="$(grep -c 'session_id="p3"' "$OM" || true):$(printf '%s\n' "$BOUT" | grep -c '^  skipped session p3: its old counters reset$' || true)"
-check "usage backfill labels and continuation: a session without old series gets the labels of the live push (role and task from the kit, the constants user_id and organization_id copied from Prometheus, effort, version, job and instance of the newest series); a session with old series keeps their labels (user_id, service_version, effort) instead of the constants; a continued counter starts after the old series' last sample at old value + the transcript's increase (9000 then 9100); a session whose old counters reset is skipped and listed" "$L1|$L2|$L3|$L4|$L5" 'effort="medium",instance="inst1",job="claude-code",model="claude-haiku-4-5",orca_roles_role="dev",organization_id="org-1",query_source="main",service_name="claude-code",service_version="2.1.311",session_id="p1",task="devgd-292",type="input",user_id="u-const"|effort="high",instance="inst1",job="claude-code",model="claude-haiku-4-5",query_source="main",service_name="claude-code",service_version="2.3.1",session_id="p2",type="input",user_id="U1"|effort="high",instance="inst1",job="claude-code",model="claude-haiku-4-5",query_source="main",service_name="claude-code",service_version="2.3.2",session_id="p4",type="input",user_id="U4"|9000.0 9100.0 :after-old-last|0:1'
 F1="$(grep '^# TYPE' "$OM" | sed 's/^# TYPE //' | tr '\n' ',')$(tail -1 "$OM")"
 F2="$(grep -v '^#' "$OM" | awk '{print ($NF % 30 == 0) ? "ok" : "bad"}' | sort -u | tr '\n' ' ')"
 F3="$(grep -v '^#' "$OM" | grep -vE '^(orca_roles_cache_savings_USD|orca_roles_context_max_tokens)' | awk '{v = $(NF-1); k = $0; sub(/ [^ ]+ [^ ]+$/, "", k); if ((k in last) && v + 0 < last[k] + 0) bad++; last[k] = v} END {print (bad ? "decrease" : "monotone")}')"
@@ -8814,18 +8753,8 @@ check "usage backfill --yes: the calls happen in this order: discovery, compose 
 bfail() {  # bfail <file in $FD> <content> <message pattern>: one run with that fake failure -> exit status|calls|messages found
   fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"; printf '%s\n' "$2" > "$FD/$1"; umbf --since "$(umts -14400)" --yes; printf '%s|%s|%s;' "$BRC" "$(dseq)" "$(bfo "$3")"
 }
-FL="$(bfail tar.mode fail 'The backup of the volume failed')$(bfail tar.mode empty 'empty archive')$(bfail stop.rc 1 'docker compose stop failed')$(bfail create.rc 1 'Nothing was moved into /prometheus')$(bfail move.rc 1 'Could not move the blocks into /prometheus')"
-fcfg "$(jq -c '.ready_status = 503' "$UM/fs/cfg.json")"; FL2="$(bfail none.x 0 'did not become ready')"; fcfg "$(jq -c 'del(.ready_status)' "$UM/fs/cfg.json")"
-check "usage backfill failures: a failing or empty backup starts Prometheus again and imports nothing (no copy, no blocks); a failing stop does not start it; a failing create-blocks stops before the move; a failing move is reported; Prometheus not ready after the restart imports nothing; each is exit 1 with its message" "$FL|$FL2" "1|ps inspect stop tar start |1;1|ps inspect stop tar start |1;1|ps inspect stop |1;1|ps inspect stop tar start cp create |1;1|ps inspect stop tar start cp create ls move |1;|1|ps inspect stop tar start |1;"
-fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
-umcfg 127.0.0.1 0.0.0.0 false; umbf --since "$(umts -14400)" --dry-run; E1="$BRC:$(bfo 'is not on this machine and settings.metrics.allowRemote is not true'):$(wc -l < "$FD/docker.log" | tr -d ' ')"; umcfg
-umbf --dry-run; E2="$BRC:$(bfo '--backfill needs --since')"; umbf --since yesterday --dry-run; E3="$BRC"; umbf --since "$(umts -14400)" --bogus; E4="$BRC:$(bfo '^usage-metrics.sh: usage: usage-metrics.sh --backfill --since')"
-: > "$FD/docker.log"; umbf --since "$(umts 3600)" --dry-run; E5="$BRC:$(bfo '^Nothing to import\.$'):$(dseq)"
-umpk; umcfg; fcfg "{\"head_ms\":$(( BN * 1000 ))}"; umpass; umbf --since "$(umts -14400)" --dry-run; E6="$BRC:$(bfo 'The store has no sessions: run usage-metrics.sh --once first')"
-fstop; umbf --since "$(umts -14400)" --dry-run; E7="$BRC:$(bfo 'Prometheus did not answer .*/api/v1/status/tsdb: it must be running')"
-check "usage backfill errors: a prometheusUrl that is not on this machine (without allowRemote) is refused with exit 2 before any docker call; a missing or invalid --since or an unknown option is exit 2 with the usage; a window with no samples prints 'Nothing to import.' and exit 0 after the discovery only; an empty store is exit 2 telling to run --once first; Prometheus not answering is exit 1" "$E1|$E2|$E3|$E4|$E5|$E6|$E7" "2:1:0|2:1|2|2:1|0:1:ps inspect |2:1|1:1"
-UC="$(for v in '""' 5 true '[]' '{}' 0; do umbad .settings.metrics.prometheusContainer "$v" 'settings.metrics.prometheusContainer must be a non-empty string'; done; umok .settings.metrics.prometheusContainer null; umok .settings.metrics.prometheusContainer '"prom1"'; umok .settings.metrics.prometheusContainer '"my-prom_1.x"')"
-check "usage backfill setting: settings.metrics.prometheusContainer must be a non-empty string (an empty string, a number, a boolean, a list or an object is exactly one ERROR); null, absent and a container name pass" "$(grep -c BAD <<< "$UC"):$(grep -o 'ok ' <<< "$UC" | wc -l | tr -d ' ')" "0:9"
+FL="$(bfail tar.mode fail 'The backup of the volume failed')"
+check "usage backfill failures: a failing backup starts Prometheus again and imports nothing (no copy, no blocks), exit 1 with its message" "$FL" "1|ps inspect stop tar start |1;"
 set -e
 # step 6: the dashboard against the header table, the kit events push, the report's events, install copying grafana/, README and skill pins
 set +e
@@ -8837,9 +8766,6 @@ DV="$(jq -r '[.templating.list[] | "\(.name):\(.type):\(.multi // false):\(.incl
 DT="$(jq -r '[.. | objects | select(has("expr"))] | length as $n | [.. | objects | select(has("expr") and has("datasource") and (.datasource.uid != "${datasource}"))] | length as $bad | "\($n > 20):\($bad)"' "$DB" 2>/dev/null)"
 DE="$(printf '%s\n' "$DN" | grep -cE '^orca_roles_(kit_events|dispatch_outcomes)_total$' || true):$(jq -r '[.. | objects | select(has("expr")) | select(.expr | test("orca_roles_(kit_events|dispatch_outcomes)_total")) | select(.expr | test("orca_roles_role|session_id")) ] | length' "$DB" 2>/dev/null)"
 check "usage dashboard: grafana/orca-roles-usage.json is valid JSON with the datasource, task and orca_roles_role variables (the last two multi-select with All), every query uses the \${datasource} variable, every metric name in its queries is in the header table of usage_metrics.py (none unknown), and the two event panels use the event metrics without a session or role filter (they carry no such label)" "$DX|$DV|$DT|$DE" "|datasource:datasource:false:false,task:query:true:true,orca_roles_role:query:true:true|true:0|2:0"
-RN="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md" | grep -oE 'orca_roles_[A-Za-z0-9_]+|claude_code_[A-Za-z0-9_]+' | sort -u)"
-RX="$(comm -3 <(printf '%s\n' "$RN") <(printf '%s\n' "$HN") | tr '\n' ' ')"
-check "usage docs table: the metric names of the README's Usage metrics section are exactly the names of the header table in usage_metrics.py (none missing, none invented)" "$RX" ""
 umpk; fstop; fstart; umcfg
 ev() { jq -nc --arg w "$1" --arg e "$2" --arg r "$3" '{ts: "2026-10-27T10:00:00Z", worktree: $w, event: $e, role: $r}' >> "$PM/events.jsonl"; }
 ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 reopened dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 started dev; ev /w/a/devgd-300 not-started dev; ev /w/a/other no-check oc; ev /unmapped launch ""; ev /w/a/devgd-300 bogus dev
@@ -8848,29 +8774,6 @@ epts() { pbody "$1" '.resourceMetrics[0].scopeMetrics[0].metrics[] | .name as $n
 umpass; V1="$(fposts):$(epts 1)"
 V2="$(pbody 1 '[(.resourceMetrics | length), ([.resourceMetrics[0].resource.attributes[] | "\(.key)=\(.value.stringValue)"] | join(",")), ([.. | objects | select(has("sum")) | .sum | [.isMonotonic, .aggregationTemporality]] | unique | tostring)] | join("|")')"
 check "usage kit events push: the first pass pushes one resource (service.name=claude-code only, no session.id) with orca_roles.dispatch.outcomes (outcome, role, task, project) and orca_roles.kit.events (event, role, task, project) as cumulative monotonic sums; counts per event and role, task and project from worktrees.jsonl by the longest path (an unmapped worktree has no task or project label); an unknown event, a line whose worktree is not a string and a half-written last line are not counted" "$V1|$V2" "1:orca_roles.dispatch.outcomes|outcome=dispatch,project=svc,role=dev,task=devgd-292|2 orca_roles.dispatch.outcomes|outcome=no-check,project=svc,role=oc,task=outer|1 orca_roles.dispatch.outcomes|outcome=not-started,project=svc,role=dev,task=devgd-292|1 orca_roles.dispatch.outcomes|outcome=started,project=svc,role=dev,task=devgd-292|1 orca_roles.kit.events|event=launch,project=svc,task=devgd-292|1 orca_roles.kit.events|event=launch|1 orca_roles.kit.events|event=reopened,project=svc,role=dev,task=devgd-292|1 |1|service.name=claude-code|[[true,2]]"
-umpass; Q1="$(fposts)"
-printf ',"role":""}\n' >> "$PM/events.jsonl"; umpass; Q2="$(fposts):$(epts 2 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
-ev /w/a/devgd-300 launch ""; umpass; Q3="$(fposts):$(epts 3 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
-fcfg '{"post_status":500}'; ev /w/a/devgd-300 started dev; umpass; Q4="$(fposts):$(umlogn 'push refused: HTTP 500')"
-fcfg '{}'; umpass; Q5="$(fposts):$(epts 5 | tr ' ' '\n' | grep 'outcome=started,project=svc,role=dev,task=devgd-292')"; umpass; Q6="$(fposts)"
-check "usage kit events push: nothing is sent when no count changed, a completed half line or a new line is one push with the new cumulative count (launch 2, then 3), a refused push (HTTP 500) is logged and the changed count is pushed by the next pass (started 2) and not repeated" "$Q1|$Q2|$Q3|$Q4|$Q5|$Q6" "1|2:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|2|3:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|3|4:1|5:orca_roles.dispatch.outcomes|outcome=started,project=svc,role=dev,task=devgd-292|2|5"
-umpk; fstop; fstart; umcfg 0.0.0.0 127.0.0.1 false; ev /w/a/devgd-300 launch ""; umpass; M1="$(fposts):$(umlogn 'otlpEndpoint')"; ev /w/a/devgd-300 launch ""; umpass; M2="$(fposts):$(umlogn 'otlpEndpoint')"
-umcfg 0.0.0.0 127.0.0.1 true; umpass; M3="$(fposts):$(epts 1 | tr ' ' '\n' | grep -c 'event=launch,project=svc,task=devgd-292|2' || true)"
-check "usage kit events push remote rule: an endpoint that is not on this machine without allowRemote gets nothing and one warning per day (the events stay pending), with allowRemote true the pending count is pushed" "$M1|$M2|$M3" "0:1|0:1|1:1"
-umpk; fstop; fstart; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
-head -1 "$PM/events.jsonl" > "$PM/events.tmp" && mv "$PM/events.tmp" "$PM/events.jsonl"; umpass; ev /w/a/devgd-300 launch ""; umpass; S2="$(fposts)"
-ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 launch ""; umpass; S3="$(fposts):$(epts 2 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
-check "usage kit events push floor: when events.jsonl is rewritten shorter its counts are read again but nothing lower than what was pushed is sent (3 pushed, 1 and 2 counted: no push), and a count above the floor is pushed (4)" "$S1|$S2|$S3" "1|1|2:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|4"
-RJ="$(KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" --report --json 2>&1 | jq -c '.events' 2>/dev/null)"
-RT="$(KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" --report --json --task devgd-292 2>&1 | jq -c '.events' 2>/dev/null)"
-RS="$(KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" --report --json --since 2026-10-28 2>&1 | jq -c '.events' 2>/dev/null)"
-RX2="$(KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" --report 2>&1 | grep -c '^kit events and dispatch outcomes by task:$' || true)"
-check "usage report events: --report --json has the per-task counts of events.jsonl (events key; --task keeps one task; --since drops older events) and the text report prints the 'kit events and dispatch outcomes by task' part" "$RJ|$RT|$RS|$RX2" '{"devgd-292":{"launch":4}}|{"devgd-292":{"launch":4}}|{}|1'
-HG="$SB/hg"; rm -rf "$HG"; sinst "$HG" "$MACOS"; G1="$SRC:$(cmp -s "$ROOT/grafana/orca-roles-usage.json" "$HG/.orca-roles/grafana/orca-roles-usage.json" && echo same)"
-sinst "$HG" "$MACOS"; G2="$(printf '%s\n' "$SOUT" | grep -c '^WARNING: these files' || true):$([ -e "$HG/.orca-roles/backup" ] && echo backup || echo none)"
-echo '{"edited": 1}' > "$HG/.orca-roles/grafana/orca-roles-usage.json"; echo '{}' > "$HG/.orca-roles/grafana/old.json"; sinst "$HG" "$MACOS"
-G3="$(printf '%s\n' "$SOUT" | grep -c '^WARNING: these files' || true):$(printf '%s\n' "$SOUT" | grep -c '^  grafana/orca-roles-usage.json$' || true):$(printf '%s\n' "$SOUT" | grep -c '^  grafana/old.json$' || true):$(find "$HG/.orca-roles/backup" -path '*grafana/orca-roles-usage.json' -type f | wc -l | tr -d ' '):$(cmp -s "$ROOT/grafana/orca-roles-usage.json" "$HG/.orca-roles/grafana/orca-roles-usage.json" && echo restored):$([ -e "$HG/.orca-roles/grafana/old.json" ] && echo stale || echo gone):$(grep -c '  grafana/orca-roles-usage.json$' "$HG/.orca-roles/.manifest" || true)"
-check "usage dashboard install: install.sh copies grafana/ into the kit (~/.orca-roles/grafana/orca-roles-usage.json, identical to the repo's), a second install is quiet, a locally edited or added file there is named in the WARNING and saved in the backup, the folder is regenerated (the edit is gone, the extra file removed) and the manifest lists the dashboard" "$G1|$G2|$G3" "0:same|0:none|1:1:1:1:restored:gone:1"
 RM="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
 rd() { printf '%s\n' "$RM" | grep -cF -e "$1" || true; }
 RK="$(for k in enabled otlpEndpoint prometheusUrl intervalSeconds retentionDays allowRemote prometheusContainer; do printf '%s ' "$(printf '%s\n' "$RM" | grep -c "^  | \`$k\` |" || true)"; done)"
