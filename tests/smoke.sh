@@ -8509,7 +8509,7 @@ def watch():
 threading.Thread(target=watch, daemon=True).start()
 s.serve_forever()
 PYE
-fstart() { rm -rf "$UM/fs" "$UM/fake.port"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>&1 & FPID=$!; poll test -s "$UM/fake.port"; FP="$(cat "$UM/fake.port")"; }
+fstart() { rm -rf "$UM/fs" "$UM/fake.port"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>&1 & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 150 ]; do sleep 0.2; n=$((n+1)); done; FP="$(cat "$UM/fake.port")"; }
 fstop() { kill "$FPID" 2>/dev/null || true; wait "$FPID" 2>/dev/null || true; }
 fcfg() { printf '%s' "$1" > "$UM/fs/cfg.json"; }
 fposts() { find "$UM/fs/posts" -name '*.json' | wc -l | tr -d ' '; }
