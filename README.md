@@ -168,7 +168,7 @@ Create a worktree from the project's **"+"**. In a few seconds the Planner opens
 
 - **From a Jira ticket:** the kit reads the ticket Orca links to the worktree (`linkedWorkItem` in `orca worktree show`) and passes it to the Planner, which reads it and plans from there. If the worktree is not linked, it tries the branch, but only when the uppercase key starts the branch or one of its segments (`DEVGD-220-new-api`, `feature/DEVGD-220`), so `fix-123` or `release-1.4` are not taken for tickets. The session Orca creates by default with the ticket's name is interrupted and closes by itself.
 - **Where the hook does not run** (main checkout, folder projects, existing worktrees): run `roles` in a workspace terminal. It does not duplicate open tabs.
-- **Branch names:** if Orca names a new worktree's branch after your user, that is Orca's `branchPrefix` setting (`"git-username"`), not the kit; change it in Orca's settings.
+- **Branch names:** if Orca names a new worktree's branch after your user, that is Orca's `branchPrefix` setting (`"git-username"`), not the kit; set Orca's **Settings → Git → Branch prefix** to *None*, so a new branch is just the worktree's name until it is renamed. The convention is `<type>/<KEY>-<slug>` (for example `feat/DEVGD-292-tax-classifier`; type `feat`, `fix`, `chore`, `docs`, `refactor` or `test`). In programmer and academic-research mode the Planner proposes the name with the plan (`bin/branch-name.sh --propose`) and, after your yes, renames the branch (`bin/branch-name.sh --rename <name>`) before the first round and before anything is pushed. The script refuses (and says why) when the branch has an upstream or exists on a remote, is checked out in another worktree, the name is taken or invalid, or HEAD is detached; pr-reviewer never renames (it is the PR's branch).
 
 ### Seeing what each role is doing: `team-status`
 
@@ -973,6 +973,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── agent.sh                 # launches a role's agent according to the configuration
 │   ├── kickoff.sh               # sends each agent its role, passes the Jira ticket and closes the extra agent
 │   ├── clean.sh                 # cleans the workers' context and resends their role
+│   ├── branch-name.sh           # proposes a <type>/<KEY>-<slug> branch name and renames the current branch (only if it was never pushed)
 │   ├── checkpoint.sh            # records the tree under refs/orca-roles/checkpoints/ (the Planner's briefs diff rounds against it)
 │   ├── crosscheck.sh            # throwaway copies of a ref (with the worktree's dependencies linked, caches and build outputs not) to run tests on other code, and patches between them
 │   ├── close-role.sh            # closes a role's tab in the current workspace

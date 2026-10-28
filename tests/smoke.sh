@@ -3719,6 +3719,27 @@ check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/
 check "defaults: Tester maxSelfMutants and baseCheck, Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.tester.params.baseCheck, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,true,"high"]'
 check "defaults: every default Tester parameter is listed in tester.md's Parameters" "$(jq -r '.roles.tester.params | keys[]' "$ROOT/config.default.json" | while IFS= read -r k; do awk '/^## Parameters/{f=1;next} /^## /{f=0} f' "$ROOT/prompts/programmer/tester.md" | grep -qF -- "- \`$k\`:" || echo "$k"; done)" ""
 echo "ok   marketplace and defaults"
+# bin/branch-name.sh: <type>/<KEY>-<slug> proposals and the guarded rename of the current branch (temp repos and local bare remotes, no orca on the PATH)
+BN="$TMP/bn"; rm -rf "$BN"; mkdir -p "$BN"; BJQ="$(dirname "$(command -v jq)")"
+bnrun() { (cd "$1" && shift && env -i HOME="$TMP/home" PATH="$BJQ:/usr/bin:/bin" KIT="$KIT" bash "$KIT/bin/branch-name.sh" "$@" 2>&1; echo "rc=$?") | sed -e "s#/private$BN#B#g" -e "s#$BN#B#g" | tr '\n' ' '; }
+bnrepo() {  # bnrepo <dir name> <branch>: a repo with one commit on <branch>
+  local d="$BN/$1"; mkdir -p "$d"; git -C "$d" init -q -b "$2"; git -C "$d" config user.email t@t; git -C "$d" config user.name t; echo x > "$d/f"; git -C "$d" add f; git -C "$d" commit -qm base
+}
+bnrepo devgd-292 w/devgd-292; bnrepo scratch main
+SL60="abcdefghij abcdefghij abcdefghij abcdefghij abcdefghij abcdefghij"
+BP="$(bnrun "$BN/devgd-292" --propose --type feat --key devgd-292 --slug 'Tax classifier: MODELO -> TIPO')|$(bnrun "$BN/devgd-292" --propose --type feat --slug 'Tax classifier')|$(bnrun "$BN/scratch" --propose --type feat --slug 'Hello World')|$(bnrun "$BN/scratch" --propose --type feat --key k-1 --slug "$SL60")|$(bnrun "$BN/scratch" --propose --type fix --key DEVGD-292 --slug 'devgd-292 fix x')|$(bnrun "$BN/scratch" --propose --type bug --slug a | grep -c 'rc=2'):$(bnrun "$BN/scratch" --propose --type feat --slug '!!!' | grep -c 'rc=2')"
+check "branch-name.sh --propose: <type>/<KEY>-<slug> with the key from --key or from a folder named like devgd-292 (uppercased), no key without either, the slug lowercased with runs of other characters as one dash and cut to 40, a slug that repeats the key loses it, an unknown type or an empty slug is exit 2" "$BP" "feat/DEVGD-292-tax-classifier-modelo-tipo rc=0 |feat/DEVGD-292-tax-classifier rc=0 |feat/hello-world rc=0 |feat/K-1-abcdefghij-abcdefghij-abcdefghij-abcdefg rc=0 |fix/DEVGD-292-fix-x rc=0 |1:1"
+git init -q --bare "$BN/bare.git"
+bnrepo r1 w/a; R1="$(bnrun "$BN/r1" --rename feat/DEVGD-1-x):$(git -C "$BN/r1" branch --show-current)"
+bnrepo r2 w/a; git -C "$BN/r2" remote add origin "$BN/bare.git"; git -C "$BN/r2" push -q -u origin w/a 2>/dev/null; R2="$(bnrun "$BN/r2" --rename feat/n):$(git -C "$BN/r2" branch --show-current)"
+bnrepo r3 w/b; git -C "$BN/r3" remote add origin "$BN/bare.git"; git -C "$BN/r3" push -q origin w/b 2>/dev/null; R3="$(bnrun "$BN/r3" --rename feat/n):$(git -C "$BN/r3" branch --show-current)"
+bnrepo r4 w/c; git -C "$BN/r4" worktree add -q --force "$BN/r4wt" w/c 2>/dev/null; R4="$(bnrun "$BN/r4" --rename feat/n):$(git -C "$BN/r4" branch --show-current)"
+bnrepo r5 w/d; git -C "$BN/r5" branch feat/x; R5="$(bnrun "$BN/r5" --rename feat/x)"
+bnrepo r6 w/e; R6="$(bnrun "$BN/r6" --rename 'feat/..x')$(bnrun "$BN/r6" --rename 'feat/a b')$(bnrun "$BN/r6" --rename -x):$(git -C "$BN/r6" branch --show-current)"
+bnrepo r7 w/f; git -C "$BN/r7" checkout -q --detach; R7="$(bnrun "$BN/r7" --rename feat/n)"
+bnrepo r8 w/g; git -C "$BN/r8" remote add origin "$BN/none/x.git"; R8="$(bnrun "$BN/r8" --rename feat/n):$(git -C "$BN/r8" branch --show-current)"
+bnrepo r9 feat/same; R9="$(bnrun "$BN/r9" --rename feat/same)"
+check "branch-name.sh --rename: a plain local branch is renamed; one with an upstream, one that exists on a remote, one checked out in another worktree, a target that exists, an invalid name (feat/..x, a space, a leading dash) and a detached HEAD are refused with one line and nothing changed; an unreachable remote warns and renames; the same name is already" "$R1|$R2|$R3|$R4|$R5|$R6|$R7|$R8|$R9" "renamed w/a -> feat/DEVGD-1-x rc=0 :feat/DEVGD-1-x|branch-name.sh: not renamed: it tracks origin/w/a rc=1 :w/a|branch-name.sh: not renamed: it exists on origin rc=1 :w/b|branch-name.sh: not renamed: checked out in B/r4wt rc=1 :w/c|branch-name.sh: not renamed: feat/x already exists rc=1 |branch-name.sh: not renamed: invalid name rc=1 branch-name.sh: not renamed: invalid name rc=1 branch-name.sh: not renamed: invalid name rc=1 :w/e|branch-name.sh: not renamed: detached HEAD rc=1 |branch-name.sh: could not check remote origin; renaming anyway renamed w/g -> feat/n rc=0 :feat/n|already feat/same rc=0 "
 }
 
 sec_composer_tab() {
