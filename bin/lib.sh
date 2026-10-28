@@ -28,10 +28,14 @@ orca_ide_path() {
   fi
   return 1
 }
+# Whether this is WSL (the kernel says Microsoft and wslpath exists).
+is_wsl() {
+  grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null && command -v wslpath >/dev/null 2>&1
+}
 orca_shim() {
   local dir="$KIT/shim" tmp ide cur
   cur="$(type -P orca 2>/dev/null)" || cur=""
-  [ -z "$cur" ] || [ "$cur" = "$dir/orca" ] || return 0
+  [ -z "$cur" ] || [ "$cur" = "$dir/orca" ] || { [ -L "$cur" ] && [ "$(readlink "$cur")" = "$dir/orca" ]; } || return 0   # also a link to the shim (~/.local/bin/orca on WSL)
   if ide="$(orca_ide_path)"; then
     mkdir -p "$dir" && tmp="$(mktemp "$dir/.orca.XXXXXX")" || return 0
     {
@@ -1117,8 +1121,7 @@ orca_app_node() {
         return 0;;
     esac
   fi
-  grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null || return 1
-  command -v wslpath >/dev/null 2>&1 || return 1
+  is_wsl || return 1
   ide="$(orca_ide_path)" || return 1
   line="$(grep -m1 '^ORCA_WIN_LAUNCHER=' "$ide" 2>/dev/null)" || return 1
   v="${line#*\'}"; v="${v%%\'*}"

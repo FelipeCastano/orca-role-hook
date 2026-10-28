@@ -3513,6 +3513,21 @@ check "orca alias: calls ORCA_CLI_COMMAND" "$(PATH="$TMP/cli:/usr/bin:/bin" ORCA
 orca worktree list")" "orca-ide:worktree list"
 check "orca alias: nothing outside Orca" "$(PATH="/usr/bin:/bin" ORCA_CLI_COMMAND='' bash -c "shopt -s expand_aliases; $ALIAS_LINE
 command -v orca || echo none")" "none"
+# the orca shim for the tabs Orca resumes on WSL: a link in ~/.local/bin when that is on the PATH, else one marked line in ~/.profile (fake WSL: a version file naming Microsoft, our own wslpath and orca-ide, a temp HOME)
+W="$TMP/wslh"; rm -rf "$W"; mkdir -p "$W/bin" "$W/ide"; JQD="$(dirname "$(command -v jq)")"
+printf 'Linux version 5.15.0-microsoft-standard-WSL2\n' > "$W/ver"; printf 'Linux version 6.1 generic\n' > "$W/ver-linux"
+printf '#!/bin/sh\necho x\n' > "$W/bin/wslpath"; printf '#!/usr/bin/env bash\necho ide\n' > "$W/ide/orca-ide"; chmod +x "$W/bin/wslpath" "$W/ide/orca-ide"
+wins() {  # wins <home> <version file> [extra PATH dir]: one install under the fake WSL; WOUT
+  mkdir -p "$1"; WOUT="$(cd "$TMP" && env -i HOME="$1" PATH="${3:+$3:}$W/bin:$JQD:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$2" ORCA_WSL_CLI_DIR="$W/ide" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$W/sch.log" ORCA_ROLES_SUPERPOWERS_FETCH=skip bash "$ROOT/install.sh" </dev/null 2>&1)" || true
+}
+wmark() { local n; n="$(grep -c '# orca-roles: orca shim' "$1/.profile" 2>/dev/null || true)"; echo "${n:-0}"; }
+HA="$W/ha"; wins "$HA" "$W/ver" "$HA/.local/bin"; WA1="$(readlink "$HA/.local/bin/orca" || true):$(wmark "$HA")"; wins "$HA" "$W/ver" "$HA/.local/bin"; WA2="$(readlink "$HA/.local/bin/orca" || true):$(wmark "$HA"):$(printf '%s\n' "$WOUT" | grep -c '^Note: ~/.local/bin/orca' || true)"
+rm -f "$HA/.local/bin/orca"; mkdir -p "$HA/.local/bin"; printf '#!/bin/sh\necho mine\n' > "$HA/.local/bin/orca"; wins "$HA" "$W/ver" "$HA/.local/bin"; WC="$(tail -1 "$HA/.local/bin/orca"):$([ -L "$HA/.local/bin/orca" ] && echo link || echo file):$(printf '%s\n' "$WOUT" | grep -c "^Note: ~/.local/bin/orca exists and is not the kit's shim; left as is\.\$" || true)"
+HB="$W/hb"; mkdir -p "$HB"; printf 'export A=1\n' > "$HB/.profile"; wins "$HB" "$W/ver"; WB1="$(wmark "$HB"):$([ -e "$HB/.local/bin/orca" ] && echo link || echo nolink):$(head -1 "$HB/.profile")"
+sed -i.bak 's|^\[ -x .*# orca-roles: orca shim$|echo old # orca-roles: orca shim|' "$HB/.profile"; rm -f "$HB/.profile.bak"; wins "$HB" "$W/ver"; WB2="$(wmark "$HB"):$(grep -c '^\[ -x "$HOME/.orca-roles/shim/orca" \] && case' "$HB/.profile" || true):$(grep -c '^echo old' "$HB/.profile" || true):$(head -1 "$HB/.profile")"
+HD="$W/hd"; wins "$HD" "$W/ver-linux" "$HD/.local/bin"; WD="$([ -e "$HD/.local/bin/orca" ] && echo link || echo nolink):$(wmark "$HD")"
+HE="$W/he"; mkdir -p "$W/own"; printf '#!/bin/sh\necho own\n' > "$W/own/orca"; chmod +x "$W/own/orca"; wins "$HE" "$W/ver" "$W/own"; WE="$([ -e "$HE/.local/bin/orca" ] && echo link || echo nolink):$(wmark "$HE"):$([ -e "$HE/.orca-roles/shim/orca" ] && echo shim || echo noshim)"
+check "orca shim on WSL: with ~/.local/bin on the PATH the install links it to the kit's shim (a second install changes nothing, no .profile line), a user's own file there is left with one note; without it one marked line goes into ~/.profile (other lines kept, a second install keeps one, an old marked line is replaced in place); off WSL, or with an orca that already resolves, nothing is written" "$WA1|$WA2|$WC|$WB1|$WB2|$WD|$WE" "$HA/.orca-roles/shim/orca:0|$HA/.orca-roles/shim/orca:0:0|echo mine:file:1|1:nolink:export A=1|1:1:0:export A=1|nolink:0|nolink:0:noshim"
 }
 
 sec_remove_role() {

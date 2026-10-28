@@ -153,6 +153,31 @@ grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
 
+# On WSL, tabs Orca resumes itself (a bare 'claude --resume' in a fresh shell) do not get the orca shim that agent.sh puts on the PATH: link it into
+# ~/.local/bin when that is on the PATH, else add a marked line to ~/.profile. Nothing happens off WSL or when orca already resolves (no shim).
+if is_wsl && [ -e "$KIT/shim/orca" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*)
+      OLNK="$HOME/.local/bin/orca"
+      if [ -e "$OLNK" ] || [ -L "$OLNK" ]; then
+        [ -L "$OLNK" ] && [ "$(readlink "$OLNK")" = "$KIT/shim/orca" ] || echo "Note: ~/.local/bin/orca exists and is not the kit's shim; left as is."
+      else
+        mkdir -p "$HOME/.local/bin" && ln -sfn "$KIT/shim/orca" "$OLNK"
+      fi;;
+    *)
+      OMARK="# orca-roles: orca shim"
+      if [ "$KIT" = "$HOME/.orca-roles" ]; then OP='$HOME/.orca-roles'; else OP="$(printf '%s' "$KIT" | sed 's/[\\"$`]/\\&/g')"; fi
+      OLINE="[ -x \"$OP/shim/orca\" ] && case \":\$PATH:\" in *\":$OP/shim:\"*) ;; *) PATH=\"$OP/shim:\$PATH\";; esac   $OMARK"
+      OPROF="$HOME/.profile"
+      if grep -qxF -- "$OLINE" "$OPROF" 2>/dev/null; then :
+      elif grep -qF -- "$OMARK" "$OPROF" 2>/dev/null; then
+        OTMP="$(mktemp)" && OL="$OLINE" OM="$OMARK" awk 'index($0, ENVIRON["OM"]) { print ENVIRON["OL"]; next } { print }' "$OPROF" > "$OTMP" && cat "$OTMP" > "$OPROF"; rm -f "$OTMP"
+      else
+        printf '%s\n' "$OLINE" >> "$OPROF"
+      fi;;
+  esac
+fi
+
 # Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
 if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
   while IFS= read -r wt; do
