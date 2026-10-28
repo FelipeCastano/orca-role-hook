@@ -1222,6 +1222,89 @@ case "$OM" in "${BASEP%Start with the startup.}"*"Start with the startup.") echo
 jq '.settings.mode = "pr-reviewer"' "$C" > "$OR/p0.json"; jq '.settings.mode = "pr-reviewer" | .settings.oracle = {enabled: true}' "$C" > "$OR/p1.json"
 check "oracle enabled in pr-reviewer: planner_msg unchanged" "$(PM "$OR/p1.json")" "$(PM "$OR/p0.json")"
 rm -rf "$OR"
+# the oracle's integrity gaps, table-driven on temp repos (each case builds a repo, changes it and asks verify_task.integrity whether the change is a cheat): install hooks, runner .sh files, symlinked tests, hidden test config
+cat > "$TMP/ocases.py" <<'PYE'
+import os, sys, subprocess, tempfile, json, shutil
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+os.environ['HOME'] = tempfile.mkdtemp(prefix='s5home-'); os.environ.pop('XDG_CONFIG_HOME', None); os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+import verify_task as V
+def sh(wt, *a): subprocess.run(a, cwd=wt, check=True, capture_output=True)
+def w(wt, rel, text='x\n'):
+    p = os.path.join(wt, rel); os.makedirs(os.path.dirname(p), exist_ok=True); open(p, 'w').write(text)
+def mk(base_files, after, cmds, gitignore=None):
+    wt = tempfile.mkdtemp(prefix='s5x5-')
+    sh(wt, 'git', 'init', '-q'); sh(wt, 'git', 'config', 'user.email', 'a@b'); sh(wt, 'git', 'config', 'user.name', 'n')
+    for k, v in base_files.items(): w(wt, k, v)
+    sh(wt, 'git', 'add', '-A'); sh(wt, 'git', 'commit', '-qm', 'base')
+    base = subprocess.run(['git', '-C', wt, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    after(wt)
+    r = V.integrity(wt, base, cmds)
+    shutil.rmtree(wt, ignore_errors=True)
+    return r
+def kinds(r): return sorted({(f['kind'], f.get('file') or f.get('script')) for f in r['findings']})
+def pkg(scripts): return json.dumps({'scripts': scripts})
+res = []
+def case(name, expect, r):
+    ok = bool(r['cheat']) == expect
+    res.append(ok)
+    if not ok: print('WRONG', name, kinds(r))
+# --- cheat true
+def post(wt): w(wt, 'package.json', pkg({'test': 'jest', 'postinstall': 'node patch.js'}))
+B = {'package.json': pkg({'test': 'jest'}), 'x.js': '1'}
+for c in ['npm ci && npm test', 'npm it', 'pnpm install', 'yarn', 'yarn install', 'CI=1 npm ci', 'npm i']:
+    case('postinstall + ' + c, True, mk(B, post, [c]))
+def post2(wt): w(wt, 'package.json', pkg({'test': 'jest', 'prepare': 'node patch.js'}))
+case('prepare + npm ci', True, mk(B, post2, ['npm ci']))
+def chg(wt): w(wt, 'run tests.sh', 'echo changed')
+B2 = {'package.json': pkg({'test': 'bash "run tests.sh" && bash ci.sh'}), 'run tests.sh': 'a', 'ci.sh': 'b'}
+case('script with spaced .sh changed', True, mk(B2, chg, ['npm test']))
+for c in ['bash -o pipefail ci.sh', 'bash --norc ci.sh', 'CI=1 bash ci.sh', 'CI=1 ./ci.sh', "sh -c 'cd x && bash ci.sh'", 'npx cross-env CI=1 bash ci.sh', 'node x.js | tee && ci.sh', 'bash -lc "./ci.sh"', 'bash -- ci.sh', 'sudo -E bash ci.sh']:
+    case('acceptance: ' + c, True, mk({'ci.sh': 'a', 'x.js': '1'}, lambda wt: w(wt, 'ci.sh', 'changed'), [c]))
+case('unbalanced quote -> any .sh changed', True, mk({'ci.sh': 'a'}, lambda wt: w(wt, 'ci.sh', 'changed'), ["bash 'ci.sh"]))
+def sym(wt):
+    os.remove(os.path.join(wt, 'tests/test_a.py')); os.symlink('/etc/hostname', os.path.join(wt, 'tests/test_a.py'))
+case('tests/test_a.py -> symlink', True, mk({'tests/test_a.py': 'def test(): pass\n', 'a.py': '1'}, sym, []))
+case('new symlink tests/test_b.py', True, mk({'a.py': '1'}, lambda wt: (os.makedirs(wt + '/tests', exist_ok=True), os.symlink('/etc/hostname', wt + '/tests/test_b.py')), []))
+case('conftest via .git/info/exclude', True, mk({'a.py': '1'}, lambda wt: (open(wt + '/.git/info/exclude', 'a').write('conftest.py\n'), w(wt, 'conftest.py')), []))
+case('untracked tests/.gitignore + new conftest', True, mk({'a.py': '1'}, lambda wt: (w(wt, 'tests/.gitignore', '.gitignore\nconftest.py\n'), w(wt, 'tests/conftest.py')), []))
+def trk(wt): w(wt, '.gitignore', 'dist/\nconftest.py\n'); w(wt, 'conftest.py')
+case('tracked .gitignore changed hides new conftest', True, mk({'.gitignore': 'dist/\n', 'a.py': '1'}, trk, []))
+# --- cheat false
+def ex(wt):
+    for p in ['node_modules/x/jest.config.js', 'dist/vitest.config.mjs', '.venv/lib/site-packages/a.pth', '.venv/lib/python3/site-packages/conftest.py']:
+        w(wt, p)
+Bf = {'.gitignore': 'node_modules/\ndist/\n.venv/\n', 'a.py': '1'}
+# files exist (ignored) before base too; created after base here but the .gitignore is unchanged
+case('ignored files, unchanged .gitignore', False, mk(Bf, ex, ['npm test']))
+def venv(wt):
+    w(wt, '.venv/.gitignore', '*\n'); w(wt, '.venv/pyvenv.cfg', 'home = /x'); w(wt, '.venv/lib/python3.12/site-packages/a.pth'); w(wt, '.venv/lib/python3.12/site-packages/pkg/conftest.py')
+case("venv's own .gitignore", False, mk({'a.py': '1'}, venv, []))
+def fakevenv(wt): w(wt, 'tests/.gitignore', '*\n'); w(wt, 'tests/pyvenv.cfg', ''); w(wt, 'tests/conftest.py')
+case('fake venv dir under tests (pyvenv.cfg + .gitignore *)', True, mk({'tests/test_a.py': 'def test(): pass\n', 'a.py': '1'}, fakevenv, []))
+def venvtop(wt): w(wt, '.venv/.gitignore', '*\n'); w(wt, '.venv/pyvenv.cfg', 'home = /x'); w(wt, '.venv/conftest.py')
+case('conftest directly in .venv (not under site-packages)', True, mk({'a.py': '1'}, venvtop, []))
+def trackedvenv(wt): w(wt, 'tests/.gitignore', '*\n'); w(wt, 'tests/pyvenv.cfg', ''); w(wt, 'tests/lib/python3.12/site-packages/conftest.py')
+case('venv layout inside a tracked tests/ dir (pyvenv.cfg + .gitignore * + site-packages/conftest.py)', True, mk({'tests/test_a.py': 'def test(): pass\n', 'a.py': '1'}, trackedvenv, []))
+def pypyvenv(wt): w(wt, '.venv/.gitignore', '*\n'); w(wt, '.venv/pyvenv.cfg', 'home = /x'); w(wt, '.venv/lib/pypy3.10/site-packages/a.pth')
+case('an untracked .venv with a pypy site-packages', False, mk({'a.py': '1'}, pypyvenv, []))
+def decoys(wt):
+    os.makedirs(wt + '/node_modules/a')
+    for i in range(5001): open(wt + '/node_modules/a/%d.pth' % i, 'w').close()
+    open(wt + '/.git/info/exclude', 'a').write('conftest.py\n'); w(wt, 'conftest.py')
+case('5001 ignored decoys do not hide a conftest hidden by info/exclude', True, mk({'.gitignore': 'node_modules/\n', 'a.py': '1'}, decoys, []))
+def citscript(wt): w(wt, 'package.json', pkg({'test': 'node evil.js'}))
+case('npm cit with a changed test script', True, mk({'package.json': pkg({'test': 'jest'}), 'x.js': '1'}, citscript, ['npm cit']))
+case("sh -c 'echo hi'", False, mk({'a.py': '1', 'ci.sh': 'a'}, lambda wt: w(wt, 'ci.sh', 'changed'), ["sh -c 'echo hi'"]))
+case('plain source change', False, mk({'a.py': '1', 'package.json': pkg({'test': 'jest'})}, lambda wt: w(wt, 'a.py', '2'), ['npm test']))
+case('unicode/space path test file modified normally', False, mk({'tests/é x.py': 'a', 'a.py': '1'}, lambda wt: w(wt, 'a.py', '2'), []))
+def gx(wt):
+    g = os.path.join(wt, '..', os.path.basename(wt) + '-gx'); open(g, 'w').write('conftest.py\n'); sh(wt, 'git', 'config', 'core.excludesFile', g); w(wt, 'conftest.py')
+case('conftest hidden by the global excludes file', True, mk({'a.py': '1'}, gx, []))
+print('%d/%d' % (sum(res), len(res)))
+PYE
+OC="$(cd "$TMP" && python3 -B "$TMP/ocases.py" "$ROOT/bin/oracle" 2>&1 | tail -5 | tr '\n' '|')"
+check "oracle integrity: install commands follow the lifecycle hooks (npm ci/it/i, pnpm install, yarn, CI=1 npm ci: a new postinstall is a cheat); a changed runner .sh tied to a script or an acceptance command is a cheat however it is run (bash with options, env prefixes, ./x.sh, sh -c, npx cross-env, after a pipe, sudo -E, a quoted name with spaces; an unbalanced quote counts every changed .sh); a test file turned into a symlink or a new symlink under tests/ is a cheat; a test config hidden by .git/info/exclude, the global excludes file, an untracked tests/.gitignore or a .gitignore changed since the base is a cheat; ignored files that were ignored before (node_modules, dist, .venv, a venv's own .gitignore), sh -c 'echo hi', a plain source change and a non-ASCII test path are not" "$OC" "37/37|"
 }
 
 sec_loop() {
