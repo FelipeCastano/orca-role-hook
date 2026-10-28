@@ -1000,7 +1000,9 @@ rm -rf "$KIT/tmp"
 
 sec_oracle() {
 # Optional oracle: bin/oracle/*.py (acceptance command + test integrity) and bin/oracle.sh; planner_msg only changes with settings.oracle.enabled
-OR="$TMP/or"; rm -rf "$OR"; mkdir -p "$OR/specs"
+OR="$TMP/or"; rm -rf "$OR"; mkdir -p "$OR/specs" "$OR/nobin"
+# verify_task.py asks orca for the task's spec when it gets --task and --spec-file: the whole section runs with an orca of its own that knows no Run (never the real one)
+printf '#!/bin/sh\necho '"'"'{"ok":true,"result":{"runs":[],"tasks":[]}}'"'"'\n' > "$OR/nobin/orca"; chmod +x "$OR/nobin/orca"; export PATH="$OR/nobin:$PATH"
 oracle_repo() {   # <name>: a git repo with a base commit on main (a test, a subject and its test), then branch feat
   local p="$OR/$1"; mkdir -p "$p/tests" "$p/src"
   git -C "$p" init -q; git -C "$p" checkout -q -b main 2>/dev/null || true
@@ -1041,6 +1043,26 @@ bash test.sh
   check "oracle pass: verify.json written under ORCA_ROLES_ORACLE_OUT" "$(jq -r .status "$OR/out/t1/verify.json" 2>&1)" "pass"
   check "oracle pass: nothing written in the repo" "$(git -C "$P" status --porcelain)" ""
   check "oracle pass: config_sha is the sha1 of the config" "$(st .config_sha)" "$(shasum "$OCFG" | cut -d' ' -f1)"
+  # the spec file against the sha256 the Planner put in the Orca task (a fake orca answers run-list and task-list): verified, tampered (nothing runs), unverified (no hash, orca failing or absent, unknown task: runs as given)
+  SPXN=0; SPX="$OR/spx"; rm -rf "$SPX"; mkdir -p "$SPX/bin"; printf '#!/bin/sh\n[ ! -e "%s/fail" ] || { echo garbage; exit 1; }\ncase "$2" in run-list) cat "%s/rl.json";; task-list) cat "%s/tl.json";; esac\n' "$SPX" "$SPX" "$SPX" > "$SPX/bin/orca"; chmod +x "$SPX/bin/orca"
+  printf '{"result":{"runs":[{"id":"run_1"}]}}' > "$SPX/rl.json"
+  spx_task() {  # spx_task <spec text or empty for a task with no hash>: the task "th" of the fake run
+    jq -cn --arg s "$1" '{result: {tasks: [{id: "th", spec: $s}]}}' > "$SPX/tl.json"
+  }
+  spx_run() {  # spx_run <path var for orca: fake|none> <spec file> [task id]: one oracle run in a repo whose acceptance command is bash test.sh; $OUT, $RC, $OR/err
+    local P2 pth; SPXN=$((SPXN + 1)); P2="$(oracle_repo "spx$SPXN")"
+    case "$1" in fake) pth="$SPX/bin:$PATH";; *) pth="$(dirname "$(command -v "$PYB")"):/usr/bin:/bin";; esac
+    PATH="$pth" oracle_run "$P2" "${3:-th}" "$2"
+  }
+  SPF="$(oracle_spec '`bash test.sh`')"; SPH="$(shasum -a 256 "$SPF" | cut -d' ' -f1)"
+  spx_task "$(printf 'Do it.\nspec-sha256: %s' "$SPH")"; rm -f "$SPX/fail"; spx_run fake "$SPF"; X1="$RC:$(st '.spec_check'):$(st .status):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
+  printf 'weakened\n' >> "$SPF"; spx_run fake "$SPF"; X2="$RC:$(st '.spec_check'):$(st .status):$(st .cheat):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'does not match the hash in task th (task .*, file .*): not run' "$OR/err" || true):$(jq -r .status "$OR/out/th/verify.json" 2>/dev/null || true)"
+  spx_task "Do it, no hash here"; spx_run fake "$SPF"; X3="$(st '.spec_check'):$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'spec not verified (no_hash)' "$OR/err" || true)"
+  : > "$SPX/fail"; spx_run fake "$SPF"; X4="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"; rm -f "$SPX/fail"
+  spx_run none "$SPF"; X5="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
+  spx_task "$(printf 'Do it.\nspec-sha256: %s' "$SPH")"; spx_run fake "$SPF" other-task; X6="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
+  P3="$(oracle_repo spxo)"; XO="$(cd "$P3" && ORCA_ROLES_ORACLE_OUT="$OR/out" "$PYB" -B "$PYF/verify_task.py" --spec-file "$SPF" --no-wait --dry-run 2>/dev/null | jq -r 'has("spec_check")' || true)"
+  check "oracle spec hash: the spec file's sha256 against the spec-sha256 line of the Orca task: a match is spec_check verified and the commands run; a changed file is spec_tampered (exit 1, cheat, nothing runs, the stderr line, saved in verify.json); a task without the line, a failing or missing orca and an unknown task id run the file as given with spec_check unverified and the reason no_hash, orca_unreachable (twice) or task_not_found; --spec-file alone has no spec_check" "$X1|$X2|$X3|$X4|$X5|$X6|$XO" "0:verified:pass:ran|1:tampered:spec_tampered:true:norun:1:spec_tampered|unverified:no_hash:ran:1|orca_unreachable:ran|orca_unreachable:ran|task_not_found:ran|false"
   # fail, flaky, persistent red
   P="$(oracle_repo fail)"; printf 'exit 1\n' > "$P/test.sh"; oracle_run "$P" t2 "$(oracle_spec '`bash test.sh`')"
   check "oracle fail: exit 1, status fail, retried once (2 attempts)" "$RC:$(st .status):$(st .pass):$(st '.commands[0].attempts')" "1:fail:false:2"
@@ -1305,6 +1327,7 @@ print('%d/%d' % (sum(res), len(res)))
 PYE
 OC="$(cd "$TMP" && python3 -B "$TMP/ocases.py" "$ROOT/bin/oracle" 2>&1 | tail -5 | tr '\n' '|')"
 check "oracle integrity: install commands follow the lifecycle hooks (npm ci/it/i, pnpm install, yarn, CI=1 npm ci: a new postinstall is a cheat); a changed runner .sh tied to a script or an acceptance command is a cheat however it is run (bash with options, env prefixes, ./x.sh, sh -c, npx cross-env, after a pipe, sudo -E, a quoted name with spaces; an unbalanced quote counts every changed .sh); a test file turned into a symlink or a new symlink under tests/ is a cheat; a test config hidden by .git/info/exclude, the global excludes file, an untracked tests/.gitignore or a .gitignore changed since the base is a cheat; ignored files that were ignored before (node_modules, dist, .venv, a venv's own .gitignore), sh -c 'echo hi', a plain source change and a non-ASCII test path are not" "$OC" "37/37|"
+PATH="${PATH#"$OR/nobin:"}"   # the orca of this section goes out of the PATH
 }
 
 sec_loop() {

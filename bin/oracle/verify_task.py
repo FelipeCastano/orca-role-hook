@@ -8,6 +8,7 @@
 Statuses: pass, pass_flaky, fail, no_acceptance_command, command_not_allowed, env_not_runnable, dry_run.
 Exit 0 only on pass (or pass_flaky) and no cheat."""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -533,6 +534,38 @@ def run_cmd(wt, cmd, timeout, retries=1):
                 flaky_isolated_files=isolated, tail=SECRET.sub('[REDACTED]', '\n'.join(out))[-600:])
 
 
+SPEC_HASH = re.compile(r'(?m)^\s*spec-sha256:\s*([0-9a-f]{64})\s*$')
+
+
+def check_spec_hash(task, run, file_hash):
+    """The spec file against the sha256 the Planner put in the task (workers cannot change the Orca task): ('verified', None),
+    ('tampered', {'task': hex, 'file': hex}) or ('unverified', reason: orca_unreachable, task_not_found or no_hash)."""
+    try:
+        text = load_task_spec(task, run)
+    except SystemExit as e:
+        msg = str(e)
+        return 'unverified', ('task_not_found' if 'not found' in msg and 'did not return JSON' not in msg else 'orca_unreachable')
+    except Exception:
+        return 'unverified', 'orca_unreachable'
+    m = SPEC_HASH.search(text or '')
+    if not m:
+        return 'unverified', 'no_hash'
+    if m.group(1) == file_hash:
+        return 'verified', None
+    return 'tampered', {'task': m.group(1), 'file': file_hash}
+
+
+def save_result(res, task, dry_run):
+    if dry_run:
+        return
+    root = os.environ.get('ORCA_ROLES_ORACLE_OUT') or os.path.join(
+        os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'orca-roles', 'oracle')
+    d = os.path.join(root, re.sub(r'[^A-Za-z0-9_.-]', '_', task))
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, 'verify.json'), 'w') as fh:
+        json.dump(res, fh, indent=1, ensure_ascii=False)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='verify_task.py')
     ap.add_argument('--worktree', default='.')
@@ -555,8 +588,9 @@ def main(argv):
         return 2
     wt = os.path.abspath(a.worktree)
     if a.spec_file:
-        with open(a.spec_file) as fh:
-            spec = fh.read()
+        with open(a.spec_file, 'rb') as fh:
+            raw = fh.read()
+        spec = raw.decode('utf-8', errors='replace')
     elif a.task:
         spec = load_task_spec(a.task, a.run)
     else:
@@ -564,6 +598,21 @@ def main(argv):
     task = a.task or os.path.basename(a.spec_file)
     cmds = acceptance_commands(spec)
     res = dict(task=task, worktree=os.path.basename(wt), pass_=False, cheat=False, status=None, commands=[], integrity=None)
+    if a.spec_file and a.task:
+        check, detail = check_spec_hash(a.task, a.run, hashlib.sha256(raw).hexdigest())
+        if check == 'tampered':
+            res.update(status='spec_tampered', spec_check='tampered', spec_hash=detail, cheat=True, pass_=False,
+                       verified_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))
+            res['pass'] = res.pop('pass_')
+            print('verify_task.py: the spec file does not match the hash in task %s (task %s…, file %s…): not run' % (
+                a.task, detail['task'][:12], detail['file'][:12]), file=sys.stderr)
+            save_result(res, task, a.dry_run)
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+            return 1
+        res['spec_check'] = check
+        if check == 'unverified':
+            res['spec_check_reason'] = detail
+            print('verify_task.py: spec not verified (%s); running the spec file as given' % detail, file=sys.stderr)
     load_before = round(os.getloadavg()[0], 1)
     waited, load_start, reached = (0.0, load_before, True)
     if not a.no_wait and not a.dry_run:
@@ -597,13 +646,7 @@ def main(argv):
                load1=round(load, 1), ncpu=ncpu, high_load=load > ncpu, duration_s=round(time.time() - t0, 1),
                agent=a.agent, model=a.model, config_sha=a.config_sha, verified_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))
     res['pass'] = res.pop('pass_') and not res['cheat']
-    if not a.dry_run:
-        root = os.environ.get('ORCA_ROLES_ORACLE_OUT') or os.path.join(
-            os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'orca-roles', 'oracle')
-        d = os.path.join(root, re.sub(r'[^A-Za-z0-9_.-]', '_', task))
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, 'verify.json'), 'w') as fh:
-            json.dump(res, fh, indent=1, ensure_ascii=False)
+    save_result(res, task, a.dry_run)
     print(json.dumps(res, ensure_ascii=False, indent=1))
     return 0 if res['pass'] else 1
 
