@@ -99,7 +99,7 @@ Clone the repo and run the installer from the clone:
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role`, `roles-yaml` and `team-status` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings. Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
+It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role`, `roles-yaml`, `team-status` and `coordinator` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings. Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
 
 ```bash
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
@@ -835,7 +835,8 @@ It costs one more worker per step and a few test runs. It is modeled on executio
 To run several features at once, each in its own worktree with its own team, start a coordinator in an Orca terminal (for example in the project's main checkout):
 
 ```bash
-~/.orca-roles/bin/coordinator.sh            # Claude Code with the Planner's model and permission mode; --model <m> to change it
+coordinator                                 # Claude Code with the Planner's model and permission mode; --model <m> to change it
+~/.orca-roles/bin/coordinator.sh            # the same, by its path (before opening a new terminal after installing)
 ```
 
 It follows [`prompts/coordinator.md`](prompts/coordinator.md) and Orca's orchestration guide:
