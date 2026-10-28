@@ -181,6 +181,81 @@ if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
   done < "$(trusted_list)"
 fi
 
+# Usage metrics scheduler: a pass of bin/usage-metrics.sh --once every settings.metrics.intervalSeconds (launchd on macOS; cron, every minute, on
+# Linux/WSL). Only the user's own scheduler is touched, only here. ORCA_ROLES_SCHEDULER=fake (or fake-nocron: no crontab) logs the commands to
+# $ORCA_ROLES_SCHEDULER_LOG instead of running launchctl/crontab (the test suite always sets it); ORCA_ROLES_SCHEDULER_OS then replaces uname -s.
+MLABEL=com.orca-roles.usage-metrics; MMARK="# orca-roles usage-metrics"
+sched_fake() { case "${ORCA_ROLES_SCHEDULER:-}" in fake|fake-nocron) return 0;; *) return 1;; esac; }
+sched_run() { if sched_fake; then printf '%s\n' "$*" >> "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}"; else "$@"; fi; }
+sched_crontab_list() { if sched_fake; then cat "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}.crontab" 2>/dev/null || true; else crontab -l 2>/dev/null || true; fi; }
+sched_crontab_set() { if sched_fake; then cat > "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}.crontab"; printf 'crontab -\n' >> "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}"; else crontab -; fi; }
+sched_have_crontab() { if sched_fake; then [ "${ORCA_ROLES_SCHEDULER:-}" = fake ]; else command -v crontab >/dev/null 2>&1; fi; }
+xml_esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+schedule_metrics() {
+  local os plist uid py interval line cur
+  os="$(uname -s)"; if sched_fake && [ -n "${ORCA_ROLES_SCHEDULER_OS:-}" ]; then os="$ORCA_ROLES_SCHEDULER_OS"; fi
+  plist="$HOME/Library/LaunchAgents/$MLABEL.plist"; uid="$(id -u)"
+  if ! metrics_enabled "$CONF"; then
+    if [ "$os" = Darwin ]; then
+      if [ -f "$plist" ]; then sched_run launchctl bootout "gui/$uid/$MLABEL" >/dev/null 2>&1 || true; rm -f "$plist"; fi
+    elif sched_have_crontab; then
+      cur="$(sched_crontab_list)"
+      if printf '%s\n' "$cur" | grep -qF "$MMARK"; then printf '%s\n' "$cur" | grep -vF "$MMARK" | sched_crontab_set; fi
+    fi
+    echo "Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled."
+    return 0
+  fi
+  if ! py="$(command -v python3 2>/dev/null)" || [ -z "$py" ] || ! "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+    echo "Usage metrics: no python3 >= 3.9 found; metrics are not scheduled."; return 0
+  fi
+  case "$py" in /*) ;; *) py="$(cd "$(dirname "$py")" && pwd)/$(basename "$py")";; esac
+  interval="$(jq -r '(.settings.metrics? | objects | .intervalSeconds?) // 60' "$CONF" 2>/dev/null)"
+  case "$interval" in ''|*[!0-9]*) interval=60;; esac
+  if [ "$interval" -lt 15 ] || [ "$interval" -gt 3600 ]; then interval=60; fi
+  if [ "$os" = Darwin ]; then
+    mkdir -p "$(dirname "$plist")" "$KIT/metrics"
+    cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$MLABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$(xml_esc "$KIT/bin/usage-metrics.sh")</string>
+    <string>--once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ORCA_ROLES_PYTHON</key><string>$(xml_esc "$py")</string>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key><string>$(xml_esc "$HOME")</string>
+  </dict>
+  <key>StartInterval</key><integer>$interval</integer>
+  <key>RunAtLoad</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>$(xml_esc "$KIT/metrics/usage-metrics.launchd.log")</string>
+  <key>StandardErrorPath</key><string>$(xml_esc "$KIT/metrics/usage-metrics.launchd.log")</string>
+</dict>
+</plist>
+PLIST
+    sched_run launchctl bootout "gui/$uid/$MLABEL" >/dev/null 2>&1 || true
+    if sched_run launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1; then echo "Usage metrics: recorded every $interval s (launchd)."
+    else echo "Warning: launchctl could not load $plist; run: launchctl bootstrap gui/$uid $plist"; fi
+  elif sched_have_crontab; then
+    line="* * * * * ORCA_ROLES_PYTHON=$py /bin/bash $KIT/bin/usage-metrics.sh --once >/dev/null 2>&1 $MMARK"
+    cur="$(sched_crontab_list)"
+    { printf '%s\n' "$cur" | grep -vF "$MMARK" | sed '/^$/d' || true; printf '%s\n' "$line"; } | sched_crontab_set
+    echo "Usage metrics: recorded every minute (cron)."
+  else
+    echo "Usage metrics: no crontab found; run $KIT/bin/usage-metrics.sh --once yourself or schedule it."
+  fi
+  return 0
+}
+schedule_metrics || echo "Warning: could not set up the usage metrics scheduler."
+
 echo
 echo "Installed in $KIT"
 echo "Configuration: $CONF"
