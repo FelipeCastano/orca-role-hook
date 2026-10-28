@@ -8272,6 +8272,192 @@ umi() { jq -r '[(.physical | split("/") | last), .project, .task] | join("/")' "
 uminst; I1="$UIRC:$(umi)"; uminst; I2="$UIRC:$(umi)"
 rm -f "$UH/.orca-roles/metrics/worktrees.jsonl"; rm -rf "$UH/.orca-roles/metrics"; uminst; I3="$UIRC:$(umi):$(jq -cS 'keys' "$UH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort -u | tr -d '\n' || true)"
 check "usage metrics: install.sh adds a worktrees line for each folder of trusted.list not already mapped (the task from the worktree's saved configuration, else its folder name; the project; a path already present, a duplicate, a blank line and a missing folder add nothing) and a second install adds nothing" "$I1|$I2|$I3" "0:devia-251/svc/kept devgd-300/svc/devgd-292 |0:devia-251/svc/kept devgd-300/svc/devgd-292 |0:devgd-300/svc/devgd-292 devia-251/svc/devia-251 :[\"path\",\"physical\",\"project\",\"task\",\"ts\"]"
+# the transcript parser (usage-metrics.sh --once / --report) on fixture transcripts: temp kit, ORCA_ROLES_CLAUDE_PROJECTS and HOME, never the real ones
+PK="$UM/pk"; PC="$UM/cp"; PM="$PK/metrics"; PD="$PC/-w-a-devgd-300"
+umpk() { rm -rf "$PK" "$PC"; mkdir -p "$PK/bin" "$PD"; cp "$ROOT/config.default.json" "$PK/"; mkdir -p "$PM"; printf '%s\n' '{"ts":"2026-10-01T00:00:00Z","path":"/w/a","physical":"/w/a","project":"svc","task":"outer"}' '{"ts":"2026-10-01T00:00:00Z","path":"/w/a/devgd-300","physical":"/w/a/devgd-300","project":"svc","task":"devgd-292"}' > "$PM/worktrees.jsonl"; }
+umpass() { if KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" "${@:---once}" > "$UM/pass.out" 2> "$UM/pass.err"; then UPRC=0; else UPRC=$?; fi; }
+umrepx() { KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" --report "$@" 2>&1; }
+umrep() { umrepx "$@" || true; }
+pu() { jq -nc --arg ts "$2" --arg cwd "$3" --arg t "$4" '{type: "user", timestamp: $ts, cwd: $cwd, version: "2.1.311", message: {role: "user", content: $t}}' >> "$1"; }
+pa() { jq -nc --arg ts "$2" --arg cwd "$3" --arg id "$4" --arg m "$5" --argjson u "$6" --argjson c "$7" '{type: "assistant", timestamp: $ts, cwd: $cwd, version: "2.1.311", message: {id: $id, role: "assistant", model: $m, usage: $u, content: $c}}' >> "$1"; }
+pr() { jq -nc --arg ts "$2" --arg id "$3" --argjson e "$4" --arg out "$5" '{type: "user", timestamp: $ts, message: {role: "user", content: [{type: "tool_result", tool_use_id: $id, is_error: $e, content: $out}]}, toolUseResult: {stdout: $out}}' >> "$1"; }
+pj() { printf '%s\n' "$2" >> "$1"; }
+U1='{"input_tokens":1000000,"output_tokens":200000,"cache_read_input_tokens":1000000,"cache_creation_input_tokens":400000,"cache_creation":{"ephemeral_1h_input_tokens":100000,"ephemeral_5m_input_tokens":300000},"output_tokens_details":{"thinking_tokens":50000},"server_tool_use":{"web_search_requests":2}}'
+uss() { jq -c --arg s "$1" 'select(.session_id == $s)' "$PM"/sessions-*.jsonl 2>/dev/null | tail -1; }
+usf() { uss "$1" | jq -r "$2" 2>/dev/null | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g' || true; }   # 3.0 and 3 are the same number to every jq
+umpk; F1="$PD/s1.jsonl"; W="/w/a/devgd-300/src"
+pu "$F1" 2026-10-27T10:00:00.000Z "$W" "Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/dev.md and adopt that role. SECRET-PROMPT-MARKER"
+pj "$F1" '{"type":"api-request","timestamp":"2026-10-27T10:00:01.000Z","params":{"output_config":{"effort":"high"}}}'
+pa "$F1" 2026-10-27T10:00:02.000Z "$W" m1 claude-haiku-4-5 "$U1" '[{"type":"text","text":"SECRET-REPLY"}]'
+pa "$F1" 2026-10-27T10:00:02.100Z "$W" m1 claude-haiku-4-5 "$U1" '[{"type":"thinking","thinking":"hmm"}]'
+pa "$F1" 2026-10-27T10:00:03.000Z "$W" m1 claude-haiku-4-5 "$U1" '[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"echo SECRET-CMD"}}]'
+pr "$F1" 2026-10-27T10:00:08.000Z tu1 false "SECRET-OUT"
+pa "$F1" 2026-10-27T10:00:09.000Z "$W" m2 claude-opus-4-5 '{"input_tokens":1000,"output_tokens":100,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0}' '[{"type":"tool_use","id":"tu2","name":"Edit","input":{"new_string":"a\nb\n","old_string":"x\n"}},{"type":"tool_use","id":"tu3","name":"Write","input":{"content":"1\n2\n3"}}]'
+pr "$F1" 2026-10-27T10:00:11.000Z tu2 true "SECRET-ERR"
+pj "$F1" '{"type":"system","subtype":"compact_boundary","timestamp":"2026-10-27T10:00:12.000Z"}'
+pj "$F1" '{"type":"assistant","timestamp":"2026-10-27T10:00:13.000Z","isApiErrorMessage":true,"message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}'
+pa "$F1" 2026-10-27T10:00:14.000Z "$W" m3 claude-haiku-4-5 '{"input_tokens":1000000,"output_tokens":0,"inference_geo":"us"}' '[{"type":"text","text":"ok"}]'
+umpass
+S1A="$UPRC:$(usf s1 '[.session_id, .task, .project, .orca_roles_role, .effort, .query_source, .service_version, .first, .last] | join("|")')"
+S1B="$(usf s1 '[.turns, .userMessages, .compactions, .apiErrors, .modelChanges, .maxContext] | join("|")')"
+S1C="$(usf s1 '.tokens | [.input, .output, .cacheRead, .cacheCreation, .thinking] | join("|")')"
+S1D="$(usf s1 '.models["claude-haiku-4-5"] | [.input, .output, .cacheRead, .cacheCreation, .cacheWrite5m, .cacheWrite1h, .thinking, .turns, .cost, .cacheSavings, (.costByType | [.input, .output, .cacheRead, .cacheWrite, .webSearch] | join("/"))] | join("|")')"
+S1E="$(usf s1 '[.models["claude-opus-4-5"].cost, .costPriced, .cost, .costState, .cacheSavings, (.unpriced | length)] | join("|")')"
+S1F="$(usf s1 '[.tools.Bash.calls, .tools.Bash.errors, .tools.Bash.seconds, .tools.Edit.calls, .tools.Edit.errors, .tools.Edit.seconds, .tools.Write.calls, .lines.added, .lines.removed, .lines.source] | join("|")')"
+check "usage parse: one response written on 3 lines counts once; labels (longest mapped path, role from the role message, effort, version); turns, user messages, compactions, API errors (not a turn), model changes, max context" "$S1A|$S1B" "0:s1|devgd-292|svc|dev|high|main|2.1.311|2026-10-27T10:00:00.000Z|2026-10-27T10:00:14.000Z|3|1|1|1|2|2400000"
+F2P="2026-10-27T11:00:00.000Z"
+mk1() { pu "$PD/$1.jsonl" "$F2P" "$W" "task $1"; pa "$PD/$1.jsonl" "$F2P" "$W" "id-$1" "$2" "$3" '[{"type":"text","text":"x"}]'; }
+mk1 pa claude-haiku-5-5 '{"input_tokens":50000,"output_tokens":1000000,"cache_read_input_tokens":60000}'
+mk1 pb claude-haiku-5-5 '{"input_tokens":100000}'
+mk1 pc claude-haiku-5-5 '{"input_tokens":100001}'
+mk1 pd claude-sonnet-4-5-20250929 '{"input_tokens":1000000}'
+mk1 pe claude-opus-5-5-20260101 '{"input_tokens":1000000}'
+mk1 pf claude-opus-5-20260101 '{"input_tokens":1000000}'
+mk1 pg "claude-opus-4-5[1m]" '{"output_tokens":1000000}'
+mk1 ph claude-unknown-9 '{"input_tokens":1000000}'
+umpass
+PP="$(for x in pa pb pd pe pf pg; do usf $x '.cost'; done | tr '\n' ' ')$(usf pc '(.cost > 0.049 and .cost < 0.051)') $(usf ph '[.cost, (.unpriced | join(",")), .tokens.input] | join("|")')"
+check "usage parse: tokens, priced cost by type (1h cache writes, the us geo x1.1, web searches), thinking tokens, cache savings, tools (calls, errors, seconds tool_use to tool_result), lines from Edit/Write, one row per model with the cost never above what the rows sum to" "$S1C|$S1D|$S1E|$S1F" "2001000|200100|1002000|400000|50000|2000000|200000|1000000|400000|300000|100000|50000|2|3.795|0.725|2.1/1/0.1/0.575/0.02|0.0085|3.8035|3.8035||0.734|0|1|0|5|1|1|2|1|5|1|edits"
+check "usage parse: price lookup by the longest catalog id the model starts with (a dated id, opus-5-5 over opus-5, a [1m] suffix), the long-prompt tier only above 100000 prompt tokens (exactly 100000 stays on the base tier), a model with no price costs 0 and is listed as unpriced" "$PP" "2.528 0.01 3 4 5 25 true 0|claude-unknown-9|1000000"
+umsum() { (cd "$PM" && cksum sessions-*.jsonl 2>/dev/null | tr '\n' ' ') || true; jq -cS 'del(.lastPass)' "$PM/state.json" 2>/dev/null | cksum || true; }
+umcount() { cat "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' ' || true; }
+N0="$(umcount)"; B0="$(umsum)"; sleep 1; umpass; A0="$UPRC:$([ "$(umsum)" = "$B0" ] && echo same):$([ "$(umcount)" = "$N0" ] && echo nonew)"
+SUB="$PD/s1/subagents/agent-a.jsonl"; mkdir -p "$PD/s1/subagents"
+pu "$SUB" 2026-10-27T10:00:05.000Z /w/a/devgd-300/x "SECRET-SUB-PROMPT"
+pa "$SUB" 2026-10-27T10:00:05.100Z /w/a/devgd-300/x m1 claude-haiku-4-5 "$U1" '[{"type":"text","text":"again"}]'
+pa "$SUB" 2026-10-27T10:00:06.000Z /w/a/devgd-300/x m9 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"tu9","name":"Bash","input":{"command":"ls"}}]'
+pr "$SUB" 2026-10-27T10:00:07.000Z tu9 false "out"
+umpass; A1="$UPRC:$(usf s1 '[.turns, .userMessages, .tokens.input, .tools.Bash.calls, .costPriced] | join("|")'):$(( $(umcount) - N0 ))"
+PART="$(jq -nc --arg ts 2026-10-27T10:00:20.000Z --argjson c '[{"type":"text","text":"p"}]' --argjson u '{"input_tokens":1000000}' '{type: "assistant", timestamp: $ts, cwd: "/w/a/devgd-300/src", message: {id: "m4", role: "assistant", model: "claude-haiku-4-5", usage: $u, content: $c}}')"
+printf '%s' "$PART" >> "$F1"; umpass; A2="$(usf s1 '.turns')"; printf '\n' >> "$F1"; umpass; A3="$(usf s1 '[.turns, .tokens.input] | join("|")')"
+head -3 "$F1" > "$F1.new" && mv "$F1.new" "$F1"; umpass; A4="$(usf s1 '[.turns, .tokens.input, .costPriced, .tools.Bash.calls, .userMessages] | join("|")')"
+head -1 "$SUB" > "$SUB.new" && mv "$SUB.new" "$SUB"; umpass; A5="$(usf s1 '[.turns, .tokens.input, .costPriced, (.tools.Bash.calls // 0)] | join("|")')"
+A6="$(grep -rlF SECRET "$PM" | wc -l | tr -d ' ' || true)"
+rm -rf "$F1" "$PD/s1"; umpass; A7="$(jq -r '[(.sessions | has("s1")), ([.files | keys[] | select(test("/s1"))] | length)] | join("|")' "$PM/state.json" 2>/dev/null || true)"
+check "usage parse: a pass with no new bytes changes no store file (state.json only in lastPass); a subagent file is merged into its parent (a response it repeats counts once, its prompt is no user message); a half-written last line waits for its newline; a truncated main file or subagent file recomputes the session from the start; a deleted file leaves state.json; no prompt, reply, tool input or output text is stored" "$A0|$A1|$A2|$A3|$A4|$A5|$A6|$A7" "0:same:nonew|0:4|1|3001000|2|4.8035:1|4|5|4001000|2|2000000|3.695|1|1|1|1000000|2.695|0|0|false|0"
+# cost = max(priced, cost-state), never lower than the priced sum; lines from cost-state when it carries them
+umpk; W="/w/a/devgd-300/src"; F3="$PD/cs1.jsonl"
+pb() { jq -nc --arg ts "$2" --arg id "$3" --arg cmd "$4" --arg cwd "${5:-/w/a/devgd-300/src}" '{type: "assistant", timestamp: $ts, cwd: $cwd, message: {id: "b-\($id)", role: "assistant", model: "claude-haiku-4-5", content: [{type: "tool_use", id: $id, name: "Bash", input: {command: $cmd}}]}}' >> "$1"; }
+pu "$F3" 2026-10-27T10:00:00.000Z "$W" "go"
+pa "$F3" 2026-10-27T10:00:01.000Z "$W" c1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"tw","name":"Write","input":{"content":"1\n2\n3\n"}}]'
+pj "$F3" '{"type":"cost-state","totalCostUSD":0.5,"totalLinesAdded":7,"totalLinesRemoved":2}'
+umpass; C1="$(usf cs1 '[.cost, .costPriced, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+pj "$F3" '{"type":"cost-state","totalCostUSD":4.25,"totalLinesAdded":8,"totalLinesRemoved":2}'; umpass; C2="$(usf cs1 '[.cost, .costPriced, .costState] | join("|")')"
+pa "$F3" 2026-10-27T10:00:02.000Z "$W" c2 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'; umpass; C3="$(usf cs1 '[.cost, .costPriced] | join("|")')"
+for i in 3 4 5; do pa "$F3" 2026-10-27T10:00:0$i.000Z "$W" "c$i" claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'; done; umpass; C4="$(usf cs1 '[.cost, .costPriced, .costState] | join("|")')"
+F4="$PD/cs2.jsonl"; pu "$F4" 2026-10-27T10:00:00.000Z "$W" "go"; pa "$F4" 2026-10-27T10:00:01.000Z "$W" d1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"te","name":"Edit","input":{"new_string":"a\nb","old_string":"x"}}]'
+pj "$F4" '{"type":"cost-state","totalCostUSD":9.5}'; umpass; C5="$(usf cs2 '[.cost, .costPriced, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+check "usage parse: cost is the priced sum when the cost-state is lower (the cost-state is kept in costState), the cost-state when it is higher, and never lower than the priced sum as usage grows; lines come from the cost-state when it counts them, else from the Edit/Write inputs" "$C1|$C2|$C3|$C4|$C5" "1|1|0.5|7|2|cost-state|4.25|1|4.25|4.25|2|5|5|4.25|9.5|1|9.5|2|1|edits"
+# the kit filter: a session is the kit's when its first cwd is a mapped worktree (or under one) or its first prompt is a role message
+umpk; W="/w/a/devgd-300/src"; RM="Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/tester.md and adopt that role."
+kses() {  # kses <sid> <cwd> <first prompt> [second prompt]
+  local f="$PD/$1.jsonl"; pj "$f" '{"type":"file-history-snapshot","messageId":"x"}'; pu "$f" 2026-10-27T10:00:00.000Z "$2" "$3"
+  [ -z "${4:-}" ] || pu "$f" 2026-10-27T10:00:01.000Z "$2" "$4"
+  pa "$f" 2026-10-27T10:00:02.000Z "$2" "m-$1" claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
+}
+kses k1 "$W" "hello"; kses k2 /w/a/other "hello"; kses k3 /unmapped/x "$RM"; kses k4 /unmapped/y "hello"; kses k5 /w/a/devgd-300 "# TASK task_abcdef1234 do it"
+kses k6 /w/a-other "hello"; kses k7 /unmapped/z "hello" "$RM"; kses k8 "$W" "hello" "Read /k/prompts/programmer/dev.md and adopt that role."
+umpass
+ku() { local o; o="$(usf "$1" '[.task, .orca_roles_role, .effort, .turns] | join("/")')"; printf '%s ' "${o:-absent}"; }
+K1="$(for k in k1 k2 k3 k4 k5 k6 k7 k8; do ku $k; done)"
+printf '%s\n' '{"ts":"2026-10-27T12:00:00Z","path":"/unmapped/y","physical":"/unmapped/y","project":"p2","task":"late"}' >> "$PM/worktrees.jsonl"; umpass; K2="$(ku k4)$(ku k6)"
+K3="$(jq -r '[.sessions | keys[]] | join(",")' "$PM/state.json" 2>/dev/null || true)"
+check "usage parse: kit sessions only: cwd under a mapped worktree (the longest path gives the task, a sibling folder that only shares the prefix is not under it), a first-prompt role message with an unmapped cwd (task empty), a dispatch start with no role message (role empty), the role from the second prompt; a plain session in an unmapped folder, or whose role message is not its first prompt, is absent; a worktree mapped later brings an ignored session in; absent sessions keep no totals in state" "$K1|$K2|$K3" "devgd-292//medium/1 outer//medium/1 /tester/medium/1 absent devgd-292//medium/1 absent absent devgd-292/dev/medium/1 |late//medium/1 absent |k1,k2,k3,k4,k5,k8"
+# worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the prompt naming the task, and the commits of Bash tool calls
+umpk; W="/w/a/devgd-300/src"; F5="$PD/vd.jsonl"; WD='orca orchestration send --from term_x --type worker_done'
+pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Please do task_abcdef01 now"
+pb "$F5" 2026-10-27T10:00:30.000Z v1 "$WD --subject \"VERDICT: ACCEPTED\" --body \"all good\" --task-id task_abcdef01 --dispatch-id d --outcome succeeded --json"
+pb "$F5" 2026-10-27T10:00:40.000Z v2 "$WD --subject \"VERDICT: REJECTED\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:00:50.000Z v3 "$WD --subject \"done\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:00.000Z v4 "$WD --subject done --body 'REJECTED: nope' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:10.000Z v5 "$WD --subject 'ACCEPTED' --body 'REJECTED' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:20.000Z v6 "$WD --subject UNACCEPTED --body unrejected --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:30.000Z v7 "$WD --subject 'accepted' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:40.000Z v8 "$WD --subject ACCEPTED --task-id task_ffffffff99"
+pb "$F5" 2026-10-27T10:01:50.000Z v9 "$WD --subject \"VERDICT: ACCEPTED\" --body \"it's fine' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:02:00.000Z g0 "ls -la"
+pb "$F5" 2026-10-27T10:02:10.000Z g1 "git commit -m x"; pr "$F5" 2026-10-27T10:02:11.000Z g1 false "[main abc] x
+ 3 files changed, 12 insertions(+), 4 deletions(-)"
+pb "$F5" 2026-10-27T10:02:20.000Z g2 "git -C /w/a commit -m y"; pr "$F5" 2026-10-27T10:02:21.000Z g2 false " 1 file changed, 1 insertion(+)"
+pb "$F5" 2026-10-27T10:02:30.000Z g3 "git commit -m failed"; pr "$F5" 2026-10-27T10:02:31.000Z g3 true " 9 files changed, 99 insertions(+), 99 deletions(-)"
+pb "$F5" 2026-10-27T10:02:40.000Z g4 "git add -A && git commit -m z"; pr "$F5" 2026-10-27T10:02:41.000Z g4 false " 2 files changed, 5 deletions(-)"
+pb "$F5" 2026-10-27T10:02:50.000Z g5 "echo \"git commit\""; pr "$F5" 2026-10-27T10:02:51.000Z g5 false " 7 files changed, 70 insertions(+)"
+pb "$F5" 2026-10-27T10:03:00.000Z g6 "git status"; pr "$F5" 2026-10-27T10:03:01.000Z g6 false " 7 files changed, 70 insertions(+)"
+umpass
+V1="$(usf vd '[.workerDone[] | "\(.verdict):\(.seconds)"] | join(",")')"; V2="$(usf vd '.commits | [.count, .insertions, .deletions] | join("|")')"; V3="$(usf vd '[.tools.Bash.calls, .tools.Bash.errors] | join("|")')"
+check "usage parse: worker_done verdict from --subject first, then a literal --body, never from a body built by \$( ) or backticks, only the words ACCEPTED/REJECTED (not UNACCEPTED, not lower case), also when the command has an unbalanced quote; seconds from the prompt that names the task id to the send (null when no prompt names it); commits from Bash git commit calls that succeeded, with insertions and deletions from the result (singular forms, missing parts 0; a failed commit, an echo and other git commands do not count)" "$V1|$V2|$V3" "ACCEPTED:30,REJECTED:40,:50,REJECTED:60,ACCEPTED:70,:80,:90,ACCEPTED:null,ACCEPTED:110|3|13|9|16|1"
+# a pass reads only the global config: disabled -> nothing read or written; a live lock -> no work; a dead one is taken over; rotation once per UTC day
+umpass() { if KIT="${UMKIT:-$PK}" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" "${@:---once}" > "$UM/pass.out" 2> "$UM/pass.err"; then UPRC=0; else UPRC=$?; fi; }
+umpk; kses g1 /unmapped/g "$RM"; PK2="$UM/pk2"; rm -rf "$PK2"; mkdir -p "$PK2"; chmod 000 "$PD/g1.jsonl"
+jq '.settings.metrics.enabled = false' "$ROOT/config.default.json" > "$PK2/config.json"; UMKIT="$PK2" umpass; G1="$UPRC:$([ -e "$PK2/metrics" ] && echo wrote || echo none)"
+rm -f "$PK2/config.json"; jq '.settings.metrics.enabled = false' "$ROOT/config.default.json" > "$PK2/config.default.json"; UMKIT="$PK2" umpass; G2="$UPRC:$([ -e "$PK2/metrics" ] && echo wrote || echo none)"
+chmod 644 "$PD/g1.jsonl"; cp "$ROOT/config.default.json" "$PK2/config.default.json"; UMKIT="$PK2" umpass; G3="$UPRC:$([ -d "$PK2/metrics" ] && echo wrote || echo none):$(KIT="$PK2" HOME="$TMP/home" bash "$ROOT/bin/usage-metrics.sh" --report --json 2>/dev/null | jq -r .total.sessions 2>/dev/null || true)"
+jq '.settings.metrics.enabled = false' "$ROOT/config.default.json" > "$PK2/config.json"; G4="$(KIT="$PK2" HOME="$TMP/home" bash "$ROOT/bin/usage-metrics.sh" --report --json 2>/dev/null | jq -r .total.sessions 2>/dev/null || true)"
+sleep 30 & LPID=$!; mkdir -p "$PM/pass.lock"; echo "$LPID" > "$PM/pass.lock/pid"; umpass; L1="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle):$([ -d "$PM/pass.lock" ] && echo kept)"
+kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null || true; echo "$LPID" > "$PM/pass.lock/pid"; umpass; L2="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle):$([ -d "$PM/pass.lock" ] && echo kept || echo released):$(usf g1 '.turns')"
+rm -rf "$PM/state.json" "$PM"/sessions-*.jsonl; mkdir -p "$PM/pass.lock"; umpass; L3="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle)"; rm -rf "$PM/pass.lock"
+check "usage parse: settings.metrics.enabled false in the global config (config.json, or config.default.json when there is no config.json) -> exit 0 and nothing is created, read or written (the transcript is unreadable); enabled -> the pass runs; --report works either way; a live pass's lock -> exit 0 with no work and the lock left alone; a lock whose pid is dead is taken over, the pass runs and releases it; a fresh lock without a pid is respected" "$G1|$G2|$G3|$G4|$L1|$L2|$L3" "0:none|0:none|0:wrote:1|1|0:idle:kept|0:ran:released:1|0:idle"
+umday() { python3 -I -c 'import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=int(sys.argv[1]))).isoformat())' "$1"; }
+umpk; jq '.settings.metrics.retentionDays = 30' "$ROOT/config.default.json" > "$PK/config.json"; printf '{"ts":"x"}\n' > "$PM/events.jsonl"; cp "$PM/worktrees.jsonl" "$UM/wt.keep"
+for d in 100 31 30 29 0; do echo '{}' > "$PM/sessions-$(umday $d).jsonl"; done; echo '{}' > "$PM/sessions-2020-01-01.jsonl.bak"
+umpass; R1="$(find "$PM" -maxdepth 1 -name 'sessions-20??-??-??.jsonl' | wc -l | tr -d ' '):$(find "$PM" -maxdepth 1 \( -name "sessions-$(umday 100).jsonl" -o -name "sessions-$(umday 31).jsonl" \) | wc -l | tr -d ' '):$([ -e "$PM/sessions-$(umday 30).jsonl" ] && echo b30):$([ -e "$PM/sessions-2020-01-01.jsonl.bak" ] && echo decoy):$(cat "$PM/events.jsonl"):$(cmp -s "$PM/worktrees.jsonl" "$UM/wt.keep" && echo wt):$([ -s "$PM/state.json" ] && echo state || echo nostate)"
+echo '{}' > "$PM/sessions-$(umday 200).jsonl"; umpass; R2="$([ -e "$PM/sessions-$(umday 200).jsonl" ] && echo kept || echo gone)"
+jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; umpass; R3="$([ -e "$PM/sessions-$(umday 200).jsonl" ] && echo kept || echo gone):$([ -e "$PM/sessions-$(umday 29).jsonl" ] && echo b29 || echo no29)"
+jq '.settings.metrics.retentionDays = "30"' "$ROOT/config.default.json" > "$PK/config.json"; echo '{}' > "$PM/sessions-$(umday 100).jsonl"; echo '{}' > "$PM/sessions-$(umday 31).jsonl"
+jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; umpass; R4="$([ -e "$PM/sessions-$(umday 100).jsonl" ] && echo kept || echo gone):$([ -e "$PM/sessions-$(umday 31).jsonl" ] && echo kept || echo gone)"
+check "usage parse: rotation on the first pass of a UTC day removes the daily files older than retentionDays (the day exactly retentionDays old stays) and nothing else (state.json, worktrees.jsonl, events.jsonl, a file that is not a daily file); a second pass the same day removes nothing more; an invalid retentionDays falls back to 90" "$R1|$R2|$R3|$R4" "3:0:b30:decoy:{\"ts\":\"x\"}:wt:state|kept|gone:b29|gone:kept"
+# --report: the latest line of each session, totals = sums by task, role and model, --task and --since filters, text and --json; and the same tokens and cost as bin/metrics.sh on one transcript
+umpk; W="/w/a/devgd-300/src"; RD="Read /k/prompts/programmer/dev.md and adopt that role."; RT="Read /k/prompts/programmer/tester.md and adopt that role."
+F6="$PD/r1.jsonl"; pu "$F6" 2026-10-27T10:00:00.000Z "$W" "$RD"; pa "$F6" 2026-10-27T10:00:01.000Z "$W" r1a claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
+F7="$PD/r2.jsonl"; pu "$F7" 2026-10-27T10:00:00.000Z "$W" "$RT"; pa "$F7" 2026-10-27T10:00:01.000Z "$W" r2a claude-opus-4-5 '{"output_tokens":1000000}' '[{"type":"text","text":"x"}]'
+F8="$PD/r3.jsonl"; pu "$F8" 2026-09-01T10:00:00.000Z /w/a/o "plain"; pa "$F8" 2026-09-01T10:00:01.000Z /w/a/o r3a claude-haiku-4-5 '{"output_tokens":1000000}' '[{"type":"text","text":"x"}]'
+umpass; pa "$F6" 2026-10-27T10:05:00.000Z "$W" r1b claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"y"}]'; sleep 1; umpass
+jqr() { jq -r "$@" 2>/dev/null || true; }
+RJ="$(umrep --json || true)"
+P1="$(jqr '[.total.sessions, .total.cost, .total.tokens.input, .total.tokens.output] | join("|")' <<< "$RJ")"
+P2="$(jqr '[(.byTask | to_entries[] | "\(.key):\(.value.sessions):\(.value.cost)"), (.byRole | to_entries[] | "\(.key):\(.value.sessions):\(.value.cost)"), (.byModel | to_entries[] | "\(.key):\(.value.sessions):\(.value.cost)")] | join(",")' <<< "$RJ")"
+P3="$(jqr '[.total.cost, ([.byTask[].cost] | add), ([.byRole[].cost] | add), .total.costByType.input, .total.costByType.output] | join("|")' <<< "$RJ")"
+P4="$(umrep --json --task devgd-292 | jqr '[.task, .total.sessions, .total.cost] | join("|")'):$(umrep --json --since 2026-10-01 | jqr '[.total.sessions, .total.cost] | join("|")'):$(umrep --json --since 2026-10-28 | jqr '[.total.sessions, .total.cost] | join("|")'):$(umrep --json --task nope | jqr .total.sessions)"
+P5="$(umrepx --since 2026-13 >/dev/null; echo $?):$(umrepx --bogus >/dev/null; echo $?):$(umrep | head -1 | grep -c '^total  *3 sessions' || true)"
+CCH="$UM/cch"; rm -rf "$CCH"; PKM="$UM/pkm"; rm -rf "$PKM"; mkdir -p "$PKM" "$CCH/projects/$(printf '%s' "$UMPB" | tr '/.' '--')"; cp "$ROOT/config.default.json" "$PKM/"
+F9="$CCH/projects/$(printf '%s' "$UMPB" | tr '/.' '--')/mt1.jsonl"; pu "$F9" 2026-10-27T10:00:00.000Z "$UMPB" "$RD"
+for i in 1 2 3; do pa "$F9" 2026-10-27T10:00:0$i.000Z "$UMPB" mt1 claude-haiku-4-5 "$U1" '[{"type":"text","text":"x"}]'; done
+pa "$F9" 2026-10-27T10:01:00.000Z "$UMPB" mt2 claude-opus-4-5 '{"input_tokens":3000,"output_tokens":700,"cache_read_input_tokens":9000,"cache_creation_input_tokens":500}' '[{"type":"text","text":"y"}]'
+pj "$F9" '{"type":"cost-state","totalCostUSD":12.5}'
+UMKIT="$PKM" PC="$CCH/projects" umpass
+P6="$(cd "$UMB" && HOME="$TMP/home" CLAUDE_CONFIG_DIR="$CCH" "$TMP/home/.orca-roles/bin/metrics.sh" | jqr '[.turns, .input, .output, .cacheRead, .cacheWrite, .maxContext, .usd] | join("|")')=$(jqr '[.turns, .tokens.input, .tokens.output, .tokens.cacheRead, .tokens.cacheCreation, .maxContext, .cost] | join("|")' "$PKM"/metrics/sessions-*.jsonl)"
+check "usage report: the latest store line of each session counts once (a session stored in two passes), totals equal the sums by task, role and model, --task and --since (by the session's last line) filter, an invalid --since or option is exit 2, the text form has a total row; a fixture session gives the same turns, tokens, max context and cost as bin/metrics.sh on the same transcript" "$(printf '%s' "$P1|$P2|$P3|$P4|$P5" | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g'):$(printf '%s' "$P6" | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g;s/=/ /' | awk '{print ($1 == $2) ? "same" : $0}')" "3|32|2000000|2000000|devgd-292:2:27,outer:1:5,:1:5,dev:1:2,tester:1:25,claude-haiku-4-5:2:7,claude-opus-4-5:1:25|32|32|32|2|30|devgd-292|2|27:2|27:0|0:0|2:2:1:same"
+# round 2: the cost-state counters never decrease, worker_done only from a real `orca orchestration send` command, commits only from a real `git commit` command
+umpk; W="/w/a/devgd-300/src"; F10="$PD/dc.jsonl"
+pu "$F10" 2026-10-27T10:00:00.000Z "$W" "go"
+pa "$F10" 2026-10-27T10:00:01.000Z "$W" e1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
+pj "$F10" '{"type":"cost-state","totalCostUSD":4.25,"totalLinesAdded":8,"totalLinesRemoved":2}'
+umpass; DC1="$(usf dc '[.cost, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+pj "$F10" '{"type":"cost-state","totalCostUSD":3.0,"totalLinesAdded":5,"totalLinesRemoved":6}'; umpass; DC2="$(usf dc '[.cost, .costState, .lines.added, .lines.removed] | join("|")')"
+pj "$F10" '{"type":"cost-state","totalCostUSD":1.0}'; umpass; DC3="$(usf dc '[.cost, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+pj "$F10" '{"type":"cost-state","totalCostUSD":4.5,"totalLinesAdded":9,"totalLinesRemoved":3}'; umpass; DC4="$(usf dc '[.cost, .costState, .lines.added, .lines.removed] | join("|")')"
+DCS="$(jq -r 'select(.session_id == "dc") | .cost' "$PM"/sessions-*.jsonl | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g' | tr '\n' ' ')"
+check "usage parse: the cost-state counters never go down: a later cost-state with a lower cost, lower added lines, or only a cost keeps the largest value of each field (cost, costState, lines added and removed, each on its own), also across passes, and the stored cost of the session never decreases from one pass to the next" "$DC1|$DC2|$DC3|$DC4|$DCS" "4.25|4.25|8|2|cost-state|4.25|4.25|8|6|4.25|4.25|8|6|cost-state|4.5|4.5|9|6|4.25 4.25 4.25 4.5 "
+umpk; F11="$PD/wd.jsonl"; TK=task_abcdef01
+pu "$F11" 2026-10-27T10:00:00.000Z "$W" "do $TK"
+SD="orca orchestration send --type worker_done"
+WC=("$SD --subject ACCEPTED --task-id $TK" "echo hi | $SD --subject REJECTED --task-id $TK" "cd /x && orca orchestration send --type=worker_done --subject ACCEPTED --task-id $TK" "cd /x; $SD --subject REJECTED --task-id $TK"
+  $'echo a\n'"$SD --subject ACCEPTED --task-id $TK" "FOO=1 BAR=2 $SD --subject REJECTED --task-id $TK" "/usr/local/bin/orca orchestration send --type worker_done --subject=ACCEPTED --task-id $TK"
+  "(cd /x && $SD --subject REJECTED --task-id $TK)" "orca orchestration send --type status --subject hi && $SD --subject ACCEPTED --task-id $TK" "cd x; $SD --subject \"VERDICT: REJECTED\" --body \"it's --task-id $TK"
+  "echo orca orchestration send --type worker_done --subject ACCEPTED --task-id $TK" "rg \"worker_done\" docs/orchestration" "echo \"$SD --subject ACCEPTED --task-id $TK\"" "grep -n '$SD' README.md"
+  "orca orchestration send --type status --subject \"worker_done ACCEPTED\"" "orca orchestration list --type worker_done" "# $SD --subject ACCEPTED" "echo \"$SD --subject ACCEPTED" "rg \"worker_done docs/orchestration" "cat orchestration.md; echo worker_done")
+WE=(ACCEPTED REJECTED ACCEPTED REJECTED ACCEPTED REJECTED ACCEPTED REJECTED ACCEPTED REJECTED - - - - - - - - - -)
+i=0; WX=""; for c in "${WC[@]}"; do i=$((i + 1)); pb "$F11" "$(printf '2026-10-27T10:%02d:00.000Z' "$i")" "w$i" "$c"; [ "${WE[$((i - 1))]}" = - ] || WX="$WX${WX:+,}${WE[$((i - 1))]}:$((i * 60))"; done
+umpass; WD1="$(usf wd '[.workerDone[] | "\(.verdict):\(.seconds)"] | join(",")')"
+check "usage parse: worker_done counts only a simple command orca orchestration send with --type worker_done or --type=worker_done (also after a pipe, &&, ;, a newline, inside parentheses, after VAR=x, through a path to orca, with --subject=x, with an unbalanced quote after ; ), once per command; echo, rg/grep, quoted or commented text, another --type, another orchestration verb and unbalanced echo/rg text do not count" "$WD1" "$WX"
+umpk; F12="$PD/gc.jsonl"; pu "$F12" 2026-10-27T10:00:00.000Z "$W" "go"
+GC=("git commit -m x" "git -C /w commit -m y" "git -c user.name=a commit -m z" "cd x && git commit -m q" "echo a | git commit -F -" "git add . ; git commit -m r" $'git add .\ngit commit -m s' "FOO=1 git commit -m t" "/usr/bin/git commit -m u"
+  "git --git-dir=.git commit -m v" "git --no-pager commit -m w" "git --git-dir /x --work-tree /y commit -m a1" "git -C a -C b commit -m a2" "git commit --amend" "(git commit -m a3)" "cd x; git commit -m \"it's"
+  "git commit-tree abc" "echo git commit" "echo \"git commit -m x\"" "rg 'git commit' docs" "git status" "git log --grep commit" "git -C commit status" "git push" "git config alias.commit x" "# git commit" "gitk commit" "echo \"git commit -m x" "git --no-pager log")
+GN=16; i=0
+for c in "${GC[@]}"; do i=$((i + 1)); pb "$F12" "$(printf '2026-10-27T10:%02d:00.000Z' "$i")" "g$i" "$c"; pr "$F12" "$(printf '2026-10-27T10:%02d:30.000Z' "$i")" "g$i" false " 1 file changed, 2 insertions(+)"; done
+umpass; GC1="$(usf gc '.commits | [.count, .insertions, .deletions] | join("|")')"
+check "usage parse: commits count only a real git command whose first non-option word is commit (also after a pipe, &&, ;, a newline, parentheses, VAR=x, a path to git, -C/-c/--git-dir/--work-tree with their argument, an unbalanced quote after ;); git commit-tree, echo git commit, rg/quoted/commented text, a folder named commit after -C, other git subcommands, gitk and unbalanced echo text do not" "$GC1" "$GN|$((GN * 2))|0"
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
