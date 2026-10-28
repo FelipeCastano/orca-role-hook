@@ -502,13 +502,19 @@ check_config() {
           (. as $o | ("maxLoad", "waitMax", "timeout", "retries") as $k | select($o | got($k) and (.[$k] | nn | not)) | P + "settings.oracle.\($k) must be a non-negative number"))),
         ($s | objs("telemetry"; "settings.telemetry";
           (if got("roleAttribute") and (.roleAttribute != true and .roleAttribute != false) then P + "settings.telemetry.roleAttribute must be true or false" else empty end))),
+        ($s | objs("metrics"; "settings.metrics";
+          (if got("enabled") and (.enabled != true and .enabled != false) then P + "settings.metrics.enabled must be true or false" else empty end),
+          (if got("allowRemote") and (.allowRemote != true and .allowRemote != false) then P + "settings.metrics.allowRemote must be true or false" else empty end),
+          (. as $m | ("otlpEndpoint", "prometheusUrl") as $k | select($m | got($k) and (.[$k] | type == "string" and test("^https?://.") | not)) | P + "settings.metrics.\($k) must be a URL starting with http:// or https://"),
+          (if got("intervalSeconds") and (.intervalSeconds | type == "number" and . == floor and . >= 15 and . <= 3600 | not) then P + "settings.metrics.intervalSeconds must be an integer from 15 to 3600" else empty end),
+          (if got("retentionDays") and (.retentionDays | type == "number" and . == floor and . >= 1 and . <= 3650 | not) then P + "settings.metrics.retentionDays must be an integer from 1 to 3650" else empty end))),
         ($s | if got("trust") and (.trust != "worktree" and .trust != "never") then P + "settings.trust must be \"worktree\" or \"never\"" else empty end),
         ((.roles // {}) | to_entries[] | .key as $r | select(.value | type == "object" and got("opencode")) | .value.opencode
           | if type != "object" then "ERROR: invalid configuration: role \($r): opencode must be an object"
             else (if got("steps") and (.steps | pint | not) then "ERROR: invalid configuration: role \($r): opencode.steps must be a positive integer" else empty end),
               (if got("permissions") and (.permissions | type != "array" or any(.[]; type != "object" or (.action | type) != "string" or (.resource | type) != "string" or (.effect | IN("allow", "ask", "deny") | not)))
                 then "ERROR: invalid configuration: role \($r): opencode.permissions must be a list of {\"action\", \"resource\", \"effect\": \"allow\"|\"ask\"|\"deny\"}" else empty end) end)' "$1" 2>/dev/null)" \
-    || { echo "ERROR: invalid configuration: settings.flow, settings.oracle, settings.telemetry, settings.trust and roles.<role>.opencode must be valid (see README)"; return 0; }
+    || { echo "ERROR: invalid configuration: settings.flow, settings.oracle, settings.telemetry, settings.metrics, settings.trust and roles.<role>.opencode must be valid (see README)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
@@ -658,6 +664,32 @@ flow_record_rounds() { [ "$(jq -r '(.settings.flow? | objects | .recordRounds?) 
 oracle_enabled() { [ "$(jq -r '(.settings.oracle? | objects | .enabled?) == true' "$1" 2>/dev/null)" = true ]; }
 # settings.telemetry.roleAttribute: agent.sh tags the agent's OpenTelemetry data with orca_roles.role=<role>
 telemetry_role_attribute() { [ "$(jq -r '(.settings.telemetry? | objects | .roleAttribute?) == true' "$1" 2>/dev/null)" = true ]; }
+# settings.metrics.enabled is not false: the kit records its usage metrics (events and worktrees below; the transcripts are read by usage-metrics.sh).  metrics_enabled <config>
+metrics_enabled() { [ "$(jq -r '(.settings.metrics? | objects | .enabled?) == false' "$1" 2>/dev/null)" != true ]; }
+# Where the kit keeps what the metrics pass needs: $KIT/metrics (created on the first write).
+metrics_dir() { printf '%s\n' "$KIT/metrics"; }
+# One JSON line appended to <metrics dir>/<file>; a failed write is ignored.  metrics_append <file> <jq args...> <program>
+metrics_append() {
+  local f d; f="$1"; shift; d="$(metrics_dir)"
+  { mkdir -p "$d" && jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$@" >> "$d/$f"; } 2>/dev/null || true
+  return 0
+}
+# A kit event: <worktree (physical path)> <event> <role> [<task>]
+metrics_event() {
+  if [ $# -ge 4 ]; then metrics_append events.jsonl --arg w "$1" --arg e "$2" --arg r "$3" --arg t "$4" '{ts: $ts, worktree: $w, event: $e, role: $r, task: $t}'
+  else metrics_append events.jsonl --arg w "$1" --arg e "$2" --arg r "$3" '{ts: $ts, worktree: $w, event: $e, role: $r}'; fi
+}
+# The task of a worktree: task= in defaults.env.OTEL_RESOURCE_ATTRIBUTES of the config, else the worktree folder's name.  metrics_task <config> <worktree folder>
+metrics_task() {
+  local t
+  t="$(jq -r '(.defaults.env? | objects | .OTEL_RESOURCE_ATTRIBUTES?) // "" | if type == "string" then split(",") | map(gsub("^\\s+|\\s+$"; "") | select(startswith("task="))) | first // "" | .[5:] else "" end' "$1" 2>/dev/null)" || t=""
+  [ -n "$t" ] || t="$(basename "$2")"
+  printf '%s\n' "$t"
+}
+# One worktrees.jsonl line: the worktree's path as git prints it, its physical path, its project and its task.  metrics_worktree <worktree top> <project> <task>
+metrics_worktree() {
+  metrics_append worktrees.jsonl --arg p "$1" --arg y "$(cd "$1" 2>/dev/null && pwd -P || printf '%s' "$1")" --arg j "$2" --arg t "$3" '{ts: $ts, path: $p, physical: $y, project: $j, task: $t}'
+}
 # The marker a coordinator leaves before it creates a worktree (prompts/coordinator.md), read from inside that worktree:
 # <git common dir>/orca-roles.coordinated/<worktree folder name>. Only the Planner's first start reads it, and kickoff.sh removes it then.
 coordinated_marker() {

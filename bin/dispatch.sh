@@ -16,6 +16,22 @@ GITDIR="$(git rev-parse --git-dir 2>/dev/null)" && GITDIR="$(cd "$GITDIR" && pwd
 if [ -n "$GITDIR" ]; then LOG="$GITDIR/orca-roles-dispatch.log"; else mkdir -p "$KIT/tmp" 2>/dev/null; LOG="$KIT/tmp/orca-roles-dispatch.log"; fi   # outside a repository nothing is left in the current folder
 TICK="${ORCA_ROLES_DISPATCH_TICK:-3}"; POLLS="${ORCA_ROLES_DISPATCH_POLLS:-5}"   # seconds between polls, polls per wait (the tests shorten them)
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+# Usage metrics (settings.metrics): one events.jsonl line per step of a dispatch. One config read: this worktree's saved copy, else the global one.
+MCFG="${GITDIR:+$GITDIR/orca-roles.config.json}"; [ -f "$MCFG" ] || { MCFG="$KIT/config.json"; [ -f "$MCFG" ] || MCFG="$KIT/config.default.json"; }
+METRICS=0; metrics_enabled "$MCFG" && METRICS=1
+MTOP=""; if [ -n "$GITDIR" ] && MTOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then MTOP="$(cd "$MTOP" && pwd -P)"; else MTOP=""; fi
+mevent() {  # mevent <event> <task> <handle>
+  local id=""
+  [ "$METRICS" = 1 ] || return 0
+  id="$(role_of_handle "$3")"
+  metrics_event "$MTOP" "$1" "$id" "$2"
+}
+role_of_handle() {  # role_of_handle <handle>: the role id that owns it in this worktree, or nothing
+  local var
+  [ -n "$GITDIR" ] && [ -f "$GITDIR/orca-roles.env" ] || return 0
+  var="$(grep -m1 "=$1\$" "$GITDIR/orca-roles.env" 2>/dev/null | cut -d= -f1)"; [ -n "$var" ] || return 0
+  printf '%s' "$var" | tr 'A-Z_' 'a-z-'
+}
 
 # Same detachment as launch.sh's detached_start: Orca kills the process group of a tab when it closes it.
 detached_start() {  # detached_start <log> <command> [args...]
@@ -37,7 +53,7 @@ other_agent_of() {  # other_agent_of <handle>
 }
 start_checker() {  # start_checker <task> <handle> <pane key> <dispatcher handle>
   local ag
-  if ag="$(other_agent_of "$2")"; then log "$2: no start check for agent $ag"; return 0; fi
+  if ag="$(other_agent_of "$2")"; then log "$2: no start check for agent $ag"; mevent no-check "$1" "$2"; return 0; fi
   detached_start "$LOG" "$SELF" --watch "$1" "$2" "$3" "$4" || log "$2: $1 not checked (no way to detach the checker)"
 }
 started() {  # started <pane key> <task id>: Orca has a row for that pane whose prompt names the task
@@ -55,10 +71,10 @@ wait_started() {  # wait_started <pane key> <task id>: polls POLLS times, TICK s
 if [ "${1:-}" = --watch ]; then   # hidden: the detached checker  --watch <task> <handle> <pane key> <dispatcher handle>
   task="$2"; h="$3"; pane="$4"; creator="$5"; enter=no; t0=$SECONDS
   if [ -z "$pane" ]; then log "$h: $task not checked (no pane key for it)"; exit 0; fi
-  wait_started "$pane" "$task" && { log "$h: $task started"; exit 0; }
+  wait_started "$pane" "$task" && { log "$h: $task started"; mevent started "$task" "$h"; exit 0; }
   if orca terminal show --terminal "$h" --json 2>/dev/null | jq -e '.result.terminal.preview // "" | contains("[Pasted text")' >/dev/null 2>&1; then
-    if orca terminal send --terminal "$h" --enter --json >/dev/null 2>&1; then enter=yes; log "$h: $task unsent in its composer; Enter re-sent"; fi
-    if [ "$enter" = yes ] && wait_started "$pane" "$task"; then log "$h: Enter re-sent, task started"; exit 0; fi
+    if orca terminal send --terminal "$h" --enter --json >/dev/null 2>&1; then enter=yes; log "$h: $task unsent in its composer; Enter re-sent"; mevent enter-resent "$task" "$h"; fi
+    if [ "$enter" = yes ] && wait_started "$pane" "$task"; then log "$h: Enter re-sent, task started"; mevent started "$task" "$h"; exit 0; fi
   fi
   body="$h has not started $task after $((SECONDS - t0)) s (Enter re-sent: $enter). Look at its tab or tell the user."
   if [ -n "$creator" ] && orca orchestration send --to "$creator" --type status --subject "Dispatch not started" --body "$body" --json >/dev/null 2>&1; then
@@ -66,6 +82,7 @@ if [ "${1:-}" = --watch ]; then   # hidden: the detached checker  --watch <task>
   else
     log "$h: $task not started (Enter re-sent: $enter); could not tell the dispatcher"
   fi
+  mevent not-started "$task" "$h"
   exit 0
 fi
 
@@ -94,6 +111,7 @@ args=(orchestration dispatch --task "$TASK" --to "$TO")
 OUT="$(orca "${args[@]}" --inject --json)"; rc=$?
 printf '%s\n' "$OUT"
 if [ "$rc" = 0 ]; then
+  mevent dispatch "$TASK" "$TO"
   pane="$(printf '%s' "$OUT" | jq -r '(.result.dispatch // .result // {}) | .assignee_pane_key // empty' 2>/dev/null)"
   creator="$(printf '%s' "$OUT" | jq -r '(.result.dispatch // .result // {}) | .creator_handle // empty' 2>/dev/null)"
   start_checker "$TASK" "$TO" "$pane" "${creator:-${ORCA_TERMINAL_HANDLE:-}}"

@@ -577,10 +577,11 @@ state_set() {  # state_set <file> <VAR> <value>: replaces that line (or adds it)
 if [ ! -f "$KICKED" ]; then if [ -s "$STATE" ]; then cp "$STATE" "$KICKED"; else : > "$KICKED"; fi; fi
 kicked_of() { grep "^$1=" "$KICKED" 2>/dev/null | head -1 | cut -d= -f2-; }
 # Classify every role before closing or opening anything: if Orca cannot tell, the team is left exactly as it is
+KEPT_DETACHED=""   # roles kept by the orphaned-with-live-agent rule (recorded as metrics events once the team's state is written)
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
   role_state "$v" "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
-  [ "$st" != 0 ] || [ "$ROLE_DETACHED" != 1 ] || echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles."
+  [ "$st" != 0 ] || [ "$ROLE_DETACHED" != 1 ] || { KEPT_DETACHED="$KEPT_DETACHED $id"; echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles."; }
   [ "$st" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE) for $t: no tab was closed or opened. Run roles again once Orca is ready."
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
@@ -707,6 +708,14 @@ for id in $ROLES; do
   tl="$(tabs_of_handle "$h")"; [ -z "$tl" ] || state_set "$TABS" "$v" "$tl"
 done
 
+if metrics_enabled "$CFG"; then   # what the metrics pass cannot read itself: the worktree's project and task, and the kit's events
+  MTOP="$(git_here toplevel)" && MPHYS="$(cd "$MTOP" && pwd -P)" || { MTOP="$PWD"; MPHYS="$(pwd -P)"; }
+  metrics_worktree "$MTOP" "$(project_name .)" "$(metrics_task "$CFG" "$MTOP")"
+  metrics_event "$MPHYS" launch ""
+  [ "${ORCA_ROLES_RELAUNCH:-}" != 1 ] || metrics_event "$MPHYS" relaunch planner
+  for id in $REMEMBERED $RESUMED; do metrics_event "$MPHYS" reopened "$id"; done
+  for id in $KEPT_DETACHED; do metrics_event "$MPHYS" detached-kept "$id"; done
+fi
 PREV_TABS="$(cat "$TABS" 2>/dev/null)"
 : > "$STATE"; : > "$PTY"; : > "$TABS.tmp.$$"
 for id in $ROLES; do   # a role with no saved tab (left closed) is not written back as VAR=

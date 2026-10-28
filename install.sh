@@ -170,6 +170,17 @@ grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
 
+# Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
+if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
+  while IFS= read -r wt; do
+    [ -d "$wt" ] || continue
+    ph="$(cd "$wt" && pwd -P)" || continue
+    grep -qF "\"physical\":$(printf '%s' "$ph" | jq -Rs .)" "$(metrics_dir)/worktrees.jsonl" 2>/dev/null && continue
+    wcfg=""; wgd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" && wcfg="$wgd/orca-roles.config.json"; [ -f "$wcfg" ] || wcfg="$CONF"
+    metrics_worktree "$wt" "$(project_name "$wt" 2>/dev/null || basename "$wt")" "$(metrics_task "$wcfg" "$wt")"
+  done < "$(trusted_list)"
+fi
+
 echo
 echo "Installed in $KIT"
 echo "Configuration: $CONF"

@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -8135,6 +8135,143 @@ check "parallel runner: SMOKE_JOBS=3 prints the sections in the requested order 
 cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out" | cut -d: -f1):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK" "$Q1|$Q2" "1:marker fast,:1:1:0|1:marker fast,:1:1:0"
+}
+
+sec_usage_metrics() {
+# settings.metrics and the kit's writers for the metrics pass: validation, worktrees.jsonl and events.jsonl from launch.sh and dispatch.sh, install.sh's mapping, enabled=false, a failing write
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+umcv() { jq -c --argjson v "$2" "$1 = \$v" "$ROOT/config.default.json" > "$UM/cv.json"; check_config "$UM/cv.json" | tr '\n' '/'; }
+umbad() { [ "$(umcv "$1" "$2")" = "ERROR: invalid configuration: $3/" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
+umok() { [ -z "$(umcv "$1" "$2")" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
+UV1="$(
+for k in enabled allowRemote; do for v in '"yes"' '"true"' '"false"' '1' '0' '[]' '{}'; do umbad ".settings.metrics.$k" "$v" "settings.metrics.$k must be true or false"; done; done
+for v in 0 5 10 14 3601 86400 -60 1.5 '"60"' true '[]'; do umbad .settings.metrics.intervalSeconds "$v" 'settings.metrics.intervalSeconds must be an integer from 15 to 3600'; done
+for v in 0 -1 3651 1.5 '"90"' true '[]'; do umbad .settings.metrics.retentionDays "$v" 'settings.metrics.retentionDays must be an integer from 1 to 3650'; done
+for k in otlpEndpoint prometheusUrl; do for v in '"127.0.0.1:4318"' '"localhost:9090"' '""' '"http://"' '"ftp://h/x"' '"/v1/metrics"' 5 true '[]'; do umbad ".settings.metrics.$k" "$v" "settings.metrics.$k must be a URL starting with http:// or https://"; done; done
+for v in '"x"' 5 '[]' true; do umbad .settings.metrics "$v" 'settings.metrics must be an object'; done
+)"
+UV2="$(
+umok .settings.metrics null; umok .settings.metrics '{}'
+for k in enabled allowRemote otlpEndpoint prometheusUrl intervalSeconds retentionDays; do umok ".settings.metrics.$k" null; done
+for v in true false; do umok .settings.metrics.enabled "$v"; umok .settings.metrics.allowRemote "$v"; done
+for v in 15 16 60 300 3599 3600 3600.0; do umok .settings.metrics.intervalSeconds "$v"; done
+for v in 1 90 3650; do umok .settings.metrics.retentionDays "$v"; done
+for k in otlpEndpoint prometheusUrl; do for v in '"http://127.0.0.1:4318/v1/metrics"' '"https://metrics.example.com"' '"http://h"'; do umok ".settings.metrics.$k" "$v"; done; done
+)"
+check "usage metrics settings: an invalid value of any key is exactly one ERROR naming it (enabled \"yes\", intervalSeconds 0 and 10, retentionDays \"90\", otlpEndpoint \"127.0.0.1:4318\" and their families)" "$(grep -c BAD <<< "$UV1"):$(grep -o 'ok ' <<< "$UV1" | wc -l | tr -d ' ')" "0:54"
+jq -c '.settings.metrics.enabled = "yes" | .settings.metrics.intervalSeconds = 0 | .settings.metrics.retentionDays = "90"' "$ROOT/config.default.json" > "$UM/cv.json"
+check "usage metrics settings: null, absent and every valid value (the boundaries 15, 3600, 1, 3650 included) pass, the defaults are in config.default.json and the shipped file passes, three wrong keys are three ERROR lines" "$(grep -c BAD <<< "$UV2"):$(grep -o 'ok ' <<< "$UV2" | wc -l | tr -d ' '):$(jq -cS .settings.metrics "$ROOT/config.default.json"):$(check_config "$ROOT/config.default.json" | wc -l | tr -d ' '):$(check_config "$UM/cv.json" | grep -c '^ERROR: invalid configuration: settings\.metrics\.')" '0:28:{"allowRemote":false,"enabled":true,"intervalSeconds":60,"otlpEndpoint":"http://127.0.0.1:4318/v1/metrics","prometheusUrl":"http://127.0.0.1:9090","retentionDays":90}:0:3'
+# the writers: a project with two worktrees (devgd-300 gets its task from an OTEL attribute, devia-251 has none), a fake orca, the kickoff stubbed
+write_launch_config
+UMR="$UM/svc"; mkdir -p "$UMR"; git -C "$UMR" init -q -b main; git -C "$UMR" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+for w in devgd-300 devia-251; do git -C "$UMR" worktree add -q -b "b-$w" "$UM/wt/$w"; done
+UMA="$UM/wt/devgd-300"; UMB="$UM/wt/devia-251"; UMPB="$(cd "$UMB" && pwd -P)"; UMPA="$(cd "$UMA" && pwd -P)"
+umgd() { git -C "$1" rev-parse --absolute-git-dir; }
+cat > "$UM/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$UM/orca.log"
+case "\$1 \$2" in
+  "terminal create") [ -f "$UM/failcreate" ] && exit 1; while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal show") case "\$(cat "$UM/st.\$4" 2>/dev/null)" in
+      stale) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+      orph) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';;
+      *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\nexit 0\n' > "$UM/bin/kickoff"; chmod +x "$UM/bin/orca" "$UM/bin/kickoff"
+uml() { local d="$1"; shift; (cd "$d" && HOME="$TMP/home" PATH="$UM/bin:$PATH" ORCA_ROLES_KICKOFF="$UM/bin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_RELAUNCH="${UM_RELAUNCH:-}" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+umreset() { rm -rf "$MD" "$UM"/st.* "$UM/failcreate" "$(umgd "$1")"/orca-roles.*; : > "$UM/orca.log"; }
+umline() { jq -r "$1" "$MD/worktrees.jsonl" 2>/dev/null | tr '\n' ',' || true; }
+umev() { jq -r '[.event, .role] | join(":")' "$MD/events.jsonl" 2>/dev/null | tr '\n' ' ' || true; }
+umtask() {  # umtask <the OTEL value as JSON>: the task recorded for devgd-300 with that attribute
+  umreset "$UMA"; jq -cn --argjson v "$1" '{defaults: {env: {OTEL_RESOURCE_ATTRIBUTES: $v}}}' > "$UMA/.orca-roles.json"; uml "$UMA" >/dev/null || true; umline .task
+}
+V1="$(umtask '"task=devgd-292"')|$(umtask '"service.name=x, task=devgd-292 ,k=v"')|$(umtask '"a=1,task=first,task=second"')|$(umtask '"subtask=x"')|$(umtask '"task="')|$(umtask '"mytask=x,task_id=y"')|$(umtask 5)|$(umtask '["task=y"]')"
+rm -f "$UMA/.orca-roles.json"; umreset "$UMA"; uml "$UMA" >/dev/null || true; V2="$(umline .task)"
+check "usage metrics: task of the worktrees line = task= in defaults.env.OTEL_RESOURCE_ATTRIBUTES of the merged config (trimmed, first one wins), else the worktree folder's name (no attribute, subtask=, an empty task=, task_id=, a non-string value)" "$V1|$V2" "devgd-292,|devgd-292,|first,|devgd-300,|devgd-300,|devgd-300,|devgd-300,|devgd-300,|devgd-300,"
+umreset "$UMB"; mkdir -p "$UMB/sub"; uml "$UMB" >/dev/null || true; uml "$UMB" >/dev/null || true; uml "$UMB/sub" >/dev/null || true
+umall() { jq -r "$1" "$2" 2>/dev/null | sort -u | tr '\n' ',' || true; }
+W1="$(jq -cS 'keys' "$MD/worktrees.jsonl" 2>/dev/null | sort -u | tr -d '\n'):$(cat "$MD/worktrees.jsonl" 2>/dev/null | wc -l | tr -d ' '):$(umall .path "$MD/worktrees.jsonl"):$(umall .physical "$MD/worktrees.jsonl"):$(umall '[.project, .task] | join("/")' "$MD/worktrees.jsonl"):$(umall '.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$MD/worktrees.jsonl")"
+umreset "$UMB"; uml "$UMB" >/dev/null || true
+W2="$(jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null | tr -d '\n'):$(umev):$(umall .worktree "$MD/events.jsonl")"
+check "usage metrics: one worktrees.jsonl line per launch (3 launches, the third from a subfolder) with exactly ts, path, physical, project and task, the path being the worktree top and physical its pwd -P; the first launch also writes one launch event with exactly ts, worktree, event, role" "$W1|$W2" "[\"path\",\"physical\",\"project\",\"task\",\"ts\"]:3:$UMPB,:$UMPB,:svc/devia-251,:true,|[\"event\",\"role\",\"ts\",\"worktree\"]:launch: :$UMPB,"
+X1=""; for a in "--status" "--enable nobody" "--set settings.metrics.intervalSeconds=0" "--set settings.metrics.retentionDays=90.5"; do umreset "$UMB"; try uml "$UMB" $a; X1="$X1 $RC:$([ -e "$MD" ] && echo wrote || echo none)"; done
+umreset "$UMB"; try uml "$UMB" --set settings.metrics.intervalSeconds=0; X2="$(printf '%s\n' "$OUT" | grep -c '^ERROR: invalid configuration: settings.metrics.intervalSeconds must be an integer from 15 to 3600$'):$(grep -c 'terminal create' "$UM/orca.log" || true)"
+umreset "$UMB"; : > "$UM/failcreate"; try uml "$UMB"; X3="$RC:$([ -e "$MD" ] && echo wrote || echo none)"
+check "usage metrics: nothing is written for --status, an unknown role, an invalid settings.metrics value (the ERROR stops the launch before any tab is created) or a launch that cannot open a tab" "$X1|$X2|$X3" " 0:none 1:none 1:none 1:none|1:0|1:none"
+# events of a launch that finds the team already open: a tab gone and one detached but running; then the Planner's relauncher
+umreset "$UMB"; uml "$UMB" >/dev/null || true; rm -rf "$MD"; echo stale > "$UM/st.h-Dev"; echo orph > "$UM/st.h-Deployer"
+try uml "$UMB"; E1="$RC:$(umev)"; E1F="$(jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null | sort -u | tr '\n' ' ' || true)"
+rm -rf "$MD"; rm -f "$UM"/st.*; UM_RELAUNCH=1 try uml "$UMB"; E2="$RC:$(umev)"
+check "usage metrics: events of a launch over an open team: launch, reopened for the role whose tab is gone, detached-kept for the tab Orca flags detached while its agent runs (a launch run by the relauncher adds relaunch with the planner role); every line has exactly ts, worktree, event and role" "$E1:$E1F|$E2" '0:launch: reopened:dev detached-kept:deployer :["event","role","ts","worktree"] |0:launch: relaunch:planner '
+# dispatch.sh: its events by role (the handle's role in the worktree's orca-roles.env), with a fake orca whose checker waits are shortened
+UMG="$(umgd "$UMB")"; UMT="task_um$$"; mkdir -p "$UM/dbin"; umreset "$UMB"
+printf 'DEV=h-w\nOC=h-oc\n' > "$UMG/orca-roles.env"; echo '{"roles":{"dev":{},"oc":{"agent":"opencode"}}}' > "$UMG/orca-roles.config.json"
+cat > "$UM/dbin/orca" <<EOS
+#!/bin/sh
+case "\$1 \$2" in
+  "orchestration dispatch") cat "$UM/dispatch.json"; exit "\$(cat "$UM/dispatch.rc")";;
+  "worktree ps") n=\$(( \$(cat "$UM/pscount" 2>/dev/null || echo 0) + 1 )); echo \$n > "$UM/pscount"; mode="\$(cat "$UM/mode")"
+    if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$UM/entered" ]; }; then cat "$UM/ps.started"; else cat "$UM/ps.idle"; fi;;
+  "terminal show") cat "$UM/show.json";;
+  "terminal send") : > "$UM/entered";;
+  "orchestration send") exit 0;;
+esac
+exit 0
+EOS
+chmod +x "$UM/dbin/orca"
+printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"done","prompt":"Read the role message"}]}]}}' > "$UM/ps.idle"
+printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"working","prompt":"do %s now"}]}]}}' "$UMT" > "$UM/ps.started"
+printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$UM/dispatch.json"; echo 0 > "$UM/dispatch.rc"
+printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> [Pasted text #1 +3 lines]"}}}' > "$UM/show.pasted"; printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> idle"}}}' > "$UM/show.plain"
+umd() {  # umd <mode> <pasted|plain> <args...>: runs dispatch.sh from the worktree and waits for its checker to end (UMNOWAIT: no checker is expected)
+  local mode="$1" show="$2" n=0; shift 2
+  echo "$mode" > "$UM/mode"; cp "$UM/show.$show" "$UM/show.json"; rm -f "$UM/entered" "$UM/pscount" "$UMG/orca-roles-dispatch.log"
+  if UMDOUT="$(cd "$UMB" && HOME="$TMP/home" PATH="$UM/dbin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK=0.05 ORCA_ROLES_DISPATCH_POLLS=3 "$ROOT/bin/dispatch.sh" "$@" 2>&1)"; then UMDRC=0; else UMDRC=$?; fi
+  [ -z "${UMNOWAIT:-}" ] || return 0
+  until grep -qE 'started$|told |could not tell|not checked|no start check' "$UMG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.1; n=$((n + 1)); done
+  n=0; while pgrep -f -- "--watch $UMT" >/dev/null 2>&1 && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+}
+umdcase() { rm -rf "$MD"; umd "$@"; umev; jq -cS '[keys, .task, .worktree]' "$MD/events.jsonl" >> "$UM/fields.txt" 2>/dev/null || true; }
+: > "$UM/fields.txt"
+D1="$(umdcase early plain --task "$UMT" --to h-w)|$(umdcase enter pasted --task "$UMT" --to h-w)|$(umdcase never pasted --task "$UMT" --to h-w)|$(umdcase never plain --task "$UMT" --to h-w)"
+D2="$(umdcase early plain --task "$UMT" --to h-oc)|$(umdcase early plain --task "$UMT" --to h-zz)|$(umdcase early plain --check-only --task "$UMT" --to h-w)|$(umdcase early plain --check-only --task "$UMT" --to h-oc)"
+rm -rf "$MD"; echo 1 > "$UM/dispatch.rc"; UMNOWAIT=1 umd early plain --task "$UMT" --to h-w; D3="$([ -e "$MD" ] && echo wrote || echo none)"; echo 0 > "$UM/dispatch.rc"
+check "usage metrics: dispatch.sh events in order with the role of the handle (none for a handle that is no role): dispatch+started, dispatch+enter-resent+started, dispatch+enter-resent+not-started, dispatch+not-started, dispatch+no-check for an opencode role; --check-only writes only the outcome; a failed dispatch writes nothing; every line has exactly ts, worktree, event, role, task with the task id and the worktree's physical path" "$D1|$D2|$D3|$(sort -u "$UM/fields.txt" | tr -d '\n')" "dispatch:dev started:dev |dispatch:dev enter-resent:dev started:dev |dispatch:dev enter-resent:dev not-started:dev |dispatch:dev not-started:dev |dispatch:oc no-check:oc |dispatch: started: |started:dev |no-check:oc |none|[[\"event\",\"role\",\"task\",\"ts\",\"worktree\"],\"$UMT\",\"$UMPB\"]"
+# a failing write changes nothing in the output or the exit status of launch.sh and dispatch.sh (the metrics folder is a file, or read-only)
+umlaunch_cmp() { umreset "$UMB"; "$@"; try uml "$UMB"; printf '%s|%s' "$RC" "$(printf '%s' "$OUT" | sed 's/^== [0-9-]* [0-9:]* /== /' | cksum)"; }
+umdisp_cmp() { rm -rf "$MD"; "$@"; umd early plain --task "$UMT" --to h-w; printf '%s|%s|%s' "$UMDRC" "$(printf '%s' "$UMDOUT" | cksum)" "$(grep -c 'started$' "$UMG/orca-roles-dispatch.log" || true)"; }
+umnone() { :; }; umfile() { printf x > "$MD"; }; umro() { mkdir -p "$MD"; chmod 555 "$MD"; }
+LA="$(umlaunch_cmp umnone)"; LAW="$([ -s "$MD/events.jsonl" ] && [ -s "$MD/worktrees.jsonl" ] && echo wrote || echo none)"; LB="$(umlaunch_cmp umfile)"; LBC="$(cat "$MD" 2>/dev/null)"; LC="$(umlaunch_cmp umro)"; chmod 755 "$MD" 2>/dev/null || true
+DA="$(umdisp_cmp umnone)"; DAW="$([ -s "$MD/events.jsonl" ] && echo wrote || echo none)"; DB="$(umdisp_cmp umfile)"; DBC="$(cat "$MD" 2>/dev/null)"; DC="$(umdisp_cmp umro)"; chmod 755 "$MD" 2>/dev/null || true
+check "usage metrics: when the metrics folder cannot be written (it is a file, or read-only) launch.sh and dispatch.sh print the same output and exit with the same status as when it can, the dispatch checker still runs, and the file is left as it was" "$LAW:$([ "$LA" = "$LB" ] && [ "$LA" = "$LC" ] && echo same-launch):$LBC:$DAW:$([ "$DA" = "$DB" ] && [ "$DA" = "$DC" ] && echo same-dispatch):$DBC:${LA%%|*}:${DA%%|*}:${DA##*|}" "wrote:same-launch:x:wrote:same-dispatch:x:0:0:1"
+rm -rf "$MD"
+# settings.metrics.enabled false (in the worktree's merged configuration, in its saved copy, or in the kit's): no write from launch.sh, dispatch.sh or install.sh
+echo '{"settings":{"metrics":{"enabled":false}}}' > "$UMB/.orca-roles.json"
+umreset "$UMB"; uml "$UMB" >/dev/null || true; echo stale > "$UM/st.h-Dev"; echo orph > "$UM/st.h-Deployer"; UM_RELAUNCH=1 uml "$UMB" >/dev/null || true; Z1="$([ -e "$MD" ] && echo wrote || echo none)"
+rm -f "$UMB/.orca-roles.json" "$UM"/st.*
+umreset "$UMB"; uml "$UMB" >/dev/null || true; echo stale > "$UM/st.h-Dev"; echo orph > "$UM/st.h-Deployer"; UM_RELAUNCH=1 uml "$UMB" >/dev/null || true; Y1="$([ -s "$MD/events.jsonl" ] && [ -s "$MD/worktrees.jsonl" ] && echo wrote || echo none)"; rm -f "$UM"/st.*
+printf 'DEV=h-w\nOC=h-oc\n' > "$UMG/orca-roles.env"; jq '.roles = {"dev": {}, "oc": {"agent": "opencode"}}' "$KIT/config.json" > "$UMG/orca-roles.config.json"
+umnw() { rm -rf "$MD"; umd "$@" >/dev/null 2>&1 || true; [ -e "$MD" ] && echo wrote || echo none; }
+Y2="$(umnw early plain --task "$UMT" --to h-w)"; jq '.settings.metrics.enabled = false' "$UMG/orca-roles.config.json" > "$UM/gcfg.json"; cp "$UM/gcfg.json" "$UMG/orca-roles.config.json"
+Z2="$(umnw early plain --task "$UMT" --to h-w) $(umnw enter pasted --task "$UMT" --to h-w) $(umnw never pasted --task "$UMT" --to h-w) $(umnw never plain --task "$UMT" --to h-w) $(umnw early plain --task "$UMT" --to h-oc)"
+rm -f "$UMG/orca-roles.config.json"; cp "$KIT/config.json" "$UM/kitcfg.orig"; jq '.settings.metrics.enabled = false' "$UM/kitcfg.orig" > "$KIT/config.json"
+Z3="$(umnw early plain --task "$UMT" --to h-w) $(umnw never pasted --task "$UMT" --to h-w)"
+cp "$UM/kitcfg.orig" "$KIT/config.json"
+UH="$UM/ih"; rm -rf "$UH"; mkdir -p "$UH/.orca-roles"; printf '%s\n' "$UMPA" "$UMPB" > "$UH/.orca-roles/trusted.list"; jq '.settings.metrics.enabled = false' "$ROOT/config.default.json" > "$UH/.orca-roles/config.json"
+uminst() { if (cd "$UM" && HOME="$UH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1); then UIRC=0; else UIRC=$?; fi; }
+uminst; Z4="$UIRC:$([ -e "$UH/.orca-roles/metrics" ] && echo wrote || echo none)"
+jq '.settings.metrics.enabled = true' "$UH/.orca-roles/config.json" > "$UM/hcfg.json"; cp "$UM/hcfg.json" "$UH/.orca-roles/config.json"; uminst; Y4="$([ -e "$UH/.orca-roles/metrics/worktrees.jsonl" ] && echo wrote || echo none)"
+check "usage metrics: the same runs write with settings.metrics.enabled true or absent, and with it false nothing is written: launch.sh (also on a launch over an open team and the relauncher's), dispatch.sh (the saved copy of the worktree's configuration, and the kit's when the worktree has none; every outcome) and install.sh" "$Y1 $Y2 $Y4|$Z1|$Z2|$Z3|$Z4" "wrote wrote wrote|none|none none none none none|none none|0:none"
+# install.sh maps the worktrees of trusted.list that no launch recorded: once per physical path (idempotent), the task from the worktree's saved configuration, else the folder's name, folders that are gone skipped
+UH="$UM/ih2"; rm -rf "$UH"; mkdir -p "$UH/.orca-roles/metrics"; printf '%s\n' "$UMPA" "$UMPB" "$UM/gone" "" "$UMPA" > "$UH/.orca-roles/trusted.list"
+jq -cn --arg p "$UMPB" '{ts: "2026-01-01T00:00:00Z", path: $p, physical: $p, project: "svc", task: "kept"}' > "$UH/.orca-roles/metrics/worktrees.jsonl"
+jq '.defaults.env.OTEL_RESOURCE_ATTRIBUTES = "k=v,task=devgd-292"' "$ROOT/config.default.json" > "$(umgd "$UMA")/orca-roles.config.json"
+umi() { jq -r '[(.physical | split("/") | last), .project, .task] | join("/")' "$UH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | tr '\n' ' ' || true; }
+uminst; I1="$UIRC:$(umi)"; uminst; I2="$UIRC:$(umi)"
+rm -f "$UH/.orca-roles/metrics/worktrees.jsonl"; rm -rf "$UH/.orca-roles/metrics"; uminst; I3="$UIRC:$(umi):$(jq -cS 'keys' "$UH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort -u | tr -d '\n' || true)"
+check "usage metrics: install.sh adds a worktrees line for each folder of trusted.list not already mapped (the task from the worktree's saved configuration, else its folder name; the project; a path already present, a duplicate, a blank line and a missing folder add nothing) and a second install adds nothing" "$I1|$I2|$I3" "0:devia-251/svc/kept devgd-300/svc/devgd-292 |0:devia-251/svc/kept devgd-300/svc/devgd-292 |0:devgd-300/svc/devgd-292 devia-251/svc/devia-251 :[\"path\",\"physical\",\"project\",\"task\",\"ts\"]"
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
