@@ -195,7 +195,7 @@ merged_config() {  # $1 = project/worktree folder
   local base="$KIT/config.json" proj
   [ -f "$base" ] || base="$KIT/config.default.json"
   proj="$(project_config "${1:-.}")"
-  if [ -n "$proj" ]; then jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" "$LEGACY_JQ"' (.[0] | legacy($l) | legacy_modes($lm)) * (.[1] | legacy($l) | legacy_modes($lm))' "$base" "$proj"; else jq --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" "$LEGACY_JQ"' legacy($l) | legacy_modes($lm)' "$base"; fi
+  if [ -n "$proj" ]; then jq -s --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' (.[0] | legacy($l)) * (.[1] | legacy($l))' "$base" "$proj"; else jq --argjson l "$LEGACY_ROLES" "$LEGACY_JQ"' legacy($l)' "$base"; fi
 }
 # Path of the .orca-roles.json that applies to a folder (empty if none).  project_config <folder>
 project_config() {
@@ -230,14 +230,6 @@ setting() { jq -r --arg k "$2" --arg d "$3" '(if (.settings | type) == "object" 
 MODE_IDS="programmer pr-reviewer academic-research"
 MODES_JSON='["programmer","pr-reviewer","academic-research"]'
 MODE_LIST="programmer, pr-reviewer, academic-research"
-# Modes renamed between versions (old id → new id); the old id is accepted with a note until the version after the next tag.
-LEGACY_MODES='{"academic-writer": "academic-research"}'
-# The current id of a mode (an old id maps to its new one; anything else is unchanged), without a trailing newline.  canon_mode <id>
-canon_mode() {
-  local m
-  for m in $MODE_IDS; do [ "$m" = "$1" ] && { printf '%s' "$1"; return 0; }; done
-  jq -jn --argjson l "$LEGACY_MODES" --arg m "$1" '$l[$m] // $m'
-}
 # Why a mode id is unusable (empty output if it is fine): the match is exact against the list, so nothing like ../x or a path reaches a prompt path.
 mode_error() {  # <id>
   local m
@@ -247,15 +239,17 @@ mode_error() {  # <id>
       return 0
     fi
   done
+  [ "$1" = academic-writer ] && { echo "mode 'academic-writer' was renamed: use academic-research"; return 0; }
   echo "unknown mode '$1' (modes: $MODE_LIST)"
 }
-# The effective mode of a configuration (settings.mode, "programmer" if unset); 1 with the reason on stderr if it is invalid or unavailable.  mode_of <config>
+# The effective mode of a configuration (settings.mode, "programmer" if unset); 1 with the reason on stderr if it is invalid or unavailable.  mode_of [--saved] <config>
 mode_of() {
-  local m e
+  local m e saved=0
+  [ "${1:-}" = --saved ] && { saved=1; shift; }
   m="$(jq -j '(if has("settings") then .settings else {} end) | if type != "object" then error("settings must be an object") else (if has("mode") then .mode else "programmer" end) end | if type == "string" then . else tojson end' "$1" 2>/dev/null; rc=$?; printf x; exit $rc)" \
     || { echo "invalid settings in the configuration: settings must be an object" >&2; return 1; }
   m="${m%x}"   # the sentinel keeps a trailing newline in the id, which then fails the exact match
-  m="$(canon_mode "$m"; printf x)"; m="${m%x}"   # a configuration saved under an old mode id still reads as the new one
+  [ "$saved" = 1 ] && [ "$m" = academic-writer ] && m=academic-research   # configs saved by kits before v1.4
   e="$(mode_error "$m")"
   [ -z "$e" ] || { echo "$e" >&2; return 1; }
   printf '%s\n' "$m"
@@ -265,16 +259,16 @@ phase_of() { jq -r '(.settings // {}) | .phase // "experiment" | tostring' "$1" 
 # Enabled roles of the configuration's mode, in order; the planner always runs. A role without "modes" belongs to programmer only.
 # In academic-research a role with "phases" also needs the current phase in it; in the other modes "phases" is ignored.
 enabled_roles() {
-  local m p; m="$(mode_of "$1")" || return 1
+  local m p; m="$(mode_of --saved "$1")" || return 1
   p="$(phase_of "$1")"
-  jq -r --arg m "$m" --arg p "$p" --argjson lm "$LEGACY_MODES" '.roles | to_entries[]
-    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (map($lm[.]? // .) | index($m) != null) else false end)
+  jq -r --arg m "$m" --arg p "$p" '.roles | to_entries[]
+    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (index($m) != null) else false end)
         and ($m != "academic-research" or (.value | has("phases") | not) or (.value.phases | type == "array" and index($p) != null))))
     | .key' "$1"
 }
 # The enabled roles that can start: a worker whose prompt file for the mode is missing is skipped with a warning.  launchable_roles <config>
 launchable_roles() {
-  local id m f; m="$(mode_of "$1")" || return 1
+  local id m f; m="$(mode_of --saved "$1")" || return 1
   for id in $(enabled_roles "$1"); do
     f="$(prompt_of "$1" "$id")"
     if [ "$id" != planner ] && [ ! -f "$f" ]; then echo "Warning: role $id is skipped: it has no prompt for mode $m (expected $f)." >&2; continue; fi
@@ -314,32 +308,19 @@ var_of() {
   printf '%s\n' "${s//-/_}"
 }
 # The kit's prompts folder for the configuration's mode
-prompts_dir_of() { local m; m="$(mode_of "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
+prompts_dir_of() { local m; m="$(mode_of --saved "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
 # A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~, {kit} and {home}), or the mode's prompts/<mode>/<role>.md
 prompt_of() {
-  local m p; m="$(mode_of "$1" 2>/dev/null)" || return 1
-  p="$(jq -r --arg r "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '.roles[$r].prompt as $p
+  local m p; m="$(mode_of --saved "$1" 2>/dev/null)" || return 1
+  p="$(jq -r --arg r "$2" --arg m "$m" '.roles[$r].prompt as $p
     | if ($p | type) == "string" then (if $m == "programmer" then $p else empty end)
-      elif ($p | type) == "object" then (($p[$m] // ([$p | to_entries[] | select(($lm[.key] // .key) == $m) | .value] | first)) // empty | strings) else empty end' "$1")"
+      elif ($p | type) == "object" then ($p[$m] // empty | strings) else empty end' "$1")"
   p="$(expand_path "$p")"; echo "${p:-$KIT/prompts/$m/$2.md}"   # accepts ~, {kit} and {home}
 }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
-# Renamed modes (LEGACY_MODES) are mapped in the same places by legacy_modes, defined below with legacy.
 LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
-LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;
-def legacy_modes($lm): (if (.settings? | type) == "object" and (.settings.mode | type) == "string" then .settings.mode |= ($lm[.] // .) else . end)
-  | (if (.roles? | type) == "object" then .roles |= with_entries(if (.value | type) == "object" then
-      (if (.value.modes | type) == "array" then .value.modes |= map(if type == "string" then ($lm[.] // .) else . end) else . end)
-      | (if (.value.prompt | type) == "object" then .value.prompt |= ((to_entries | map(select($lm[.key]) | .key = $lm[.key]) | from_entries) + with_entries(select($lm[.key] | not))) else . end)
-    else . end) else . end);
-def mv_path($kp): . as $p | if type != "string" then . else
-    ([$kp[] | select(. as $k | $p | startswith($k + "roles/academic-writer/") or startswith($k + "prompts/academic-writer/"))] | first) as $k
-    | if $k == null then $p else $k + ($p[($k | length):] | sub("^(?<a>roles|prompts)/academic-writer/"; "\(.a)/academic-research/")) end end;
-def legacy_paths($kp): if (.roles? | type) == "object" then .roles |= with_entries(if (.value | type) == "object" and (.value.prompt | type) != "null" then
-      .value.prompt |= (if type == "string" then mv_path($kp) elif type == "object" then map_values(mv_path($kp)) else . end)
-    else . end) else . end;
-def kit_prefixes($kit; $home): ["{kit}/"] + (if $kit == "" then [] else [$kit + "/"] + (if $home != "" and ($kit | startswith($home + "/")) then ($kit[($home | length + 1):]) as $r | ["~/" + $r + "/", "{home}/" + $r + "/"] else [] end) end);'
+LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
 # The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
@@ -347,12 +328,8 @@ OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--he
 # ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
 # claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
-# Old mode id in the user's settings.mode, role modes, prompt keys, or prompt paths inside the kit?  config_has_old_mode <config.json>
-config_has_old_mode() {
-  jq -e --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "$KIT" --arg home "$HOME" "$LEGACY_JQ"' legacy($l) as $a | ($a | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) != $a' "$1" >/dev/null
-}
-upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, default $KIT] → stdout
-  jq -s --argjson l "$LEGACY_ROLES" --argjson lm "$LEGACY_MODES" --arg kit "${3:-${KIT:-}}" --arg home "$HOME" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l) | legacy_modes($lm) | legacy_paths(kit_prefixes($kit; $home))) as $u | ($d * $u) as $m
+upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
+  jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
@@ -379,10 +356,10 @@ overrides_from_args() {
     shift
     k="${opt#--}"
     if [ "$k" = mode ]; then
-      o="$(jq -c --arg v "$val" --argjson lm "$LEGACY_MODES" '.mode = ($lm[$v] // $v)' <<<"$o")"; explicit=1
+      o="$(jq -c --arg v "$val" '.mode = $v' <<<"$o")"; explicit=1
     elif [ "$k" = set ] && case "$val" in settings.mode=*) true;; *) false;; esac; then
       # --set settings.mode=x is the same request as --mode x (and --mode wins if both are given)
-      [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" --argjson lm "$LEGACY_MODES" '.mode = ($lm[$v] // $v)' <<<"$o")"
+      [ "$explicit" = 1 ] || o="$(jq -c --arg v "${val#*=}" '.mode = $v' <<<"$o")"
     elif [ "$k" = set ]; then
       case "$val" in *=*) ;; *) echo "ERROR: --set expects path=value (e.g. roles.dev.model=claude-opus-5-5): $val" >&2; return 1;; esac
       case "${val%%=*}" in settings|roles) echo "ERROR: --set replaces one value, not a whole object: use --set settings.<key>=value (or roles.<role>.<key>=value)" >&2; return 1;; esac
@@ -392,17 +369,6 @@ overrides_from_args() {
     fi
   done
   printf '%s\n' "$o"
-}
-# The exceptions of a file with the old mode ids mapped to the new ones (.mode and the value of a settings.mode entry of .set).  canon_overrides <overrides file> → stdout
-canon_overrides() {
-  jq -c --argjson lm "$LEGACY_MODES" '(if (.mode | type) == "string" then .mode |= ($lm[.] // .) else . end)
-    | (if (.set | type) == "array" then .set |= map(if ((.path? // null) == ["settings","mode"]) and (.value | type) == "string" then .value |= ($lm[.] // .) else . end) else . end)' "$1"
-}
-# Exit 0 if a configuration or exceptions file uses an old mode id (settings.mode, a role's modes or prompt keys, .mode, a settings.mode entry of .set); 1 if not, or the file is missing or invalid.  legacy_mode_in <json file>
-legacy_mode_in() {
-  [ -f "$1" ] || return 1
-  [ "$(jq -r --argjson lm "$LEGACY_MODES" 'try ([(.settings.mode?), (.roles[]?.modes? | arrays | .[]), (.roles[]?.prompt? | objects | keys[]), (.mode?), (.set[]? | select((.path? // null) == ["settings","mode"]) | .value)]
-    | any(.[]; type == "string" and ($lm[.] != null))) catch false' "$1" 2>/dev/null)" = true ]
 }
 # Combines a worktree's saved exceptions with the ones of the current run: the new ones add to the saved ones.  merge_overrides <saved> <new> [<previous effective mode>] → stdout
 # only: the new list if it has any, else the saved one. enable/disable: both lists, a role named in the new one leaves the other saved one.
@@ -429,11 +395,11 @@ check_overrides() {
 # --only/--enable/--disable are part of the mode. One "ERROR: ..." line per problem, nothing if it is fine.  check_config <applied config> [<overrides>]
 check_config() {
   local m out
-  out="$(jq -r --argjson ms "$MODES_JSON" --arg ml "$MODE_LIST" --argjson lm "$LEGACY_MODES" '.roles | to_entries[] | .key as $r | .value as $v
+  out="$(jq -r --argjson ms "$MODES_JSON" --arg ml "$MODE_LIST" '.roles | to_entries[] | .key as $r | .value as $v
     | (if ($v | has("modes")) then
         ($v.modes | if . == "all" then empty
           elif type == "array" and length > 0 then
-            (map(select(type != "string" or (($lm[.] // .) as $x | $ms | index($x) | not))) | if length > 0 then "ERROR: role \($r): modes has unknown mode ids (\(map(tostring) | join(", "))); modes: \($ml)" else empty end)
+            (map(select(type != "string" or (. as $x | $ms | index($x) | not))) | if length > 0 then "ERROR: role \($r): modes has unknown mode ids (\(map(tostring) | join(", "))); modes: \($ml)\(if index("academic-writer") then " (academic-writer was renamed: use academic-research)" else "" end)" else empty end)
           else "ERROR: role \($r): modes must be \"all\" or a non-empty list of mode ids (modes: \($ml))" end)
       else empty end),
       (if ($v | has("phases")) then
@@ -443,7 +409,7 @@ check_config() {
       (if ($v | has("prompt")) then
         ($v.prompt | if . == null or type == "string" then empty
           elif type == "object" then
-            (to_entries | map(select((($lm[.key] // .key) as $k | $ms | index($k) | not) or (.value | type) != "string")) | if length > 0 then "ERROR: role \($r): prompt must map mode ids to file paths (invalid: \(map(.key) | join(", ")); modes: \($ml))" else empty end)
+            (to_entries | map(select((.key as $k | $ms | index($k) | not) or (.value | type) != "string")) | if length > 0 then "ERROR: role \($r): prompt must map mode ids to file paths (invalid: \(map(.key) | join(", ")); modes: \($ml))" else empty end)
           else "ERROR: role \($r): prompt must be a path or an object {\"<mode>\": path}" end)
       else empty end)' "$1")" || { echo "ERROR: invalid configuration: roles must be objects (check ~/.orca-roles/config.json and .orca-roles.json)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
@@ -519,10 +485,10 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
-  out="$(jq -r --slurpfile o "$2" --arg m "$m" --argjson lm "$LEGACY_MODES" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
+  out="$(jq -r --slurpfile o "$2" --arg m "$m" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
     | select(. != "planner" and $R[.] != null)
     | . as $r | ($R[$r].modes // ["programmer"]) as $rm
-    | select($rm | if . == "all" then false elif type == "array" then (map($lm[.]? // .) | index($m) == null) else false end)
+    | select($rm | if . == "all" then false elif type == "array" then (index($m) == null) else false end)
     | "ERROR: role \($r) is not part of mode \($m) (its modes: \($rm | if type == "array" then join(", ") else tostring end))"' "$1")" || { echo "ERROR: could not check the exceptions against the mode"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
 }
@@ -638,7 +604,7 @@ flow_cross_check() {
     "bad "*) echo "orca-roles: settings.flow.crossCheck must be true or false (got ${v#bad }); ignoring it" >&2; return 1;;
     *) return 1;;
   esac
-  [ "$(mode_of "$1")" = programmer ] || return 1
+  [ "$(mode_of --saved "$1")" = programmer ] || return 1
   case " $2 " in *" cross-dev "*) ;; *) echo "orca-roles: settings.flow.crossCheck needs the cross-dev role enabled in this worktree; ignoring it" >&2; return 1;; esac
   if [ "$(rstr "$1" cross-dev agent)" = "$(rstr "$1" dev agent)" ] && [ "$(rstr "$1" cross-dev model)" = "$(rstr "$1" dev model)" ]; then
     echo "orca-roles: cross-dev runs the same agent and model as dev, so their mistakes will tend to match; a different model family makes the cross-check stronger" >&2
@@ -712,7 +678,7 @@ coordinator_run() {
 
 # The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang legacy_note art cap oc esc e cm cr xc
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
@@ -723,10 +689,8 @@ planner_msg() {
   extra="$(jq -r --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
     '[.roles | to_entries[] | select(.key != "planner" and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
-  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of "$cfg")."
-  [ "$(mode_of "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."
-  legacy_note="$(git_here git-dir)" && legacy_note="$legacy_note/orca-roles.legacy-note"
-  [ -n "$legacy_note" ] && [ -s "$legacy_note" ] && msg="$msg Tell the user at startup, in one line: $(cat "$legacy_note")"
+  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of --saved "$cfg")."
+  [ "$(mode_of --saved "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
@@ -736,15 +700,15 @@ planner_msg() {
   [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
   if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
-  cap=""; [ "$(mode_of "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
+  cap=""; [ "$(mode_of --saved "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
   [ -n "$cap" ] && msg="$msg Flow override: stop and check with the user when a step piles up $cap rejected rounds (this replaces the 3 in your prompt)."
   [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
   xc=""; flow_cross_check "$cfg" "$roles" && xc=1
   [ -n "$xc" ] && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
-  esc=""; if [ "$(mode_of "$cfg")" = programmer ]; then   # settings.flow.escalation (see README, Escalation): the active roles with a valid one
+  esc=""; if [ "$(mode_of --saved "$cfg")" = programmer ]; then   # settings.flow.escalation (see README, Escalation): the active roles with a valid one
     for id in $roles; do e="$(flow_escalation "$cfg" "$id" 2>/dev/null)"; [ -n "$e" ] && esc="$esc, $(title_of "$cfg" "$id") to ${e% *} after ${e#* } rejected round(s) of a step"; done
   fi
-  if [ "$(mode_of "$cfg")" = programmer ] && { flow_record_rounds "$cfg" || [ -n "$esc" ]; }; then   # settings.flow.recordRounds (see README, Round log); off = byte-identical message
+  if [ "$(mode_of --saved "$cfg")" = programmer ] && { flow_record_rounds "$cfg" || [ -n "$esc" ]; }; then   # settings.flow.recordRounds (see README, Round log); off = byte-identical message
     if [ -z "$esc" ]; then
       msg="$msg Round log: after each Dev round, once you have its verdict (the Tester's ACCEPTED or REJECTED, or the oracle's red) and before the next dispatch, run \`$(kit_env)$KIT/bin/round.sh dev --step <step> --round <n> --outcome accepted|rejected|oracle-red --task <task id>\` from the worktree (oracle-red when the oracle is red, whatever the Tester says). It only appends a line to a local file; never call it with a dispatch to Dev in flight."
     else
@@ -752,7 +716,7 @@ planner_msg() {
     fi
     [ -n "$xc" ] && msg="$msg With the cross-check on, add \`--cross agree|disagree|none\` to each of those round.sh calls: the Tester's Cross-check result for that round, none when Cross-Dev left no candidate."
   fi
-  if [ "$(mode_of "$cfg")" = programmer ] && oracle_enabled "$cfg"; then   # settings.oracle (see README, Optional oracle); off = byte-identical message
+  if [ "$(mode_of --saved "$cfg")" = programmer ] && oracle_enabled "$cfg"; then   # settings.oracle (see README, Optional oracle); off = byte-identical message
     msg="$msg Oracle: every Dev task spec gets a section \`## Acceptance command\` with a fenced block of commands from the allowlist (pytest, ruff, mypy, npm/pnpm/yarn test|lint|build|typecheck, vitest, jest, tsc, eslint, playwright test, make, go test|vet|build, cargo test|check|clippy|build, bash <file>.sh; joined only with &&, no pipes or redirections). Save each Dev spec to <your scratchDir>/spec-<task_id>.md; after each Dev worker_done, before briefing the Tester, run \`$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file> --base <the step's base ref: the previous step's last checkpoint ref, or HEAD for the first step of the set>\`: pass or pass_flaky means go on to the Tester (a non-empty runner_config_changed in its integrity goes into the Tester's brief as state); fail, a cheat, command_not_allowed, env_not_runnable or no_acceptance_command means back to Dev with the oracle's output (a rejected round). The Tester's VERDICT stays, but the oracle decides whether the step's code is accepted."
   fi
   # Orca's worker-start --terminal never sees an `opencode mini` tab as ready (its agent_readiness stage times out, seen with Orca 1.4.218):
@@ -769,7 +733,7 @@ planner_msg() {
   elif [ "$resume" = 3 ]; then
     msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
   elif [ "$resume" = 4 ]; then
-    msg="$msg WARNING: the mode was switched from $oldmode to $(mode_of "$cfg") and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in $(scratch_dir planner)/mode-switch-summary.md: read it first."
+    msg="$msg WARNING: the mode was switched from $oldmode to $(mode_of --saved "$cfg") and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in $(scratch_dir planner)/mode-switch-summary.md: read it first."
     [ -n "$(clear_command "$cfg" planner)" ] || msg="$msg Your previous conversation is still there: follow only this mode's prompt from now on."
     msg="$msg Start with the startup."
   elif [ "$resume" = 2 ]; then
@@ -799,7 +763,7 @@ planner_ask_msg() {
     esac
     list="${list:+$list; }$id ($one)"
   done
-  sug="$(mode_of "$cfg" 2>/dev/null)" || sug=programmer
+  sug="$(mode_of --saved "$cfg" 2>/dev/null)" || sug=programmer
   msg="$msg Ask the user, in one question, which mode to use: $list. Suggested: $sug."
   msg="$msg Do not start any work before the answer."
   msg="$msg When the user answers, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn: the kit opens that mode's team and sends you your role message for it."

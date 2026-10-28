@@ -89,4 +89,3 @@ These depend on how a live model applies the prompts, or on services the scripts
 | `cat .../launch.sh` counting as a launch (#19) | Accepted as harmless |
 | A NUL byte in a title (#44) | Cannot reach agent.sh through the JSON configuration |
 | The academic-research wording-only guard, the `.git` check, the suite depending on `ORCA_ROLES_CONFIG` (#40-#42) | Fixed and tested in this PR |
-| A real kit update with an academic-writer team open (#33) | The install never touches open tabs, and the old mode id of a saved team is covered by the smoke tests; the alias goes away after the next tag |

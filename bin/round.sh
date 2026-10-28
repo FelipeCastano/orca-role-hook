@@ -48,7 +48,7 @@ echo "Recorded round $ROUND of step $STEP for $TITLE ($MODEL): $OUTCOME."
 
 # Escalation. The state file holds one line per escalated role: <role> <tab> <step> <tab> <model it had before, or - when it had none>.
 TO=""; AFTER=1
-if [ "$(mode_of "$CFG")" = programmer ]; then read -r TO AFTER <<< "$(flow_escalation "$CFG" "$ID")"; fi
+if [ "$(mode_of --saved "$CFG")" = programmer ]; then read -r TO AFTER <<< "$(flow_escalation "$CFG" "$ID")"; fi
 [ -n "$TO" ] || exit 0
 escalated_from() { [ -f "$ESC" ] && awk -F'\t' -v r="$1" '$1 == r {print $3; exit}' "$ESC"; }
 FROM="$(escalated_from "$ID")"

@@ -62,8 +62,6 @@ else
   echo "Local mode: the role is saved in your installation ($TARGET_CFG)."
 fi
 
-# The note for a mode id renamed between versions.  legacy_mode_note <old id> <new id> <where it was found>
-legacy_mode_note() { echo "Note: mode '$1' is now called '$2'; the old name works until the next version. Found in: $3. Update it to $2." >&2; }
 # Whether $1 is one of the words of the list $2
 in_list() { case " $2 " in *" $1 "*) return 0;; esac; return 1; }
 # Ids that are kit files, not roles: prompts/<mode>/common-workers.md and the planner's prompt
@@ -164,14 +162,7 @@ fi
 if [ -n "$FROM_JSON" ]; then
   [ -f "$FROM_JSON" ] || { echo "$FROM_JSON does not exist" >&2; exit 1; }
   jq empty "$FROM_JSON" 2>/dev/null || { echo "$FROM_JSON is not valid JSON" >&2; exit 1; }
-  # The JSON is read through a copy with the old mode ids (modes, prompt keys) mapped to the new ones; when both the old and the new key of a prompt are present, the new one wins
-  JF="$(mktemp)"; trap 'rm -f "$JF"' EXIT
-  jq --argjson lm "$LEGACY_MODES" 'if type == "object" then
-      (if (.modes | type) == "string" then .modes |= ($lm[.] // .)
-       elif (.modes | type) == "array" then .modes |= map(if type == "string" then ($lm[.] // .) else . end) else . end)
-      | (if (.prompt | type) == "object" then .prompt |= ((to_entries | map(select($lm[.key]) | .key = $lm[.key]) | from_entries) + with_entries(select($lm[.key] | not))) else . end)
-    else . end' "$FROM_JSON" > "$JF"
-  [ "$(jq -n --slurpfile a "$FROM_JSON" --slurpfile b "$JF" '$a == $b')" = true ] || legacy_mode_note academic-writer academic-research "$FROM_JSON"
+  JF="$FROM_JSON"
   J() { jq -r --arg k "$1" '.[$k] // empty | if type == "string" then . else tojson end' "$JF"; }
   ID="$(J id)"; DESC="$(J description)"
   [[ "$ID" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "Invalid id (lowercase and hyphens): '$ID'" >&2; exit 1; }
@@ -269,9 +260,7 @@ case "$MSEL" in
   2)
     i=0; for m in $MODE_IDS; do i=$((i+1)); if mode_unavailable "$m"; then echo "  $i) $m (not available yet)"; else echo "  $i) $m"; fi; done
     ask MPICK "Mode (number)" "1"
-    MPICK_C="$(canon_mode "$MPICK")"
-    [ "$MPICK_C" = "$MPICK" ] || legacy_mode_note "$MPICK" "$MPICK_C" "the mode typed"
-    NEW_MODES=""; i=0; for m in $MODE_IDS; do i=$((i+1)); if [ "$MPICK" = "$i" ] || [ "$MPICK_C" = "$m" ]; then NEW_MODES="$m"; fi; done
+    NEW_MODES=""; i=0; for m in $MODE_IDS; do i=$((i+1)); if [ "$MPICK" = "$i" ] || [ "$MPICK" = "$m" ]; then NEW_MODES="$m"; fi; done
     [ -n "$NEW_MODES" ] || { echo "Invalid mode" >&2; exit 1; }
     MODES_FIELD="[\"$NEW_MODES\"]";;
   *) echo "Invalid option" >&2; exit 1;;

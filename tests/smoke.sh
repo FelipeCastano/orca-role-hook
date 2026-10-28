@@ -759,8 +759,7 @@ check "var_of: ids, edges and non-ids map as tr did" "$(var_of dev):$(var_of e2e
 check "var_of: ends with one newline and never swallows an echo option" "$(var_of dev | od -An -c | tr -d ' '):$(var_of -n):$(var_of -e)" 'DEV\n:_N:_E'
 check "lower_ascii: A-Z only, no trailing newline, specials and non-ASCII untouched" "$(lower_ascii Claude):$(lower_ascii OPENCODE):$(lower_ascii 'Researcher (Claude)'):$(lower_ascii a1-B2_C3):[$(lower_ascii '')]:$(lower_ascii ÉX):$(lower_ascii 'A&B*[Q]\Z'):$(lower_ascii ABCDEFGHIJKLMNOPQRSTUVWXYZ)" 'claude:opencode:researcher (claude):a1-b2_c3:[]:Éx:a&b*[q]\z:abcdefghijklmnopqrstuvwxyz'
 NS="$TMP/nospawn"; mkdir -p "$NS/bin"; for c in tr jq cut; do printf '#!/bin/sh\necho %s >> "%s/spawned"\nexit 1\n' "$c" "$NS" > "$NS/bin/$c"; chmod +x "$NS/bin/$c"; done
-check "var_of, lower_ascii and canon_mode of a known mode start no tr, cut or jq" "$(PATH="$NS/bin:$PATH" bash -c 'source "$1/bin/lib.sh"; var_of a-b; lower_ascii AbC; canon_mode programmer; canon_mode pr-reviewer; canon_mode academic-research' _ "$ROOT" >/dev/null 2>&1; cat "$NS/spawned" 2>/dev/null | wc -l | tr -d ' ')" "0"
-check "canon_mode: known modes unchanged, legacy id mapped, unknown unchanged" "$(canon_mode programmer):$(canon_mode pr-reviewer):$(canon_mode academic-research):$(canon_mode academic-writer):$(canon_mode foo):[$(canon_mode '')]" "programmer:pr-reviewer:academic-research:academic-research:foo:[]"
+check "var_of and lower_ascii start no tr, cut or jq" "$(PATH="$NS/bin:$PATH" bash -c 'source "$1/bin/lib.sh"; var_of a-b; lower_ascii AbC' _ "$ROOT" >/dev/null 2>&1; cat "$NS/spawned" 2>/dev/null | wc -l | tr -d ' ')" "0"
 # Renamed role: visual-tester → e2e-tester, keeping the user's settings and position
 printf '{"roles":{"dev":{},"visual-tester":{"title":"Visual-Tester","enabled":false},"deployer":{}}}' > "$TMP/legacy.json"
 check "upgrade_config renames visual-tester" "$(upgrade_config "$ROOT/config.default.json" "$TMP/legacy.json" | jq -c '[(.roles | keys_unsorted | .[0:3]), .roles["e2e-tester"].title, .roles["e2e-tester"].enabled, (.roles | has("visual-tester"))]')" '[["dev","e2e-tester","deployer"],"E2E-Tester",false,false]'
@@ -2105,36 +2104,6 @@ yfor local-only "npm i"; M="$(cd "$Y2" && env -u ORCA_CLI_COMMAND PATH="$FB:/usr
 check "roles-yaml: ROLES_YAML_RESULT skipped:local-only-policy" "$M" "ROLES_YAML_RESULT=skipped:local-only-policy"
 yfor local-only "$KITL"; check "roles-yaml: ROLES_YAML_RESULT skipped:local-script, exit 0" "$RC:$(printf '%s\n' "$OUT" | tail -n 1)" "0:ROLES_YAML_RESULT=skipped:local-script"
 check "roles-yaml --check and --remove print no result line" "$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --check 2>&1 | grep -c ROLES_YAML_RESULT || true)$(cd "$YS" && PATH="$TMP/yoff:$PATH" "$ROOT/bin/orca-yaml.sh" --remove 2>&1 | grep -c ROLES_YAML_RESULT || true)" "00"
-# the old mode id (academic-writer) is an alias of academic-research in roles-yaml (single project, --all, --dry-run); --check and --remove stay as they were
-YN="$TMP/yalias"; rm -rf "$YN"; mkdir -p "$YN/bin" "$YN/show"; cp "$YA/bin/orca" "$YN/bin/orca"
-for n in k1 k2 k3 fo tr one; do mkdir -p "$YN/$n"; git -C "$YN/$n" init -q; git -C "$YN/$n" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; done
-ynsingle() { (cd "$YN/$1" && shift && PATH="$YN/bin:$PATH" FAKE_LIST="$YN/list.json" FAKE_SHOW="$YN/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>"$YN/err" || true); }
-ynall() { try env PATH="$YN/bin:$PATH" FAKE_LIST="$YN/list.json" FAKE_SHOW="$YN/show" "$ROOT/bin/orca-yaml.sh" "$@" 2>"$YN/err"; }
-ynold() { sed 's/--mode academic-research/--mode academic-writer/' "$YN/$1/orca.yaml" > "$YN/t.yaml"; cat "$YN/t.yaml" > "$YN/$1/orca.yaml"; }
-ynmode() { sed -n 's/^.*launch\.sh//p' "$YN/$1/orca.yaml" | tr -d ' '; }
-ynhash() { (cd "$YN" && find . -type f -not -path './bin/*' -not -path './show/*' -not -name err -not -name t.yaml -not -name list.json | LC_ALL=C sort | xargs shasum) | shasum; }
-jq -nc --arg d "$YN" '{ok:true,result:{repos:(["k1","k2","k3","fo","tr"] | map({displayName:., path:($d + "/" + .), kind:"git"}))}}' > "$YN/list.json"
-NOTE_AW="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: --mode. Update it to academic-research."
-# single project: --mode academic-writer writes the new id, one note, same result line; --dry-run writes nothing
-OUT1="$(ynsingle one --mode academic-writer)"; E1="$(cat "$YN/err")"
-check "roles-yaml alias: --mode academic-writer writes academic-research and prints one note on stderr; the result line is the one of the new id" "$(printf '%s' "$OUT1" | tail -n 1):$(ynmode one):$(printf '%s\n' "$E1" | grep -c '^Note:'):$([ "$E1" = "$NOTE_AW" ] && echo exact)" "ROLES_YAML_RESULT=created:--modeacademic-research:1:exact"
-rm -f "$YN/one/orca.yaml" "$YN/one/.worktreeinclude"; : > "$YN/one/.git/info/exclude"; H0="$(ynhash)"
-OLDD="$(ynsingle one --mode academic-writer --dry-run)"; NEWD="$(ynsingle one --mode academic-research --dry-run)"
-check "roles-yaml alias: --mode academic-writer --dry-run prints what the new id prints and writes nothing" "$([ "$OLDD" = "$NEWD" ] && echo same):$([ "$(ynhash)" = "$H0" ] && echo unchanged):$(ls -A "$YN/one" | tr '\n' ' ')" "same:unchanged:.git "
-# --all: kit orca.yaml files with the old id are renamed (dry run: announced only); the repair path, a tracked file and someone else's file
-for n in k1 k2 k3; do ynsingle "$n" --mode academic-research >/dev/null; ynold "$n"; done
-rm -f "$YN/k2/.worktreeinclude"; printf 'scripts:\n  setup: echo academic-writer\n' > "$YN/fo/orca.yaml"
-ynsingle tr --mode academic-research >/dev/null; ynold tr; git -C "$YN/tr" add -f orca.yaml; git -C "$YN/tr" -c user.name=t -c user.email=t@t commit -q -m yaml
-printf '{"ok":true,"result":{"repo":{"hookSettings":{"commandSourcePolicy":"local-only","scripts":{"setup":"npm i"}}}}}' > "$YN/show/k3"
-H1="$(ynhash)"; ynall --all --dry-run; DR="$RC:$(printf '%s\n' "$OUT" | grep -c '^k[123] (.*): would update (mode renamed to academic-research)$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(grep -c '^Note:' "$YN/err" || true):$([ "$(ynhash)" = "$H1" ] && echo unchanged || echo CHANGED)"
-ynall --all; AL="$RC:$(printf '%s\n' "$OUT" | grep -c '^k[12] (.*): updated (mode renamed to academic-research)$'):$(printf '%s\n' "$OUT" | grep -c '^k3 (.*): skipped: local-only-policy$'):$(printf '%s\n' "$OUT" | grep '^Summary'):$(ynmode k1)/$(ynmode k2)/$(ynmode k3):$(grep -cx orca.yaml "$YN/k2/.worktreeinclude"):$(ynmode tr):$(tr -d ' \n' < "$YN/fo/orca.yaml")"
-check "roles-yaml alias: --all --dry-run announces the rename of the kit's old lines and writes nothing; --all renames them (repairing k2) and reports a child that skips (local-only policy) as skipped; a tracked kit file and someone else's file are not touched" "$DR|$AL" "0:3:Summary: 0 created, 3 updated, 0 unchanged, 2 skipped, 0 errors:0:unchanged|0:2:1:Summary: 0 created, 2 updated, 0 unchanged, 3 skipped, 0 errors:--modeacademic-research/--modeacademic-research/--modeacademic-writer:1:--modeacademic-writer:scripts:setup:echoacademic-writer"
-# --all --mode academic-writer: one note, every project gets the new id; --check and --remove print what they printed and need no mode
-ynold k1; ynold k2; H2="$(ynhash)"; ynall --all --mode academic-writer --dry-run; D2="$RC:$(grep -c '^Note:' "$YN/err" || true):$(printf '%s\n' "$OUT" | grep -c 'would update to mode academic-research'):$([ "$(ynhash)" = "$H2" ] && echo unchanged || echo CHANGED)"
-ynall --all --mode academic-writer; A2="$RC:$(grep -c '^Note:' "$YN/err" || true):$(printf '%s\n' "$OUT" | grep -c ': updated to mode academic-research$'):$(ynmode k1)/$(ynmode k2)"
-check "roles-yaml alias: --all --mode academic-writer (also --dry-run) prints the note once and writes the new id in every project" "$D2|$A2" "0:1:2:unchanged|0:1:2:--modeacademic-research/--modeacademic-research"
-ynold k1; CK1="$(ynsingle k1 --check)"; CKE="$(cat "$YN/err")"; ynsingle k1 --mode academic-research >/dev/null; CK2="$(ynsingle k1 --check)"; ynsingle k1 --remove >/dev/null; RME="$(cat "$YN/err")"
-check "roles-yaml alias: --check prints the same with the old line as with the new one and no note, --remove no note and removes the file" "$([ "$CK1" = "$CK2" ] && echo same):$CKE:$RME:$([ -e "$YN/k1/orca.yaml" ] && echo left)" "same:::"
 }
 
 sec_launch_overrides() {
@@ -3067,6 +3036,12 @@ for v in false null 5 '["programmer"]' '"programmer\n"' '""'; do
   try env KIT="$PK" bash -c '. "$KIT/bin/lib.sh"; mode_of "$1" 2>/dev/null' _ "$TMP/m-bad.json"; check "mode_of rejects settings.mode $v" "$RC" "1"
 done
 jq 'del(.settings.mode)' "$MC" > "$TMP/m-nokey.json"; check "mode_of: missing settings.mode = programmer" "$(KIT="$PK" mode_of "$TMP/m-nokey.json")" "programmer"
+# the old mode id academic-writer is gone: the renamed error for the user's own settings, mapped silently only for a config the kit saved (mode_of --saved)
+jq '.settings.mode = "academic-writer"' "$MC" > "$TMP/m-w.json"; jq '.settings.mode = "academic-research"' "$MC" > "$TMP/m-r.json"; jq '.roles.dev.modes = ["programmer", "academic-writer"]' "$MC" > "$TMP/m-wr.json"
+try env KIT="$PK" bash -c '. "$KIT/bin/lib.sh"; mode_of "$1" 2>&1' _ "$TMP/m-w.json"; RN1="$OUT
+rc=$RC"; RN2="$(KIT="$PK" mode_of --saved "$TMP/m-w.json" 2>&1 || true)"; RN3="$(KIT="$PK" mode_of "$TMP/m-r.json" 2>&1 || true)"
+check "academic-writer is gone: mode_error and mode_of give the renamed message and exit 1 (the user's config.json, .orca-roles.json or --mode); mode_of --saved reads a saved config as academic-research (the same answer as for the new id); check_config names the rename for settings.mode and for a role's modes list" "$(KIT="$PK" mode_error academic-writer)|$RN1|$([ "$RN2" = "$RN3" ] && echo saved-same)|$(KIT="$PK" check_config "$TMP/m-w.json" | grep -c "mode 'academic-writer' was renamed: use academic-research" || true)|$(KIT="$PK" check_config "$TMP/m-wr.json" | grep -c 'modes has unknown mode ids (academic-writer).*(academic-writer was renamed: use academic-research)' || true)" "mode 'academic-writer' was renamed: use academic-research|mode 'academic-writer' was renamed: use academic-research
+rc=1|saved-same|1|1"
 # an open team blocks a mode change
 ml --reset >/dev/null; : > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
 try ml --mode pr-reviewer; check "open team: a mode change is rejected, nothing changes" "$RC:$(mcreates):$(mstate):$(mmode)" "1:$N:$B:programmer"
@@ -3391,24 +3366,6 @@ try nrm common-workers; check "modes: --remove common-workers without a local ro
 # --help prints the header comment only
 HELP="$(cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --help 2>&1)"; HRC=$?
 check "new-role --help: exit 0, first and last header lines, only comment lines" "$HRC:$(printf '%s\n' "$HELP" | head -1 | grep -c '^# Wizard to create a new role'):$(printf '%s\n' "$HELP" | tail -1 | grep -c '^#     Each mode has its own prompt file'):$(printf '%s\n' "$HELP" | grep -vc '^#')" "0:1:1:0"
-# the old mode id (academic-writer) is an alias of academic-research: same result as the new id plus one note, and nothing is written or deleted under the old name
-AWN="Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version."
-mkdir -p "$PK/roles/academic-research"; echo live > "$PK/roles/academic-research/ali-keep.md"; ln -sfn academic-research "$PK/roles/academic-writer"
-printf '%s' '{"id":"ali","description":"d","modes":"academic-writer","phases":["writing"],"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "alias from-json: modes academic-writer (and phases) is saved as academic-research, one note naming the JSON file, prompt only in the new folder" "$RC:$(jq -c '.roles.ali | [.modes, .phases, (.prompt | keys)]' "$NRC"):$(printf '%s\n' "$OUT" | grep -c "^$AWN Found in: $TMP/nj.json. Update it to academic-research.\$"):$(ls "$PK/roles/academic-research/ali.md" 2>/dev/null | wc -l | tr -d ' ')" '0:[["academic-research"],["writing"],["academic-research"]]:1:1'
-printf '%s' '{"id":"ali","description":"d","modes":"academic-writer","overwrite":true,"prompt":"# a2\n## Report\n"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "alias from-json: overwriting a role that stays in academic-research keeps its prompt, though the old folder name is a symlink to the new one" "$RC:$(head -n1 "$PK/roles/academic-research/ali.md"):$(cat "$PK/roles/academic-research/ali-keep.md")" "0:# a2:live"
-rm -f "$PK/roles/academic-writer" "$PK/roles/academic-research/ali-keep.md"
-printf '%s' '{"id":"alp","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# old\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; R1="$RC:$(head -n1 "$PK/roles/academic-research/alp.md"):$(printf '%s\n' "$OUT" | grep -c '^Note: mode .academic-writer.'):$([ -e "$PK/roles/academic-writer" ] && echo oldfolder || true)"
-printf '%s' '{"id":"alq","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-writer":"# old\n## Report\n","academic-research":"# new\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; R2="$RC:$(head -n1 "$PK/roles/academic-research/alq.md"):$(jq -c '.roles.alq.prompt | keys' "$NRC")"
-printf '%s' '{"id":"aln","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# new\n## Report\n"}}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; R3="$RC:$(printf '%s\n' "$OUT" | grep -c 'Note: mode .academic-writer' || true)"
-check "alias from-json: a prompt keyed by the old id is written for academic-research (one note, no old folder); with both keys the new one wins; no old id, no note" "$R1|$R2|$R3" '0:# old:1:|0:# new:["academic-research","pr-reviewer","programmer"]|0:0'
-printf '%s' '{"id":"alb","description":"d","modes":"pr-reviewer","phases":["writing"],"prompt":"# a\n## Report\n"}' > "$TMP/nj.json"; S5="$(snap)"
-try nrj "$TMP/nj.json"; check "alias from-json: phases outside academic-research says academic-research and writes nothing" "$RC:$(printf '%s\n' "$OUT" | grep -c '^phases is only for mode academic-research (the other modes have no phases)$'):$([ "$(snap)" = "$S5" ] && echo unchanged)" "1:1:unchanged"
-nrw_ph al-wiz 2 academic-writer 1; check "alias wizard: typing academic-writer as the mode saves academic-research, prints one note and asks the phases" "$RC:$(jq -c '.roles["al-wiz"] | [.modes, .phases]' "$NRC"):$(printf '%s\n' "$OUT" | grep -c "^$AWN Found in: the mode typed. Update it to academic-research.\$"):$(printf '%s\n' "$OUT" | grep -c 'Phases (academic-research)')" '0:[["academic-research"],["experiment"]]:1:1'
 rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy is shared with other sections
 }
 
@@ -5410,46 +5367,11 @@ check "fetch_superpowers: without git only a warning (install exits 0, no folder
 }
 
 sec_install_migration() {
-# install.sh migrates the renamed mode academic-writer: config, prompt paths, roles folder and the compatibility links
-MH="$TMP/mig-home"; MK="$MH/.orca-roles"; rm -rf "$MH"; mkdir -p "$MK"
-mrun() { if MOUT="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC=0; else MRC=$?; fi; MREN="$(printf '%s\n' "$MOUT" | grep -c '^Renamed mode academic-writer to academic-research in your configuration ' || true)"; MMOV="$(printf '%s\n' "$MOUT" | grep -c '^Moved your academic-writer roles' || true)"; MWARN="$(printf '%s\n' "$MOUT" | grep -c '^WARNING: .*was not moved' || true)"; }
-mstate() { ( cd "$MK" && { shasum config.json; find roles -print 2>/dev/null | sort | xargs -I{} sh -c 'if [ -L "{}" ]; then echo "{} -> $(readlink "{}")"; else echo "{}"; fi'; find roles -type f 2>/dev/null | sort | xargs shasum 2>/dev/null; } | shasum ); }
-cat > "$MK/config.json" <<J
-{ "settings": { "mode": "academic-writer", "phase": "writing" }, "roles": {
-    "zeta": { "title": "Zeta", "modes": ["academic-writer", "programmer"], "prompt": { "academic-writer": "{kit}/roles/academic-writer/z.md", "programmer": "{kit}/roles/zeta-p.md" } },
-    "k1": { "title": "K1", "prompt": "$MK/roles/academic-writer/a.md" },
-    "k2": { "title": "K2", "prompt": "~/.orca-roles/prompts/academic-writer/b.md" },
-    "k3": { "title": "K3", "prompt": "{home}/.orca-roles/roles/academic-writer/sub/c.md" },
-    "k4": { "title": "K4", "prompt": "~/notes/roles/academic-writer/x.md" },
-    "k5": { "title": "K5", "prompt": "{kit}/roles/academic-writer-extra/x.md" },
-    "k6": { "title": "K6", "prompt": "{kit}/roles/foo/roles/academic-writer/x.md" },
-    "k7": { "title": "K7", "prompt": "/data/prompts/academic-writer/x.md" } } }
-J
-mkdir -p "$MK/roles/academic-writer/sub"; echo A > "$MK/roles/academic-writer/a.md"; echo H > "$MK/roles/academic-writer/.hid"; echo C > "$MK/roles/academic-writer/sub/c.md"
-mrun
-MR1="$MRC:$MREN"
-check "install migration: exit 0 and the Renamed line once; settings.mode, role modes and prompt key renamed, phase kept" "$MR1:$(jq -c '[.settings.mode, .settings.phase, .roles.zeta.modes, (.roles.zeta.prompt | keys)]' "$MK/config.json")" '0:1:["academic-research","writing",["academic-research","programmer"],["academic-research","programmer"]]'
-check "install migration: prompt paths in the four prefix forms are rewritten, only that segment" "$(jq -r '[.roles.zeta.prompt["academic-research"], .roles.k1.prompt, .roles.k2.prompt, .roles.k3.prompt] | join(" ")' "$MK/config.json")" "{kit}/roles/academic-research/z.md $MK/roles/academic-research/a.md ~/.orca-roles/prompts/academic-research/b.md {home}/.orca-roles/roles/academic-research/sub/c.md"
-# shellcheck disable=SC2088
-check "install migration: paths outside the kit or not at the folder boundary are untouched, role order kept" "$(jq -r '[.roles.k4.prompt, .roles.k5.prompt, .roles.k6.prompt, .roles.k7.prompt] | join(" ")' "$MK/config.json"):$(jq -r '.roles | keys_unsorted | .[0:3] | join(",")' "$MK/config.json")" "~/notes/roles/academic-writer/x.md {kit}/roles/academic-writer-extra/x.md {kit}/roles/foo/roles/academic-writer/x.md /data/prompts/academic-writer/x.md:zeta,k1,k2"
-check "install migration: the user's roles move (hidden and nested included), the old path is a relative link, Moved line once" "$MMOV:$(readlink "$MK/roles/academic-writer"):$(cat "$MK/roles/academic-research/a.md" "$MK/roles/academic-research/.hid" "$MK/roles/academic-research/sub/c.md" | tr '\n' ' '):$(cat "$MK/roles/academic-writer/a.md")" "1:academic-research:A H C :A"
-check "install migration: prompts/academic-writer is a relative link to prompts/academic-research and resolves" "$(readlink "$MK/prompts/academic-writer"):$(cmp -s "$MK/prompts/academic-writer/planner.md" "$ROOT/prompts/academic-research/planner.md" && echo same)" "academic-research:same"
-S1="$(mstate)"; mrun
-check "install migration: a second install prints none of the migration lines and changes nothing" "$MRC:$MREN:$MMOV:$MWARN:$([ "$(mstate)" = "$S1" ] && echo same)" "0:0:0:0:same"
-# a conflict keeps both, warns per entry, leaves the old folder without a link; once merged by hand the next install links it
-rm -rf "$MK/roles"; mkdir -p "$MK/roles/academic-writer" "$MK/roles/academic-research"; echo OLD > "$MK/roles/academic-writer/a.md"; echo NEW > "$MK/roles/academic-research/a.md"; echo B > "$MK/roles/academic-writer/b.md"; echo OLD2 > "$MK/roles/academic-writer/.h"; echo NEW2 > "$MK/roles/academic-research/.h"
-mrun
-check "install migration conflict: both versions kept, one WARNING per kept entry naming both paths, Moved for the rest, no link" "$MMOV:$MWARN:$(cat "$MK/roles/academic-writer/a.md" "$MK/roles/academic-research/a.md" "$MK/roles/academic-writer/.h" "$MK/roles/academic-research/.h" | tr '\n' ' '):$(cat "$MK/roles/academic-research/b.md"):$([ -L "$MK/roles/academic-writer" ] && echo link || echo dir):$(ls -A "$MK/roles/academic-writer" | tr '\n' ' '):$(printf '%s\n' "$MOUT" | grep -c "^WARNING: $MK/roles/academic-writer/a.md was not moved: $MK/roles/academic-research/a.md already exists. Any prompt path in your configuration that named the old file now names the new one. Merge them by hand, then run install.sh again.$")" "1:2:OLD NEW OLD2 NEW2 :B:dir:.h a.md :1"
-rm -f "$MK/roles/academic-writer/a.md" "$MK/roles/academic-writer/.h"; mrun
-check "install migration conflict: after the manual merge the next install links the old path, no warning" "$MRC:$MWARN:$(readlink "$MK/roles/academic-writer")" "0:0:academic-research"
-# a link to somewhere else is replaced, a user without the old mode sees no change and no new output
-rm -rf "$MK/roles"; mkdir -p "$MK/roles/elsewhere"; ln -s elsewhere "$MK/roles/academic-writer"; mrun
-check "install migration: an old link pointing elsewhere is replaced by the right one, the folder it pointed to is untouched" "$(readlink "$MK/roles/academic-writer"):$([ -d "$MK/roles/elsewhere" ] && echo kept)" "academic-research:kept"
-rm -rf "$MK/roles"; cat > "$MK/config.json" <<J
-{ "settings": { "mode": "programmer" }, "roles": { "foo": { "title": "Foo", "prompt": "{kit}/roles/foo.md" }, "k": { "title": "K", "prompt": "~/notes/roles/academic-writer/x.md" } } }
-J
-mrun; B1="$(shasum < "$MK/config.json")"; mrun
-check "install migration: without the old mode nothing is printed, no roles folder or link appears, config stable" "$MRC:$MREN:$MMOV:$MWARN:$([ -e "$MK/roles/academic-writer" ] || [ -L "$MK/roles/academic-writer" ] || [ -e "$MK/roles/academic-research" ] && echo present || echo none):$([ "$(shasum < "$MK/config.json")" = "$B1" ] && echo same):$(jq -r '.roles.foo.prompt, .roles.k.prompt' "$MK/config.json" | tr '\n' ' ')" "0:0:0:0:none:same:{kit}/roles/foo.md ~/notes/roles/academic-writer/x.md "
+# the academic-writer alias is gone: install.sh keeps the mode id the user wrote (the renamed message is shown), links nothing and moves no roles folder
+MH="$TMP/mig-home"; MK="$MH/.orca-roles"; rm -rf "$MH"; mkdir -p "$MK/roles/academic-writer"; echo A > "$MK/roles/academic-writer/a.md"
+printf '%s' '{ "settings": { "mode": "academic-writer" }, "roles": {} }' > "$MK/config.json"
+if MOUT="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC=0; else MRC=$?; fi
+check "install: a config that still says academic-writer keeps it (exit 0, the renamed message shown, no 'Renamed mode' line), prompts/academic-writer is not linked and the user's roles/academic-writer is left where it is" "$MRC:$(jq -r .settings.mode "$MK/config.json"):$(printf '%s\n' "$MOUT" | grep -c "^mode 'academic-writer' was renamed: use academic-research\$" || true):$(printf '%s\n' "$MOUT" | grep -c '^Renamed mode' || true):$([ -e "$MK/prompts/academic-writer" ] || [ -L "$MK/prompts/academic-writer" ] && echo linked || echo nolink):$([ -d "$MK/roles/academic-writer" ] && [ ! -L "$MK/roles/academic-writer" ] && cat "$MK/roles/academic-writer/a.md")" "0:academic-writer:1:0:nolink:A"
 }
 
 sec_install() {
@@ -7083,47 +7005,14 @@ touch "$TMP/aw-alive"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" "$PKL/bin/close-role.sh" nop 2>&1) > "$TMP/aw-h1.out"
 (cd "$AM" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_PHASE_SWITCH=1 "$PKL/bin/close-role.sh" both 2>&1) > "$TMP/aw-h2.out"
 check "phase.sh refuses outside academic-research; close-role.sh prints the hint except during a phase switch" "$PR_RC:$(grep -c 'still enabled in the configuration' "$TMP/aw-h1.out"):$(grep -c 'tab closed' "$TMP/aw-h2.out"):$(grep -c 'still enabled' "$TMP/aw-h2.out")" "1:phase.sh: only for mode academic-research (this worktree: programmer):1:1:0"
-# the renamed mode keeps its old id as an alias: old ids in persisted state read as the new mode, with a note; the saved state moves to the new id only when a launch succeeds
+# a worktree configuration saved by a kit that still wrote the old mode id is read as academic-research (mode_of --saved)
 LC="$TMP/aw-lc"; mkdir -p "$LC"
-jq -c '.settings.mode="academic-writer" | .roles.exp.modes=["academic-writer"] | .roles.wr.prompt={"academic-writer":"/old/wr.md"} | .roles.both.prompt={"academic-writer":"/old/both.md","academic-research":"/new/both.md"}' "$AC" > "$LC/old.json"
-jq -c '.roles.exp.modes=["academic-wirter"]' "$AC" > "$LC/typo.json"
-mkdir -p "$LC/proj"; git -C "$LC/proj" init -q; printf '%s' '{"settings":{"mode":"academic-writer"},"roles":{"both":{"modes":["academic-writer","programmer"],"prompt":{"academic-writer":"/old/both.md","academic-research":"/new/both.md"}},"wr":{"prompt":{"academic-writer":"/old/wr.md"}}}}' > "$LC/proj/.orca-roles.json"
-LM="$(cd "$LC/proj" && KIT="$PK" merged_config . | jq -c '[.settings.mode, .roles.both.modes, .roles.both.prompt, .roles.wr.prompt]')"
-check "legacy id: a config saved under the old mode id reads as academic-research (mode, roles, prompt keys; merged with a project config the new key wins) and the library accepts it; a typo is still rejected" "$(KIT="$PK" mode_of "$LC/old.json"):$(KIT="$PK" enabled_roles "$LC/old.json" | tr '\n' ' '):$(KIT="$PK" prompt_of "$LC/old.json" wr):$(KIT="$PK" prompt_of "$LC/old.json" both):[$(KIT="$PK" check_config "$LC/old.json")]:$(KIT="$PK" check_config "$LC/typo.json" | grep -c 'unknown mode ids'):$(canon_mode academic-writer)|$(canon_mode Academic-Writer)|$(canon_mode academic-research):$LM" "academic-research:planner exp both nop :/old/wr.md:/new/both.md:[]:1:academic-research|Academic-Writer|academic-research:[\"academic-research\",[\"academic-research\",\"programmer\"],{\"academic-research\":\"/new/both.md\"},{\"academic-research\":\"/old/wr.md\"}]"
-LY=""; i=0; for j in '{"settings":{"mode":"academic-writer"}}' '{"roles":{"x":{"modes":["programmer","academic-writer"]}}}' '{"roles":{"x":{"prompt":{"academic-writer":"p"}}}}' '{"mode":"academic-writer"}' '{"set":[{"path":["settings","mode"],"value":"academic-writer"}]}' '{"settings":{"mode":"academic-research"},"roles":{"x":{"modes":["academic-research"],"prompt":{"academic-research":"p"}}},"mode":"pr-reviewer","set":[{"path":["roles","x","model"],"value":"academic-writer"}]}' '{"roles":{"x":{"modes":"all"}}}' garbage; do
-  i=$((i + 1)); printf '%s' "$j" > "$LC/ly$i.json"; if legacy_mode_in "$LC/ly$i.json"; then LY="${LY}y"; else LY="${LY}n"; fi
-done
-if legacy_mode_in "$LC/missing.json"; then LY="${LY}y"; else LY="${LY}n"; fi
-check "legacy id: legacy_mode_in finds the old id in settings.mode, a role's modes, a prompt key, .mode and a settings.mode entry of .set, and nothing else (missing or invalid file: no)" "$LY" "yyyyynnnn"
-printf '%s' '{"only":["a"],"set":[{"path":["settings","mode"],"value":"academic-writer"},{"path":["roles","x","model"],"value":"academic-writer"}],"mode":"academic-writer"}' > "$LC/ov.json"
-check "legacy id: --mode, --mode=, --set settings.mode= and --set=settings.mode= are stored as academic-research; canon_overrides maps .mode and the settings.mode entry of .set only" "$(for a in "--mode academic-writer" "--mode=academic-writer" "--set settings.mode=academic-writer" "--set=settings.mode=academic-writer" "--mode Academic-Writer"; do overrides_from_args $a | jq -r .mode; done | tr '\n' ' ')$(canon_overrides "$LC/ov.json" | jq -c '[.mode, .set[0].value, .set[1].value, .only]')" "academic-research academic-research academic-research academic-research Academic-Writer [\"academic-research\",\"academic-research\",\"academic-writer\",[\"a\"]]"
-# launch under the old id
 LG="$TMP/aw-leg"; mkdir -p "$LG"; git -C "$LG" init -q -b main; LGG="$LG/.git"
 aln() { (cd "$LG" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" "$@" 2>&1); }
-lgh() { cut -d= -f1 "$LGG/orca-roles.env" 2>/dev/null | tr '\n' ' '; }
-lgmsg() { (cd "$LG" && KIT="$PK" planner_msg "$LGG/orca-roles.config.json" "planner exp" "$LGG/orca-roles.env" "" "" 0); }
-rm -f "$TMP/aw-alive"; printf '{ "settings": { "mode": "academic-writer" } }' > "$LG/.orca-roles.json"
-try aln --mode academic-writer
-check "legacy id: the old id in .orca-roles.json and --mode launches the academic-research team, prints one note naming both sources, keeps a copy for the Planner, saves only the new id, and the Planner is told to relay it" "$RC:$(lgh):$(printf '%s\n' "$OUT" | grep -c "^Note: mode 'academic-writer' is now called 'academic-research'; the old name works until the next version. Found in: .orca-roles.json (.*/.orca-roles.json); the options of this run (--mode or the setup script in orca.yaml). Update it to academic-research.$"):$(printf '%s\n' "$OUT" | grep -c 'academic-writer'):$(printf '%s\n' "$OUT" | grep -c '^Mode: academic-research$'):$([ "$(cat "$LGG/orca-roles.legacy-note")" = "$(printf '%s\n' "$OUT" | grep '^Note: ')" ] && echo same):$(jq -r .mode "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json"):$(lgmsg | grep -c 'Tell the user at startup, in one line: Note: mode .academic-writer. is now called')" "0:PLANNER EXP BOTH NOP :1:1:1:same:academic-research:academic-research:1"
-rm -f "$LG/.orca-roles.json" "$LGG/orca-roles.env"
+rm -f "$TMP/aw-alive"; rm -f "$LG/.orca-roles.json" "$LGG/orca-roles.env"
 try aln --reset --mode academic-research
-check "legacy id: with the new name nothing about the alias shows (no note, no copy for the Planner, nothing in its message)" "$RC:$(lgh):$(printf '%s\n' "$OUT" | grep -c 'academic-writer\|^Note:'):$([ -e "$LGG/orca-roles.legacy-note" ] && echo present):$(lgmsg | grep -c 'Tell the user')" "0:PLANNER EXP BOTH NOP :0::0"
-rm -f "$LGG/orca-roles.env"; printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"
-try aln
-check "legacy id: saved options with the old mode id still select the same team, are rewritten to the new id with the role selection kept, and are named in the note; no normalized copy is left" "$RC:$(lgh):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(printf '%s\n' "$OUT" | grep -c "^Note: .*Found in: this worktree's saved options (.*orca-roles.overrides.json)\. Update it to academic-research\.$"):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' '):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:PLANNER EXP :[\"academic-research\",[\"exp\"]]:1:0:academic-research"
-# a team open under the old id is the same mode
 jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
-printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; touch "$TMP/aw-alive"
-try aln --mode academic-research
-check "legacy id: a team open under the old id is the same mode: no open-team refusal, no dropped role selection" "$RC:$(printf '%s\n' "$OUT" | grep -c 'team is open in mode\|Mode changed'):$(jq -c '[.mode, .only]' "$LGG/orca-roles.overrides.json"):$(jq -r .settings.mode "$LGG/orca-roles.config.json")" "0:0:[\"academic-research\",[\"exp\"]]:academic-research"
-# a failed launch changes nothing; --status reads the old id
-printf '{"only":["exp"],"enable":[],"disable":[],"set":[],"mode":"academic-writer"}\n' > "$LGG/orca-roles.overrides.json"; jq -c '.settings.mode="academic-writer"' "$LGG/orca-roles.config.json" > "$LC/c.json" && cp "$LC/c.json" "$LGG/orca-roles.config.json"
-LB="$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" 2>/dev/null | cksum || true)"
-try aln --only nonexist
-check "legacy id: a launch that fails leaves the saved options, config, handles and note as they were, and no normalized copy" "$RC:$(cat "$LGG/orca-roles.overrides.json" "$LGG/orca-roles.config.json" "$LGG/orca-roles.env" "$LGG/orca-roles.legacy-note" | cksum):$(find "$LGG" -name '*canon*' | wc -l | tr -d ' ')" "1:$LB:0"
 check "legacy id: --status reads a worktree configuration saved under the old id as academic-research, with its phase" "$(aln --status | grep '^Mode:\|^Phase:' | tr '\n' ' ')" "Mode: academic-research Phase: experiment "
-SG="$TMP/aw-sc4"; mkdir -p "$SG"; printf '# orca-roles academic-writer\nmy\n' > "$SG/.gitignore"; try "$SC" "$SG"
-check "legacy id: the scaffold treats a .gitignore with the old header as having the block: no second header, old header untouched" "$RC:$(grep -c '^# orca-roles' "$SG/.gitignore"):$(head -2 "$SG/.gitignore" | tr '\n' ' ')" "0:1:# orca-roles academic-writer my "
 rm -f "$TMP/aw-alive"
 rm -rf "$PK/prompts/academic-research"   # the other sections reuse this kit and expect the mode unavailable
 }

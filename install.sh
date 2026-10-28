@@ -90,7 +90,6 @@ rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp" "${KIT
 cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
 find "$KIT/bin" -name __pycache__ -type d -prune -exec rm -rf {} +
 if [ -d "$SRC/grafana" ]; then cp -R "$SRC/grafana" "$KIT/"; fi
-ln -s academic-research "$KIT/prompts/academic-writer"   # old path of the renamed mode, regenerated with prompts/
 chmod +x "$KIT/bin/"*.sh
 if [ -f "$SRC/VERSION" ]; then cp "$SRC/VERSION" "$KIT/VERSION"; else rm -f "$KIT/VERSION"; fi   # refs older than the VERSION file have none
 echo "$SOURCE@$INST_REF${INST_SHA:+ $INST_SHA}" > "$KIT/.installed"
@@ -135,28 +134,10 @@ if [ ! -f "$CONF" ]; then
 else
   # Adds new roles or keys from the installed version without overwriting what you already have (or the order of your roles)
   TMPC="$(mktemp)"
-  RENAMED=0; ! config_has_old_mode "$CONF" || RENAMED=1
   upgrade_config "$KIT/config.default.json" "$CONF" "$KIT" > "$TMPC"
   mv "$TMPC" "$CONF"
-  [ "$RENAMED" = 0 ] || echo "Renamed mode academic-writer to academic-research in your configuration ($CONF)."
 fi
 jq empty "$CONF" || { echo "ERROR: $CONF is not valid JSON" >&2; exit 1; }
-
-# Your roles of the renamed mode: roles/academic-writer/ moves to roles/academic-research/, and the old path becomes a link to it
-OLDR="$KIT/roles/academic-writer"; NEWR="$KIT/roles/academic-research"
-if [ -L "$OLDR" ]; then
-  [ "$(readlink "$OLDR")" = academic-research ] || { rm "$OLDR"; ln -s academic-research "$OLDR"; }
-elif [ -d "$OLDR" ]; then
-  mkdir -p "$NEWR"; MOVED=0; KEPT=""
-  while IFS= read -r n; do
-    if [ -e "$NEWR/$n" ] || [ -L "$NEWR/$n" ]; then KEPT="$KEPT$n"$'\n'; else mv "$OLDR/$n" "$NEWR/$n"; MOVED=1; fi
-  done < <(find "$OLDR" -mindepth 1 -maxdepth 1 -exec basename {} \;)
-  if [ -z "$KEPT" ]; then rmdir "$OLDR"; ln -s academic-research "$OLDR"; fi
-  [ "$MOVED" = 0 ] || echo "Moved your academic-writer roles to $NEWR."
-  while IFS= read -r n; do
-    [ -z "$n" ] || echo "WARNING: $OLDR/$n was not moved: $NEWR/$n already exists. Any prompt path in your configuration that named the old file now names the new one. Merge them by hand, then run install.sh again."
-  done <<<"$KEPT"
-fi
 
 # Aliases 'roles', 'new-role', 'roles-yaml' and 'team-status' (once)
 # zsh → ~/.zshrc; bash → ~/.bashrc (on macOS, ~/.bash_profile, which is what Terminal reads); other shells → ~/.profile
