@@ -60,7 +60,7 @@ fi
 # manifest_of <dir>: "<sha1>  <relative path>" of every file the install regenerates, plus the top-level README.md, config.default.json and VERSION, sorted
 manifest_of() {
   local f
-  ( cd "$1" && { find bin prompts plugin mcp -type f 2>/dev/null || true; ls -d README.md config.default.json VERSION 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$1" && { find bin prompts plugin mcp grafana -type f 2>/dev/null || true; ls -d README.md config.default.json VERSION 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s  %s\n' "$(shasum < "$f" | cut -d' ' -f1)" "$f"
     done )
 }
@@ -74,7 +74,7 @@ if [ -f "$KIT/.manifest" ]; then
   CHANGED="$(awk 'NR == FNR { old[substr($0, 43)] = $1; next }
     { p = substr($0, 43) }
     p in old { if (old[p] != $1) print p; next }
-    p ~ /^(bin|prompts|plugin|mcp)\// { print p }' "$KIT/.manifest" "$NOW" || true)"
+    p ~ /^(bin|prompts|plugin|mcp|grafana)\// { print p }' "$KIT/.manifest" "$NOW" || true)"
   rm -f "$NOW"
   if [ -n "$CHANGED" ]; then
     BK="$KIT/backup/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -86,8 +86,9 @@ if [ -f "$KIT/.manifest" ]; then
     echo "Your copies are in $BK (restore what you need from there)."
   fi
 fi
-rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp"   # regenerated; config.json and roles/ are not touched
+rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp" "${KIT:?}/grafana"   # regenerated; config.json and roles/ are not touched
 cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
+if [ -d "$SRC/grafana" ]; then cp -R "$SRC/grafana" "$KIT/"; fi
 ln -s academic-research "$KIT/prompts/academic-writer"   # old path of the renamed mode, regenerated with prompts/
 chmod +x "$KIT/bin/"*.sh
 if [ -f "$SRC/VERSION" ]; then cp "$SRC/VERSION" "$KIT/VERSION"; else rm -f "$KIT/VERSION"; fi   # refs older than the VERSION file have none

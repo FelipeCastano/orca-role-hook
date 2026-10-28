@@ -57,6 +57,10 @@ Instrument -> Prometheus name (collector: resource_to_telemetry_conversion, unit
   orca_roles.task.duration (s)            orca_roles_task_duration_seconds_total{verdict}
   orca_roles.commits                      orca_roles_commits_total
   orca_roles.commit.lines                 orca_roles_commit_lines_total{type=insertions|deletions}
+  orca_roles.kit.events                   orca_roles_kit_events_total{event=launch|reopened|detached-kept|relaunch,role,task,project}
+  orca_roles.dispatch.outcomes            orca_roles_dispatch_outcomes_total{outcome=dispatch|started|enter-resent|not-started|no-check,role,task,project}
+The last two come from $KIT/metrics/events.jsonl, not from a session: counts per (task, project, event, role), task/project from worktrees.jsonl by the
+event's worktree path ('' if unmapped), pushed under one resource (service.name=claude-code, no session.id) only when a count changed.
 
 Rotation: on the first pass of a UTC day, sessions-*.jsonl older than settings.metrics.retentionDays are deleted (never state.json,
 worktrees.jsonl or events.jsonl). Errors go to $KIT/metrics/usage-metrics.log (the last 1000 lines kept).
@@ -1149,6 +1153,92 @@ def push(state):
             return
 
 
+# ---------------------------------------------------------------- kit events (events.jsonl -> orca_roles.kit.events / orca_roles.dispatch.outcomes)
+OUTCOME_EVENTS = ("dispatch", "started", "enter-resent", "not-started", "no-check")
+KIT_EVENTS = ("launch", "reopened", "detached-kept", "relaunch")
+SEP = "\t"
+
+
+def tally_events(lines, wts, counts):
+    for o in lines:
+        ev, wt = o.get("event"), o.get("worktree")
+        if ev not in OUTCOME_EVENTS + KIT_EVENTS or not isinstance(wt, str):
+            continue
+        hit = wt_match(wts, wt) if wt else None
+        key = SEP.join((hit[0] if hit else "", hit[1] if hit else "", ev, str(o.get("role") or "")))
+        counts[key] = counts.get(key, 0) + 1
+
+
+def read_events(state, wts):
+    """Reads the new complete lines of events.jsonl (byte offset in state['events']); a file that shrank is read again from the start."""
+    E = state.setdefault("events", {"offset": 0, "counts": {}, "floor": {}, "start": None})
+    try:
+        with open(os.path.join(MDIR, "events.jsonl"), "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            if size < E["offset"]:
+                E["offset"], E["counts"] = 0, {}
+            f.seek(E["offset"])
+            data = f.read(size - E["offset"])
+    except OSError:
+        return E
+    end = data.rfind(b"\n") + 1
+    lines = []
+    for raw in data[:end].splitlines():
+        try:
+            o = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if isinstance(o, dict):
+            lines.append(o)
+    if lines:
+        tally_events(lines, wts(), E["counts"])
+    E["offset"] += end
+    return E
+
+
+def events_resource(E, now_ns):
+    """The ResourceMetrics of the kit events; vals are committed to E['floor'] only after a successful push."""
+    metrics = {}
+    start = str(int((E["start"] or time.time()) * 1e9))
+    new_floor = {}
+    for key, n in sorted(E["counts"].items()):
+        task, project, ev, role = key.split(SEP)
+        n = max(n, E["floor"].get(key, 0))
+        new_floor[key] = n
+        name, label = ("orca_roles.dispatch.outcomes", "outcome") if ev in OUTCOME_EVENTS else ("orca_roles.kit.events", "event")
+        m = metrics.setdefault(name, {"name": name, "unit": "", "sum": {"dataPoints": [], "aggregationTemporality": 2, "isMonotonic": True}})
+        m["sum"]["dataPoints"].append({"attributes": str_attrs({label: ev, "role": role, "task": task, "project": project}),
+                                       "startTimeUnixNano": start, "timeUnixNano": str(now_ns), "asDouble": float(n)})
+    for key, n in E["floor"].items():   # a key the file no longer yields keeps its last value
+        if key not in new_floor:
+            new_floor[key] = n
+    res = {"resource": {"attributes": str_attrs({"service.name": "claude-code"})},
+           "scopeMetrics": [{"scope": {"name": "orca-roles.usage-metrics"}, "metrics": list(metrics.values())}]}
+    return res, new_floor
+
+
+def push_events(state, wts):
+    """Reads the new events and pushes the counts that changed since the last successful push. Never loud."""
+    E = read_events(state, wts)
+    if not any(n > E["floor"].get(k, 0) for k, n in E["counts"].items()):
+        return
+    otlp, _, allow = push_settings()
+    if not host_ok(otlp, allow, state, "otlpEndpoint"):
+        return
+    now = time.time()
+    if E["start"] is None:
+        E["start"] = now
+    res, new_floor = events_resource(E, int(now * 1e9))
+    try:
+        st, _ = http_json(otlp, {"resourceMetrics": [res]})
+    except Down:
+        return
+    if 200 <= st < 300:
+        E["floor"] = new_floor
+    else:
+        log("push refused: HTTP %s" % st)
+
+
 # ---------------------------------------------------------------- backfill (never automatic: usage-metrics.sh --backfill)
 class Fatal(Exception):
     def __init__(self, msg, code=1):
@@ -1585,6 +1675,10 @@ def once():
             push(state)
         except Exception as ex:   # a push problem never fails the pass
             log("push failed: %s: %s" % (type(ex).__name__, ex))
+        try:
+            push_events(state, wts)
+        except Exception as ex:
+            log("events push failed: %s: %s" % (type(ex).__name__, ex))
         prune_pushed(state, retention_days())
         rotate(state, ts[:10], retention_days())
         state["lastPass"] = ts
@@ -1664,7 +1758,29 @@ def report(args):
     def rnd(a):
         return {"sessions": a["sessions"], "tokens": a["tokens"], "cost": r6(a["cost"]), "costByType": {k: r6(v) for k, v in a["costByType"].items()},
                 "cacheSavings": r6(a["cacheSavings"])}
-    res = {"task": task, "since": since, "total": rnd(total), "byTask": {k: rnd(v) for k, v in sorted(by_task.items())},
+    ev_counts = {}
+    try:
+        with open(os.path.join(MDIR, "events.jsonl"), "rb") as f:
+            raw_ev = f.read()
+    except OSError:
+        raw_ev = b""
+    evl = []
+    for ln in raw_ev.splitlines():
+        try:
+            eo = json.loads(ln.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if isinstance(eo, dict) and (since is None or str(eo.get("ts") or "")[:10] >= since):
+            evl.append(eo)
+    tally_events(evl, load_worktrees(), ev_counts)
+    events = {}
+    for key, n in ev_counts.items():
+        t, _, ev, role = key.split(SEP)
+        if task is not None and t != task:
+            continue
+        d = events.setdefault(t, {})
+        d[ev] = d.get(ev, 0) + n
+    res = {"task": task, "since": since, "events": {k: dict(sorted(v.items())) for k, v in sorted(events.items())}, "total": rnd(total), "byTask": {k: rnd(v) for k, v in sorted(by_task.items())},
            "byRole": {k: rnd(v) for k, v in sorted(by_role.items())}, "byModel": {k: rnd(v) for k, v in sorted(by_model.items())}}
     if as_json:
         print(json.dumps(res, separators=(",", ":")))
@@ -1679,6 +1795,10 @@ def report(args):
         print("by %s:" % title)
         for k, v in sorted(res[key].items(), key=lambda kv: -kv[1]["cost"]):
             print("  " + row(k, v))
+    if res["events"]:
+        print("kit events and dispatch outcomes by task:")
+        for k, v in res["events"].items():
+            print("  %-28s %s" % (k or "(none)", "  ".join("%s %d" % kv for kv in v.items())))
     return 0
 
 
