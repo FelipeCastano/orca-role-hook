@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -72,6 +72,7 @@ export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and p
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
+export ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$TMP/scheduler.log"   # install.sh never touches the real launchctl or crontab from the suite
 SECTION=""; ERR_AT=""
 on_exit() { local rc=$?; rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then echo "smoke.sh: aborted in section $SECTION ${ERR_AT:-(exit status $rc)}" >&2; fi; }
 trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
@@ -8135,6 +8136,666 @@ check "parallel runner: SMOKE_JOBS=3 prints the sections in the requested order 
 cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out" | cut -d: -f1):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK" "$Q1|$Q2" "1:marker fast,:1:1:0|1:marker fast,:1:1:0"
+}
+
+sec_usage_metrics() {
+# settings.metrics and the kit's writers for the metrics pass: validation, worktrees.jsonl and events.jsonl from launch.sh and dispatch.sh, install.sh's mapping, enabled=false, a failing write
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+umcv() { jq -c --argjson v "$2" "$1 = \$v" "$ROOT/config.default.json" > "$UM/cv.json"; check_config "$UM/cv.json" | tr '\n' '/'; }
+umbad() { [ "$(umcv "$1" "$2")" = "ERROR: invalid configuration: $3/" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
+umok() { [ -z "$(umcv "$1" "$2")" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
+UV1="$(
+for k in enabled allowRemote; do for v in '"yes"' '"true"' '"false"' '1' '0' '[]' '{}'; do umbad ".settings.metrics.$k" "$v" "settings.metrics.$k must be true or false"; done; done
+for v in 0 5 10 14 3601 86400 -60 1.5 '"60"' true '[]'; do umbad .settings.metrics.intervalSeconds "$v" 'settings.metrics.intervalSeconds must be an integer from 15 to 3600'; done
+for v in 0 -1 3651 1.5 '"90"' true '[]'; do umbad .settings.metrics.retentionDays "$v" 'settings.metrics.retentionDays must be an integer from 1 to 3650'; done
+for k in otlpEndpoint prometheusUrl; do for v in '"127.0.0.1:4318"' '"localhost:9090"' '""' '"http://"' '"ftp://h/x"' '"/v1/metrics"' 5 true '[]'; do umbad ".settings.metrics.$k" "$v" "settings.metrics.$k must be a URL starting with http:// or https://"; done; done
+for v in '"x"' 5 '[]' true; do umbad .settings.metrics "$v" 'settings.metrics must be an object'; done
+)"
+UV2="$(
+umok .settings.metrics null; umok .settings.metrics '{}'
+for k in enabled allowRemote otlpEndpoint prometheusUrl intervalSeconds retentionDays; do umok ".settings.metrics.$k" null; done
+for v in true false; do umok .settings.metrics.enabled "$v"; umok .settings.metrics.allowRemote "$v"; done
+for v in 15 16 60 300 3599 3600 3600.0; do umok .settings.metrics.intervalSeconds "$v"; done
+for v in 1 90 3650; do umok .settings.metrics.retentionDays "$v"; done
+for k in otlpEndpoint prometheusUrl; do for v in '"http://127.0.0.1:4318/v1/metrics"' '"https://metrics.example.com"' '"http://h"'; do umok ".settings.metrics.$k" "$v"; done; done
+)"
+check "usage metrics settings: an invalid value of any key is exactly one ERROR naming it (enabled \"yes\", intervalSeconds 0 and 10, retentionDays \"90\", otlpEndpoint \"127.0.0.1:4318\" and their families)" "$(grep -c BAD <<< "$UV1"):$(grep -o 'ok ' <<< "$UV1" | wc -l | tr -d ' ')" "0:54"
+jq -c '.settings.metrics.enabled = "yes" | .settings.metrics.intervalSeconds = 0 | .settings.metrics.retentionDays = "90"' "$ROOT/config.default.json" > "$UM/cv.json"
+check "usage metrics settings: null, absent and every valid value (the boundaries 15, 3600, 1, 3650 included) pass, the defaults are in config.default.json and the shipped file passes, three wrong keys are three ERROR lines" "$(grep -c BAD <<< "$UV2"):$(grep -o 'ok ' <<< "$UV2" | wc -l | tr -d ' '):$(jq -cS .settings.metrics "$ROOT/config.default.json"):$(check_config "$ROOT/config.default.json" | wc -l | tr -d ' '):$(check_config "$UM/cv.json" | grep -c '^ERROR: invalid configuration: settings\.metrics\.')" '0:28:{"allowRemote":false,"enabled":true,"intervalSeconds":60,"otlpEndpoint":"http://127.0.0.1:4318/v1/metrics","prometheusUrl":"http://127.0.0.1:9090","retentionDays":90}:0:3'
+# the writers: a project with two worktrees (devgd-300 gets its task from an OTEL attribute, devia-251 has none), a fake orca, the kickoff stubbed
+write_launch_config
+UMR="$UM/svc"; mkdir -p "$UMR"; git -C "$UMR" init -q -b main; git -C "$UMR" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+for w in devgd-300 devia-251; do git -C "$UMR" worktree add -q -b "b-$w" "$UM/wt/$w"; done
+UMA="$UM/wt/devgd-300"; UMB="$UM/wt/devia-251"; UMPB="$(cd "$UMB" && pwd -P)"; UMPA="$(cd "$UMA" && pwd -P)"
+umgd() { git -C "$1" rev-parse --absolute-git-dir; }
+cat > "$UM/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$UM/orca.log"
+case "\$1 \$2" in
+  "terminal create") [ -f "$UM/failcreate" ] && exit 1; while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal show") case "\$(cat "$UM/st.\$4" 2>/dev/null)" in
+      stale) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+      orph) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';;
+      *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\nexit 0\n' > "$UM/bin/kickoff"; chmod +x "$UM/bin/orca" "$UM/bin/kickoff"
+uml() { local d="$1"; shift; (cd "$d" && HOME="$TMP/home" PATH="$UM/bin:$PATH" ORCA_ROLES_KICKOFF="$UM/bin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_RELAUNCH="${UM_RELAUNCH:-}" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+umreset() { rm -rf "$MD" "$UM"/st.* "$UM/failcreate" "$(umgd "$1")"/orca-roles.*; : > "$UM/orca.log"; }
+umline() { jq -r "$1" "$MD/worktrees.jsonl" 2>/dev/null | tr '\n' ',' || true; }
+umev() { jq -r '[.event, .role] | join(":")' "$MD/events.jsonl" 2>/dev/null | tr '\n' ' ' || true; }
+umtask() {  # umtask <the OTEL value as JSON>: the task recorded for devgd-300 with that attribute
+  umreset "$UMA"; jq -cn --argjson v "$1" '{defaults: {env: {OTEL_RESOURCE_ATTRIBUTES: $v}}}' > "$UMA/.orca-roles.json"; uml "$UMA" >/dev/null || true; umline .task
+}
+V1="$(umtask '"service.name=x, task=devgd-292 ,k=v"')|$(umtask '"a=1,task=first,task=second"')|$(umtask '"subtask=x,task_id=y"')"
+rm -f "$UMA/.orca-roles.json"; umreset "$UMA"; uml "$UMA" >/dev/null || true; V2="$(umline .task)"
+check "usage metrics: task of the worktrees line = task= in defaults.env.OTEL_RESOURCE_ATTRIBUTES of the merged config (trimmed, first one wins), else the worktree folder's name (no attribute, subtask=, an empty task=, task_id=, a non-string value)" "$V1|$V2" "devgd-292,|first,|devgd-300,|devgd-300,"
+umreset "$UMB"; mkdir -p "$UMB/sub"; uml "$UMB" >/dev/null || true; uml "$UMB" >/dev/null || true; uml "$UMB/sub" >/dev/null || true
+umall() { jq -r "$1" "$2" 2>/dev/null | sort -u | tr '\n' ',' || true; }
+W1="$(jq -cS 'keys' "$MD/worktrees.jsonl" 2>/dev/null | sort -u | tr -d '\n'):$(cat "$MD/worktrees.jsonl" 2>/dev/null | wc -l | tr -d ' '):$(umall .path "$MD/worktrees.jsonl"):$(umall .physical "$MD/worktrees.jsonl"):$(umall '[.project, .task] | join("/")' "$MD/worktrees.jsonl"):$(umall '.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$MD/worktrees.jsonl")"
+umreset "$UMB"; uml "$UMB" >/dev/null || true
+W2="$(jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null | tr -d '\n'):$(umev):$(umall .worktree "$MD/events.jsonl")"
+X1=""; for a in "--status" "--enable nobody" "--set settings.metrics.intervalSeconds=0" "--set settings.metrics.retentionDays=90.5"; do umreset "$UMB"; try uml "$UMB" $a; X1="$X1 $RC:$([ -e "$MD" ] && echo wrote || echo none)"; done
+umreset "$UMB"; try uml "$UMB" --set settings.metrics.intervalSeconds=0; X2="$(printf '%s\n' "$OUT" | grep -c '^ERROR: invalid configuration: settings.metrics.intervalSeconds must be an integer from 15 to 3600$'):$(grep -c 'terminal create' "$UM/orca.log" || true)"
+umreset "$UMB"; : > "$UM/failcreate"; try uml "$UMB"; X3="$RC:$([ -e "$MD" ] && echo wrote || echo none)"
+check "usage metrics: nothing is written for --status, an unknown role, an invalid settings.metrics value (the ERROR stops the launch before any tab is created) or a launch that cannot open a tab" "$X1|$X2|$X3" " 0:none 1:none 1:none 1:none|1:0|1:none"
+# events of a launch that finds the team already open: a tab gone and one detached but running; then the Planner's relauncher
+umreset "$UMB"; uml "$UMB" >/dev/null || true; rm -rf "$MD"; echo stale > "$UM/st.h-Dev"; echo orph > "$UM/st.h-Deployer"
+try uml "$UMB"; E1="$RC:$(umev)"; E1F="$(jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null | sort -u | tr '\n' ' ' || true)"
+rm -rf "$MD"; rm -f "$UM"/st.*; UM_RELAUNCH=1 try uml "$UMB"; E2="$RC:$(umev)"
+check "usage metrics: events of a launch over an open team: launch, reopened for the role whose tab is gone, detached-kept for the tab Orca flags detached while its agent runs (a launch run by the relauncher adds relaunch with the planner role); every line has exactly ts, worktree, event and role" "$E1:$E1F|$E2" '0:launch: reopened:dev detached-kept:deployer :["event","role","ts","worktree"] |0:launch: relaunch:planner '
+# dispatch.sh: its events by role (the handle's role in the worktree's orca-roles.env), with a fake orca whose checker waits are shortened
+UMG="$(umgd "$UMB")"; UMT="task_um$$"; mkdir -p "$UM/dbin"; umreset "$UMB"
+printf 'DEV=h-w\nOC=h-oc\n' > "$UMG/orca-roles.env"; echo '{"roles":{"dev":{},"oc":{"agent":"opencode"}}}' > "$UMG/orca-roles.config.json"
+cat > "$UM/dbin/orca" <<EOS
+#!/bin/sh
+case "\$1 \$2" in
+  "orchestration dispatch") cat "$UM/dispatch.json"; exit "\$(cat "$UM/dispatch.rc")";;
+  "worktree ps") n=\$(( \$(cat "$UM/pscount" 2>/dev/null || echo 0) + 1 )); echo \$n > "$UM/pscount"; mode="\$(cat "$UM/mode")"
+    if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$UM/entered" ]; }; then cat "$UM/ps.started"; else cat "$UM/ps.idle"; fi;;
+  "terminal show") cat "$UM/show.json";;
+  "terminal send") : > "$UM/entered";;
+  "orchestration send") exit 0;;
+esac
+exit 0
+EOS
+chmod +x "$UM/dbin/orca"
+printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"done","prompt":"Read the role message"}]}]}}' > "$UM/ps.idle"
+printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"working","prompt":"do %s now"}]}]}}' "$UMT" > "$UM/ps.started"
+printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$UM/dispatch.json"; echo 0 > "$UM/dispatch.rc"
+printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> [Pasted text #1 +3 lines]"}}}' > "$UM/show.pasted"; printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> idle"}}}' > "$UM/show.plain"
+umd() {  # umd <mode> <pasted|plain> <args...>: runs dispatch.sh from the worktree and waits for its checker to end (UMNOWAIT: no checker is expected)
+  local mode="$1" show="$2" n=0; shift 2
+  echo "$mode" > "$UM/mode"; cp "$UM/show.$show" "$UM/show.json"; rm -f "$UM/entered" "$UM/pscount" "$UMG/orca-roles-dispatch.log"
+  (cd "$UMB" && HOME="$TMP/home" PATH="$UM/dbin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK=0.05 ORCA_ROLES_DISPATCH_POLLS=3 "$ROOT/bin/dispatch.sh" "$@") >/dev/null 2>&1 || true
+  [ -z "${UMNOWAIT:-}" ] || return 0
+  until grep -qE 'started$|told |could not tell|not checked|no start check' "$UMG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.1; n=$((n + 1)); done
+  n=0; while pgrep -f -- "--watch $UMT" >/dev/null 2>&1 && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+}
+umdcase() { rm -rf "$MD"; umd "$@"; umev; jq -cS '[keys, .task, .worktree]' "$MD/events.jsonl" >> "$UM/fields.txt" 2>/dev/null || true; }
+: > "$UM/fields.txt"
+D1="$(umdcase early plain --task "$UMT" --to h-w)|$(umdcase enter pasted --task "$UMT" --to h-w)|$(umdcase never pasted --task "$UMT" --to h-w)|$(umdcase never plain --task "$UMT" --to h-w)"
+D2="$(umdcase early plain --task "$UMT" --to h-oc)|$(umdcase early plain --task "$UMT" --to h-zz)|$(umdcase early plain --check-only --task "$UMT" --to h-w)|$(umdcase early plain --check-only --task "$UMT" --to h-oc)"
+rm -rf "$MD"; echo 1 > "$UM/dispatch.rc"; UMNOWAIT=1 umd early plain --task "$UMT" --to h-w; D3="$([ -e "$MD" ] && echo wrote || echo none)"; echo 0 > "$UM/dispatch.rc"
+check "usage metrics: dispatch.sh events in order with the role of the handle (none for a handle that is no role): dispatch+started, dispatch+enter-resent+started, dispatch+enter-resent+not-started, dispatch+not-started, dispatch+no-check for an opencode role; --check-only writes only the outcome; a failed dispatch writes nothing; every line has exactly ts, worktree, event, role, task with the task id and the worktree's physical path" "$D1|$D2|$D3|$(sort -u "$UM/fields.txt" | tr -d '\n')" "dispatch:dev started:dev |dispatch:dev enter-resent:dev started:dev |dispatch:dev enter-resent:dev not-started:dev |dispatch:dev not-started:dev |dispatch:oc no-check:oc |dispatch: started: |started:dev |no-check:oc |none|[[\"event\",\"role\",\"task\",\"ts\",\"worktree\"],\"$UMT\",\"$UMPB\"]"
+rm -rf "$MD"
+# settings.metrics.enabled false (in the worktree's merged configuration, in its saved copy, or in the kit's): no write from launch.sh, dispatch.sh or install.sh
+echo '{"settings":{"metrics":{"enabled":false}}}' > "$UMB/.orca-roles.json"
+umreset "$UMB"; uml "$UMB" >/dev/null || true; echo stale > "$UM/st.h-Dev"; echo orph > "$UM/st.h-Deployer"; UM_RELAUNCH=1 uml "$UMB" >/dev/null || true; Z1="$([ -e "$MD" ] && echo wrote || echo none)"
+rm -f "$UMB/.orca-roles.json" "$UM"/st.*
+umreset "$UMB"; uml "$UMB" >/dev/null || true; echo stale > "$UM/st.h-Dev"; echo orph > "$UM/st.h-Deployer"; UM_RELAUNCH=1 uml "$UMB" >/dev/null || true; Y1="$([ -s "$MD/events.jsonl" ] && [ -s "$MD/worktrees.jsonl" ] && echo wrote || echo none)"; rm -f "$UM"/st.*
+printf 'DEV=h-w\nOC=h-oc\n' > "$UMG/orca-roles.env"; jq '.roles = {"dev": {}, "oc": {"agent": "opencode"}}' "$KIT/config.json" > "$UMG/orca-roles.config.json"
+umnw() { rm -rf "$MD"; umd "$@" >/dev/null 2>&1 || true; [ -e "$MD" ] && echo wrote || echo none; }
+Y2="$(umnw early plain --task "$UMT" --to h-w)"; jq '.settings.metrics.enabled = false' "$UMG/orca-roles.config.json" > "$UM/gcfg.json"; cp "$UM/gcfg.json" "$UMG/orca-roles.config.json"
+Z2="$(umnw early plain --task "$UMT" --to h-w) $(umnw enter pasted --task "$UMT" --to h-w) $(umnw never pasted --task "$UMT" --to h-w) $(umnw never plain --task "$UMT" --to h-w) $(umnw early plain --task "$UMT" --to h-oc)"
+rm -f "$UMG/orca-roles.config.json"; cp "$KIT/config.json" "$UM/kitcfg.orig"; jq '.settings.metrics.enabled = false' "$UM/kitcfg.orig" > "$KIT/config.json"
+Z3="$(umnw early plain --task "$UMT" --to h-w) $(umnw never pasted --task "$UMT" --to h-w)"
+cp "$UM/kitcfg.orig" "$KIT/config.json"
+UH="$UM/ih"; rm -rf "$UH"; mkdir -p "$UH/.orca-roles"; printf '%s\n' "$UMPA" "$UMPB" > "$UH/.orca-roles/trusted.list"; jq '.settings.metrics.enabled = false' "$ROOT/config.default.json" > "$UH/.orca-roles/config.json"
+uminst() { if (cd "$UM" && HOME="$UH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1); then UIRC=0; else UIRC=$?; fi; }
+uminst; Z4="$UIRC:$([ -e "$UH/.orca-roles/metrics" ] && echo wrote || echo none)"
+jq '.settings.metrics.enabled = true' "$UH/.orca-roles/config.json" > "$UM/hcfg.json"; cp "$UM/hcfg.json" "$UH/.orca-roles/config.json"; uminst; Y4="$([ -e "$UH/.orca-roles/metrics/worktrees.jsonl" ] && echo wrote || echo none)"
+check "usage metrics: the same runs write with settings.metrics.enabled true or absent, and with it false nothing is written: launch.sh (also on a launch over an open team and the relauncher's), dispatch.sh (the saved copy of the worktree's configuration, and the kit's when the worktree has none; every outcome) and install.sh" "$Y1 $Y2 $Y4|$Z1|$Z2|$Z3|$Z4" "wrote wrote wrote|none|none none none none none|none none|0:none"
+# the transcript parser (usage-metrics.sh --once / --report) on fixture transcripts: temp kit, ORCA_ROLES_CLAUDE_PROJECTS and HOME, never the real ones
+PK="$UM/pk"; PC="$UM/cp"; PM="$PK/metrics"; PD="$PC/-w-a-devgd-300"
+HC="$UM/hermetic.json"; jq '.settings.metrics.otlpEndpoint = "http://127.0.0.1:1/v1/metrics" | .settings.metrics.prometheusUrl = "http://127.0.0.1:1"' "$ROOT/config.default.json" > "$HC"   # the passes never reach the real collector or Prometheus
+umpk() { rm -rf "$PK" "$PC"; mkdir -p "$PK/bin" "$PD"; cp "$HC" "$PK/config.default.json"; mkdir -p "$PM"; printf '%s\n' '{"ts":"2026-10-01T00:00:00Z","path":"/w/a","physical":"/w/a","project":"svc","task":"outer"}' '{"ts":"2026-10-01T00:00:00Z","path":"/w/a/devgd-300","physical":"/w/a/devgd-300","project":"svc","task":"devgd-292"}' > "$PM/worktrees.jsonl"; }
+umpass() { if KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" "${@:---once}" > "$UM/pass.out" 2> "$UM/pass.err"; then UPRC=0; else UPRC=$?; fi; }
+umrepx() { KIT="$PK" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" --report "$@" 2>&1; }
+umrep() { umrepx "$@" || true; }
+pu() { jq -nc --arg ts "$2" --arg cwd "$3" --arg t "$4" '{type: "user", timestamp: $ts, cwd: $cwd, version: "2.1.311", message: {role: "user", content: $t}}' >> "$1"; }
+pa() { jq -nc --arg ts "$2" --arg cwd "$3" --arg id "$4" --arg m "$5" --argjson u "$6" --argjson c "$7" '{type: "assistant", timestamp: $ts, cwd: $cwd, version: "2.1.311", message: {id: $id, role: "assistant", model: $m, usage: $u, content: $c}}' >> "$1"; }
+pr() { jq -nc --arg ts "$2" --arg id "$3" --argjson e "$4" --arg out "$5" '{type: "user", timestamp: $ts, message: {role: "user", content: [{type: "tool_result", tool_use_id: $id, is_error: $e, content: $out}]}, toolUseResult: {stdout: $out}}' >> "$1"; }
+pj() { printf '%s\n' "$2" >> "$1"; }
+U1='{"input_tokens":1000000,"output_tokens":200000,"cache_read_input_tokens":1000000,"cache_creation_input_tokens":400000,"cache_creation":{"ephemeral_1h_input_tokens":100000,"ephemeral_5m_input_tokens":300000},"output_tokens_details":{"thinking_tokens":50000},"server_tool_use":{"web_search_requests":2}}'
+uss() { jq -c --arg s "$1" 'select(.session_id == $s)' "$PM"/sessions-*.jsonl 2>/dev/null | tail -1; }
+usf() { uss "$1" | jq -r "$2" 2>/dev/null | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g' || true; }   # 3.0 and 3 are the same number to every jq
+umpk; F1="$PD/s1.jsonl"; W="/w/a/devgd-300/src"
+pu "$F1" 2026-10-27T10:00:00.000Z "$W" "Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/dev.md and adopt that role. SECRET-PROMPT-MARKER"
+pj "$F1" '{"type":"api-request","timestamp":"2026-10-27T10:00:01.000Z","params":{"output_config":{"effort":"high"}}}'
+pa "$F1" 2026-10-27T10:00:02.000Z "$W" m1 claude-haiku-4-5 "$U1" '[{"type":"text","text":"SECRET-REPLY"}]'
+pa "$F1" 2026-10-27T10:00:02.100Z "$W" m1 claude-haiku-4-5 "$U1" '[{"type":"thinking","thinking":"hmm"}]'
+pa "$F1" 2026-10-27T10:00:03.000Z "$W" m1 claude-haiku-4-5 "$U1" '[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"echo SECRET-CMD"}}]'
+pr "$F1" 2026-10-27T10:00:08.000Z tu1 false "SECRET-OUT"
+pa "$F1" 2026-10-27T10:00:09.000Z "$W" m2 claude-opus-4-5 '{"input_tokens":1000,"output_tokens":100,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0}' '[{"type":"tool_use","id":"tu2","name":"Edit","input":{"new_string":"a\nb\n","old_string":"x\n"}},{"type":"tool_use","id":"tu3","name":"Write","input":{"content":"1\n2\n3"}}]'
+pr "$F1" 2026-10-27T10:00:11.000Z tu2 true "SECRET-ERR"
+pj "$F1" '{"type":"system","subtype":"compact_boundary","timestamp":"2026-10-27T10:00:12.000Z"}'
+pj "$F1" '{"type":"assistant","timestamp":"2026-10-27T10:00:13.000Z","isApiErrorMessage":true,"message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}'
+pa "$F1" 2026-10-27T10:00:14.000Z "$W" m3 claude-haiku-4-5 '{"input_tokens":1000000,"output_tokens":0,"inference_geo":"us"}' '[{"type":"text","text":"ok"}]'
+umpass
+S1A="$UPRC:$(usf s1 '[.session_id, .task, .project, .orca_roles_role, .effort, .query_source, .service_version, .first, .last] | join("|")')"
+S1B="$(usf s1 '[.turns, .userMessages, .compactions, .apiErrors, .modelChanges, .maxContext] | join("|")')"
+S1C="$(usf s1 '.tokens | [.input, .output, .cacheRead, .cacheCreation, .thinking] | join("|")')"
+S1D="$(usf s1 '.models["claude-haiku-4-5"] | [.input, .output, .cacheRead, .cacheCreation, .cacheWrite5m, .cacheWrite1h, .thinking, .turns, .cost, .cacheSavings, (.costByType | [.input, .output, .cacheRead, .cacheWrite, .webSearch] | join("/"))] | join("|")')"
+S1E="$(usf s1 '[.models["claude-opus-4-5"].cost, .costPriced, .cost, .costState, .cacheSavings, (.unpriced | length)] | join("|")')"
+S1F="$(usf s1 '[.tools.Bash.calls, .tools.Bash.errors, .tools.Bash.seconds, .tools.Edit.calls, .tools.Edit.errors, .tools.Edit.seconds, .tools.Write.calls, .lines.added, .lines.removed, .lines.source] | join("|")')"
+check "usage parse: one response written on 3 lines counts once; labels (longest mapped path, role from the role message, effort, version); turns, user messages, compactions, API errors (not a turn), model changes, max context" "$S1A|$S1B" "0:s1|devgd-292|svc|dev|high|main|2.1.311|2026-10-27T10:00:00.000Z|2026-10-27T10:00:14.000Z|3|1|1|1|2|2400000"
+F2P="2026-10-27T11:00:00.000Z"
+mk1() { pu "$PD/$1.jsonl" "$F2P" "$W" "task $1"; pa "$PD/$1.jsonl" "$F2P" "$W" "id-$1" "$2" "$3" '[{"type":"text","text":"x"}]'; }
+mk1 pa claude-haiku-5-5 '{"input_tokens":50000,"output_tokens":1000000,"cache_read_input_tokens":60000}'
+mk1 pb claude-haiku-5-5 '{"input_tokens":100000}'
+mk1 pc claude-haiku-5-5 '{"input_tokens":100001}'
+mk1 pd claude-sonnet-4-5-20250929 '{"input_tokens":1000000}'
+mk1 pe claude-opus-5-5-20260101 '{"input_tokens":1000000}'
+mk1 pf claude-opus-5-20260101 '{"input_tokens":1000000}'
+mk1 pg "claude-opus-4-5[1m]" '{"output_tokens":1000000}'
+mk1 ph claude-unknown-9 '{"input_tokens":1000000}'
+umpass
+PP="$(for x in pa pb pd pe pf pg; do usf $x '.cost'; done | tr '\n' ' ')$(usf pc '(.cost > 0.049 and .cost < 0.051)') $(usf ph '[.cost, (.unpriced | join(",")), .tokens.input] | join("|")')"
+check "usage parse: tokens, priced cost by type (1h cache writes, the us geo x1.1, web searches), thinking tokens, cache savings, tools (calls, errors, seconds tool_use to tool_result), lines from Edit/Write, one row per model with the cost never above what the rows sum to" "$S1C|$S1D|$S1E|$S1F" "2001000|200100|1002000|400000|50000|2000000|200000|1000000|400000|300000|100000|50000|2|3.795|0.725|2.1/1/0.1/0.575/0.02|0.0085|3.8035|3.8035||0.734|0|1|0|5|1|1|2|1|5|1|edits"
+umsum() { (cd "$PM" && cksum sessions-*.jsonl 2>/dev/null | tr '\n' ' ') || true; jq -cS 'del(.lastPass)' "$PM/state.json" 2>/dev/null | cksum || true; }
+umcount() { cat "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' ' || true; }
+N0="$(umcount)"; B0="$(umsum)"; sleep 1; umpass; A0="$UPRC:$([ "$(umsum)" = "$B0" ] && echo same):$([ "$(umcount)" = "$N0" ] && echo nonew)"
+SUB="$PD/s1/subagents/agent-a.jsonl"; mkdir -p "$PD/s1/subagents"
+pu "$SUB" 2026-10-27T10:00:05.000Z /w/a/devgd-300/x "SECRET-SUB-PROMPT"
+pa "$SUB" 2026-10-27T10:00:05.100Z /w/a/devgd-300/x m1 claude-haiku-4-5 "$U1" '[{"type":"text","text":"again"}]'
+pa "$SUB" 2026-10-27T10:00:06.000Z /w/a/devgd-300/x m9 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"tu9","name":"Bash","input":{"command":"ls"}}]'
+pr "$SUB" 2026-10-27T10:00:07.000Z tu9 false "out"
+umpass; A1="$UPRC:$(usf s1 '[.turns, .userMessages, .tokens.input, .tools.Bash.calls, .costPriced] | join("|")'):$(( $(umcount) - N0 ))"
+PART="$(jq -nc --arg ts 2026-10-27T10:00:20.000Z --argjson c '[{"type":"text","text":"p"}]' --argjson u '{"input_tokens":1000000}' '{type: "assistant", timestamp: $ts, cwd: "/w/a/devgd-300/src", message: {id: "m4", role: "assistant", model: "claude-haiku-4-5", usage: $u, content: $c}}')"
+printf '%s' "$PART" >> "$F1"; umpass; A2="$(usf s1 '.turns')"; printf '\n' >> "$F1"; umpass; A3="$(usf s1 '[.turns, .tokens.input] | join("|")')"
+head -3 "$F1" > "$F1.new" && mv "$F1.new" "$F1"; umpass; A4="$(usf s1 '[.turns, .tokens.input, .costPriced, .tools.Bash.calls, .userMessages] | join("|")')"
+head -1 "$SUB" > "$SUB.new" && mv "$SUB.new" "$SUB"; umpass; A5="$(usf s1 '[.turns, .tokens.input, .costPriced, (.tools.Bash.calls // 0)] | join("|")')"
+A6="$(grep -rlF SECRET "$PM" | wc -l | tr -d ' ' || true)"
+rm -rf "$F1" "$PD/s1"; umpass; A7="$(jq -r '[(.sessions | has("s1")), ([.files | keys[] | select(test("/s1"))] | length)] | join("|")' "$PM/state.json" 2>/dev/null || true)"
+check "usage parse: a pass with no new bytes changes no store file (state.json only in lastPass); a subagent file is merged into its parent (a response it repeats counts once, its prompt is no user message); a half-written last line waits for its newline; a truncated main file or subagent file recomputes the session from the start; a deleted file leaves state.json; no prompt, reply, tool input or output text is stored" "$A0|$A1|$A2|$A3|$A4|$A5|$A6|$A7" "0:same:nonew|0:4|1|3001000|2|4.8035:1|4|5|4001000|2|2000000|3.695|1|1|1|1000000|2.695|0|0|false|0"
+# cost = max(priced, cost-state), never lower than the priced sum; lines from cost-state when it carries them
+umpk; W="/w/a/devgd-300/src"; F3="$PD/cs1.jsonl"
+pb() { jq -nc --arg ts "$2" --arg id "$3" --arg cmd "$4" --arg cwd "${5:-/w/a/devgd-300/src}" '{type: "assistant", timestamp: $ts, cwd: $cwd, message: {id: "b-\($id)", role: "assistant", model: "claude-haiku-4-5", content: [{type: "tool_use", id: $id, name: "Bash", input: {command: $cmd}}]}}' >> "$1"; }
+pu "$F3" 2026-10-27T10:00:00.000Z "$W" "go"
+pa "$F3" 2026-10-27T10:00:01.000Z "$W" c1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"tw","name":"Write","input":{"content":"1\n2\n3\n"}}]'
+pj "$F3" '{"type":"cost-state","totalCostUSD":0.5,"totalLinesAdded":7,"totalLinesRemoved":2}'
+umpass; C1="$(usf cs1 '[.cost, .costPriced, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+pj "$F3" '{"type":"cost-state","totalCostUSD":4.25,"totalLinesAdded":8,"totalLinesRemoved":2}'; umpass; C2="$(usf cs1 '[.cost, .costPriced, .costState] | join("|")')"
+pa "$F3" 2026-10-27T10:00:02.000Z "$W" c2 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'; umpass; C3="$(usf cs1 '[.cost, .costPriced] | join("|")')"
+for i in 3 4 5; do pa "$F3" 2026-10-27T10:00:0$i.000Z "$W" "c$i" claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'; done; umpass; C4="$(usf cs1 '[.cost, .costPriced, .costState] | join("|")')"
+F4="$PD/cs2.jsonl"; pu "$F4" 2026-10-27T10:00:00.000Z "$W" "go"; pa "$F4" 2026-10-27T10:00:01.000Z "$W" d1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"tool_use","id":"te","name":"Edit","input":{"new_string":"a\nb","old_string":"x"}}]'
+pj "$F4" '{"type":"cost-state","totalCostUSD":9.5}'; umpass; C5="$(usf cs2 '[.cost, .costPriced, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+# the kit filter: a session is the kit's when its first cwd is a mapped worktree (or under one) or its first prompt is a role message
+umpk; W="/w/a/devgd-300/src"; RM="Read /k/prompts/programmer/common-workers.md and /k/prompts/programmer/tester.md and adopt that role."
+kses() {  # kses <sid> <cwd> <first prompt> [second prompt]
+  local f="$PD/$1.jsonl"; pj "$f" '{"type":"file-history-snapshot","messageId":"x"}'; pu "$f" 2026-10-27T10:00:00.000Z "$2" "$3"
+  [ -z "${4:-}" ] || pu "$f" 2026-10-27T10:00:01.000Z "$2" "$4"
+  pa "$f" 2026-10-27T10:00:02.000Z "$2" "m-$1" claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
+}
+kses k1 "$W" "hello"; kses k2 /w/a/other "hello"; kses k3 /unmapped/x "$RM"; kses k4 /unmapped/y "hello"; kses k5 /w/a/devgd-300 "# TASK task_abcdef1234 do it"
+kses k6 /w/a-other "hello"; kses k7 /unmapped/z "hello" "$RM"; kses k8 "$W" "hello" "Read /k/prompts/programmer/dev.md and adopt that role."
+umpass
+ku() { local o; o="$(usf "$1" '[.task, .orca_roles_role, .effort, .turns] | join("/")')"; printf '%s ' "${o:-absent}"; }
+K1="$(for k in k1 k2 k3 k4 k5 k6 k7 k8; do ku $k; done)"
+printf '%s\n' '{"ts":"2026-10-27T12:00:00Z","path":"/unmapped/y","physical":"/unmapped/y","project":"p2","task":"late"}' >> "$PM/worktrees.jsonl"; umpass; K2="$(ku k4)$(ku k6)"
+K3="$(jq -r '[.sessions | keys[]] | join(",")' "$PM/state.json" 2>/dev/null || true)"
+check "usage parse: kit sessions only: cwd under a mapped worktree (the longest path gives the task, a sibling folder that only shares the prefix is not under it), a first-prompt role message with an unmapped cwd (task empty), a dispatch start with no role message (role empty), the role from the second prompt; a plain session in an unmapped folder, or whose role message is not its first prompt, is absent; a worktree mapped later brings an ignored session in; absent sessions keep no totals in state" "$K1|$K2|$K3" "devgd-292//medium/1 outer//medium/1 /tester/medium/1 absent devgd-292//medium/1 absent absent devgd-292/dev/medium/1 |late//medium/1 absent |k1,k2,k3,k4,k5,k8"
+W="/w/a/devgd-300/src"; umpk; CL="/k/bin/clean.sh --msg planner"
+pu "$PD/c1.jsonl" 2026-10-27T10:00:00.000Z "$W" "hello"; pb "$PD/c1.jsonl" 2026-10-27T10:00:05.000Z cb1 "$CL" "$W"
+pu "$PD/c2.jsonl" 2026-10-27T10:00:00.000Z "$W" "Read /k/prompts/programmer/dev.md and adopt that role."; pb "$PD/c2.jsonl" 2026-10-27T10:00:05.000Z cb2 "$CL" "$W"
+pu "$PD/c3.jsonl" 2026-10-27T10:00:00.000Z "$W" "hello"; pb "$PD/c3.jsonl" 2026-10-27T10:00:05.000Z cb3 "echo \"$CL\"" "$W"
+umpass; CR="$(usf c1 .orca_roles_role)|$(usf c2 .orca_roles_role)|$(usf c3 .orca_roles_role)"
+check "usage parse: a session restarted with /clear gets its role from the first main-session Bash call of <path>/bin/clean.sh --msg <role> (planner), a role message still wins (dev), and clean.sh inside a quoted string gives no role" "$CR" "planner|dev|"
+# worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the prompt naming the task, and the commits of Bash tool calls
+umpk; W="/w/a/devgd-300/src"; F5="$PD/vd.jsonl"; WD='orca orchestration send --from term_x --type worker_done'
+pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Please do task_abcdef01 now"
+pb "$F5" 2026-10-27T10:00:30.000Z v1 "$WD --subject \"VERDICT: ACCEPTED\" --body \"all good\" --task-id task_abcdef01 --dispatch-id d --outcome succeeded --json"
+pb "$F5" 2026-10-27T10:00:40.000Z v2 "$WD --subject \"VERDICT: REJECTED\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:00:50.000Z v3 "$WD --subject \"done\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:00.000Z v4 "$WD --subject done --body 'REJECTED: nope' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:10.000Z v5 "$WD --subject 'ACCEPTED' --body 'REJECTED' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:20.000Z v6 "$WD --subject UNACCEPTED --body unrejected --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:30.000Z v7 "$WD --subject 'accepted' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:01:40.000Z v8 "$WD --subject ACCEPTED --task-id task_ffffffff99"
+pb "$F5" 2026-10-27T10:01:50.000Z v9 "$WD --subject \"VERDICT: ACCEPTED\" --body \"it's fine' --task-id task_abcdef01"
+pb "$F5" 2026-10-27T10:02:00.000Z g0 "ls -la"
+pb "$F5" 2026-10-27T10:02:10.000Z g1 "git commit -m x"; pr "$F5" 2026-10-27T10:02:11.000Z g1 false "[main abc] x
+ 3 files changed, 12 insertions(+), 4 deletions(-)"
+pb "$F5" 2026-10-27T10:02:20.000Z g2 "git -C /w/a commit -m y"; pr "$F5" 2026-10-27T10:02:21.000Z g2 false " 1 file changed, 1 insertion(+)"
+pb "$F5" 2026-10-27T10:02:30.000Z g3 "git commit -m failed"; pr "$F5" 2026-10-27T10:02:31.000Z g3 true " 9 files changed, 99 insertions(+), 99 deletions(-)"
+pb "$F5" 2026-10-27T10:02:40.000Z g4 "git add -A && git commit -m z"; pr "$F5" 2026-10-27T10:02:41.000Z g4 false " 2 files changed, 5 deletions(-)"
+pb "$F5" 2026-10-27T10:02:50.000Z g5 "echo \"git commit\""; pr "$F5" 2026-10-27T10:02:51.000Z g5 false " 7 files changed, 70 insertions(+)"
+pb "$F5" 2026-10-27T10:03:00.000Z g6 "git status"; pr "$F5" 2026-10-27T10:03:01.000Z g6 false " 7 files changed, 70 insertions(+)"
+umpass
+V1="$(usf vd '[.workerDone[] | "\(.verdict):\(.seconds)"] | join(",")')"; V2="$(usf vd '.commits | [.count, .insertions, .deletions] | join("|")')"; V3="$(usf vd '[.tools.Bash.calls, .tools.Bash.errors] | join("|")')"
+check "usage parse: worker_done verdict from --subject first, then a literal --body, never from a body built by \$( ) or backticks, only the words ACCEPTED/REJECTED (not UNACCEPTED, not lower case), also when the command has an unbalanced quote; seconds from the prompt that names the task id to the send (null when no prompt names it); commits from Bash git commit calls that succeeded, with insertions and deletions from the result (singular forms, missing parts 0; a failed commit, an echo and other git commands do not count)" "$V1|$V2|$V3" "ACCEPTED:30,REJECTED:40,:50,REJECTED:60,ACCEPTED:70,:80,:90,ACCEPTED:null,ACCEPTED:110|3|13|9|16|1"
+# a pass reads only the global config: disabled -> nothing read or written; a live lock -> no work; a dead one is taken over; rotation once per UTC day
+umpass() { if KIT="${UMKIT:-$PK}" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" "${@:---once}" > "$UM/pass.out" 2> "$UM/pass.err"; then UPRC=0; else UPRC=$?; fi; }
+umpk; kses g1 /unmapped/g "$RM"; PK2="$UM/pk2"; rm -rf "$PK2"; mkdir -p "$PK2"; chmod 000 "$PD/g1.jsonl"
+jq '.settings.metrics.enabled = false' "$HC" > "$PK2/config.json"; UMKIT="$PK2" umpass; G1="$UPRC:$([ -e "$PK2/metrics" ] && echo wrote || echo none)"
+rm -f "$PK2/config.json"; jq '.settings.metrics.enabled = false' "$HC" > "$PK2/config.default.json"; UMKIT="$PK2" umpass; G2="$UPRC:$([ -e "$PK2/metrics" ] && echo wrote || echo none)"
+chmod 644 "$PD/g1.jsonl"; cp "$HC" "$PK2/config.default.json"; UMKIT="$PK2" umpass; G3="$UPRC:$([ -d "$PK2/metrics" ] && echo wrote || echo none):$(KIT="$PK2" HOME="$TMP/home" bash "$ROOT/bin/usage-metrics.sh" --report --json 2>/dev/null | jq -r .total.sessions 2>/dev/null || true)"
+jq '.settings.metrics.enabled = false' "$HC" > "$PK2/config.json"; G4="$(KIT="$PK2" HOME="$TMP/home" bash "$ROOT/bin/usage-metrics.sh" --report --json 2>/dev/null | jq -r .total.sessions 2>/dev/null || true)"
+sleep 30 & LPID=$!; mkdir -p "$PM/pass.lock"; echo "$LPID" > "$PM/pass.lock/pid"; umpass; L1="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle):$([ -d "$PM/pass.lock" ] && echo kept)"
+kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null || true; echo "$LPID" > "$PM/pass.lock/pid"; umpass; L2="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle):$([ -d "$PM/pass.lock" ] && echo kept || echo released):$(usf g1 '.turns')"
+rm -rf "$PM/state.json" "$PM"/sessions-*.jsonl; mkdir -p "$PM/pass.lock"; umpass; L3="$UPRC:$([ -e "$PM/state.json" ] && echo ran || echo idle)"; rm -rf "$PM/pass.lock"
+umday() { python3 -I -c 'import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=int(sys.argv[1]))).isoformat())' "$1"; }
+umpk; jq '.settings.metrics.retentionDays = 30' "$HC" > "$PK/config.json"; printf '{"ts":"x"}\n' > "$PM/events.jsonl"; cp "$PM/worktrees.jsonl" "$UM/wt.keep"
+for d in 100 31 30 29 0; do echo '{}' > "$PM/sessions-$(umday $d).jsonl"; done; echo '{}' > "$PM/sessions-2020-01-01.jsonl.bak"
+umpass; R1="$(find "$PM" -maxdepth 1 -name 'sessions-20??-??-??.jsonl' | wc -l | tr -d ' '):$(find "$PM" -maxdepth 1 \( -name "sessions-$(umday 100).jsonl" -o -name "sessions-$(umday 31).jsonl" \) | wc -l | tr -d ' '):$([ -e "$PM/sessions-$(umday 30).jsonl" ] && echo b30):$([ -e "$PM/sessions-2020-01-01.jsonl.bak" ] && echo decoy):$(cat "$PM/events.jsonl"):$(cmp -s "$PM/worktrees.jsonl" "$UM/wt.keep" && echo wt):$([ -s "$PM/state.json" ] && echo state || echo nostate)"
+echo '{}' > "$PM/sessions-$(umday 200).jsonl"; umpass; R2="$([ -e "$PM/sessions-$(umday 200).jsonl" ] && echo kept || echo gone)"
+jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; umpass; R3="$([ -e "$PM/sessions-$(umday 200).jsonl" ] && echo kept || echo gone):$([ -e "$PM/sessions-$(umday 29).jsonl" ] && echo b29 || echo no29)"
+jq '.settings.metrics.retentionDays = "30"' "$HC" > "$PK/config.json"; echo '{}' > "$PM/sessions-$(umday 100).jsonl"; echo '{}' > "$PM/sessions-$(umday 31).jsonl"
+jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; umpass; R4="$([ -e "$PM/sessions-$(umday 100).jsonl" ] && echo kept || echo gone):$([ -e "$PM/sessions-$(umday 31).jsonl" ] && echo kept || echo gone)"
+check "usage parse: rotation on the first pass of a UTC day removes the daily files older than retentionDays (the day exactly retentionDays old stays) and nothing else (state.json, worktrees.jsonl, events.jsonl, a file that is not a daily file); a second pass the same day removes nothing more; an invalid retentionDays falls back to 90" "$R1|$R2|$R3|$R4" "3:0:b30:decoy:{\"ts\":\"x\"}:wt:state|kept|gone:b29|gone:kept"
+# --report: the latest line of each session, totals = sums by task, role and model, --task and --since filters, text and --json; and the same tokens and cost as bin/metrics.sh on one transcript
+umpk; W="/w/a/devgd-300/src"; RD="Read /k/prompts/programmer/dev.md and adopt that role."; RT="Read /k/prompts/programmer/tester.md and adopt that role."
+F6="$PD/r1.jsonl"; pu "$F6" 2026-10-27T10:00:00.000Z "$W" "$RD"; pa "$F6" 2026-10-27T10:00:01.000Z "$W" r1a claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
+F7="$PD/r2.jsonl"; pu "$F7" 2026-10-27T10:00:00.000Z "$W" "$RT"; pa "$F7" 2026-10-27T10:00:01.000Z "$W" r2a claude-opus-4-5 '{"output_tokens":1000000}' '[{"type":"text","text":"x"}]'
+F8="$PD/r3.jsonl"; pu "$F8" 2026-09-01T10:00:00.000Z /w/a/o "plain"; pa "$F8" 2026-09-01T10:00:01.000Z /w/a/o r3a claude-haiku-4-5 '{"output_tokens":1000000}' '[{"type":"text","text":"x"}]'
+umpass; pa "$F6" 2026-10-27T10:05:00.000Z "$W" r1b claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"y"}]'; sleep 1; umpass
+jqr() { jq -r "$@" 2>/dev/null || true; }
+RJ="$(umrep --json || true)"
+P1="$(jqr '[.total.sessions, .total.cost, .total.tokens.input, .total.tokens.output] | join("|")' <<< "$RJ")"
+P2="$(jqr '[(.byTask | to_entries[] | "\(.key):\(.value.sessions):\(.value.cost)"), (.byRole | to_entries[] | "\(.key):\(.value.sessions):\(.value.cost)"), (.byModel | to_entries[] | "\(.key):\(.value.sessions):\(.value.cost)")] | join(",")' <<< "$RJ")"
+P3="$(jqr '[.total.cost, ([.byTask[].cost] | add), ([.byRole[].cost] | add), .total.costByType.input, .total.costByType.output] | join("|")' <<< "$RJ")"
+P4="$(umrep --json --task devgd-292 | jqr '[.task, .total.sessions, .total.cost] | join("|")'):$(umrep --json --since 2026-10-01 | jqr '[.total.sessions, .total.cost] | join("|")'):$(umrep --json --since 2026-10-28 | jqr '[.total.sessions, .total.cost] | join("|")'):$(umrep --json --task nope | jqr .total.sessions)"
+P5="$(umrepx --since 2026-13 >/dev/null; echo $?):$(umrepx --bogus >/dev/null; echo $?):$(umrep | head -1 | grep -c '^total  *3 sessions' || true)"
+CCH="$UM/cch"; rm -rf "$CCH"; PKM="$UM/pkm"; rm -rf "$PKM"; mkdir -p "$PKM" "$CCH/projects/$(printf '%s' "$UMPB" | tr '/.' '--')"; cp "$HC" "$PKM/"
+F9="$CCH/projects/$(printf '%s' "$UMPB" | tr '/.' '--')/mt1.jsonl"; pu "$F9" 2026-10-27T10:00:00.000Z "$UMPB" "$RD"
+for i in 1 2 3; do pa "$F9" 2026-10-27T10:00:0$i.000Z "$UMPB" mt1 claude-haiku-4-5 "$U1" '[{"type":"text","text":"x"}]'; done
+pa "$F9" 2026-10-27T10:01:00.000Z "$UMPB" mt2 claude-opus-4-5 '{"input_tokens":3000,"output_tokens":700,"cache_read_input_tokens":9000,"cache_creation_input_tokens":500}' '[{"type":"text","text":"y"}]'
+pj "$F9" '{"type":"cost-state","totalCostUSD":12.5}'
+UMKIT="$PKM" PC="$CCH/projects" umpass
+P6="$(cd "$UMB" && HOME="$TMP/home" CLAUDE_CONFIG_DIR="$CCH" "$TMP/home/.orca-roles/bin/metrics.sh" | jqr '[.turns, .input, .output, .cacheRead, .cacheWrite, .maxContext, .usd] | join("|")')=$(jqr '[.turns, .tokens.input, .tokens.output, .tokens.cacheRead, .tokens.cacheCreation, .maxContext, .cost] | join("|")' "$PKM"/metrics/sessions-*.jsonl)"
+check "usage report: the latest store line of each session counts once (a session stored in two passes), totals equal the sums by task, role and model, --task and --since (by the session's last line) filter, an invalid --since or option is exit 2, the text form has a total row; a fixture session gives the same turns, tokens, max context and cost as bin/metrics.sh on the same transcript" "$(printf '%s' "$P1|$P2|$P3|$P4|$P5" | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g'):$(printf '%s' "$P6" | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g;s/=/ /' | awk '{print ($1 == $2) ? "same" : $0}')" "3|32|2000000|2000000|devgd-292:2:27,outer:1:5,:1:5,dev:1:2,tester:1:25,claude-haiku-4-5:2:7,claude-opus-4-5:1:25|32|32|32|2|30|devgd-292|2|27:2|27:0|0:0|2:2:1:same"
+# round 2: the cost-state counters never decrease, worker_done only from a real `orca orchestration send` command, commits only from a real `git commit` command
+umpk; W="/w/a/devgd-300/src"; F10="$PD/dc.jsonl"
+pu "$F10" 2026-10-27T10:00:00.000Z "$W" "go"
+pa "$F10" 2026-10-27T10:00:01.000Z "$W" e1 claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
+pj "$F10" '{"type":"cost-state","totalCostUSD":4.25,"totalLinesAdded":8,"totalLinesRemoved":2}'
+umpass; DC1="$(usf dc '[.cost, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+pj "$F10" '{"type":"cost-state","totalCostUSD":3.0,"totalLinesAdded":5,"totalLinesRemoved":6}'; umpass; DC2="$(usf dc '[.cost, .costState, .lines.added, .lines.removed] | join("|")')"
+pj "$F10" '{"type":"cost-state","totalCostUSD":1.0}'; umpass; DC3="$(usf dc '[.cost, .costState, .lines.added, .lines.removed, .lines.source] | join("|")')"
+pj "$F10" '{"type":"cost-state","totalCostUSD":4.5,"totalLinesAdded":9,"totalLinesRemoved":3}'; umpass; DC4="$(usf dc '[.cost, .costState, .lines.added, .lines.removed] | join("|")')"
+DCS="$(jq -r 'select(.session_id == "dc") | .cost' "$PM"/sessions-*.jsonl | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g' | tr '\n' ' ')"
+check "usage parse: the cost-state counters never go down: a later cost-state with a lower cost, lower added lines, or only a cost keeps the largest value of each field (cost, costState, lines added and removed, each on its own), also across passes, and the stored cost of the session never decreases from one pass to the next" "$DC1|$DC2|$DC3|$DC4|$DCS" "4.25|4.25|8|2|cost-state|4.25|4.25|8|6|4.25|4.25|8|6|cost-state|4.5|4.5|9|6|4.25 4.25 4.25 4.5 "
+umpk; F12="$PD/gc.jsonl"; pu "$F12" 2026-10-27T10:00:00.000Z "$W" "go"
+GC=("git commit -m x" "git -C /w commit -m y" "git -c user.name=a commit -m z" "cd x && git commit -m q" "echo a | git commit -F -" "git add . ; git commit -m r" $'git add .\ngit commit -m s' "FOO=1 git commit -m t" "/usr/bin/git commit -m u"
+  "git --git-dir=.git commit -m v" "git --no-pager commit -m w" "git --git-dir /x --work-tree /y commit -m a1" "git -C a -C b commit -m a2" "git commit --amend" "(git commit -m a3)" "cd x; git commit -m \"it's"
+  "git commit-tree abc" "echo git commit" "echo \"git commit -m x\"" "rg 'git commit' docs" "git status" "git log --grep commit" "git -C commit status" "git push" "git config alias.commit x" "# git commit" "gitk commit" "echo \"git commit -m x" "git --no-pager log")
+GN=16; i=0
+for c in "${GC[@]}"; do i=$((i + 1)); pb "$F12" "$(printf '2026-10-27T10:%02d:00.000Z' "$i")" "g$i" "$c"; pr "$F12" "$(printf '2026-10-27T10:%02d:30.000Z' "$i")" "g$i" false " 1 file changed, 2 insertions(+)"; done
+umpass; GC1="$(usf gc '.commits | [.count, .insertions, .deletions] | join("|")')"
+check "usage parse: commits count only a real git command whose first non-option word is commit (also after a pipe, &&, ;, a newline, parentheses, VAR=x, a path to git, -C/-c/--git-dir/--work-tree with their argument, an unbalanced quote after ;); git commit-tree, echo git commit, rg/quoted/commented text, a folder named commit after -C, other git subcommands, gitk and unbalanced echo text do not" "$GC1" "$GN|$((GN * 2))|0"
+# live push: a fake local server (OTLP endpoint and Prometheus API in one, on a free port, started and stopped here) and fixture sessions with timestamps relative to now
+cat > "$UM/fake.py" <<'PYE'
+import json, os, re, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+D, PORTF = sys.argv[1], sys.argv[2]
+os.makedirs(D + "/posts", exist_ok=True)
+n = [0]
+def cfg():
+    try:
+        with open(D + "/cfg.json") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+def log(s):
+    with open(D + "/req.log", "a") as f:
+        f.write(s + "\n")
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def out(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        n[0] += 1
+        with open(D + "/posts/%03d.json" % n[0], "wb") as f:
+            f.write(body)
+        log("POST %s %s" % (self.path, self.headers.get("Content-Type")))
+        c = cfg()
+        if c.get("post_delay"):
+            time.sleep(c["post_delay"])
+        self.out(c.get("post_status", 200), {})
+    def do_GET(self):
+        u = urlparse(self.path); q = parse_qs(u.query); c = cfg()
+        log("GET " + u.path + " " + json.dumps(q))
+        if u.path == "/api/v1/series":
+            if c.get("series_status", 200) != 200:
+                return self.out(c["series_status"], {})
+            mm = re.search(r'session_id="([^"]*)"', q["match[]"][0])
+            if mm:
+                return self.out(200, {"status": "success", "data": c.get("old", {}).get(mm.group(1), [])})
+            if c.get("const_status", 200) != 200:
+                return self.out(c["const_status"], {})
+            return self.out(200, {"status": "success", "data": c.get("constants", [])})
+        if u.path == "/api/v1/status/tsdb":
+            return self.out(200, {"status": "success", "data": {"headStats": {"minTime": c.get("head_ms", 0)}}})
+        if u.path == "/-/ready":
+            return self.out(c.get("ready_status", 200), {})
+        if u.path == "/api/v1/query" and q["query"][0].startswith("sum by"):
+            return self.out(200, {"status": "success", "data": {"resultType": "vector", "result": [{"metric": {"task": k}, "value": [0, str(v)]} for k, v in c.get("totals", {}).items()]}})
+        if u.path == "/api/v1/query":
+            qs = q["query"][0]; fn = qs.split("(")[0]
+            mm = re.search(r"([a-zA-Z_:]+)\{(.*)\}\[", qs)
+            name = mm.group(1); labels = dict(re.findall(r'(\w+)="([^"]*)"', mm.group(2))); sid = labels["session_id"]
+            for o in c.get("old", {}).get(sid, []):
+                if o["__name__"] == name and all(o.get(k) == v for k, v in labels.items()):
+                    v = c["values"][sid + "|" + name + "|" + o.get("model", "") + "|" + o.get("type", "")]
+                    val = {"resets": v[2], "last_over_time": v[0], "timestamp": v[1]}[fn]
+                    return self.out(200, {"status": "success", "data": {"resultType": "vector", "result": [{"metric": o, "value": [0, str(val)]}]}})
+            return self.out(200, {"status": "success", "data": {"resultType": "vector", "result": []}})
+        self.out(404, {})
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+with open(PORTF, "w") as f:
+    f.write(str(s.server_address[1]))
+threading.Timer(240, lambda: os._exit(0)).start()
+pp = os.getppid()
+def watch():
+    while os.getppid() == pp:
+        time.sleep(0.5)
+    os._exit(0)
+threading.Thread(target=watch, daemon=True).start()
+s.serve_forever()
+PYE
+fstart() { rm -rf "$UM/fs" "$UM/fake.port"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>&1 & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 150 ]; do sleep 0.2; n=$((n+1)); done; FP="$(cat "$UM/fake.port")"; }
+fstop() { kill "$FPID" 2>/dev/null || true; wait "$FPID" 2>/dev/null || true; }
+fcfg() { printf '%s' "$1" > "$UM/fs/cfg.json"; }
+fposts() { find "$UM/fs/posts" -name '*.json' | wc -l | tr -d ' '; }
+fgets() { grep -c "$1" "$UM/fs/req.log" 2>/dev/null || true; }
+umcfg() {  # umcfg [otlp host] [prometheus host] [allowRemote]: the fake server as the collector and Prometheus
+  jq --arg o "http://${1:-127.0.0.1}:$FP/v1/metrics" --arg p "http://${2:-127.0.0.1}:$FP" --argjson a "${3:-false}" '.settings.metrics.otlpEndpoint = $o | .settings.metrics.prometheusUrl = $p | .settings.metrics.allowRemote = $a' "$HC" > "$PK/config.json"
+}
+umts() { python3 -I -c 'import datetime, sys; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%S.000Z"))' "$1"; }
+RDEV="Read /k/prompts/programmer/dev.md and adopt that role. do task_abcdef01"
+ps1() {  # ps1 <sid> <input1> <input2>: a mapped dev session with two responses, a Bash call and a worker_done send, its lines at now-120 .. now-30 s
+  local f="$PD/$1.jsonl" W="/w/a/devgd-300/src"
+  pu "$f" "$(umts -120)" "$W" "$RDEV"
+  pa "$f" "$(umts -100)" "$W" "$1-m1" claude-haiku-4-5 "{\"input_tokens\":$2,\"output_tokens\":100}" '[{"type":"tool_use","id":"tb1","name":"Bash","input":{"command":"ls"}}]'
+  pr "$f" "$(umts -95)" tb1 false "out"
+  pa "$f" "$(umts -30)" "$W" "$1-m2" claude-haiku-4-5 "{\"input_tokens\":$3,\"output_tokens\":0}" '[{"type":"text","text":"x"}]'
+}
+ps_more() { pa "$PD/$1.jsonl" "$(umts -1)" /w/a/devgd-300/src "$1-m$2" claude-haiku-4-5 "{\"input_tokens\":$3}" '[{"type":"text","text":"x"}]'; }
+pbody() { jq -r "$2" "$UM/fs/posts/$(printf '%03d' "$1").json" 2>/dev/null | sed -E 's/([0-9])\.0([^0-9]|$)/\1\2/g' || true; }
+umpk; fstart; umcfg
+ps1 s1 400 300
+pb "$PD/s1.jsonl" "$(umts -20)" wd1 "orca orchestration send --type worker_done --subject \"VERDICT: ACCEPTED\" --task-id task_abcdef01"
+kses h1 /w/a/devgd-300/src "hello"; python3 -I - "$PD/h1.jsonl" <<'PYE'
+import sys, re
+p = sys.argv[1]; s = open(p).read(); open(p, "w").write(re.sub(r'2026-10-27T10:00:0\d\.000Z', '2020-01-01T00:00:00.000Z', s))
+PYE
+kses u1 /unmapped/q "plain"
+umpass; X1="$(fposts)"; umpass; X2="$(fposts)"
+ps_more s1 3 50; umpass; X3="$(fposts)"; umpass; X4="$(fposts)"
+fcfg '{"post_status":500}'; ps_more s1 4 20; umpass; X5="$(fposts):$(grep -c 'push refused: HTTP 500' "$PM/usage-metrics.log" || true)"
+fcfg '{}'; umpass; X6="$(fposts):$(pbody "$(fposts)" '[.resourceMetrics[].resource.attributes[] | select(.key == "session.id") | .value.stringValue] | join(",")')"
+X7="$(pbody "$(fposts)" '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "claude_code.token.usage") | .sum.dataPoints[] | select(.attributes[] | .key == "type" and .value.stringValue == "input") | .asDouble')"; umpass; X8="$(fposts)"
+H1="$(for n in $(seq 1 "$(fposts)"); do pbody "$n" '[.resourceMetrics[].resource.attributes[] | select(.key == "session.id") | .value.stringValue] | join(",")'; done | tr '\n' ' ')"
+ps_more h1 9 5; umpass; X9="$(fposts):$(pbody "$(fposts)" '[.resourceMetrics[].resource.attributes[] | select(.key == "session.id") | .value.stringValue] | join(",")')"
+check "usage push: a session with new transcript lines is pushed once per change (an idle pass sends nothing), a refused push (HTTP 500) is logged and retried by the next pass and then not repeated, a session that ended long before (history) is pushed only once it has a new line, a session that is not the kit's never" "$X1:$X2:$X3:$X4:$X5:$X6:$X7:$X8:$H1:$X9" "1:1:2:2:3:1:4:s1:770:4:s1 s1 s1 s1 :5:h1"
+FT="$(jq -r 'select(.type == "user") | .timestamp' "$PD/s1.jsonl" | head -1)"; ST="$(printf '%s' "$FT" | jq -R 'sub("\\.000Z$"; "Z") | fromdateiso8601 * 1000000000 | tostring' | tr -d '"')"
+pall() { pbody 1 "$1" | tr '\n' ','; }
+R1="$(pall '[.resourceMetrics[0].resource.attributes[] | "\(.key)=\(.value.stringValue)"] | sort | join(",")')"
+R2="$(pall '[.. | objects | select(has("sum")) | .sum | [.isMonotonic, .aggregationTemporality]] | unique | tostring')$(pall '[.. | objects | select(has("gauge")) | .name] | sort | join(" ")')"
+R3="$(pall '[.. | objects | select(has("sum")) | .sum.dataPoints[].startTimeUnixNano] | unique | join(" ")')$(pall '[.. | objects | select(has("gauge")) | .gauge.dataPoints[] | has("startTimeUnixNano")] | unique | tostring')"
+R4="$(pall '[.. | objects | select(has("timeUnixNano")) | .timeUnixNano | tonumber / 1e9 | floor] | unique | length')"
+R5="$(pall '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "claude_code.token.usage") | .sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"' | tr -d '\n')"
+R6="$(pall '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "claude_code.cost.usage") | .sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble * 1000000 | round)"')$(pall '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "claude_code.session.count") | .sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"')"
+R7="$(grep -m1 '^POST' "$UM/fs/req.log" | tr ' ' '_'):$(grep -c 'adopt that role\|task_abcdef01\|echo' "$UM/fs/posts/001.json" || true)"
+check "usage push payload: one ResourceMetrics per session with the resource attributes service.name=claude-code, service.version, session.id, task and orca_roles.role (and none of job, instance, project, session_id), content type application/json, cumulative monotonic sums (temporality 2) all starting at the session's first line, the two gauges without a start time, one time stamp, no prompt or tool text; the three dashboard instruments with their old names, units and data point attributes (type/model/effort/query_source, model/effort/query_source, start_type)" "$R1|$R2|$R3|$ST|$R4|$R5|$R6|$R7" "orca_roles.role=dev,service.name=claude-code,service.version=2.1.311,session.id=s1,task=devgd-292,|[[true,2]],orca_roles.cache.savings orca_roles.context.max,|$ST,[false],|$ST|1,|input/claude-haiku-4-5/medium/main=700,output/claude-haiku-4-5/medium/main=100,cacheRead/claude-haiku-4-5/medium/main=0,cacheCreation/claude-haiku-4-5/medium/main=0,|claude-haiku-4-5/medium/main=1200,fresh=1,|POST_/v1/metrics_application/json:0"
+R8="$(pall '[.resourceMetrics[0].scopeMetrics[0].metrics[] | "\(.name):\(.unit):\(if has("sum") then "sum" else "gauge" end)"] | sort | join(",")')"
+R9="$(pbody 1 '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "orca_roles.cost.by_type" or .name == "orca_roles.lines" or .name == "orca_roles.commit.lines" or .name == "orca_roles.verdicts" or .name == "orca_roles.tool.calls" or .name == "orca_roles.task.duration") | "\(.name)[\([.sum.dataPoints[] | [.attributes[] | .value.stringValue] | join("/")] | sort | join(" "))]"' | sort | tr '\n' ',')"
+check "usage push instruments: exactly the instruments of the header table with their units and kinds (sum or gauge), and the data point attributes of by-type cost (input output cacheRead cacheWrite webSearch), lines (added removed), commit lines (insertions deletions), verdicts and task duration by verdict, tool metrics by tool name" "$R8|$R9" "claude_code.cost.usage:USD:sum,claude_code.session.count::sum,claude_code.token.usage:tokens:sum,orca_roles.api.errors::sum,orca_roles.cache.savings:USD:gauge,orca_roles.commit.lines::sum,orca_roles.commits::sum,orca_roles.compactions::sum,orca_roles.context.max:tokens:gauge,orca_roles.cost.by_type:USD:sum,orca_roles.lines::sum,orca_roles.model.changes::sum,orca_roles.task.duration:s:sum,orca_roles.thinking:tokens:sum,orca_roles.tool.calls::sum,orca_roles.tool.duration:s:sum,orca_roles.tool.errors::sum,orca_roles.turns::sum,orca_roles.user.messages::sum,orca_roles.verdicts::sum,|orca_roles.commit.lines[deletions insertions],orca_roles.cost.by_type[cacheRead/claude-haiku-4-5 cacheWrite/claude-haiku-4-5 input/claude-haiku-4-5 output/claude-haiku-4-5 webSearch/claude-haiku-4-5],orca_roles.lines[added removed],orca_roles.task.duration[ACCEPTED],orca_roles.tool.calls[Bash],orca_roles.verdicts[ACCEPTED],"
+umpk; fstop; fstart; umcfg
+CONST='[{"__name__":"claude_code_cost_usage_USD_total","job":"claude-code","instance":"i1","session_id":"zzz","model":"m","effort":"low","project":"p","user_id":"u-1","user_email":"a@b.c","user_account_uuid":"acc","organization_id":"org-1","host_arch":"arm64","os_type":"darwin","os_version":"25.1","terminal_type":"tmux","service_name":"claude-code","service_version":"9.9.9"}]'
+cattrs() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key | test("^(user_|organization_id$|host_arch$|os_|terminal_type$|job$|instance$|project$|effort$|model$|session_id$|service_name$)")) | "\(.key)=\(.value.stringValue)"] | sort | join(",")'; }
+fcfg "{\"constants\":$CONST}"; ps1 c1 100 100; umpass; K1="$(cattrs 1):$(fgets '__name__=~')"
+ps1 c2 100 100; umpass; K2="$(fposts):$(fgets '__name__=~')"
+umpk; fstop; fstart; umcfg; fcfg "{\"constants\":$CONST,\"const_status\":500}"; ps1 c3 100 100; umpass; K3="$(fposts):$(cattrs 1)"
+umpk; fstop; fstart; umcfg; fcfg '{"constants":[]}'; ps1 c4 100 100; umpass; ps1 c5 100 100; umpass; K4="$(fposts):$(cattrs 1):$(fgets '__name__=~')"
+check "usage push constant labels: user_*, organization_id, host_arch, os_*, terminal_type are copied onto the resource from the newest claude_code_* series of Prometheus (never job, instance, project, effort, model, session_id or service_name), looked up once a day (a second session the same day does not query again), omitted when Prometheus cannot answer or has no such series (then 1d, 7d and 90d windows were tried, once)" "$K1|$K2|$K3|$K4" "host_arch=arm64,organization_id=org-1,os_type=darwin,os_version=25.1,terminal_type=tmux,user_account_uuid=acc,user_email=a@b.c,user_id=u-1:1|2:1|1:|2::3"
+# continuation of the series a session already has in Prometheus
+umpk; fstop; fstart; umcfg
+TL="$(( $(date +%s) - 60 ))"
+OLD='"job":"claude-code","instance":"i","session_id":"sc","user_id":"old-u","service_version":"2.3.1","task":"old-task","orca_roles_role":"old-role"'
+TK='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","effort":"high","query_source":"main"'
+fcfg "{\"constants\":[{\"__name__\":\"claude_code_cost_usage_USD_total\",\"user_id\":\"new-u\"}],\"old\":{\"sc\":[{$TK,\"type\":\"input\",$OLD},{$TK,\"type\":\"output\",$OLD},{\"__name__\":\"claude_code_cost_usage_USD_total\",\"model\":\"claude-haiku-4-5\",\"effort\":\"high\",\"query_source\":\"main\",$OLD},{\"__name__\":\"claude_code_session_count_total\",\"start_type\":\"resume\",$OLD}]},\"values\":{\"sc|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[1000,$TL,0],\"sc|claude_code_token_usage_tokens_total|claude-haiku-4-5|output\":[100,$TL,0],\"sc|claude_code_cost_usage_USD_total|claude-haiku-4-5|\":[5.0,$TL,0],\"sc|claude_code_session_count_total||\":[1,$TL,0]}}"
+ps1 sc 400 300; ps1 sn 400 300; umpass
+rmof() { pbody "$1" ".resourceMetrics[] | select(any(.resource.attributes[]; .key == \"session.id\" and .value.stringValue == \"$2\")) | $3"; }
+mval() { rmof "$1" "$2" ".scopeMetrics[0].metrics[] | select(.name == \"$3\") | .sum.dataPoints[] | select(any(.attributes[]; .value.stringValue == \"$4\")) | \"\\([.attributes[] | .value.stringValue] | join(\"/\"))=\\(.asDouble * 1000000 | round)\""; }
+M1="$(mval 1 sc claude_code.token.usage input | tr '\n' ' ')$(mval 1 sc claude_code.token.usage output | tr '\n' ' ')$(mval 1 sc claude_code.cost.usage claude-haiku-4-5 | tr '\n' ' ')$(mval 1 sc claude_code.session.count resume | tr '\n' ' ')"
+M2="$(mval 1 sn claude_code.token.usage input | tr '\n' ' ')$(mval 1 sn claude_code.cost.usage claude-haiku-4-5 | tr '\n' ' ')$(mval 1 sn claude_code.session.count fresh | tr '\n' ' ')"
+M3="$(rmof 1 sc '[.resource.attributes[] | select(.key | test("^(user_|task$|orca_roles|service.version)")) | "\(.key)=\(.value.stringValue)"] | sort | join(",")')|$(rmof 1 sn '[.resource.attributes[] | select(.key | test("^(user_|task$|orca_roles|service.version)")) | "\(.key)=\(.value.stringValue)"] | sort | join(",")')"
+Q0="$(fgets 'session_id')"; ps_more sc 3 50; umpass; M4="$(mval "$(fposts)" sc claude_code.token.usage input | tr '\n' ' '):$([ "$(fgets 'session_id')" = "$Q0" ] && echo cached)"
+check "usage push continuation: a session whose series already exist in Prometheus is pushed as the old value plus what the transcript added since the anchor (old 1000 above the transcript's 400 at that time + 300 = 1300; an old value equal to the transcript's at that point is the anchor itself: 100; cost anchored with its tokens; the session count continues), keeps the old labels (effort high, start_type, user_id, service.version, task, role) instead of the constants, a session with no old series starts at its transcript totals with the constants, and the offsets are cached (the next push queries nothing)" "$M1|$M2|$M3|$M4" "input/claude-haiku-4-5/high/main=1300000000 output/claude-haiku-4-5/high/main=100000000 claude-haiku-4-5/high/main=5000300 resume=1000000 |input/claude-haiku-4-5/medium/main=700000000 claude-haiku-4-5/medium/main=1200 fresh=1000000 |orca_roles_role=old-role,service.version=2.3.1,task=old-task,user_id=old-u|orca_roles.role=dev,service.version=2.1.311,task=devgd-292,user_id=new-u|input/claude-haiku-4-5/high/main=1350000000 :cached"
+# a session whose old counters reset is never pushed (logged once); Prometheus down at the first push postpones it
+umpk; fstop; fstart; umcfg
+TL="$(( $(date +%s) - 60 ))"
+OLDS='"job":"claude-code","instance":"i","session_id":"SID"'
+TKS='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","effort":"high","query_source":"main","type":"input"'
+fcfg "{\"old\":{\"sr\":[{$TKS,${OLDS//SID/sr}}],\"sp\":[{$TKS,${OLDS//SID/sp}}]},\"values\":{\"sr|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[1000,$TL,1],\"sp|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[1000,$TL,0]},\"series_status\":500}"
+ps1 sp 400 300; umpass; Z1="$(fposts):$(cat "$PM/usage-metrics.log" 2>/dev/null | wc -l | tr -d ' ' || true)"
+fcfg "{\"old\":{\"sr\":[{$TKS,${OLDS//SID/sr}}],\"sp\":[{$TKS,${OLDS//SID/sp}}]},\"values\":{\"sr|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[1000,$TL,1],\"sp|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[1000,$TL,0]}}"
+ps1 sr 400 300; umpass; Z2="$(fposts):$(pbody 1 '[.resourceMetrics[].resource.attributes[] | select(.key == "session.id") | .value.stringValue] | join(",")'):$(pbody 1 '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "claude_code.token.usage") | .sum.dataPoints[] | select(any(.attributes[]; .value.stringValue == "input")) | .asDouble'):$(grep -c 'sr not continued' "$PM/usage-metrics.log" || true)"
+ps_more sr 3 10; umpass; ps_more sr 4 10; umpass; Z3="$(fposts):$(grep -c 'sr not continued' "$PM/usage-metrics.log" || true):$(grep -c 'GET /api/v1/series.*session_id=[^ ]*sr' "$UM/fs/req.log" || true)"
+check "usage push: Prometheus unreachable at a session's first push postpones it (nothing sent, nothing logged) until it answers, then it is pushed with its continuation (old 1000 + 300 = 1300); a session whose old counters reset (resets > 0) is never pushed, even when it gets new lines, and is logged once" "$Z1|$Z2|$Z3" "0:0|1:sp:1300:1|1:1:1"
+# the loopback rule (0.0.0.0 is a remote host to the rule and still reaches the fake server), a collector that is down or slow, enabled false, batches of 25 sessions
+umlogn() { local n; n="$(grep -c "$1" "$PM/usage-metrics.log" 2>/dev/null || true)"; echo "${n:-0}"; }
+umpk; fstop; fstart; umcfg 0.0.0.0 127.0.0.1 false
+ps1 r1 100 100; umpass; T1="$(fposts):$(umlogn 'otlpEndpoint')"
+ps_more r1 3 5; umpass; T2="$(fposts):$(umlogn 'otlpEndpoint')"
+jq '.warned.otlpEndpoint = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; ps_more r1 4 5; umpass; T3="$(fposts):$(umlogn 'otlpEndpoint')"
+umcfg 127.0.0.1 0.0.0.0 false; ps_more r1 5 5; umpass; umpass; T4="$(fposts):$(umlogn 'prometheusUrl')"
+umcfg 0.0.0.0 0.0.0.0 true; ps_more r1 6 5; umpass; T5="$(fposts):$(umlogn 'is not on this machine')"
+umcfg localhost localhost false; ps_more r1 7 5; umpass; T6="$(fposts)"
+check "usage push remote rule: an endpoint that is not on this machine without allowRemote sends nothing and warns once per UTC day (the warning comes back the next day), the same for prometheusUrl (the first push waits), with allowRemote true both are used, and localhost counts as this machine" "$T1|$T2|$T3|$T4|$T5|$T6" "0:1|0:1|0:2|0:1|1:3|2"
+umpk; fstop; fstart; umcfg; DP="$FP"; fstop; ps1 d1 100 100; umcfg
+T0=$SECONDS; umpass; D1="$UPRC:$((SECONDS - T0 < 3 ? 1 : 0)):$(wc -c < "$UM/pass.out" | tr -d ' '):$(wc -c < "$UM/pass.err" | tr -d ' '):$(umlogn 'push')"
+fstart; umcfg; umpass; D2="$(fposts)"
+fcfg '{"post_delay":3}'; ps_more d1 3 5; T0=$SECONDS; ORCA_ROLES_METRICS_HTTP_TIMEOUT=1 umpass; D3="$UPRC:$((SECONDS - T0 < 3 ? 1 : 0)):$(wc -c < "$UM/pass.out" | tr -d ' '):$(wc -c < "$UM/pass.err" | tr -d ' ')"
+fcfg '{}'; umpass; D4="$(fposts)"
+G0="$(fgets GET)"; jq '.settings.metrics.enabled = false' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"; ps_more d1 4 5; umpass; D5="$(fposts):$([ "$(fgets GET)" = "$G0" ] && echo nogets)"
+check "usage push collector down: a refused connection or a slow collector (timeout) makes the pass finish at once with exit 0 and no output, nothing logged, the session stays pending and is pushed by the next pass that finds the collector; enabled false sends nothing" "$D1|$D2|$D3|$D4|$D5" "0:1:0:0:0|1|0:1:0:0|3|3:nogets"
+umpk; fstop; fstart; umcfg
+cu() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key == "user_id") | .value.stringValue] | join(",")'; }
+fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-1"}]}'; ps1 n1 100 100; umpass
+jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-2"}]}'; ps1 n2 100 100; umpass
+jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-3"}],"const_status":500}'; ps1 n3 100 100; umpass
+N1="$(cu 1):$(cu 2):$(cu 3):$(fgets '__name__=~')"
+# round 2: the pushed values live outside the session object, so a session recomputed from a rewritten transcript never pushes a lower counter
+umpk; fstop; fstart; umcfg
+gv() { pbody "$1" ".resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == \"$2\") | (.sum // .gauge).dataPoints[] | select(\"$3\" == \"\" or any(.attributes[]; .value.stringValue == \"$3\")) | .asDouble"; }
+ps1 g1 400 300; umpass; ps_more g1 3 5000; umpass
+head -3 "$PD/g1.jsonl" > "$PD/g1.new" && mv "$PD/g1.new" "$PD/g1.jsonl"; umpass; ps_more g1 4 20; umpass
+GI="$(for n in 1 2 3 4; do gv "$n" claude_code.token.usage input; done | tr '\n' ' ')"
+GT="$(for n in 1 2 3 4; do gv "$n" orca_roles.turns ''; done | tr '\n' ' ')"
+GXC="$(for n in 1 2 3 4; do gv "$n" orca_roles.context.max ''; done | tr '\n' ' ')"
+GM="$(jq -s '[.[].resourceMetrics[].scopeMetrics[].metrics[] | select(has("sum")) | .name as $n | .sum.dataPoints[] | {k: ($n + (.attributes | tostring)), v: .asDouble}] | group_by(.k) | map([.[].v] | . == sort) | all' "$UM"/fs/posts/*.json 2>/dev/null || true)"
+GS="$(usf g1 '[.tokens.input, .turns, .maxContext] | join("|")')"
+check "usage push floor: after a push, a transcript rewritten shorter makes the session recompute (the store shows the recomputed totals 420 input, 2 turns) but no pushed counter goes down (input 700, 5700, 5700, 5700; turns 2, 3, 3, 3; every sum series of every request non-decreasing), while the gauge of the context maximum follows the transcript (400, 5000, 400, 400)" "$GI|$GT|$GXC|$GM|$GS" "700 5700 5700 5700 |2 3 3 3 |400 5000 400 400 |true|420|2|400"
+fstop
+# the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
+SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
+for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$SB/pybin/python3"; chmod +x "$SB/pybin/python3"
+sinst() {  # sinst <home> [VAR=value ...]: installs from the clone into <home> with the fake scheduler; SOUT, SRC
+  local h="$1"; shift; mkdir -p "$h"
+  if SOUT="$(cd "$UM" && env HOME="$h" PATH="$SB/pybin:$SB/rbin:$PATH" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$SLOG" "$@" bash "$ROOT/install.sh" </dev/null 2>&1)"; then SRC=0; else SRC=$?; fi
+}
+scfg() { mkdir -p "$1/.orca-roles"; jq "$2" "$ROOT/config.default.json" > "$1/.orca-roles/config.json"; }   # scfg <home> <jq edit>: the user's config before the install
+sl() { grep -c "$1" "$SLOG" 2>/dev/null || true; }
+splist() { python3 -I -c 'import json, plistlib, sys; print(json.dumps(plistlib.load(open(sys.argv[1], "rb")), sort_keys=True))' "$1" 2>/dev/null || true; }
+MACOS=ORCA_ROLES_SCHEDULER_OS=Darwin; LINUX=ORCA_ROLES_SCHEDULER_OS=Linux; SU="$(id -u)"; SL=com.orca-roles.usage-metrics
+H1="$SB/h1"; PL="$H1/Library/LaunchAgents/$SL.plist"; : > "$SLOG"
+sinst "$H1" "$MACOS"
+EXP="$(jq -cnS --arg h "$H1" --arg py "$SB/pybin/python3" --arg l "$SL" '{Label: $l, ProgramArguments: ["/bin/bash", "\($h)/.orca-roles/bin/usage-metrics.sh", "--once"], EnvironmentVariables: {ORCA_ROLES_PYTHON: $py, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: $h}, StartInterval: 60, RunAtLoad: true, Nice: 10, ProcessType: "Background", StandardOutPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log", StandardErrorPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log"}')"
+S1="$SRC:$([ "$(splist "$PL" | jq -cS . 2>/dev/null)" = "$EXP" ] && echo plist):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every 60 s (launchd)\.$' || true)"
+S2="$(cat "$SLOG" | sed "s#$H1#H#g")"
+sinst "$H1" "$MACOS"; S3="$SRC:$(sl 'launchctl bootout'):$(sl 'launchctl bootstrap'):$(find "$H1/Library/LaunchAgents" -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
+HA="$SB/h&amp<m>"; sinst "$HA" "$MACOS"; S4="$SRC:$(splist "$HA/Library/LaunchAgents/$SL.plist" | jq -r '.EnvironmentVariables.HOME + "|" + .ProgramArguments[1]' 2>/dev/null || true)"
+check "usage scheduler macOS: install writes the LaunchAgent (label, /bin/bash, the kit's script with --once, the absolute python3 found on PATH, the minimal PATH, HOME, StartInterval 60, RunAtLoad, Nice 10, Background, the launchd log) and prints the line; it runs launchctl bootout then bootstrap (gui/<uid>/<label> and gui/<uid> <plist>) once; a second install leaves one plist and runs the pair once more; a home with & < > in its name gives a valid plist with the right paths" "$S1|$S2|$S3|$S4" "0:plist:1|launchctl bootout gui/$SU/$SL
+launchctl bootstrap gui/$SU H/Library/LaunchAgents/$SL.plist|0:2:2:1|0:$HA|$HA/.orca-roles/bin/usage-metrics.sh"
+: > "$SLOG"; scfg "$SB/h1" '.settings.metrics.enabled = false'; sinst "$SB/h1" "$MACOS"
+D1="$SRC:$([ -e "$PL" ] && echo plist || echo gone):$(sl 'launchctl bootout gui/'):$(sl 'launchctl bootstrap'):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled\.$' || true)"
+: > "$SLOG"; sinst "$SB/h1" "$MACOS"; D2="$SRC:$(wc -c < "$SLOG" | tr -d ' ')"
+rm -rf "$SB/h0"; scfg "$SB/h0" '.settings.metrics.enabled = false'; : > "$SLOG"; sinst "$SB/h0" "$MACOS"; D3="$SRC:$(wc -c < "$SLOG" | tr -d ' '):$([ -e "$SB/h0/Library" ] && echo lib || echo nolib)"
+check "usage scheduler: with settings.metrics.enabled false the install runs launchctl bootout and removes the plist when there is one, says metrics are off, and does nothing when there is none (no log, no LaunchAgents folder)" "$D1|$D2|$D3" "0:gone:1:0:1|0:0|0:0:nolib"
+HL="$SB/hl"; rm -rf "$HL"; mkdir -p "$HL"; printf '0 5 * * * echo mine\n' > "$SLOG.crontab"; : > "$SLOG"
+CL="* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash $HL/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics"
+sinst "$HL" "$LINUX"; C1="$SRC:$(cat "$SLOG.crontab" | sed "s#$HL#H#g"):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every minute (cron)\.$' || true):$([ -e "$HL/Library" ] && echo plist || echo noplist)"
+sinst "$HL" "$LINUX"; C2="$(grep -c 'orca-roles usage-metrics' "$SLOG.crontab"):$(grep -c 'echo mine' "$SLOG.crontab"):$([ "$(sed -n 2p "$SLOG.crontab")" = "$CL" ] && echo exact || echo notexact)"
+scfg "$HL" '.settings.metrics.enabled = false'; sinst "$HL" "$LINUX"; C3="$(cat "$SLOG.crontab"):$(printf '%s\n' "$SOUT" | grep -c 'Usage metrics: off' || true)"
+: > "$SLOG"; sinst "$HL" "$LINUX"; C4="$(sl 'crontab -')"
+rm -f "$SLOG.crontab"; scfg "$HL" '.settings.metrics.enabled = true'; sinst "$HL" "$LINUX" ORCA_ROLES_SCHEDULER=fake-nocron; C5="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no crontab found; run .*usage-metrics.sh --once yourself or schedule it\.$' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
+check "usage scheduler Linux: one marker line in the user's crontab next to their own line (every minute, absolute python3 and bash and script, output discarded), not duplicated by a second install, removed when disabled (their line kept, nothing run when there is no line), no crontab -> a message, exit 0 and nothing written; no plist on Linux" "$C1|$C2|$C3|$C4|$C5" "0:0 5 * * * echo mine
+* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash H/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics:1:noplist|1:1:exact|0 5 * * * echo mine:1|0|0:1:nocron"
+rm -rf "$SB/hr"; sinst "$SB/hr" "$MACOS"; RP="$SB/hr/Library/LaunchAgents/$SL.plist"
+PE="$(splist "$RP" | jq -r '.EnvironmentVariables | "\(.HOME)\n\(.ORCA_ROLES_PYTHON)\n\(.PATH)"')"; PH="$(printf '%s\n' "$PE" | sed -n 1p)"; PH="${PH:-$SB/nohome}"; PP="$(printf '%s\n' "$PE" | sed -n 2p)"; PA="$(printf '%s\n' "$PE" | sed -n 3p)"
+rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"
+env -i HOME="$PH" PATH="$PA" ORCA_ROLES_PYTHON="$PP" /bin/bash "$PH/.orca-roles/bin/usage-metrics.sh" --once >"$SB/run.out" 2>&1 && RN=0 || RN=$?; RR1="$RN:$(wc -c < "$SB/run.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
+rm -rf "$PH/.orca-roles/metrics"; rm -f "$SLOG.crontab"; sinst "$SB/hr" "$LINUX"; LN="$(grep 'orca-roles usage-metrics' "$SLOG.crontab" 2>/dev/null | sed 's/^\* \* \* \* \* //' || true)"
+env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; RR2="$RN:$(wc -c < "$SB/run2.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
+check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
+SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
+check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
+# backfill: a fake docker first on PATH (records every call; discovery, compose, tar, promtool simulated) and the fake Prometheus HTTP server; never anything real
+FD="$UM/fdock"; BH="$UM/bh"
+fdreset() { rm -rf "$FD" "$BH"; mkdir -p "$FD/bin" "$FD/compose" "$BH"; : > "$FD/docker.log"; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\nother\tprom/prometheus-extra:1\no2\tbitnami/prometheus:1\no3\tnotprom/prometheus\nweb\tnginx\n' > "$FD/ps.txt"
+  jq -cn --arg w "$FD/compose" '[{Name: "/prom1", State: {Running: true}, Mounts: [{Destination: "/prometheus", Name: "obs_prom-data"}], Config: {Image: "quay.io/prom/prometheus:v2.54.1", Labels: {"com.docker.compose.project.working_dir": $w, "com.docker.compose.service": "prometheus"}}}]' > "$FD/inspect.json"
+  cat > "$FD/bin/docker" <<EOS
+#!/bin/sh
+echo "\$*" >> "$FD/docker.log"
+case "\$1" in
+  ps) cat "$FD/ps.txt";;
+  inspect) cat "$FD/inspect.json";;
+  compose) case "\$2" in stop) exit "\$(cat "$FD/stop.rc" 2>/dev/null || echo 0)";; esac;;
+  cp) cp "\$2" "$FD/cp.om" 2>/dev/null; exit 0;;
+  run) for a in "\$@"; do case "\$a" in *:/dst) dst="\${a%:/dst}";; /dst/*) f="\${a#/dst/}";; esac; done
+    case "\$(cat "$FD/tar.mode" 2>/dev/null)" in fail) echo "tar failed" >&2; exit 1;; empty) : > "\$dst/\$f"; exit 0;; esac
+    mkdir -p "$FD/tarsrc"; echo data > "$FD/tarsrc/chunk"; tar czf "\$dst/\$f" -C "$FD/tarsrc" .; exit 0;;
+  exec) shift; shift
+    case "\$1 \$2" in
+      "ls /tmp/import-blocks") echo "01ABC 01DEF";;
+      "sh -c") case "\$3" in
+        *"promtool check metrics"*) cat "$FD/lint.txt" 2>/dev/null; exit 0;;
+        *create-blocks-from*) exit "\$(cat "$FD/create.rc" 2>/dev/null || echo 0)";;
+        *import-staging*) exit "\$(cat "$FD/move.rc" 2>/dev/null || echo 0)";;
+      esac;;
+    esac;;
+esac
+exit 0
+EOS
+  chmod +x "$FD/bin/docker"
+}
+umbf() { KIT="$PK" HOME="$BH" PATH="$FD/bin:$PATH" ORCA_ROLES_CLAUDE_PROJECTS="$PC" ORCA_ROLES_BACKFILL_WAIT=3 bash "$ROOT/bin/usage-metrics.sh" --backfill "$@" > "$UM/bf.out" 2> "$UM/bf.err" && BRC=0 || BRC=$?; BOUT="$(cat "$UM/bf.out" "$UM/bf.err")"; }
+dkn() { local n; n="$(grep -c "$1" "$FD/docker.log" 2>/dev/null || true)"; echo "${n:-0}"; }
+omf() { find "$PM" -name 'backfill-*.om' | sort | tail -1; }
+omts() { grep "$1" "$(omf)" 2>/dev/null | grep '^claude_code_token_usage_tokens_total' | awk '{print $NF}' | sort -n | sed -n "$2p" || true; }
+BN="$(date +%s)"
+bfs() {  # bfs <sid> <cwd> <prompt> <offset:input>...: a session whose responses come at now+offset s with that many input tokens
+  local f="$PD/$1.jsonl" c="$2" pr="$3" first="" o w t; shift 3
+  for o in "$@"; do w="${o%%:*}"; [ -n "$first" ] || { first=1; pu "$f" "$(umts "$((w - 60))")" "$c" "$pr"; }; t="${o##*:}"; pa "$f" "$(umts "$w")" "$c" "$1-$w" claude-haiku-4-5 "{\"input_tokens\":$t}" '[{"type":"text","text":"x"}]'; done
+}
+set +e   # the backfill checks compare what happened; a command that fails must not end the section
+umpk; fstop; fstart; fdreset
+bfs p1 /w/a/devgd-300/src "$RDEV" -9000:100 -8000:200 -7400:50 -5400:10 -3600:10
+bfs p2 /w/a/other "plain" -9000:100 -2400:20 -2000:30 -1200:40
+bfs p3 /w/a/devgd-300/x "plain" -6000:70
+bfs p4 /w/a/devgd-300/y "plain" -5000:400 -4000:100
+umpass
+jq --argjson f "$((BN - 7200))" '.pushed.p1 = {pos: 1, state: "", off: {}, lab: {}, res: {}, vals: {}, seen: 1, first: $f, cont: true}' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+umcfg
+OLDL() { printf '"job":"claude-code","instance":"i","session_id":"%s","user_id":"%s","service_version":"%s"' "$1" "$2" "$3"; }
+TKB='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","type":"input","effort":"high","query_source":"main"'
+fcfg "{\"head_ms\":$(( (BN - 1800) * 1000 )),\"constants\":[{\"__name__\":\"claude_code_cost_usage_USD_total\",\"job\":\"claude-code\",\"instance\":\"inst1\",\"user_id\":\"u-const\",\"organization_id\":\"org-1\"}],\"old\":{\"p2\":[{$TKB,$(OLDL p2 U1 2.3.1)}],\"p3\":[{$TKB,$(OLDL p3 U3 2.3.1)}],\"p4\":[{$TKB,$(OLDL p4 U4 2.3.2)}]},\"values\":{\"p2|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[100,$((BN - 8800)),0],\"p3|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[70,$((BN - 6000)),1],\"p4|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[9000,$((BN - 4900)),0]},\"totals\":{\"devgd-292\":999,\"outer\":999}}"
+SINCE="$(umts -86400)"
+umbf --since "$SINCE" --dry-run; DS1="$BRC:$(printf '%s\n' "$BOUT" | grep -c "^Prometheus container: prom1 (volume obs_prom-data, compose $FD/compose service prometheus)\$" || true):$(dkn '^ps '):$(dkn '^inspect prom1$')"
+printf 'web\tnginx\n' > "$FD/ps.txt"; : > "$FD/docker.log"; umbf --since "$SINCE" --dry-run; DS2="$BRC:$(printf '%s\n' "$BOUT" | grep -c '^usage-metrics.sh: No running Prometheus container (image prom/prometheus) found: set settings.metrics.prometheusContainer to its name\.$' || true):$(dkn '^inspect')"
+printf 'a\tprom/prometheus:1\nb\tghcr.io/prom/prometheus@sha256:ab\n' > "$FD/ps.txt"; umbf --since "$SINCE" --dry-run; DS3="$BRC:$(printf '%s\n' "$BOUT" | grep -c '^usage-metrics.sh: Several Prometheus containers are running (a, b): set settings.metrics.prometheusContainer to the one to use\.$' || true)"
+: > "$FD/docker.log"; jq '.settings.metrics.prometheusContainer = "prom1"' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"; umbf --since "$SINCE" --dry-run; DS4="$BRC:$(dkn '^ps '):$(dkn '^inspect prom1$')"
+umcfg
+check "usage backfill discovery: the running container whose image is prom/prometheus (with a registry prefix, a tag or a digest) is used with its volume, compose folder and service; prom/prometheus-extra, bitnami/prometheus and notprom/prometheus are not Prometheus; none -> exit 2 with the message naming the setting; several -> exit 2 naming them; settings.metrics.prometheusContainer overrides and docker ps is not even asked" "$DS1|$DS2|$DS3|$DS4" "0:1:1:1|2:1:0|2:1|0:0:1"
+fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
+umbf --since "$(umts -14400)" --dry-run; OM="$(omf)"
+mx() { omts "session_id=\"$1\"" '$'; }; mn() { omts "session_id=\"$1\"" 1; }
+W1="$([ "$(mx p1)" -lt "$((BN - 7200))" ] && [ "$(mx p1)" -ge "$((BN - 7260))" ] && echo p1-before-first-push):$([ "$(mx p2)" -lt "$((BN - 1800))" ] && [ "$(mx p2)" -ge "$((BN - 1860))" ] && echo p2-before-head)"
+umbf --since "$(umts -14400)" --until "$(umts -8500)" --dry-run; W2="$([ -n "$(mx p1)" ] && [ "$(mx p1)" -lt "$((BN - 8400))" ] && [ "$(mx p2)" -lt "$((BN - 8400))" ] && echo until)"
+umbf --since "$(umts -14400)" --task devgd-292 --dry-run; W3="$(grep -o 'session_id="[^"]*"' "$(omf)" | sort -u | tr '\n' ' ')"
+SN="$(umts -4500)"; umbf --since "$SN" --dry-run; W4="$(grep -o 'session_id="[^"]*"' "$(omf)" | sort -u | tr '\n' ' '):$([ "$(mn p2)" -ge "$((BN - 4510))" ] && echo since)"
+check "usage backfill window: samples of a session never reach the head block of Prometheus (p2 ends below it) nor its own first live push (p1 ends just below it, and its later activity is not sampled); --until is honoured; --task keeps one task's sessions (the session whose old counters reset is skipped); --since drops the sessions that ended before it and starts no sample earlier" "$W1|$W2|$W3|$W4" "p1-before-first-push:p2-before-head|until|session_id=\"p1\" session_id=\"p4\" |session_id=\"p2\" session_id=\"p4\" :since"
+F1="$(grep '^# TYPE' "$OM" | sed 's/^# TYPE //' | tr '\n' ',')$(tail -1 "$OM")"
+F2="$(grep -v '^#' "$OM" | awk '{print ($NF % 30 == 0) ? "ok" : "bad"}' | sort -u | tr '\n' ' ')"
+F3="$(grep -v '^#' "$OM" | grep -vE '^(orca_roles_cache_savings_USD|orca_roles_context_max_tokens)' | awk '{v = $(NF-1); k = $0; sub(/ [^ ]+ [^ ]+$/, "", k); if ((k in last) && v + 0 < last[k] + 0) bad++; last[k] = v} END {print (bad ? "decrease" : "monotone")}')"
+F4="$(grep -cE 'adopt that role|task_abcdef01|SECRET' "$OM" || true):$(grep -cE '^# TYPE (orca_roles_cache_savings_USD|orca_roles_context_max_tokens) gauge$' "$OM" || true)"
+check "usage backfill file: OpenMetrics with a TYPE per family (counters, and gauges for the cache savings and the context maximum, samples named _total), ending in # EOF, every sample on a multiple of 30 s, every counter series non-decreasing along time, no prompt or tool text" "$F1|$F2|$F3|$F4" "claude_code_cost_usage_USD counter,claude_code_session_count counter,claude_code_token_usage_tokens counter,orca_roles_api_errors counter,orca_roles_cache_savings_USD gauge,orca_roles_commit_lines counter,orca_roles_commits counter,orca_roles_compactions counter,orca_roles_context_max_tokens gauge,orca_roles_cost_by_type_USD counter,orca_roles_lines counter,orca_roles_model_changes counter,orca_roles_thinking_tokens counter,orca_roles_turns counter,orca_roles_user_messages counter,# EOF|ok |monotone|0:2"
+: > "$FD/docker.log"; umbf --since "$(umts -14400)" --dry-run
+DR1="$BRC:$(dkn '^cp '):$(dkn 'promtool check metrics'):$(dkn '^exec prom1 rm'):$(dkn '^compose'):$(dkn '^run '):$(dkn 'create-blocks-from'):$(dkn 'import-staging'):$(cmp -s "$FD/cp.om" "$(omf)" && echo same-file)"
+DR2="$(printf '%s\n' "$BOUT" | grep -c '^Series: [0-9][0-9]*  samples: [0-9][0-9]*  sessions: 3  range: ' || true):$(printf '%s\n' "$BOUT" | grep -c '^  task devgd-292  *2 sessions  cost \$0.0009  tokens 9450$' || true):$(printf '%s\n' "$BOUT" | grep -c '^  task outer  *1 sessions  cost \$0.0002  tokens 150$' || true):$(printf '%s\n' "$BOUT" | grep -c 'Dry run: nothing was written to Prometheus' || true)"
+printf 'metric_x: bad name\nfoo no help text\n' > "$FD/lint.txt"; umbf --since "$(umts -14400)" --dry-run; DR3="$BRC:$(printf '%s\n' "$BOUT" | grep -c 'promtool check metrics reported problems:' || true):$(printf '%s\n' "$BOUT" | grep -c '  metric_x: bad name' || true):$(printf '%s\n' "$BOUT" | grep -c 'foo no help text' || true)"
+printf 'foo no help text\n' > "$FD/lint.txt"; umbf --since "$(umts -14400)" --dry-run; DR4="$BRC"; : > "$FD/lint.txt"
+check "usage backfill --dry-run: writes the .om file, copies it into the container, runs promtool check metrics and removes the copy, and calls no compose, no tar, no create-blocks and no move (nothing is written to Prometheus); prints the window, the series/samples/sessions line and the totals per task; a lint problem is listed with exit 1, lines that only say 'no help text' are not problems" "$DR1|$DR2|$DR3|$DR4" "0:1:1:1:0:0:0:0:same-file|1:1:1:1|1:1:1:0|0"
+dseq() { awk '/^ps /{print "ps"} /^inspect /{print "inspect"} /^compose stop/{print "stop"} /^run /{print "tar"} /^compose start/{print "start"} /^cp /{print "cp"} /create-blocks-from/{print "create"} /^exec [^ ]* ls /{print "ls"} /import-staging/{print "move"} /promtool check metrics/{print "lint"}' "$FD/docker.log" | tr '\n' ' '; }
+bfo() { printf '%s\n' "$BOUT" | grep -c -e "$1" || true; }
+fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
+umbf --since "$(umts -14400)"; N1="$BRC:$(dseq):$(bfo '^usage-metrics.sh: add --yes after the user agreed$'):$(bfo '^It will: stop prom1 (docker compose stop prometheus in ')::$(find "$BH" -type f | wc -l | tr -d ' ')"
+check "usage backfill without --yes: prints what it would do and stops with exit 2 'add --yes after the user agreed'; the only docker calls are the discovery (ps, inspect) and nothing is stopped, backed up or imported" "$N1" "2:ps inspect :1:1::0"
+: > "$FD/docker.log"; umbf --since "$(umts -14400)" --yes
+Y1="$BRC:$(dseq)"; BK="$(find "$BH/prometheus-backups" -name 'prometheus-data-*.tgz' | head -1)"
+Y2="$([ -n "$BK" ] && tar tzf "$BK" | grep -c chunk || true):$(bfo '^Backup: .*prometheus-data-[0-9-]*\.tgz ([0-9]* entries)$' || true):$(bfo '^Blocks moved into /prometheus: 01ABC 01DEF$'):$(bfo '^  Prometheus now: task devgd-292 cost \$999.0000'):$(bfo '^Undo: docker compose stop prometheus; restore the backup'):$([ "$(fgets '/-/ready')" -ge 1 ] && echo ready-polled)"
+check "usage backfill --yes: the calls happen in this order: discovery, compose stop, the tar of the volume, compose start, the copy of the file, create-blocks, the listing of the blocks, the staged move; the backup archive exists under the home's prometheus-backups and lists the volume's files; the output names the backup, the blocks, what Prometheus now holds per task and the undo command" "$Y1|$Y2" "0:ps inspect stop tar start cp create ls move |1:1:1:1:1:ready-polled"
+bfail() {  # bfail <file in $FD> <content> <message pattern>: one run with that fake failure -> exit status|calls|messages found
+  fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"; printf '%s\n' "$2" > "$FD/$1"; umbf --since "$(umts -14400)" --yes; printf '%s|%s|%s;' "$BRC" "$(dseq)" "$(bfo "$3")"
+}
+FL="$(bfail tar.mode fail 'The backup of the volume failed')"
+check "usage backfill failures: a failing backup starts Prometheus again and imports nothing (no copy, no blocks), exit 1 with its message" "$FL" "1|ps inspect stop tar start |1;"
+set -e
+# step 6: the dashboard against the header table, the kit events push, the report's events, install copying grafana/, README and skill pins
+set +e
+DB="$ROOT/grafana/orca-roles-usage.json"
+HN="$(python3 -I -c 'import re, sys; s = open(sys.argv[1]).read().split("\"\"\"")[1]; print("\n".join(sorted(set(re.findall(r"(?:claude_code|orca_roles)_[A-Za-z0-9_]+", s)))))' "$ROOT/bin/usage_metrics.py")"
+DN="$(jq -r '[.. | objects | select(has("expr")) | .expr] | .[]' "$DB" 2>/dev/null | grep -oE '(claude_code|orca_roles)_[A-Za-z0-9_]+' | grep -vx 'orca_roles_role' | sort -u)"
+DX="$(comm -23 <(printf '%s\n' "$DN") <(printf '%s\n' "$HN") | tr '\n' ' ')"
+DV="$(jq -r '[.templating.list[] | "\(.name):\(.type):\(.multi // false):\(.includeAll // false)"] | join(",")' "$DB" 2>/dev/null)"
+DT="$(jq -r '[.. | objects | select(has("expr"))] | length as $n | [.. | objects | select(has("expr") and has("datasource") and (.datasource.uid != "${datasource}"))] | length as $bad | "\($n > 20):\($bad)"' "$DB" 2>/dev/null)"
+DE="$(printf '%s\n' "$DN" | grep -cE '^orca_roles_(kit_events|dispatch_outcomes)_total$' || true):$(jq -r '[.. | objects | select(has("expr")) | select(.expr | test("orca_roles_(kit_events|dispatch_outcomes)_total")) | select(.expr | test("orca_roles_role|session_id")) ] | length' "$DB" 2>/dev/null)"
+check "usage dashboard: grafana/orca-roles-usage.json is valid JSON with the datasource, task and orca_roles_role variables (the last two multi-select with All), every query uses the \${datasource} variable, every metric name in its queries is in the header table of usage_metrics.py (none unknown), and the two event panels use the event metrics without a session or role filter (they carry no such label)" "$DX|$DV|$DT|$DE" "|datasource:datasource:false:false,task:query:true:true,orca_roles_role:query:true:true|true:0|2:0"
+umpk; fstop; fstart; umcfg
+ev() { jq -nc --arg w "$1" --arg e "$2" --arg r "$3" '{ts: "2026-10-27T10:00:00Z", worktree: $w, event: $e, role: $r}' >> "$PM/events.jsonl"; }
+ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 reopened dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 started dev; ev /w/a/devgd-300 not-started dev; ev /w/a/other no-check oc; ev /unmapped launch ""; ev /w/a/devgd-300 bogus dev
+echo '{"event":"launch","worktree":5}' >> "$PM/events.jsonl"; printf '{"ts":"x","worktree":"/w/a/devgd-300","event":"launch","role":""' >> "$PM/events.jsonl"
+epts() { pbody "$1" '.resourceMetrics[0].scopeMetrics[0].metrics[] | .name as $n | .sum.dataPoints[] | "\($n)|\([.attributes[] | "\(.key)=\(.value.stringValue)"] | sort | join(","))|\(.asDouble)"' | sort | tr '\n' ' '; }
+umpass; V1="$(fposts):$(epts 1)"
+V2="$(pbody 1 '[(.resourceMetrics | length), ([.resourceMetrics[0].resource.attributes[] | "\(.key)=\(.value.stringValue)"] | join(",")), ([.. | objects | select(has("sum")) | .sum | [.isMonotonic, .aggregationTemporality]] | unique | tostring)] | join("|")')"
+check "usage kit events push: the first pass pushes one resource (service.name=claude-code only, no session.id) with orca_roles.dispatch.outcomes (outcome, role, task, project) and orca_roles.kit.events (event, role, task, project) as cumulative monotonic sums; counts per event and role, task and project from worktrees.jsonl by the longest path (an unmapped worktree has no task or project label); an unknown event, a line whose worktree is not a string and a half-written last line are not counted" "$V1|$V2" "1:orca_roles.dispatch.outcomes|outcome=dispatch,project=svc,role=dev,task=devgd-292|2 orca_roles.dispatch.outcomes|outcome=no-check,project=svc,role=oc,task=outer|1 orca_roles.dispatch.outcomes|outcome=not-started,project=svc,role=dev,task=devgd-292|1 orca_roles.dispatch.outcomes|outcome=started,project=svc,role=dev,task=devgd-292|1 orca_roles.kit.events|event=launch,project=svc,task=devgd-292|1 orca_roles.kit.events|event=launch|1 orca_roles.kit.events|event=reopened,project=svc,role=dev,task=devgd-292|1 |1|service.name=claude-code|[[true,2]]"
+umpk; fstop; fstart; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
+head -1 "$PM/events.jsonl" > "$PM/events.tmp" && mv "$PM/events.tmp" "$PM/events.jsonl"; umpass; ev /w/a/devgd-300 launch ""; umpass; S2="$(fposts)"
+ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 launch ""; umpass; S3="$(fposts):$(epts 2 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
+check "usage kit events push floor: when events.jsonl is rewritten shorter its counts are read again but nothing lower than what was pushed is sent (3 pushed, 1 and 2 counted: no push), and a count above the floor is pushed (4)" "$S1|$S2|$S3" "1|1|2:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|4"
+RM="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
+rd() { printf '%s\n' "$RM" | grep -cF -e "$1" || true; }
+RK="$(for k in enabled otlpEndpoint prometheusUrl intervalSeconds retentionDays allowRemote prometheusContainer; do printf '%s ' "$(printf '%s\n' "$RM" | grep -c "^  | \`$k\` |" || true)"; done)"
+R1="$(grep -c '^### Usage metrics$' "$ROOT/README.md" || true):$(grep -c '^| `metrics` | The kit.s \[usage metrics\](#usage-metrics): ' "$ROOT/README.md" || true):$(grep -cF 'Only the global config is read by the background pass' "$ROOT/README.md" || true):$RK"
+R2="$(rd '**Never** prompts, tool inputs or tool outputs'):$(rd 'It makes no model call and uses no tokens'):$(rd 'Only to loopback addresses unless `allowRemote` is `true`'):$(rd '/.orca-roles/grafana/orca-roles-usage.json'):$(rd 'usage-metrics.sh --backfill --since 2026-10-01 --dry-run'):$(rd 'A real run (`--yes`, only after you agreed)'):$(rd '/prometheus-backups/prometheus-data-<time>.tgz'):$(rd 'prints how to undo it')"
+R3="$(grep -cF "If your organization manages Claude Code's settings" "$ROOT/README.md" || true):$(grep -cF 'managed settings of your organization can override where Claude Code sends it' "$ROOT/README.md" || true)"
+check "usage docs README: the Usage metrics section and the settings table row exist (every settings.metrics key has its row), it says that prompts, tool inputs and outputs are never recorded, that it uses no tokens, that the push stays on this machine unless allowRemote, where the dashboard is, that backfill starts with --dry-run and a real run needs the user's yes and takes a backup with an undo, and the OpenTelemetry paragraphs say organization-managed settings can send Claude Code's telemetry elsewhere" "$R1|$R2|$R3" "1:1:1:1 1 1 1 1 1 1 |1:1:1:1:1:1:1:1|2:1"
+SK="$ROOT/plugin/skills/team/SKILL.md"; sk() { grep -cF -e "$1" "$SK" || true; }
+K1="$(sk '**Usage metrics** (background, kit-wide; README → Usage metrics)'):$(sk 'usage-metrics.sh --report [--task <id>] [--since YYYY-MM-DD] [--json]'):$(sk 'Always run `usage-metrics.sh --backfill --since <date> --dry-run` first'):$(sk 'only after the user says yes'):$(sk 'Never add `--yes` on your own'):$(sk 'do not set it for them'):$(sk '`settings.metrics.enabled: false`'):$(sk 'Organization-managed settings can send Claude Code'\''s OpenTelemetry elsewhere')"
+check "usage docs skill: the team skill's Usage metrics part tells the Planner to answer cost questions with --report, to run --backfill with --dry-run first and only after the user says yes (never --yes on its own), not to set allowRemote for the user, how to turn the metrics off, and that organization-managed OpenTelemetry settings are separate" "$K1" "1:1:1:1:1:1:1:1"
+set -e
+fstop
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS

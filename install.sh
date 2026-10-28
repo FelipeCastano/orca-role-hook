@@ -60,7 +60,7 @@ fi
 # manifest_of <dir>: "<sha1>  <relative path>" of every file the install regenerates, plus the top-level README.md, config.default.json and VERSION, sorted
 manifest_of() {
   local f
-  ( cd "$1" && { find bin prompts plugin mcp -type f 2>/dev/null || true; ls -d README.md config.default.json VERSION 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$1" && { find bin prompts plugin mcp grafana -type f 2>/dev/null || true; ls -d README.md config.default.json VERSION 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s  %s\n' "$(shasum < "$f" | cut -d' ' -f1)" "$f"
     done )
 }
@@ -74,7 +74,7 @@ if [ -f "$KIT/.manifest" ]; then
   CHANGED="$(awk 'NR == FNR { old[substr($0, 43)] = $1; next }
     { p = substr($0, 43) }
     p in old { if (old[p] != $1) print p; next }
-    p ~ /^(bin|prompts|plugin|mcp)\// { print p }' "$KIT/.manifest" "$NOW" || true)"
+    p ~ /^(bin|prompts|plugin|mcp|grafana)\// { print p }' "$KIT/.manifest" "$NOW" || true)"
   rm -f "$NOW"
   if [ -n "$CHANGED" ]; then
     BK="$KIT/backup/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -86,8 +86,9 @@ if [ -f "$KIT/.manifest" ]; then
     echo "Your copies are in $BK (restore what you need from there)."
   fi
 fi
-rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp"   # regenerated; config.json and roles/ are not touched
+rm -rf "${KIT:?}/bin" "${KIT:?}/prompts" "${KIT:?}/plugin" "${KIT:?}/mcp" "${KIT:?}/grafana"   # regenerated; config.json and roles/ are not touched
 cp -R "$SRC/bin" "$SRC/prompts" "$SRC/plugin" "$SRC/README.md" "$SRC/config.default.json" "$KIT/"
+if [ -d "$SRC/grafana" ]; then cp -R "$SRC/grafana" "$KIT/"; fi
 ln -s academic-research "$KIT/prompts/academic-writer"   # old path of the renamed mode, regenerated with prompts/
 chmod +x "$KIT/bin/"*.sh
 if [ -f "$SRC/VERSION" ]; then cp "$SRC/VERSION" "$KIT/VERSION"; else rm -f "$KIT/VERSION"; fi   # refs older than the VERSION file have none
@@ -169,6 +170,92 @@ grep -q 'alias roles-yaml=' "$RC" 2>/dev/null || echo 'alias roles-yaml="$HOME/.
 grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME/.orca-roles/bin/team-status.sh"' >> "$RC"
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
+
+# Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
+if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
+  while IFS= read -r wt; do
+    [ -d "$wt" ] || continue
+    ph="$(cd "$wt" && pwd -P)" || continue
+    grep -qF "\"physical\":$(printf '%s' "$ph" | jq -Rs .)" "$(metrics_dir)/worktrees.jsonl" 2>/dev/null && continue
+    wcfg=""; wgd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" && wcfg="$wgd/orca-roles.config.json"; [ -f "$wcfg" ] || wcfg="$CONF"
+    metrics_worktree "$wt" "$(project_name "$wt" 2>/dev/null || basename "$wt")" "$(metrics_task "$wcfg" "$wt")"
+  done < "$(trusted_list)"
+fi
+
+# Usage metrics scheduler: a pass of bin/usage-metrics.sh --once every settings.metrics.intervalSeconds (launchd on macOS; cron, every minute, on
+# Linux/WSL). Only the user's own scheduler is touched, only here. ORCA_ROLES_SCHEDULER=fake (or fake-nocron: no crontab) logs the commands to
+# $ORCA_ROLES_SCHEDULER_LOG instead of running launchctl/crontab (the test suite always sets it); ORCA_ROLES_SCHEDULER_OS then replaces uname -s.
+MLABEL=com.orca-roles.usage-metrics; MMARK="# orca-roles usage-metrics"
+sched_fake() { case "${ORCA_ROLES_SCHEDULER:-}" in fake|fake-nocron) return 0;; *) return 1;; esac; }
+sched_run() { if sched_fake; then printf '%s\n' "$*" >> "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}"; else "$@"; fi; }
+sched_crontab_list() { if sched_fake; then cat "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}.crontab" 2>/dev/null || true; else crontab -l 2>/dev/null || true; fi; }
+sched_crontab_set() { if sched_fake; then cat > "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}.crontab"; printf 'crontab -\n' >> "${ORCA_ROLES_SCHEDULER_LOG:-/dev/null}"; else crontab -; fi; }
+sched_have_crontab() { if sched_fake; then [ "${ORCA_ROLES_SCHEDULER:-}" = fake ]; else command -v crontab >/dev/null 2>&1; fi; }
+xml_esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+schedule_metrics() {
+  local os plist uid py interval line cur
+  os="$(uname -s)"; if sched_fake && [ -n "${ORCA_ROLES_SCHEDULER_OS:-}" ]; then os="$ORCA_ROLES_SCHEDULER_OS"; fi
+  plist="$HOME/Library/LaunchAgents/$MLABEL.plist"; uid="$(id -u)"
+  if ! metrics_enabled "$CONF"; then
+    if [ "$os" = Darwin ]; then
+      if [ -f "$plist" ]; then sched_run launchctl bootout "gui/$uid/$MLABEL" >/dev/null 2>&1 || true; rm -f "$plist"; fi
+    elif sched_have_crontab; then
+      cur="$(sched_crontab_list)"
+      if printf '%s\n' "$cur" | grep -qF "$MMARK"; then printf '%s\n' "$cur" | grep -vF "$MMARK" | sched_crontab_set; fi
+    fi
+    echo "Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled."
+    return 0
+  fi
+  if ! py="$(command -v python3 2>/dev/null)" || [ -z "$py" ] || ! "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+    echo "Usage metrics: no python3 >= 3.9 found; metrics are not scheduled."; return 0
+  fi
+  case "$py" in /*) ;; *) py="$(cd "$(dirname "$py")" && pwd)/$(basename "$py")";; esac
+  interval="$(jq -r '(.settings.metrics? | objects | .intervalSeconds?) // 60' "$CONF" 2>/dev/null)"
+  case "$interval" in ''|*[!0-9]*) interval=60;; esac
+  if [ "$interval" -lt 15 ] || [ "$interval" -gt 3600 ]; then interval=60; fi
+  if [ "$os" = Darwin ]; then
+    mkdir -p "$(dirname "$plist")" "$KIT/metrics"
+    cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$MLABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$(xml_esc "$KIT/bin/usage-metrics.sh")</string>
+    <string>--once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ORCA_ROLES_PYTHON</key><string>$(xml_esc "$py")</string>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key><string>$(xml_esc "$HOME")</string>
+  </dict>
+  <key>StartInterval</key><integer>$interval</integer>
+  <key>RunAtLoad</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>$(xml_esc "$KIT/metrics/usage-metrics.launchd.log")</string>
+  <key>StandardErrorPath</key><string>$(xml_esc "$KIT/metrics/usage-metrics.launchd.log")</string>
+</dict>
+</plist>
+PLIST
+    sched_run launchctl bootout "gui/$uid/$MLABEL" >/dev/null 2>&1 || true
+    if sched_run launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1; then echo "Usage metrics: recorded every $interval s (launchd)."
+    else echo "Warning: launchctl could not load $plist; run: launchctl bootstrap gui/$uid $plist"; fi
+  elif sched_have_crontab; then
+    line="* * * * * ORCA_ROLES_PYTHON=$py /bin/bash $KIT/bin/usage-metrics.sh --once >/dev/null 2>&1 $MMARK"
+    cur="$(sched_crontab_list)"
+    { printf '%s\n' "$cur" | grep -vF "$MMARK" | sed '/^$/d' || true; printf '%s\n' "$line"; } | sched_crontab_set
+    echo "Usage metrics: recorded every minute (cron)."
+  else
+    echo "Usage metrics: no crontab found; run $KIT/bin/usage-metrics.sh --once yourself or schedule it."
+  fi
+  return 0
+}
+schedule_metrics || echo "Warning: could not set up the usage metrics scheduler."
 
 echo
 echo "Installed in $KIT"
