@@ -903,7 +903,7 @@ def continuation(state, sid, prom, now):
     {"res": resource labels of the old series, "off": {key: offset}, "lab": {key: {"effort": old effort}}}."""
     old = [s for s in prom_series(prom, '{session_id="%s"}' % sid) if s.get("__name__") in CLAUDE_SERIES and s.get("query_source", "main") == "main"]
     if not old:
-        return {"res": {}, "off": {}, "lab": {}}
+        return {"res": {}, "off": {}, "lab": {}, "tlast": {}}
     times, prefix = session_timeline(state, sid)
     info = []
     for s in old:
@@ -922,7 +922,7 @@ def continuation(state, sid, prom, now):
             if k in ("__name__", "job", "instance", "session_id") or k in DATAPOINT_LABELS:
                 continue
             res.setdefault(k, v)
-    off, lab, anchor = {}, {}, {}
+    off, lab, anchor, tlast = {}, {}, {}, {}
     def idx_at(t):
         i = -1
         for j, x in enumerate(times):
@@ -944,6 +944,7 @@ def continuation(state, sid, prom, now):
         key = "%s|%s|%s" % (CLAUDE_SERIES[1], s.get("model"), kind)
         off[key] = v - (series[i] if 0 <= i < len(series) else 0)
         lab[key] = {"effort": s.get("effort", "medium")}
+        tlast[key] = t_last
     for s, v, t_last in info:
         if s["__name__"] == CLAUDE_SERIES[0]:
             series = prefix.get((s.get("model"), "cost"), [])
@@ -953,11 +954,13 @@ def continuation(state, sid, prom, now):
             key = "%s|%s|" % (CLAUDE_SERIES[0], s.get("model"))
             off[key] = v - (series[i] if 0 <= i < len(series) else 0.0)
             lab[key] = {"effort": s.get("effort", "medium")}
+            tlast[key] = t_last
         elif s["__name__"] == CLAUDE_SERIES[2]:
             key = "%s||" % CLAUDE_SERIES[2]
             off[key] = v - 1
             lab[key] = {"start_type": s.get("start_type", "fresh")}
-    return {"res": res, "off": off, "lab": lab}
+            tlast[key] = t_last
+    return {"res": res, "off": off, "lab": lab, "tlast": tlast}
 
 
 def str_attrs(d):
@@ -1110,7 +1113,7 @@ def push(state):
                 P["state"], P["pos"] = "reset", pos.get(sid)
                 log("session %s not continued: its old counters in Prometheus reset" % sid)
                 continue
-            P.update(off=c["off"], lab=c["lab"], res=c["res"], cont=True)
+            P.update(off=c["off"], lab=c["lab"], res=c["res"], tlast=c["tlast"], cont=True)
         if constants is None and not P["res"]:
             try:
                 constants = refresh_constants(state, prom) if not prom_down else state.get("constants", {}).get("labels", {})
@@ -1137,12 +1140,409 @@ def push(state):
         if st is not None and 200 <= st < 300:
             for sid in chunk:
                 pushed[sid]["pos"] = pos.get(sid)
+                pushed[sid].setdefault("first", now)   # when this session's series began in Prometheus: a backfill ends before it
         else:
             for sid in chunk:
                 pushed[sid]["vals"] = saved[sid]
             if st is not None:
                 log("push refused: HTTP %s" % st)
             return
+
+
+# ---------------------------------------------------------------- backfill (never automatic: usage-metrics.sh --backfill)
+class Fatal(Exception):
+    def __init__(self, msg, code=1):
+        Exception.__init__(self, msg)
+        self.code = code
+
+
+UNITS = {"USD": "USD", "tokens": "tokens", "s": "seconds"}
+WHEN_RE = re.compile(r"^(\d{4}-\d\d-\d\d)(?:T(\d\d:\d\d)(:\d\d)?(\.\d+)?Z?)?$")
+
+
+def parse_when(s):
+    m = WHEN_RE.match(s or "")
+    if not m:
+        raise Fatal("time must be YYYY-MM-DD or an ISO time (UTC), got %r" % s, 2)
+    t = parse_ts("%sT%s%s" % (m.group(1), m.group(2) or "00:00", m.group(3) or ":00"))
+    if t is None:
+        raise Fatal("time must be YYYY-MM-DD or an ISO time (UTC), got %r" % s, 2)
+    return t
+
+
+def docker(args, cwd=None, timeout=600):
+    """-> (returncode, stdout, stderr) of `docker <args>`; Fatal(2) when docker is missing."""
+    import subprocess
+    try:
+        r = subprocess.run(["docker"] + args, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except FileNotFoundError:
+        raise Fatal("docker was not found on the PATH", 2)
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+def discover_prometheus():
+    """-> {name, image, volume, workdir, service}: the running Prometheus container (settings.metrics.prometheusContainer overrides)."""
+    want = metrics_settings().get("prometheusContainer")
+    if isinstance(want, str) and want:
+        names = [want]
+    else:
+        rc, out, err = docker(["ps", "--format", "{{.Names}}\t{{.Image}}"])
+        if rc != 0:
+            raise Fatal("docker ps failed: %s" % err.strip()[:200], 2)
+        names = []
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and re.match(r"^(?:[^/\s]+/)?prom/prometheus(?:[:@]|$)", parts[1].strip()):
+                names.append(parts[0].strip())
+        if not names:
+            raise Fatal("No running Prometheus container (image prom/prometheus) found: set settings.metrics.prometheusContainer to its name.", 2)
+        if len(names) > 1:
+            raise Fatal("Several Prometheus containers are running (%s): set settings.metrics.prometheusContainer to the one to use." % ", ".join(sorted(names)), 2)
+    rc, out, err = docker(["inspect", names[0]])
+    try:
+        info = json.loads(out)[0]
+    except (ValueError, IndexError, TypeError):
+        raise Fatal("docker inspect %s failed: %s" % (names[0], err.strip()[:200] or "no answer"), 2)
+    if not (info.get("State") or {}).get("Running", True):
+        raise Fatal("Container %s is not running." % names[0], 2)
+    vol = ""
+    for m in info.get("Mounts") or []:
+        if m.get("Destination") == "/prometheus":
+            vol = m.get("Name") or m.get("Source") or ""
+    labels = (info.get("Config") or {}).get("Labels") or {}
+    return {"name": names[0].lstrip("/"), "image": (info.get("Config") or {}).get("Image") or "prom/prometheus", "volume": vol,
+            "workdir": labels.get("com.docker.compose.project.working_dir") or "", "service": labels.get("com.docker.compose.service") or ""}
+
+
+def session_lines(state, sid):
+    """The session's transcript lines of the kinds the parser uses, from all its files, in time order: [(time, is_sub, object)]."""
+    out = []
+    for p, e in state["files"].items():
+        if e["session"] != sid or e.get("ignored"):
+            continue
+        is_sub = "/subagents/" in p
+        last = 0.0
+        try:
+            with open(p, "rb") as f:
+                for raw in f:
+                    if not raw.endswith(b"\n"):
+                        break
+                    try:
+                        o = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(o, dict) or o.get("type") not in ("assistant", "user", "system", "cost-state", "api-request"):
+                        continue
+                    t = parse_ts(o.get("timestamp")) if o.get("timestamp") else None
+                    if t is None:
+                        t = last
+                    last = t
+                    out.append((t, is_sub, o))
+        except OSError:
+            continue
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def fingerprint(S):
+    return (S["turns"], S["userMessages"], S["compactions"], S["apiErrors"], S["modelChanges"], len(S["workerDone"]), tuple(S["commits"]),
+            tuple(S["locEdits"]), tuple(S["cs"]) if S["cs"] else None, sum(v["calls"] + v["errors"] for v in S["tools"].values()))
+
+
+def sample_times(lines, lo, hi):
+    """Multiples of 30 s from 60 s before each change of the session's values until 300 s after it, inside [lo, hi)."""
+    S = new_session("x")
+    events, prev = [], None
+    for t, is_sub, o in lines:
+        feed(S, o, is_sub, lambda cwd: True)
+        fp = fingerprint(S)
+        if fp != prev:
+            events.append(t)
+            prev = fp
+    spans = []
+    for t in events:
+        a, b = t - 60, t + 300
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], b)
+        else:
+            spans.append([a, b])
+    times = []
+    for a, b in spans:
+        k = int(-(-max(a, lo) // 30))
+        while k * 30 <= b and k * 30 < hi:
+            if k * 30 >= lo:
+                times.append(k * 30)
+            k += 1
+    return times
+
+
+def prom_name(name, unit, kind):
+    base = name.replace(".", "_") + ("_" + UNITS.get(unit, unit) if unit else "")
+    return base, base + "_total" if kind == "sum" else base
+
+
+def esc_label(v):
+    return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def build_backfill(state, prom, since, until, task_filter, head_start, wts, scrape, constants):
+    """-> (series {(family, kind, series name, labels tuple): [(t, v)]}, report dict)."""
+    series, rep = {}, {"sessions": 0, "skipped": [], "unknownFirst": 0, "tasks": {}, "min": None, "max": None}
+    pushed = state.get("pushed") or {}
+    now = time.time()
+    for sid, S0 in sorted(state["sessions"].items()):
+        if not S0.get("kit"):
+            continue
+        hit = wt_match(wts, S0["cwd"]) if S0["cwd"] else None
+        task = hit[0] if hit else ""
+        if task_filter is not None and task != task_filter:
+            continue
+        if (parse_ts(S0["last"]) or 0) < since:
+            continue
+        P = pushed.get(sid) or {}
+        if P.get("state") == "reset":
+            rep["skipped"].append((sid, "its old counters reset"))
+            continue
+        end = min(until, head_start)
+        if P.get("pos") is not None and P.get("state") != "history":
+            if P.get("first"):
+                end = min(end, P["first"])
+            else:
+                rep["unknownFirst"] += 1
+        if P.get("cont"):
+            cont = {"res": P["res"], "off": P["off"], "lab": P["lab"], "tlast": P.get("tlast") or {}}
+        else:
+            c = continuation(state, sid, prom, now)
+            if c is None:
+                rep["skipped"].append((sid, "its old counters reset"))
+                continue
+            cont = c
+        lines = session_lines(state, sid)
+        times = sample_times(lines, since, end)
+        if not times:
+            continue
+        S = new_session(sid)
+        PP = {"res": cont["res"], "off": cont["off"], "lab": cont["lab"], "vals": {}}
+        i, vals, n_before = 0, {}, 0
+        for ts in times:
+            while i < len(lines) and lines[i][0] <= ts:
+                feed(S, lines[i][2], lines[i][1], lambda cwd: True)
+                i += 1
+            if not S["first"]:
+                continue
+            S["task"] = task
+            res = resource_of(S, PP, constants, task)
+            rl = {k.replace(".", "_"): v for k, v in res.items()}
+            rl.update(scrape)
+            for name, unit, kind, attrs, value, base in session_points(S, PP):
+                if base and ts <= (cont["tlast"] or {}).get(base, 0):
+                    continue
+                v = float(value) + (PP["off"].get(base, 0) if base else 0)
+                key = name + "|" + "|".join("%s=%s" % kv for kv in sorted(attrs.items()))
+                if kind == "sum":
+                    v = max(v, vals.get(key, 0.0))
+                vals[key] = v
+                fam, sname = prom_name(name, unit, kind)
+                lab = dict(rl)
+                lab.update({k.replace(".", "_"): x for k, x in attrs.items() if x not in (None, "")})
+                series.setdefault((fam, kind, sname, tuple(sorted(lab.items()))), []).append((ts, v))
+        if S["first"]:
+            rep["sessions"] += 1
+            tk = rep["tasks"].setdefault(task, {"sessions": 0, "cost": 0.0, "tokens": 0})
+            tk["sessions"] += 1
+            tk["cost"] += sum(vals[k] for k in vals if k.startswith("claude_code.cost.usage|"))
+            tk["tokens"] += sum(vals[k] for k in vals if k.startswith("claude_code.token.usage|"))
+            rep["min"] = min(rep["min"] or times[0], times[0])
+            rep["max"] = max(rep["max"] or times[-1], times[-1])
+    return series, rep
+
+
+def write_om(series, path):
+    by_fam = {}
+    for (fam, kind, sname, lab), pts in series.items():
+        by_fam.setdefault((fam, kind), []).append((sname, lab, pts))
+    n = 0
+    with open(path, "w") as f:
+        for (fam, kind), items in sorted(by_fam.items()):
+            f.write("# TYPE %s %s\n" % (fam, "counter" if kind == "sum" else "gauge"))
+            for sname, lab, pts in sorted(items):
+                ls = ",".join('%s="%s"' % (k, esc_label(v)) for k, v in lab)
+                for t, v in pts:
+                    f.write("%s{%s} %s %d\n" % (sname, ls, repr(float(v)), t))
+                    n += 1
+        f.write("# EOF\n")
+    return n
+
+
+def wait_ready(prom, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            st, _ = http_json("%s/-/ready" % prom.rstrip("/"), timeout=3)
+            if st == 200:
+                return True
+        except Down:
+            pass
+        time.sleep(1)
+    return False
+
+
+def backfill(args):
+    opts = {"since": None, "until": None, "task": None, "dry": False, "yes": False}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--since", "--until", "--task") and i + 1 < len(args):
+            opts[a[2:]] = args[i + 1]
+            i += 1
+        elif a == "--dry-run":
+            opts["dry"] = True
+        elif a == "--yes":
+            opts["yes"] = True
+        else:
+            raise Fatal("usage: usage-metrics.sh --backfill --since <ISO time|YYYY-MM-DD> [--until <ISO time>] [--task <t>] [--dry-run] [--yes]", 2)
+        i += 1
+    if not opts["since"]:
+        raise Fatal("--backfill needs --since <ISO time|YYYY-MM-DD>", 2)
+    since = parse_when(opts["since"])
+    until = parse_when(opts["until"]) if opts["until"] else time.time()
+    otlp, prom, allow = push_settings()
+    if not allow and (urllib.parse.urlparse(prom).hostname or "") not in LOOPBACK:
+        raise Fatal("prometheusUrl %s is not on this machine and settings.metrics.allowRemote is not true" % prom, 2)
+    dock = discover_prometheus()
+    try:
+        st, js = http_json("%s/api/v1/status/tsdb" % prom.rstrip("/"))
+    except Down:
+        st, js = None, None
+    try:
+        head_ms = float(((js or {}).get("data") or {}).get("headStats", {}).get("minTime"))
+    except (TypeError, ValueError):
+        raise Fatal("Prometheus did not answer %s/api/v1/status/tsdb: it must be running to find the start of its head block." % prom, 1)
+    head_start = head_ms / 1000.0
+    state = load_state()
+    if not state["sessions"]:
+        raise Fatal("The store has no sessions: run usage-metrics.sh --once first.", 2)
+    wts = load_worktrees()
+    scratch = {"constants": json.loads(json.dumps(state.get("constants") or {"day": "", "labels": {}}))}
+    scratch["constants"]["day"] = ""
+    try:
+        constants = refresh_constants(scratch, prom)
+        found = prom_series(prom, '{__name__=~"claude_code_.+"}', time.time() - 90 * 86400)
+    except Down:
+        raise Fatal("Prometheus stopped answering while reading its labels.", 1)
+    scrape = {k: v for k, v in (found[-1].items() if found else []) if k in ("job", "instance")}
+    try:
+        series, rep = build_backfill(state, prom, since, until, opts["task"], head_start, wts, scrape, constants)
+    except Down:
+        raise Fatal("Prometheus stopped answering while reading the old series of a session.", 1)
+    os.makedirs(MDIR, exist_ok=True)
+    ts_name = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    om = os.path.join(MDIR, "backfill-%s.om" % ts_name)
+    nsamp = write_om(series, om)
+    fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)) if t else "-"
+    print("Backfill file: %s" % om)
+    print("Window: from %s to %s (head block of Prometheus starts %s; each session also ends before its first live push)" % (fmt(since), fmt(min(until, head_start)), fmt(head_start)))
+    print("Series: %d  samples: %d  sessions: %d  range: %s .. %s" % (len(series), nsamp, rep["sessions"], fmt(rep["min"]), fmt(rep["max"])))
+    for t, v in sorted(rep["tasks"].items()):
+        print("  task %-20s %3d sessions  cost $%.4f  tokens %d" % (t or "(none)", v["sessions"], v["cost"], v["tokens"]))
+    for sid, why in rep["skipped"]:
+        print("  skipped session %s: %s" % (sid, why))
+    if rep["unknownFirst"]:
+        print("  note: %d sessions were pushed live but their first push time is unknown; only the head block limits them" % rep["unknownFirst"])
+    if not scrape:
+        print("  note: no job/instance labels found in Prometheus; the samples carry none")
+    print("Prometheus container: %s (volume %s, compose %s service %s)" % (dock["name"], dock["volume"] or "?", dock["workdir"] or "?", dock["service"] or "?"))
+    if nsamp == 0:
+        print("Nothing to import.")
+        return 0
+    c = dock["name"]
+    if opts["dry"]:
+        rc, _, err = docker(["cp", om, "%s:/tmp/%s" % (c, os.path.basename(om))])
+        if rc != 0:
+            raise Fatal("docker cp failed: %s" % err.strip()[:200])
+        rc, out, err = docker(["exec", c, "sh", "-c", "promtool check metrics < /tmp/%s" % os.path.basename(om)])
+        docker(["exec", c, "rm", "-f", "/tmp/" + os.path.basename(om)])
+        lint = [l for l in (out + err).splitlines() if l.strip() and "no help text" not in l]
+        if lint:
+            print("promtool check metrics reported problems:")
+            for l in lint[:20]:
+                print("  " + l)
+            return 1
+        print("promtool check metrics: ok (only 'no help text' lints). Dry run: nothing was written to Prometheus.")
+        return 0
+    if not (dock["workdir"] and dock["service"] and dock["volume"]):
+        raise Fatal("The container has no compose labels or no /prometheus volume: this tool cannot stop and back it up.", 2)
+    backup = os.path.join(os.path.expanduser("~"), "prometheus-backups", "prometheus-data-%s.tgz" % ts_name)
+    print("It will: stop %s (docker compose stop %s in %s), back up the volume to %s, start it again, wait until it is ready, build blocks with "
+          "promtool in the container and move them into /prometheus. Prometheus is down for about a minute." % (c, dock["service"], dock["workdir"], backup))
+    if not opts["yes"]:
+        raise Fatal("add --yes after the user agreed", 2)
+    stopped = [False]
+
+    def restart():
+        if stopped[0]:
+            docker(["compose", "start", dock["service"]], cwd=dock["workdir"])
+            stopped[0] = False
+
+    try:
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        rc, _, err = docker(["compose", "stop", dock["service"]], cwd=dock["workdir"])
+        if rc != 0:
+            raise Fatal("docker compose stop failed: %s" % err.strip()[:200])
+        stopped[0] = True
+        rc, _, err = docker(["run", "--rm", "--user", "root", "--entrypoint", "tar", "-v", "%s:/src:ro" % dock["volume"], "-v", "%s:/dst" % os.path.dirname(backup),
+                             dock["image"], "czf", "/dst/" + os.path.basename(backup), "-C", "/src", "."])
+        listing = ""
+        if rc == 0:
+            import subprocess
+            r = subprocess.run(["tar", "tzf", backup], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            listing = r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
+        if rc != 0 or not listing.strip():
+            raise Fatal("The backup of the volume failed (%s); nothing was imported." % (err.strip()[:200] or "empty archive"))
+        rc, _, err = docker(["compose", "start", dock["service"]], cwd=dock["workdir"])
+        if rc != 0:
+            raise Fatal("docker compose start failed: %s" % err.strip()[:200])
+        stopped[0] = False
+        print("Backup: %s (%d entries)" % (backup, len(listing.splitlines())))
+        if not wait_ready(prom, int(os.environ.get("ORCA_ROLES_BACKFILL_WAIT", "90"))):
+            raise Fatal("Prometheus did not become ready after the restart; nothing was imported.")
+    except Fatal:
+        restart()
+        raise
+    name = os.path.basename(om)
+    for step, args2 in (("copy the file", ["cp", om, "%s:/tmp/%s" % (c, name)]),
+                        ("build the blocks", ["exec", c, "sh", "-c", "rm -rf /tmp/import-blocks && mkdir /tmp/import-blocks && promtool tsdb create-blocks-from openmetrics /tmp/%s /tmp/import-blocks" % name])):
+        rc, _, err = docker(args2)
+        if rc != 0:
+            raise Fatal("Could not %s: %s. Nothing was moved into /prometheus." % (step, err.strip()[:300]))
+    rc, out, _ = docker(["exec", c, "ls", "/tmp/import-blocks"])
+    ulids = out.split()
+    rc, _, err = docker(["exec", c, "sh", "-c", "mkdir /prometheus/import-staging && cp -r /tmp/import-blocks/* /prometheus/import-staging/ && "
+                         "for b in /prometheus/import-staging/*; do mv \"$b\" /prometheus/; done && rmdir /prometheus/import-staging"])
+    if rc != 0:
+        raise Fatal("Could not move the blocks into /prometheus: %s. Check %s for a leftover import-staging folder (it is ignored by Prometheus)." % (err.strip()[:300], dock["volume"]))
+    print("Blocks moved into /prometheus: %s" % " ".join(ulids))
+    tasks = [t for t in rep["tasks"] if t]
+    if tasks:
+        q = 'sum by (task)(max_over_time(claude_code_cost_usage_USD_total{task=~"%s"}[%dd]))' % ("|".join(re.escape(t) for t in tasks), max(1, int((time.time() - since) // 86400) + 2))
+        end = time.time() + int(os.environ.get("ORCA_ROLES_BACKFILL_WAIT", "90"))
+        got = {}
+        while time.time() < end:
+            try:
+                got = {r["metric"].get("task"): float(r["value"][1]) for r in prom_vector(prom, q)}
+            except (Down, KeyError, ValueError):
+                got = {}
+            if all(got.get(t, 0) >= rep["tasks"][t]["cost"] * 0.99 for t in tasks):
+                break
+            time.sleep(3)
+        for t in tasks:
+            print("  Prometheus now: task %s cost $%.4f (file: $%.4f)" % (t, got.get(t, 0.0), rep["tasks"][t]["cost"]))
+    print("Undo: docker compose stop %s; restore the backup into the volume (docker run --rm --user root --entrypoint sh -v %s:/p -v %s:/b:ro %s "
+          "-c 'cd /p && rm -rf /p/* && tar xzf /b/%s -C /p'); docker compose start %s   (run in %s)"
+          % (dock["service"], dock["volume"], os.path.dirname(backup), dock["image"], os.path.basename(backup), dock["service"], dock["workdir"]))
+    return 0
 
 
 def prune_pushed(state, keep_days):
@@ -1287,7 +1687,13 @@ def main(argv):
         return once()
     if len(argv) >= 1 and argv[0] == "--report":
         return report(argv[1:])
-    print("usage: usage-metrics.sh --once | --report [--task <t>] [--since <YYYY-MM-DD>] [--json]", file=sys.stderr)
+    if len(argv) >= 1 and argv[0] == "--backfill":
+        try:
+            return backfill(argv[1:])
+        except Fatal as ex:
+            print("usage-metrics.sh: %s" % ex, file=sys.stderr)
+            return ex.code
+    print("usage: usage-metrics.sh --once | --report [--task <t>] [--since <YYYY-MM-DD>] [--json] | --backfill --since <time> [--until <time>] [--task <t>] [--dry-run] [--yes]", file=sys.stderr)
     return 2
 
 

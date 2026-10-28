@@ -8505,6 +8505,12 @@ class H(BaseHTTPRequestHandler):
             if c.get("const_status", 200) != 200:
                 return self.out(c["const_status"], {})
             return self.out(200, {"status": "success", "data": c.get("constants", [])})
+        if u.path == "/api/v1/status/tsdb":
+            return self.out(200, {"status": "success", "data": {"headStats": {"minTime": c.get("head_ms", 0)}}})
+        if u.path == "/-/ready":
+            return self.out(c.get("ready_status", 200), {})
+        if u.path == "/api/v1/query" and q["query"][0].startswith("sum by"):
+            return self.out(200, {"status": "success", "data": {"resultType": "vector", "result": [{"metric": {"task": k}, "value": [0, str(v)]} for k, v in c.get("totals", {}).items()]}})
         if u.path == "/api/v1/query":
             qs = q["query"][0]; fn = qs.split("(")[0]
             mm = re.search(r"([a-zA-Z_:]+)\{(.*)\}\[", qs)
@@ -8712,6 +8718,116 @@ env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; 
 check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
 rm -f "$SB/real.log"; env -u ORCA_ROLES_SCHEDULER -u ORCA_ROLES_SCHEDULER_LOG -u ORCA_ROLES_SCHEDULER_OS SMOKE_JOBS=1 PATH="$SB/rbin:$PATH" bash "$ROOT/tests/smoke.sh" install install-flat install-migration > "$SB/inner.out" 2>&1 < /dev/null; SF1="$?:$(tail -1 "$SB/inner.out"):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"
 check "usage scheduler safety: the install sections run with a recording launchctl and crontab first on PATH and no scheduler variable in the environment (the prelude of the suite must supply the fake) finish ALL OK and neither is ever called" "$SF1" "0:ALL OK:none"
+# backfill: a fake docker first on PATH (records every call; discovery, compose, tar, promtool simulated) and the fake Prometheus HTTP server; never anything real
+FD="$UM/fdock"; BH="$UM/bh"
+fdreset() { rm -rf "$FD" "$BH"; mkdir -p "$FD/bin" "$FD/compose" "$BH"; : > "$FD/docker.log"; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\nother\tprom/prometheus-extra:1\no2\tbitnami/prometheus:1\no3\tnotprom/prometheus\nweb\tnginx\n' > "$FD/ps.txt"
+  jq -cn --arg w "$FD/compose" '[{Name: "/prom1", State: {Running: true}, Mounts: [{Destination: "/prometheus", Name: "obs_prom-data"}], Config: {Image: "quay.io/prom/prometheus:v2.54.1", Labels: {"com.docker.compose.project.working_dir": $w, "com.docker.compose.service": "prometheus"}}}]' > "$FD/inspect.json"
+  cat > "$FD/bin/docker" <<EOS
+#!/bin/sh
+echo "\$*" >> "$FD/docker.log"
+case "\$1" in
+  ps) cat "$FD/ps.txt";;
+  inspect) cat "$FD/inspect.json";;
+  compose) case "\$2" in stop) exit "\$(cat "$FD/stop.rc" 2>/dev/null || echo 0)";; esac;;
+  cp) cp "\$2" "$FD/cp.om" 2>/dev/null; exit 0;;
+  run) for a in "\$@"; do case "\$a" in *:/dst) dst="\${a%:/dst}";; /dst/*) f="\${a#/dst/}";; esac; done
+    case "\$(cat "$FD/tar.mode" 2>/dev/null)" in fail) echo "tar failed" >&2; exit 1;; empty) : > "\$dst/\$f"; exit 0;; esac
+    mkdir -p "$FD/tarsrc"; echo data > "$FD/tarsrc/chunk"; tar czf "\$dst/\$f" -C "$FD/tarsrc" .; exit 0;;
+  exec) shift; shift
+    case "\$1 \$2" in
+      "ls /tmp/import-blocks") echo "01ABC 01DEF";;
+      "sh -c") case "\$3" in
+        *"promtool check metrics"*) cat "$FD/lint.txt" 2>/dev/null; exit 0;;
+        *create-blocks-from*) exit "\$(cat "$FD/create.rc" 2>/dev/null || echo 0)";;
+        *import-staging*) exit "\$(cat "$FD/move.rc" 2>/dev/null || echo 0)";;
+      esac;;
+    esac;;
+esac
+exit 0
+EOS
+  chmod +x "$FD/bin/docker"
+}
+umbf() { KIT="$PK" HOME="$BH" PATH="$FD/bin:$PATH" ORCA_ROLES_CLAUDE_PROJECTS="$PC" ORCA_ROLES_BACKFILL_WAIT=3 bash "$ROOT/bin/usage-metrics.sh" --backfill "$@" > "$UM/bf.out" 2> "$UM/bf.err" && BRC=0 || BRC=$?; BOUT="$(cat "$UM/bf.out" "$UM/bf.err")"; }
+dkn() { local n; n="$(grep -c "$1" "$FD/docker.log" 2>/dev/null || true)"; echo "${n:-0}"; }
+omf() { find "$PM" -name 'backfill-*.om' | sort | tail -1; }
+omts() { grep "$1" "$(omf)" 2>/dev/null | grep '^claude_code_token_usage_tokens_total' | awk '{print $NF}' | sort -n | sed -n "$2p" || true; }
+BN="$(date +%s)"
+bfs() {  # bfs <sid> <cwd> <prompt> <offset:input>...: a session whose responses come at now+offset s with that many input tokens
+  local f="$PD/$1.jsonl" c="$2" pr="$3" first="" o w t; shift 3
+  for o in "$@"; do w="${o%%:*}"; [ -n "$first" ] || { first=1; pu "$f" "$(umts "$((w - 60))")" "$c" "$pr"; }; t="${o##*:}"; pa "$f" "$(umts "$w")" "$c" "$1-$w" claude-haiku-4-5 "{\"input_tokens\":$t}" '[{"type":"text","text":"x"}]'; done
+}
+set +e   # the backfill checks compare what happened; a command that fails must not end the section
+umpk; fstop; fstart; fdreset
+bfs p1 /w/a/devgd-300/src "$RDEV" -9000:100 -8000:200 -7400:50 -5400:10 -3600:10
+bfs p2 /w/a/other "plain" -9000:100 -2400:20 -2000:30 -1200:40
+bfs p3 /w/a/devgd-300/x "plain" -6000:70
+bfs p4 /w/a/devgd-300/y "plain" -5000:400 -4000:100
+umpass
+jq --argjson f "$((BN - 7200))" '.pushed.p1 = {pos: 1, state: "", off: {}, lab: {}, res: {}, vals: {}, seen: 1, first: $f, cont: true}' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+umcfg
+OLDL() { printf '"job":"claude-code","instance":"i","session_id":"%s","user_id":"%s","service_version":"%s"' "$1" "$2" "$3"; }
+TKB='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","type":"input","effort":"high","query_source":"main"'
+fcfg "{\"head_ms\":$(( (BN - 1800) * 1000 )),\"constants\":[{\"__name__\":\"claude_code_cost_usage_USD_total\",\"job\":\"claude-code\",\"instance\":\"inst1\",\"user_id\":\"u-const\",\"organization_id\":\"org-1\"}],\"old\":{\"p2\":[{$TKB,$(OLDL p2 U1 2.3.1)}],\"p3\":[{$TKB,$(OLDL p3 U3 2.3.1)}],\"p4\":[{$TKB,$(OLDL p4 U4 2.3.2)}]},\"values\":{\"p2|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[100,$((BN - 8800)),0],\"p3|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[70,$((BN - 6000)),1],\"p4|claude_code_token_usage_tokens_total|claude-haiku-4-5|input\":[9000,$((BN - 4900)),0]},\"totals\":{\"devgd-292\":999,\"outer\":999}}"
+SINCE="$(umts -86400)"
+umbf --since "$SINCE" --dry-run; DS1="$BRC:$(printf '%s\n' "$BOUT" | grep -c "^Prometheus container: prom1 (volume obs_prom-data, compose $FD/compose service prometheus)\$" || true):$(dkn '^ps '):$(dkn '^inspect prom1$')"
+printf 'web\tnginx\n' > "$FD/ps.txt"; : > "$FD/docker.log"; umbf --since "$SINCE" --dry-run; DS2="$BRC:$(printf '%s\n' "$BOUT" | grep -c '^usage-metrics.sh: No running Prometheus container (image prom/prometheus) found: set settings.metrics.prometheusContainer to its name\.$' || true):$(dkn '^inspect')"
+printf 'a\tprom/prometheus:1\nb\tghcr.io/prom/prometheus@sha256:ab\n' > "$FD/ps.txt"; umbf --since "$SINCE" --dry-run; DS3="$BRC:$(printf '%s\n' "$BOUT" | grep -c '^usage-metrics.sh: Several Prometheus containers are running (a, b): set settings.metrics.prometheusContainer to the one to use\.$' || true)"
+: > "$FD/docker.log"; jq '.settings.metrics.prometheusContainer = "prom1"' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"; umbf --since "$SINCE" --dry-run; DS4="$BRC:$(dkn '^ps '):$(dkn '^inspect prom1$')"
+umcfg
+check "usage backfill discovery: the running container whose image is prom/prometheus (with a registry prefix, a tag or a digest) is used with its volume, compose folder and service; prom/prometheus-extra, bitnami/prometheus and notprom/prometheus are not Prometheus; none -> exit 2 with the message naming the setting; several -> exit 2 naming them; settings.metrics.prometheusContainer overrides and docker ps is not even asked" "$DS1|$DS2|$DS3|$DS4" "0:1:1:1|2:1:0|2:1|0:0:1"
+fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
+umbf --since "$(umts -14400)" --dry-run; OM="$(omf)"
+mx() { omts "session_id=\"$1\"" '$'; }; mn() { omts "session_id=\"$1\"" 1; }
+W1="$([ "$(mx p1)" -lt "$((BN - 7200))" ] && [ "$(mx p1)" -ge "$((BN - 7260))" ] && echo p1-before-first-push):$([ "$(mx p2)" -lt "$((BN - 1800))" ] && [ "$(mx p2)" -ge "$((BN - 1860))" ] && echo p2-before-head)"
+umbf --since "$(umts -14400)" --until "$(umts -8500)" --dry-run; W2="$([ -n "$(mx p1)" ] && [ "$(mx p1)" -lt "$((BN - 8400))" ] && [ "$(mx p2)" -lt "$((BN - 8400))" ] && echo until)"
+umbf --since "$(umts -14400)" --task devgd-292 --dry-run; W3="$(grep -o 'session_id="[^"]*"' "$(omf)" | sort -u | tr '\n' ' ')"
+SN="$(umts -4500)"; umbf --since "$SN" --dry-run; W4="$(grep -o 'session_id="[^"]*"' "$(omf)" | sort -u | tr '\n' ' '):$([ "$(mn p2)" -ge "$((BN - 4510))" ] && echo since)"
+check "usage backfill window: samples of a session never reach the head block of Prometheus (p2 ends below it) nor its own first live push (p1 ends just below it, and its later activity is not sampled); --until is honoured; --task keeps one task's sessions (the session whose old counters reset is skipped); --since drops the sessions that ended before it and starts no sample earlier" "$W1|$W2|$W3|$W4" "p1-before-first-push:p2-before-head|until|session_id=\"p1\" session_id=\"p4\" |session_id=\"p2\" session_id=\"p4\" :since"
+fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
+umbf --since "$(umts -14400)" --dry-run; OM="$(omf)"
+tl() { grep "session_id=\"$1\"" "$OM" | grep '^claude_code_token_usage_tokens_total' | grep 'type="input"'; }
+lab() { sed -n 's/^[a-z_]*{\(.*\)} [0-9.e+-]* [0-9]*$/\1/p' | sort -u; }
+L1="$(tl p1 | lab)"; L2="$(tl p2 | lab)"; L3="$(tl p4 | lab)"
+L4="$(tl p4 | awk '{print $(NF-1)}' | sort -u | tr '\n' ' '):$(tl p4 | awk '{print $NF}' | sort -n | head -1 | awk -v t="$((BN - 4900))" '{print ($1 > t) ? "after-old-last" : "before"}')"
+L5="$(grep -c 'session_id="p3"' "$OM" || true):$(printf '%s\n' "$BOUT" | grep -c '^  skipped session p3: its old counters reset$' || true)"
+check "usage backfill labels and continuation: a session without old series gets the labels of the live push (role and task from the kit, the constants user_id and organization_id copied from Prometheus, effort, version, job and instance of the newest series); a session with old series keeps their labels (user_id, service_version, effort) instead of the constants; a continued counter starts after the old series' last sample at old value + the transcript's increase (9000 then 9100); a session whose old counters reset is skipped and listed" "$L1|$L2|$L3|$L4|$L5" 'effort="medium",instance="inst1",job="claude-code",model="claude-haiku-4-5",orca_roles_role="dev",organization_id="org-1",query_source="main",service_name="claude-code",service_version="2.1.311",session_id="p1",task="devgd-292",type="input",user_id="u-const"|effort="high",instance="inst1",job="claude-code",model="claude-haiku-4-5",query_source="main",service_name="claude-code",service_version="2.3.1",session_id="p2",type="input",user_id="U1"|effort="high",instance="inst1",job="claude-code",model="claude-haiku-4-5",query_source="main",service_name="claude-code",service_version="2.3.2",session_id="p4",type="input",user_id="U4"|9000.0 9100.0 :after-old-last|0:1'
+F1="$(grep '^# TYPE' "$OM" | sed 's/^# TYPE //' | tr '\n' ',')$(tail -1 "$OM")"
+F2="$(grep -v '^#' "$OM" | awk '{print ($NF % 30 == 0) ? "ok" : "bad"}' | sort -u | tr '\n' ' ')"
+F3="$(grep -v '^#' "$OM" | grep -vE '^(orca_roles_cache_savings_USD|orca_roles_context_max_tokens)' | awk '{v = $(NF-1); k = $0; sub(/ [^ ]+ [^ ]+$/, "", k); if ((k in last) && v + 0 < last[k] + 0) bad++; last[k] = v} END {print (bad ? "decrease" : "monotone")}')"
+F4="$(grep -cE 'adopt that role|task_abcdef01|SECRET' "$OM" || true):$(grep -cE '^# TYPE (orca_roles_cache_savings_USD|orca_roles_context_max_tokens) gauge$' "$OM" || true)"
+check "usage backfill file: OpenMetrics with a TYPE per family (counters, and gauges for the cache savings and the context maximum, samples named _total), ending in # EOF, every sample on a multiple of 30 s, every counter series non-decreasing along time, no prompt or tool text" "$F1|$F2|$F3|$F4" "claude_code_cost_usage_USD counter,claude_code_session_count counter,claude_code_token_usage_tokens counter,orca_roles_api_errors counter,orca_roles_cache_savings_USD gauge,orca_roles_commit_lines counter,orca_roles_commits counter,orca_roles_compactions counter,orca_roles_context_max_tokens gauge,orca_roles_cost_by_type_USD counter,orca_roles_lines counter,orca_roles_model_changes counter,orca_roles_thinking_tokens counter,orca_roles_turns counter,orca_roles_user_messages counter,# EOF|ok |monotone|0:2"
+: > "$FD/docker.log"; umbf --since "$(umts -14400)" --dry-run
+DR1="$BRC:$(dkn '^cp '):$(dkn 'promtool check metrics'):$(dkn '^exec prom1 rm'):$(dkn '^compose'):$(dkn '^run '):$(dkn 'create-blocks-from'):$(dkn 'import-staging'):$(cmp -s "$FD/cp.om" "$(omf)" && echo same-file)"
+DR2="$(printf '%s\n' "$BOUT" | grep -c '^Series: [0-9][0-9]*  samples: [0-9][0-9]*  sessions: 3  range: ' || true):$(printf '%s\n' "$BOUT" | grep -c '^  task devgd-292  *2 sessions  cost \$0.0009  tokens 9450$' || true):$(printf '%s\n' "$BOUT" | grep -c '^  task outer  *1 sessions  cost \$0.0002  tokens 150$' || true):$(printf '%s\n' "$BOUT" | grep -c 'Dry run: nothing was written to Prometheus' || true)"
+printf 'metric_x: bad name\nfoo no help text\n' > "$FD/lint.txt"; umbf --since "$(umts -14400)" --dry-run; DR3="$BRC:$(printf '%s\n' "$BOUT" | grep -c 'promtool check metrics reported problems:' || true):$(printf '%s\n' "$BOUT" | grep -c '  metric_x: bad name' || true):$(printf '%s\n' "$BOUT" | grep -c 'foo no help text' || true)"
+printf 'foo no help text\n' > "$FD/lint.txt"; umbf --since "$(umts -14400)" --dry-run; DR4="$BRC"; : > "$FD/lint.txt"
+check "usage backfill --dry-run: writes the .om file, copies it into the container, runs promtool check metrics and removes the copy, and calls no compose, no tar, no create-blocks and no move (nothing is written to Prometheus); prints the window, the series/samples/sessions line and the totals per task; a lint problem is listed with exit 1, lines that only say 'no help text' are not problems" "$DR1|$DR2|$DR3|$DR4" "0:1:1:1:0:0:0:0:same-file|1:1:1:1|1:1:1:0|0"
+dseq() { awk '/^ps /{print "ps"} /^inspect /{print "inspect"} /^compose stop/{print "stop"} /^run /{print "tar"} /^compose start/{print "start"} /^cp /{print "cp"} /create-blocks-from/{print "create"} /^exec [^ ]* ls /{print "ls"} /import-staging/{print "move"} /promtool check metrics/{print "lint"}' "$FD/docker.log" | tr '\n' ' '; }
+bfo() { printf '%s\n' "$BOUT" | grep -c -e "$1" || true; }
+fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
+umbf --since "$(umts -14400)"; N1="$BRC:$(dseq):$(bfo '^usage-metrics.sh: add --yes after the user agreed$'):$(bfo '^It will: stop prom1 (docker compose stop prometheus in ')::$(find "$BH" -type f | wc -l | tr -d ' ')"
+check "usage backfill without --yes: prints what it would do and stops with exit 2 'add --yes after the user agreed'; the only docker calls are the discovery (ps, inspect) and nothing is stopped, backed up or imported" "$N1" "2:ps inspect :1:1::0"
+: > "$FD/docker.log"; umbf --since "$(umts -14400)" --yes
+Y1="$BRC:$(dseq)"; BK="$(find "$BH/prometheus-backups" -name 'prometheus-data-*.tgz' | head -1)"
+Y2="$([ -n "$BK" ] && tar tzf "$BK" | grep -c chunk || true):$(bfo '^Backup: .*prometheus-data-[0-9-]*\.tgz ([0-9]* entries)$' || true):$(bfo '^Blocks moved into /prometheus: 01ABC 01DEF$'):$(bfo '^  Prometheus now: task devgd-292 cost \$999.0000'):$(bfo '^Undo: docker compose stop prometheus; restore the backup'):$([ "$(fgets '/-/ready')" -ge 1 ] && echo ready-polled)"
+check "usage backfill --yes: the calls happen in this order: discovery, compose stop, the tar of the volume, compose start, the copy of the file, create-blocks, the listing of the blocks, the staged move; the backup archive exists under the home's prometheus-backups and lists the volume's files; the output names the backup, the blocks, what Prometheus now holds per task and the undo command" "$Y1|$Y2" "0:ps inspect stop tar start cp create ls move |1:1:1:1:1:ready-polled"
+bfail() {  # bfail <file in $FD> <content> <message pattern>: one run with that fake failure -> exit status|calls|messages found
+  fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"; printf '%s\n' "$2" > "$FD/$1"; umbf --since "$(umts -14400)" --yes; printf '%s|%s|%s;' "$BRC" "$(dseq)" "$(bfo "$3")"
+}
+FL="$(bfail tar.mode fail 'The backup of the volume failed')$(bfail tar.mode empty 'empty archive')$(bfail stop.rc 1 'docker compose stop failed')$(bfail create.rc 1 'Nothing was moved into /prometheus')$(bfail move.rc 1 'Could not move the blocks into /prometheus')"
+fcfg "$(jq -c '.ready_status = 503' "$UM/fs/cfg.json")"; FL2="$(bfail none.x 0 'did not become ready')"; fcfg "$(jq -c 'del(.ready_status)' "$UM/fs/cfg.json")"
+check "usage backfill failures: a failing or empty backup starts Prometheus again and imports nothing (no copy, no blocks); a failing stop does not start it; a failing create-blocks stops before the move; a failing move is reported; Prometheus not ready after the restart imports nothing; each is exit 1 with its message" "$FL|$FL2" "1|ps inspect stop tar start |1;1|ps inspect stop tar start |1;1|ps inspect stop |1;1|ps inspect stop tar start cp create |1;1|ps inspect stop tar start cp create ls move |1;|1|ps inspect stop tar start |1;"
+fdreset; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\n' > "$FD/ps.txt"
+umcfg 127.0.0.1 0.0.0.0 false; umbf --since "$(umts -14400)" --dry-run; E1="$BRC:$(bfo 'is not on this machine and settings.metrics.allowRemote is not true'):$(wc -l < "$FD/docker.log" | tr -d ' ')"; umcfg
+umbf --dry-run; E2="$BRC:$(bfo '--backfill needs --since')"; umbf --since yesterday --dry-run; E3="$BRC"; umbf --since "$(umts -14400)" --bogus; E4="$BRC:$(bfo '^usage-metrics.sh: usage: usage-metrics.sh --backfill --since')"
+: > "$FD/docker.log"; umbf --since "$(umts 3600)" --dry-run; E5="$BRC:$(bfo '^Nothing to import\.$'):$(dseq)"
+umpk; umcfg; fcfg "{\"head_ms\":$(( BN * 1000 ))}"; umpass; umbf --since "$(umts -14400)" --dry-run; E6="$BRC:$(bfo 'The store has no sessions: run usage-metrics.sh --once first')"
+fstop; umbf --since "$(umts -14400)" --dry-run; E7="$BRC:$(bfo 'Prometheus did not answer .*/api/v1/status/tsdb: it must be running')"
+check "usage backfill errors: a prometheusUrl that is not on this machine (without allowRemote) is refused with exit 2 before any docker call; a missing or invalid --since or an unknown option is exit 2 with the usage; a window with no samples prints 'Nothing to import.' and exit 0 after the discovery only; an empty store is exit 2 telling to run --once first; Prometheus not answering is exit 1" "$E1|$E2|$E3|$E4|$E5|$E6|$E7" "2:1:0|2:1|2|2:1|0:1:ps inspect |2:1|1:1"
+UC="$(for v in '""' 5 true '[]' '{}' 0; do umbad .settings.metrics.prometheusContainer "$v" 'settings.metrics.prometheusContainer must be a non-empty string'; done; umok .settings.metrics.prometheusContainer null; umok .settings.metrics.prometheusContainer '"prom1"'; umok .settings.metrics.prometheusContainer '"my-prom_1.x"')"
+check "usage backfill setting: settings.metrics.prometheusContainer must be a non-empty string (an empty string, a number, a boolean, a list or an object is exactly one ERROR); null, absent and a container name pass" "$(grep -c BAD <<< "$UC"):$(grep -o 'ok ' <<< "$UC" | wc -l | tr -d ' ')" "0:9"
+set -e
+fstop
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS

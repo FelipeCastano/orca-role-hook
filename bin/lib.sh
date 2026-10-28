@@ -507,6 +507,7 @@ check_config() {
           (if got("allowRemote") and (.allowRemote != true and .allowRemote != false) then P + "settings.metrics.allowRemote must be true or false" else empty end),
           (. as $m | ("otlpEndpoint", "prometheusUrl") as $k | select($m | got($k) and (.[$k] | type == "string" and test("^https?://.") | not)) | P + "settings.metrics.\($k) must be a URL starting with http:// or https://"),
           (if got("intervalSeconds") and (.intervalSeconds | type == "number" and . == floor and . >= 15 and . <= 3600 | not) then P + "settings.metrics.intervalSeconds must be an integer from 15 to 3600" else empty end),
+          (if got("prometheusContainer") and (.prometheusContainer | type == "string" and length > 0 | not) then P + "settings.metrics.prometheusContainer must be a non-empty string" else empty end),
           (if got("retentionDays") and (.retentionDays | type == "number" and . == floor and . >= 1 and . <= 3650 | not) then P + "settings.metrics.retentionDays must be an integer from 1 to 3650" else empty end))),
         ($s | if got("trust") and (.trust != "worktree" and .trust != "never") then P + "settings.trust must be \"worktree\" or \"never\"" else empty end),
         ((.roles // {}) | to_entries[] | .key as $r | select(.value | type == "object" and got("opencode")) | .value.opencode
