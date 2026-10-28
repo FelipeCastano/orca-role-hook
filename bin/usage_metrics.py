@@ -30,6 +30,34 @@ one JSON line per kit session that changed in that pass, with all its cumulative
   commits            {count, insertions, deletions}   Bash `git commit` calls that succeeded
   unpriced           models with no price
 
+Live push (after the store, in the same pass): OTLP/HTTP JSON (application/json) to settings.metrics.otlpEndpoint, one ResourceMetrics per session,
+cumulative monotonic Sums (Gauges where noted), startTime = the session's first line, time = now. Only sessions with new transcript lines since their
+last successful push (position kept in state.json) are sent; a session never pushed is sent only when its last line is under 15 minutes old (older
+ones are history: step 5). A non-loopback endpoint (or prometheusUrl) without settings.metrics.allowRemote true sends nothing and warns once per UTC
+day; connection errors/timeouts (5 s, ORCA_ROLES_METRICS_HTTP_TIMEOUT) are silent and retried next pass. Resource attributes: service.name=claude-code,
+service.version, session.id, task, orca_roles.role and the constant labels (user_*, organization_id, host_arch, os_type, os_version, terminal_type,
+copied once a day from the newest claude_code_* series of prometheusUrl /api/v1/series; omitted when unavailable); never job/instance/project. Before
+a session's first push its old series (session_id) are read from Prometheus and continued: value = old last + (transcript cumulative now - transcript
+cumulative at the anchor, the last point where the transcript equals the old value exactly, else at the old last sample time), with the old series'
+labels; old counters that reset -> the session is not pushed (logged once); Prometheus unreachable -> the first push waits.
+Instrument -> Prometheus name (collector: resource_to_telemetry_conversion, unit and _total suffixes):
+  claude_code.cost.usage (USD)            claude_code_cost_usage_USD_total{model,effort,query_source}   (priced cost per model)
+  claude_code.token.usage (tokens)        claude_code_token_usage_tokens_total{type,model,effort,query_source}
+  claude_code.session.count               claude_code_session_count_total{start_type}
+  orca_roles.cost.by_type (USD)           orca_roles_cost_by_type_USD_total{type,model}
+  orca_roles.cache.savings (USD, gauge)   orca_roles_cache_savings_USD{model}
+  orca_roles.thinking (tokens)            orca_roles_thinking_tokens_total{model}
+  orca_roles.tool.calls / .errors         orca_roles_tool_calls_total{tool} / orca_roles_tool_errors_total{tool}
+  orca_roles.tool.duration (s)            orca_roles_tool_duration_seconds_total{tool}
+  orca_roles.turns / .user.messages / .compactions / .api.errors / .model.changes
+                                          orca_roles_turns_total / orca_roles_user_messages_total / orca_roles_compactions_total / orca_roles_api_errors_total / orca_roles_model_changes_total
+  orca_roles.context.max (tokens, gauge)  orca_roles_context_max_tokens
+  orca_roles.lines                        orca_roles_lines_total{type=added|removed}
+  orca_roles.verdicts                     orca_roles_verdicts_total{verdict=ACCEPTED|REJECTED|none}
+  orca_roles.task.duration (s)            orca_roles_task_duration_seconds_total{verdict}
+  orca_roles.commits                      orca_roles_commits_total
+  orca_roles.commit.lines                 orca_roles_commit_lines_total{type=insertions|deletions}
+
 Rotation: on the first pass of a UTC day, sessions-*.jsonl older than settings.metrics.retentionDays are deleted (never state.json,
 worktrees.jsonl or events.jsonl). Errors go to $KIT/metrics/usage-metrics.log (the last 1000 lines kept).
 """
@@ -41,6 +69,9 @@ import re
 import shlex
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 LIMIT = float(os.environ.get("ORCA_ROLES_METRICS_LIMIT", "60"))
 KIT = os.environ.get("KIT") or os.path.join(os.path.expanduser("~"), ".orca-roles")
@@ -725,6 +756,403 @@ def take_lock():
     return None
 
 
+# ---------------------------------------------------------------- live push (OTLP/HTTP JSON to the local collector)
+HTTP_TIMEOUT = float(os.environ.get("ORCA_ROLES_METRICS_HTTP_TIMEOUT", "5"))
+BATCH = 25
+HISTORY_WINDOW = 900   # a session never pushed is pushed only when its last line is this recent (seconds); older ones are history (step 5)
+DATAPOINT_LABELS = ("model", "type", "effort", "query_source", "start_type", "decision", "source", "tool_name", "language", "verdict", "tool")
+CLAUDE_SERIES = ("claude_code_cost_usage_USD_total", "claude_code_token_usage_tokens_total", "claude_code_session_count_total")
+LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
+class Down(Exception):
+    """A connection failed or timed out: the rest of the pass skips that server."""
+
+
+def _opener():
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def http_json(url, body=None, timeout=None):
+    """-> (status, parsed JSON or None). Raises Down on a connection error or timeout."""
+    req = urllib.request.Request(url, data=None if body is None else json.dumps(body, separators=(",", ":")).encode(),
+                                 headers={"Content-Type": "application/json"} if body is not None else {}, method="POST" if body is not None else "GET")
+    try:
+        with _opener().open(req, timeout=timeout or HTTP_TIMEOUT) as r:
+            raw = r.read()
+            status = r.status
+    except urllib.error.HTTPError as e:
+        raw, status = e.read(), e.code
+    except (urllib.error.URLError, OSError, ValueError):
+        raise Down()
+    try:
+        return status, json.loads(raw) if raw else None
+    except ValueError:
+        return status, None
+
+
+def push_settings():
+    m = metrics_settings()
+    def url(k, d):
+        v = m.get(k)
+        return v if isinstance(v, str) and re.match(r"^https?://.", v) else d
+    return (url("otlpEndpoint", "http://127.0.0.1:4318/v1/metrics"), url("prometheusUrl", "http://127.0.0.1:9090"), m.get("allowRemote") is True)
+
+
+def host_ok(url, allow_remote, state, what):
+    """Loopback hosts only, unless allowRemote; one warning line per UTC day otherwise."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    if allow_remote or host in LOOPBACK:
+        return True
+    today = now_iso()[:10]
+    warned = state.setdefault("warned", {})
+    if warned.get(what) != today:
+        warned[what] = today
+        log("not pushing: %s %s is not on this machine and settings.metrics.allowRemote is not true" % (what, host))
+    return False
+
+
+def sel(name, labels):
+    return "%s{%s}" % (name, ",".join('%s="%s"' % (k, str(v).replace("\\", "\\\\").replace('"', '\\"')) for k, v in sorted(labels.items())))
+
+
+def prom_vector(base, query):
+    st, js = http_json("%s/api/v1/query?%s" % (base.rstrip("/"), urllib.parse.urlencode({"query": query})))
+    if st != 200 or not isinstance(js, dict) or js.get("status") != "success":
+        raise Down()
+    return (js.get("data") or {}).get("result") or []
+
+
+def prom_series(base, match, start=None):
+    q = {"match[]": match}
+    if start is not None:
+        q["start"] = "%d" % start
+        q["end"] = "%d" % time.time()
+    st, js = http_json("%s/api/v1/series?%s" % (base.rstrip("/"), urllib.parse.urlencode(q)))
+    if st != 200 or not isinstance(js, dict) or js.get("status") != "success":
+        raise Down()
+    return [s for s in (js.get("data") or []) if isinstance(s, dict)]
+
+
+def is_constant_label(k):
+    return k.startswith("user_") or k in ("organization_id", "host_arch", "os_type", "os_version", "terminal_type")
+
+
+def refresh_constants(state, prom):
+    """The constant labels, copied once a day from the newest existing claude_code_* series; keeps the cached ones when Prometheus is down."""
+    c = state.setdefault("constants", {"day": "", "labels": {}})
+    today = now_iso()[:10]
+    if c.get("day") == today:
+        return c["labels"]
+    labels = {}
+    for days in (1, 7, 90):
+        found = prom_series(prom, '{__name__=~"claude_code_.+"}', time.time() - days * 86400)
+        if found:
+            labels = {k: v for k, v in found[-1].items() if isinstance(v, str) and is_constant_label(k)}
+            break
+    c["day"], c["labels"] = today, labels
+    return labels
+
+
+def session_timeline(state, sid):
+    """-> (times, prefix) of the session's transcript read from the start: the responses in time order (deduplicated by message id) and, per
+    (model, kind), the running totals after each response; kinds are the token types and 'cost'."""
+    entries, seen = [], set()
+    for p, e in state["files"].items():
+        if e["session"] != sid or e.get("ignored"):
+            continue
+        try:
+            with open(p, "rb") as f:
+                for raw in f:
+                    if not raw.endswith(b"\n") or b'"usage"' not in raw:
+                        continue
+                    try:
+                        o = json.loads(raw)
+                    except ValueError:
+                        continue
+                    m = o.get("message") if isinstance(o, dict) and o.get("type") == "assistant" else None
+                    if not isinstance(m, dict) or not isinstance(m.get("usage"), dict) or o.get("isApiErrorMessage") or m.get("model") == "<synthetic>":
+                        continue
+                    mid = m.get("id") or o.get("requestId") or o.get("uuid")
+                    if mid in seen:
+                        continue
+                    seen.add(mid)
+                    u, model = m["usage"], m.get("model") if isinstance(m.get("model"), str) else "unknown"
+                    c = cost_of(model, u)
+                    entries.append((parse_ts(o.get("timestamp")) or 0.0, model, {
+                        "input": u.get("input_tokens") or 0, "output": u.get("output_tokens") or 0,
+                        "cacheRead": u.get("cache_read_input_tokens") or 0, "cacheCreation": u.get("cache_creation_input_tokens") or 0,
+                        "cost": sum(c[k] for k in TYPES + ("webSearch",)) if c else 0.0}))
+        except OSError:
+            continue
+    entries.sort(key=lambda x: x[0])
+    run, prefix = {}, {}
+    for n, (_, model, v) in enumerate(entries):
+        for kind, x in v.items():
+            run[(model, kind)] = run.get((model, kind), 0) + x
+        for key in run:
+            prefix.setdefault(key, [0] * n).append(run[key])
+        for key, lst in prefix.items():
+            if len(lst) <= n:
+                lst.append(run.get(key, 0))
+    return [e[0] for e in entries], prefix
+
+
+def continuation(state, sid, prom, now):
+    """The old series of the session in Prometheus. -> None when its counters reset (not continued), else
+    {"res": resource labels of the old series, "off": {key: offset}, "lab": {key: {"effort": old effort}}}."""
+    old = [s for s in prom_series(prom, '{session_id="%s"}' % sid) if s.get("__name__") in CLAUDE_SERIES and s.get("query_source", "main") == "main"]
+    if not old:
+        return {"res": {}, "off": {}, "lab": {}}
+    times, prefix = session_timeline(state, sid)
+    info = []
+    for s in old:
+        selector = sel(s["__name__"], {k: v for k, v in s.items() if k != "__name__"})
+        resets = prom_vector(prom, "resets(%s[90d])" % selector)
+        if any(float(r["value"][1]) > 0 for r in resets):
+            return None
+        val = prom_vector(prom, "last_over_time(%s[90d])" % selector)
+        at = prom_vector(prom, "timestamp(last_over_time(%s[90d]))" % selector)
+        if not val or not at:
+            continue
+        info.append((s, float(val[0]["value"][1]), float(at[0]["value"][1])))
+    res = {}
+    for s, _, _ in info:
+        for k, v in s.items():
+            if k in ("__name__", "job", "instance", "session_id") or k in DATAPOINT_LABELS:
+                continue
+            res.setdefault(k, v)
+    off, lab, anchor = {}, {}, {}
+    def idx_at(t):
+        i = -1
+        for j, x in enumerate(times):
+            if x <= t:
+                i = j
+        return i
+    for s, v, t_last in info:   # token series first: the anchor is the last point where the transcript equals the old value exactly
+        if s["__name__"] != CLAUDE_SERIES[1]:
+            continue
+        kind = s.get("type")
+        series = prefix.get((s.get("model"), kind), [])
+        top = idx_at(t_last)
+        hit = -1
+        for j in range(min(top + 1, len(series))):
+            if abs(series[j] - v) < 0.5:
+                hit = j
+        i = hit if hit >= 0 else top
+        anchor[s.get("model")] = max(anchor.get(s.get("model"), -1), i) if hit >= 0 else anchor.get(s.get("model"), -1)
+        key = "%s|%s|%s" % (CLAUDE_SERIES[1], s.get("model"), kind)
+        off[key] = v - (series[i] if 0 <= i < len(series) else 0)
+        lab[key] = {"effort": s.get("effort", "medium")}
+    for s, v, t_last in info:
+        if s["__name__"] == CLAUDE_SERIES[0]:
+            series = prefix.get((s.get("model"), "cost"), [])
+            i = anchor.get(s.get("model"), -1)
+            if i < 0:
+                i = idx_at(t_last)
+            key = "%s|%s|" % (CLAUDE_SERIES[0], s.get("model"))
+            off[key] = v - (series[i] if 0 <= i < len(series) else 0.0)
+            lab[key] = {"effort": s.get("effort", "medium")}
+        elif s["__name__"] == CLAUDE_SERIES[2]:
+            key = "%s||" % CLAUDE_SERIES[2]
+            off[key] = v - 1
+            lab[key] = {"start_type": s.get("start_type", "fresh")}
+    return {"res": res, "off": off, "lab": lab}
+
+
+def str_attrs(d):
+    return [{"key": k, "value": {"stringValue": str(v)}} for k, v in d.items() if v not in (None, "")]
+
+
+def session_points(S, P):
+    """-> [(metric name, unit, kind, attrs, value, key)] for one session; kind 'sum' (cumulative, monotonic) or 'gauge'."""
+    pts = []
+    def add_pt(name, unit, kind, attrs, value, base=None):
+        pts.append((name, unit, kind, attrs, value, base))
+    eff = S["effort"]
+    for model, r in S["models"].items():
+        for typ, k in (("input", "input"), ("output", "output"), ("cacheRead", "cacheRead"), ("cacheCreation", "cacheCreation")):
+            base = "%s|%s|%s" % (CLAUDE_SERIES[1], model, typ)
+            e = (P["lab"].get(base) or {}).get("effort", eff)
+            add_pt("claude_code.token.usage", "tokens", "sum", {"type": typ, "model": model, "effort": e, "query_source": "main"}, r[k], base)
+        base = "%s|%s|" % (CLAUDE_SERIES[0], model)
+        e = (P["lab"].get(base) or {}).get("effort", eff)
+        add_pt("claude_code.cost.usage", "USD", "sum", {"model": model, "effort": e, "query_source": "main"}, r["cost"], base)
+        for typ, v in r["costByType"].items():
+            add_pt("orca_roles.cost.by_type", "USD", "sum", {"type": typ, "model": model}, v)
+        add_pt("orca_roles.cache.savings", "USD", "gauge", {"model": model}, r["cacheSavings"])
+        add_pt("orca_roles.thinking", "tokens", "sum", {"model": model}, r["thinking"])
+    base = "%s||" % CLAUDE_SERIES[2]
+    add_pt("claude_code.session.count", "", "sum", {"start_type": (P["lab"].get(base) or {}).get("start_type", "fresh")}, 1, base)
+    for tool, v in S["tools"].items():
+        add_pt("orca_roles.tool.calls", "", "sum", {"tool": tool}, v["calls"])
+        add_pt("orca_roles.tool.duration", "s", "sum", {"tool": tool}, v["seconds"])
+        add_pt("orca_roles.tool.errors", "", "sum", {"tool": tool}, v["errors"])
+    for name, v in (("orca_roles.turns", S["turns"]), ("orca_roles.user.messages", S["userMessages"]), ("orca_roles.compactions", S["compactions"]),
+                    ("orca_roles.api.errors", S["apiErrors"]), ("orca_roles.model.changes", S["modelChanges"]), ("orca_roles.commits", S["commits"][0])):
+        add_pt(name, "", "sum", {}, v)
+    add_pt("orca_roles.context.max", "tokens", "gauge", {}, S["maxContext"])
+    cs = S["cs"]
+    if cs and cs[1] is not None and cs[2] is not None:
+        added, removed = cs[1], cs[2]
+    else:
+        added, removed = S["locEdits"]
+    add_pt("orca_roles.lines", "", "sum", {"type": "added"}, added)
+    add_pt("orca_roles.lines", "", "sum", {"type": "removed"}, removed)
+    add_pt("orca_roles.commit.lines", "", "sum", {"type": "insertions"}, S["commits"][1])
+    add_pt("orca_roles.commit.lines", "", "sum", {"type": "deletions"}, S["commits"][2])
+    verdicts, secs = {}, {}
+    for w in S["workerDone"]:
+        v = w.get("verdict") or "none"
+        verdicts[v] = verdicts.get(v, 0) + 1
+        secs[v] = secs.get(v, 0) + (w.get("seconds") or 0)
+    for v in verdicts:
+        add_pt("orca_roles.verdicts", "", "sum", {"verdict": v}, verdicts[v])
+        add_pt("orca_roles.task.duration", "s", "sum", {"verdict": v}, secs[v])
+    return pts
+
+
+def resource_of(S, P, constants, task):
+    """The resource attributes the collector turns into labels (resource_to_telemetry_conversion): a continued session keeps the labels of its old
+    series; a new one gets the constant labels. No job/instance, no project."""
+    attrs = {"service.name": "claude-code"}
+    for k, v in (P["res"] or constants).items():
+        if k not in ("service_name", "service_version"):
+            attrs[k] = v
+    attrs["service.version"] = P["res"].get("service_version") or S["version"]
+    attrs["session.id"] = S["sid"]
+    if not P["res"]:
+        if task:
+            attrs["task"] = task
+        if S["role"]:
+            attrs["orca_roles.role"] = S["role"]
+    return attrs
+
+
+def otlp_resource(S, P, constants, task, now_ns):
+    vals = P["vals"]
+    by_name = {}
+    for name, unit, kind, attrs, value, base in session_points(S, P):
+        key = name + "|" + "|".join("%s=%s" % kv for kv in sorted(attrs.items()))
+        v = float(value) + (P["off"].get(base, 0) if base else 0)
+        if kind == "sum":
+            v = max(v, vals.get(key, 0.0))
+        vals[key] = v   # provisional: committed to state only after a successful push
+        m = by_name.setdefault(name, {"name": name, "unit": unit, "kind": kind, "points": []})
+        dp = {"attributes": str_attrs(attrs), "timeUnixNano": str(now_ns), "asDouble": v}
+        if kind == "sum":
+            dp["startTimeUnixNano"] = str(int((parse_ts(S["first"]) or time.time()) * 1e9))
+        m["points"].append(dp)
+    metrics = []
+    for m in by_name.values():
+        body = {"dataPoints": m["points"]}
+        if m["kind"] == "sum":
+            body.update(aggregationTemporality=2, isMonotonic=True)
+        metrics.append(dict({"name": m["name"], "unit": m["unit"]}, **{m["kind"]: body}))
+    return {"resource": {"attributes": str_attrs(resource_of(S, P, constants, task))},
+            "scopeMetrics": [{"scope": {"name": "orca-roles.usage-metrics"}, "metrics": metrics}]}
+
+
+def session_positions(state):
+    pos = {}
+    for e in state["files"].values():
+        pos[e["session"]] = pos.get(e["session"], 0) + e["offset"]
+    return pos
+
+
+def push(state):
+    """Pushes the sessions that have new transcript lines since their last successful push. Never loud; a failure leaves them pending."""
+    otlp, prom, allow = push_settings()
+    pos = session_positions(state)
+    now = time.time()
+    pending = []
+    pushed = state.setdefault("pushed", {})   # per session, outside the session object: it survives a recompute (the counters never go down)
+    for sid, S in state["sessions"].items():
+        if not S.get("kit"):
+            continue
+        P = pushed.get(sid)
+        if P is None:
+            P = pushed[sid] = S.pop("push", None) or {"pos": None, "state": "", "off": {}, "lab": {}, "res": {}, "vals": {}, "seen": now}
+        if P["pos"] != pos.get(sid):
+            P["seen"] = now
+        if P["state"] == "reset":   # its old counters reset: never pushed
+            P["pos"] = pos.get(sid)
+            continue
+        if P["state"] == "history" and P["pos"] == pos.get(sid):
+            continue
+        if P["state"] == "history":   # new lines in a session that was history: live from now on
+            P["state"], P["pos"] = "", None
+        if P["pos"] is None and P["state"] == "" and now - (parse_ts(S["last"]) or 0) > HISTORY_WINDOW:
+            P["state"], P["pos"] = "history", pos.get(sid)   # finished before the live push existed: history is step 5's
+            continue
+        if P["pos"] != pos.get(sid) or P["pos"] is None:
+            pending.append(sid)
+    if not pending:
+        return
+    if not host_ok(otlp, allow, state, "otlpEndpoint"):
+        return
+    prom_ok = host_ok(prom, allow, state, "prometheusUrl")
+    prom_down = not prom_ok
+    constants = None
+    ready = []
+    for sid in pending:
+        S = state["sessions"][sid]
+        P = pushed[sid]
+        if P["state"] == "" and not P.get("cont"):
+            if prom_down:
+                continue
+            try:
+                c = continuation(state, sid, prom, now)
+            except Down:
+                prom_down = True
+                continue
+            if c is None:
+                P["state"], P["pos"] = "reset", pos.get(sid)
+                log("session %s not continued: its old counters in Prometheus reset" % sid)
+                continue
+            P.update(off=c["off"], lab=c["lab"], res=c["res"], cont=True)
+        if constants is None and not P["res"]:
+            try:
+                constants = refresh_constants(state, prom) if not prom_down else state.get("constants", {}).get("labels", {})
+            except Down:
+                prom_down = True
+                constants = state.get("constants", {}).get("labels", {})
+        ready.append(sid)
+    if not ready:
+        return
+    now_ns = int(now * 1e9)
+    wts = load_worktrees()
+
+    def task_of(sid):
+        hit = wt_match(wts, state["sessions"][sid]["cwd"]) if state["sessions"][sid]["cwd"] else None
+        return hit[0] if hit else ""
+    for i in range(0, len(ready), BATCH):
+        chunk = ready[i:i + BATCH]
+        saved = {sid: dict(pushed[sid]["vals"]) for sid in chunk}
+        body = {"resourceMetrics": [otlp_resource(state["sessions"][sid], pushed[sid], constants or {}, task_of(sid), now_ns) for sid in chunk]}
+        try:
+            st, _ = http_json(otlp, body)
+        except Down:
+            st = None
+        if st is not None and 200 <= st < 300:
+            for sid in chunk:
+                pushed[sid]["pos"] = pos.get(sid)
+        else:
+            for sid in chunk:
+                pushed[sid]["vals"] = saved[sid]
+            if st is not None:
+                log("push refused: HTTP %s" % st)
+            return
+
+
+def prune_pushed(state, keep_days):
+    """Drops the pushed values of a session whose transcripts are all gone and that has not changed for retentionDays."""
+    pushed = state.get("pushed") or {}
+    limit = time.time() - keep_days * 86400
+    for sid in [k for k, P in pushed.items() if k not in state["sessions"] and (P.get("seen") or 0) < limit]:
+        del pushed[sid]
+
+
 def once():
     if metrics_settings().get("enabled") is False:
         return 0
@@ -753,6 +1181,11 @@ def once():
         changed = compute(state, claude_root(), deadline, wts, wt_changed)
         if changed:
             store(state, changed, wts(), ts)
+        try:
+            push(state)
+        except Exception as ex:   # a push problem never fails the pass
+            log("push failed: %s: %s" % (type(ex).__name__, ex))
+        prune_pushed(state, retention_days())
         rotate(state, ts[:10], retention_days())
         state["lastPass"] = ts
         save_state(state)
