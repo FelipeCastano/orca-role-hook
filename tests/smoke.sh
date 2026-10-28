@@ -81,6 +81,7 @@ set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINE
 KIT="$TMP/kit"; mkdir -p "$KIT"   # not exported: the scripts under test find their kit through the fake HOME, as in real use
 printf '#!/bin/sh\n[ -e "%s/nopid.$1" ] || echo 4242\n' "$TMP" > "$TMP/agent-pid"; chmod +x "$TMP/agent-pid"; export ORCA_ROLES_AGENT_PID="$TMP/agent-pid"   # by default every fake tab with an agent identity has a live agent process behind it; a handle with a nopid.<handle> file in $TMP has none (a test that needs another answer points the hook at its own script)
 export ORCA_ROLES_SUPERPOWERS_FETCH=skip   # install.sh must never reach the network from the suite (the fetch tests put a fake git first on the PATH and clear this)
+NOORCA="$TMP/noorca"; mkdir -p "$NOORCA"; printf '#!/bin/sh\necho "$*" >> "%s/calls.log"\necho '"'"'{"ok":true,"result":{"worktrees":[]}}'"'"'\n' "$NOORCA" > "$NOORCA/orca"; chmod +x "$NOORCA/orca"; : > "$NOORCA/calls.log"; PATH="$NOORCA:$PATH"   # a no-op orca first on the PATH: install.sh (which lists Orca's worktrees) and the other scripts never reach the user's real Orca from the suite; a check that needs another orca puts its own first
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
 FAIL=0
@@ -8396,6 +8397,28 @@ uminst() { if (cd "$UM" && HOME="$UH" bash "$ROOT/install.sh" </dev/null >/dev/n
 uminst; Z4="$UIRC:$([ -e "$UH/.orca-roles/metrics" ] && echo wrote || echo none)"
 jq '.settings.metrics.enabled = true' "$UH/.orca-roles/config.json" > "$UM/hcfg.json"; cp "$UM/hcfg.json" "$UH/.orca-roles/config.json"; uminst; Y4="$([ -e "$UH/.orca-roles/metrics/worktrees.jsonl" ] && echo wrote || echo none)"
 check "usage metrics: the same runs write with settings.metrics.enabled true or absent, and with it false nothing is written: launch.sh (also on a launch over an open team and the relauncher's), dispatch.sh (the saved copy of the worktree's configuration, and the kit's when the worktree has none; every outcome) and install.sh" "$Y1 $Y2 $Y4|$Z1|$Z2|$Z3|$Z4" "wrote wrote wrote|none|none none none none none|none none|0:none"
+check "usage metrics: an install run with metrics on reaches the suite's no-op orca first on the PATH, never the user's real Orca" "$(grep -c '^worktree list --limit 1000 --json$' "$NOORCA/calls.log" | tr -d ' ' | sed 's/^[1-9][0-9]*$/called/')" "called"
+# install.sh also maps Orca's worktrees that have a kit team (<git dir>/orca-roles.env), found with 'orca worktree list'; a fake orca on the PATH, never the real one
+IW="$UM/iw"; rm -rf "$IW"; mkdir -p "$IW/fo"
+for n in A B D E F; do mkdir -p "$IW/$n"; git -C "$IW/$n" init -q; done
+for n in A D E F; do printf 'DEV=h-%s\n' "$n" > "$IW/$n/.git/orca-roles.env"; done
+jq '.defaults.env.OTEL_RESOURCE_ATTRIBUTES = "team=x,task=ta"' "$KIT/config.json" > "$IW/A/.git/orca-roles.config.json"
+IWP() { (cd "$IW/$1" && pwd -P); }
+printf '%s\n' "{\"ok\":true,\"result\":{\"worktrees\":[{\"path\":\"$IW/A\"},{\"path\":\"$IW/B\"},{\"path\":\"$IW/nope\"},{\"path\":\"$IW/D\"},{\"path\":\"$IW/E\"},{\"path\":5},{\"path\":null},{\"id\":\"x\"},{\"path\":\"$IW/F\"}],\"truncated\":true}}" > "$IW/fo/list.json"
+printf '#!/bin/bash\necho "$*" >> "%s/calls.log"\ncase "$FO_MODE" in\n  ok) cat "%s/list.json";;\n  fail) exit 1;;\n  junk) echo "not json {";;\n  hang) sleep 30;;\nesac\n' "$IW/fo" "$IW/fo" > "$IW/fo/orca"; chmod +x "$IW/fo/orca"
+IWNP=""; IFS=: read -r -a IWDIRS <<< "$PATH"; for d in "${IWDIRS[@]}"; do [ -x "$d/orca" ] || IWNP="$IWNP:$d"; done; IWNP="${IWNP#:}"
+iwhome() { IH="$IW/h"; rm -rf "$IH"; mkdir -p "$IH/.orca-roles/metrics"; cp "$UH/.orca-roles/config.json" "$IH/.orca-roles/config.json"; printf '%s\n' "$(IWP D)" > "$IH/.orca-roles/trusted.list"; printf '%s\n' "{\"ts\":\"2026-10-01T00:00:00Z\",\"path\":\"$IW/E\",\"physical\":\"$(IWP E)\",\"project\":\"E\",\"task\":\"old\"}" > "$IH/.orca-roles/metrics/worktrees.jsonl"; }
+iwinst() { if (cd "$UM" && HOME="$IH" PATH="$1" FO_MODE="$2" bash "$ROOT/install.sh" </dev/null >"$IW/out" 2>&1); then IWRC=0; else IWRC=$?; fi; }
+iwj() { jq -r '[.project, .task] | join("/")' "$IH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort | tr '\n' ' '; }
+iwhome; : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; V1="$IWRC:$(iwj)"; L1="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; iwinst "$IW/fo:$PATH" ok; V2="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; V3="$(sort -u "$IW/fo/calls.log" | tr '\n' '|')"
+check "install: Orca's worktrees with orca-roles.env and not mapped are mapped once (project, task from the worktree's configuration or its folder name); listed in trusted.list too, already mapped, with no orca-roles.env, not a directory or a non-string path -> no line; a second install adds nothing; only 'worktree list --limit 1000 --json' is called" "$V1:$L1:$V2:$V3" "0:A/ta D/D E/old F/F :4:4:worktree list --limit 1000 --json|"
+iwhome; iwinst "$IW/fo:$PATH" fail; W1="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
+iwhome; iwinst "$IW/fo:$PATH" junk; W2="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
+iwhome; iwinst "$IWNP" ok; W3="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
+iwhome; t0=$SECONDS; iwinst "$IW/fo:$PATH" hang; W4="$IWRC:$(iwj):$([ $((SECONDS - t0)) -lt 25 ] && echo capped || echo slow)"
+check "install: orca failing, printing non-JSON, absent from the PATH or hanging (capped at 10 s) -> the install goes on (exit 0), the trusted worktree is still mapped, nothing printed by the block" "$W1|$W2|$W3|$W4" "0:D/D E/old :0|0:D/D E/old :0|0:D/D E/old :0|0:D/D E/old :capped"
+iwhome; jq '.settings.metrics.enabled = false' "$IH/.orca-roles/config.json" > "$IW/c.json"; cp "$IW/c.json" "$IH/.orca-roles/config.json"; rm -rf "$IH/.orca-roles/metrics"; iwinst "$IW/fo:$PATH" ok
+check "install: metrics disabled -> Orca's worktrees are not mapped and nothing is written" "$IWRC:$([ -e "$IH/.orca-roles/metrics" ] && echo wrote || echo none)" "0:none"
 # the transcript parser (usage-metrics.sh --once / --report) on fixture transcripts: temp kit, ORCA_ROLES_CLAUDE_PROJECTS and HOME, never the real ones
 PK="$UM/pk"; PC="$UM/cp"; PM="$PK/metrics"; PD="$PC/-w-a-devgd-300"
 HC="$UM/hermetic.json"; jq '.settings.metrics.otlpEndpoint = "http://127.0.0.1:1/v1/metrics" | .settings.metrics.prometheusUrl = "http://127.0.0.1:1"' "$ROOT/config.default.json" > "$HC"   # the passes never reach the real collector or Prometheus

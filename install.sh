@@ -188,15 +188,34 @@ else
   [ "${SESSION_HOOK_CHANGED:-0}" != 1 ] || echo "Claude Code SessionStart hook: added to ~/.claude/settings.json (re-binds Orca Runs when a tab reopens)."
 fi
 
-# Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
-if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
+# Maps one worktree for usage metrics unless worktrees.jsonl already has its physical path; never fatal
+map_worktree() {
+  local wt="$1" ph wcfg wgd
+  [ -d "$wt" ] || return 0
+  ph="$(cd "$wt" && pwd -P)" || return 0
+  grep -qF "\"physical\":$(printf '%s' "$ph" | jq -Rs .)" "$(metrics_dir)/worktrees.jsonl" 2>/dev/null && return 0
+  wcfg=""; wgd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" && wcfg="$wgd/orca-roles.config.json"; [ -f "$wcfg" ] || wcfg="$CONF"
+  metrics_worktree "$wt" "$(project_name "$wt" 2>/dev/null || basename "$wt")" "$(metrics_task "$wcfg" "$wt")"
+  return 0
+}
+
+# Usage metrics: maps the worktrees the kit knows that were not launched since this update: the folders it recorded in trusted.list, and Orca's worktrees with a kit team (<git dir>/orca-roles.env); never fatal
+if metrics_enabled "$CONF"; then
+  if [ -f "$(trusted_list)" ]; then
+    while IFS= read -r wt; do map_worktree "$wt"; done < "$(trusted_list)"
+  fi
+  ORCA_WTS=""
+  if type -P orca >/dev/null 2>&1; then
+    ORCA_WTS="$(ORCA_ROLES_CLI_TIMEOUT=10 orca worktree list --limit 1000 --json 2>/dev/null | jq -r '.result.worktrees[]? | .path | strings' 2>/dev/null)" || ORCA_WTS=""
+  fi
   while IFS= read -r wt; do
-    [ -d "$wt" ] || continue
-    ph="$(cd "$wt" && pwd -P)" || continue
-    grep -qF "\"physical\":$(printf '%s' "$ph" | jq -Rs .)" "$(metrics_dir)/worktrees.jsonl" 2>/dev/null && continue
-    wcfg=""; wgd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" && wcfg="$wgd/orca-roles.config.json"; [ -f "$wcfg" ] || wcfg="$CONF"
-    metrics_worktree "$wt" "$(project_name "$wt" 2>/dev/null || basename "$wt")" "$(metrics_task "$wcfg" "$wt")"
-  done < "$(trusted_list)"
+    [ -n "$wt" ] && [ -d "$wt" ] || continue
+    gd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" || continue
+    [ -f "$gd/orca-roles.env" ] || continue
+    map_worktree "$wt"
+  done <<EOF
+$ORCA_WTS
+EOF
 fi
 
 # Usage metrics scheduler: a pass of bin/usage-metrics.sh --once every settings.metrics.intervalSeconds (launchd on macOS; cron, every minute, on
