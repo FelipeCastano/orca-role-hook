@@ -139,7 +139,7 @@ else
 fi
 jq empty "$CONF" || { echo "ERROR: $CONF is not valid JSON" >&2; exit 1; }
 
-# Aliases 'roles', 'new-role', 'roles-yaml' and 'team-status' (once)
+# Aliases 'roles', 'new-role', 'roles-yaml', 'team-status' and 'coordinator' (once)
 # zsh → ~/.zshrc; bash → ~/.bashrc (on macOS, ~/.bash_profile, which is what Terminal reads); other shells → ~/.profile
 case "$(basename "${SHELL:-}")" in
   zsh) RC="$HOME/.zshrc";;
@@ -150,6 +150,7 @@ grep -q 'alias roles=' "$RC" 2>/dev/null || echo 'alias roles="$HOME/.orca-roles
 grep -q 'alias new-role=' "$RC" 2>/dev/null || echo 'alias new-role="$HOME/.orca-roles/bin/new-role.sh"' >> "$RC"
 grep -q 'alias roles-yaml=' "$RC" 2>/dev/null || echo 'alias roles-yaml="$HOME/.orca-roles/bin/orca-yaml.sh"' >> "$RC"
 grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME/.orca-roles/bin/team-status.sh"' >> "$RC"
+grep -q 'alias coordinator=' "$RC" 2>/dev/null || echo 'alias coordinator="$HOME/.orca-roles/bin/coordinator.sh"' >> "$RC"
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
 
@@ -187,15 +188,34 @@ else
   [ "${SESSION_HOOK_CHANGED:-0}" != 1 ] || echo "Claude Code SessionStart hook: added to ~/.claude/settings.json (re-binds Orca Runs when a tab reopens)."
 fi
 
-# Usage metrics: maps the worktrees the kit knows (the folders it recorded in trusted.list) that were not launched since this update; never fatal
-if metrics_enabled "$CONF" && [ -f "$(trusted_list)" ]; then
+# Maps one worktree for usage metrics unless worktrees.jsonl already has its physical path; never fatal
+map_worktree() {
+  local wt="$1" ph wcfg wgd
+  [ -d "$wt" ] || return 0
+  ph="$(cd "$wt" && pwd -P)" || return 0
+  grep -qF "\"physical\":$(printf '%s' "$ph" | jq -Rs .)" "$(metrics_dir)/worktrees.jsonl" 2>/dev/null && return 0
+  wcfg=""; wgd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" && wcfg="$wgd/orca-roles.config.json"; [ -f "$wcfg" ] || wcfg="$CONF"
+  metrics_worktree "$wt" "$(project_name "$wt" 2>/dev/null || basename "$wt")" "$(metrics_task "$wcfg" "$wt")"
+  return 0
+}
+
+# Usage metrics: maps the worktrees the kit knows that were not launched since this update: the folders it recorded in trusted.list, and Orca's worktrees with a kit team (<git dir>/orca-roles.env); never fatal
+if metrics_enabled "$CONF"; then
+  if [ -f "$(trusted_list)" ]; then
+    while IFS= read -r wt; do map_worktree "$wt"; done < "$(trusted_list)"
+  fi
+  ORCA_WTS=""
+  if type -P orca >/dev/null 2>&1; then
+    ORCA_WTS="$(ORCA_ROLES_CLI_TIMEOUT=10 orca worktree list --limit 1000 --json 2>/dev/null | jq -r '.result.worktrees[]? | .path | strings' 2>/dev/null)" || ORCA_WTS=""
+  fi
   while IFS= read -r wt; do
-    [ -d "$wt" ] || continue
-    ph="$(cd "$wt" && pwd -P)" || continue
-    grep -qF "\"physical\":$(printf '%s' "$ph" | jq -Rs .)" "$(metrics_dir)/worktrees.jsonl" 2>/dev/null && continue
-    wcfg=""; wgd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" && wcfg="$wgd/orca-roles.config.json"; [ -f "$wcfg" ] || wcfg="$CONF"
-    metrics_worktree "$wt" "$(project_name "$wt" 2>/dev/null || basename "$wt")" "$(metrics_task "$wcfg" "$wt")"
-  done < "$(trusted_list)"
+    [ -n "$wt" ] && [ -d "$wt" ] || continue
+    gd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" || continue
+    [ -f "$gd/orca-roles.env" ] || continue
+    map_worktree "$wt"
+  done <<EOF
+$ORCA_WTS
+EOF
 fi
 
 # Usage metrics scheduler: a pass of bin/usage-metrics.sh --once every settings.metrics.intervalSeconds (launchd on macOS; cron, every minute, on
@@ -285,4 +305,4 @@ else
 fi
 echo "To enable or disable roles, edit \"enabled\" in $CONF."
 "$KIT/bin/apply-hooks.sh"
-echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml' and 'team-status' commands."
+echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml', 'team-status' and 'coordinator' commands."

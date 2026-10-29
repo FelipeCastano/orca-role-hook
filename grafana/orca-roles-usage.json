@@ -669,13 +669,58 @@
       }
     },
     {
+      "id": 39,
+      "type": "bargauge",
+      "title": "Tokens by type per role",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sort_desc(sum by (orca_roles_role, type) (sum by (session_id, orca_roles_role, type) (max_over_time(claude_code_token_usage_tokens_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range]))))",
+          "legendFormat": "{{orca_roles_role}} {{type}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
       "id": 17,
       "type": "row",
       "title": "Tools",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 30,
+        "y": 40,
         "w": 24,
         "h": 1
       },
@@ -691,7 +736,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 31,
+        "y": 41,
         "w": 8,
         "h": 8
       },
@@ -736,7 +781,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 31,
+        "y": 41,
         "w": 8,
         "h": 8
       },
@@ -781,7 +826,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 31,
+        "y": 41,
         "w": 8,
         "h": 8
       },
@@ -823,7 +868,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 39,
+        "y": 49,
         "w": 24,
         "h": 1
       },
@@ -839,7 +884,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 50,
         "w": 6,
         "h": 6
       },
@@ -875,7 +920,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 40,
+        "y": 50,
         "w": 6,
         "h": 6
       },
@@ -910,7 +955,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 40,
+        "y": 50,
         "w": 6,
         "h": 6
       },
@@ -945,7 +990,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 40,
+        "y": 50,
         "w": 6,
         "h": 6
       },
@@ -980,7 +1025,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -1021,7 +1066,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 56,
         "w": 6,
         "h": 8
       },
@@ -1066,7 +1111,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 46,
+        "y": 56,
         "w": 6,
         "h": 8
       },
@@ -1108,7 +1153,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 64,
         "w": 24,
         "h": 1
       },
@@ -1124,7 +1169,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 55,
+        "y": 65,
         "w": 12,
         "h": 8
       },
@@ -1170,7 +1215,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 55,
+        "y": 65,
         "w": 12,
         "h": 8
       },
@@ -1212,7 +1257,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 73,
         "w": 24,
         "h": 1
       },
@@ -1228,7 +1273,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 74,
         "w": 8,
         "h": 8
       },
@@ -1273,7 +1318,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 64,
+        "y": 74,
         "w": 8,
         "h": 8
       },
@@ -1318,7 +1363,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 64,
+        "y": 74,
         "w": 8,
         "h": 8
       },
@@ -1360,7 +1405,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 82,
         "w": 24,
         "h": 1
       },
@@ -1376,7 +1421,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 83,
         "w": 12,
         "h": 8
       },
@@ -1422,7 +1467,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 73,
+        "y": 83,
         "w": 12,
         "h": 8
       },

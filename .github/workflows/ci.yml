@@ -40,7 +40,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bash32"
           ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
           echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
-      - run: bash --version | head -1 && jq --version
+      - run: bash --version | head -1 && jq --version && sqlite3 --version
       - run: tests/smoke.sh
         env:
           SMOKE_CLI_TIMEOUT: 60
