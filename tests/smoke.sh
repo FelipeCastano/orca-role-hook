@@ -319,13 +319,20 @@ rule R10 "$PD/tester.md" 'do not write text checks or run text mutants' '^2\. If
 rule R10 "$PD/auditor.md" 'do not run text mutants' '^4\. If the change only touches prompt'
 rule R10 "$PD/tester.md" 'the rest of this list still applies (including cleanup)' '^2\. If the change only touches prompt'
 rule R10 "$PD/auditor.md" 'the rest of the method still applies, including the names-of-people pass' '^4\. If the change only touches prompt'
-rule R10 "$PD/planner.md" 'never tells the Tester or the Auditor what to test, mutate or look at' '\*\*Briefed rounds\.\*\*'
+rule R10 "$PD/local-coordinator.md" 'never tells the Tester or the Auditor what to test, mutate or look at' '\*\*Briefed rounds\.\*\*'
 # R10 plan audit: a very complex plan goes to the Auditor before the user sees it; otherwise the Planner says it judged it safe
-rule R10 "$PD/planner.md" 'decide whether the plan is **very complex**' '^3\. \*\*Before presenting it, audit it\*\*'
-rule R10 "$PD/planner.md" 'create an Auditor task, type "plan audit"' '^   If it is very complex'
-rule R10 "$PD/planner.md" 'a "plan corrections review"' '^   If it is very complex'
-rule R10 "$PD/planner.md" 'you judged it safe to go without the Auditor and why' '^4\. Present the plan'
+rule R10 "$PD/planner.md" 'decide whether the plan is **very complex**' '^Before you return a plan, audit it'
+rule R10 "$PD/planner.md" 'write the Auditor'"'"'s brief of a "plan audit" as a file and return `needs: plan-audit' '^If it is very complex'
+rule R10 "$PD/planner.md" 'a "plan corrections review"' '^If it is very complex'
+rule R10 "$PD/planner.md" 'you judged it safe to go without the Auditor and why' '^Your report for a `plan`'
 rule R10 "$PD/auditor.md" 'A **plan audit** has no code yet' '^3\. Work out which kind of task'
+# R10 the local coordinator and the Planner split: the Planner never writes outside its scratchDir or to Jira and GitHub, the local coordinator never lets it wait, resets it after each task and keeps the Tester exemption to text
+rule R10 "$PD/planner.md" 'you never write to Jira or GitHub' 'applies to you with the local coordinator'
+rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no commit, no pull request, no write to Jira' '^- \*\*Nothing leaves the worktree'
+rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
+rule R10 "$PD/local-coordinator.md" 'run `~/.orca-roles/bin/reset-planner.sh`' '^\*\*Reset after each task'
+rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
+rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
 rule R10 "$PD/auditor.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
 # R11 where each role works: in place with .orca-bak, one mutant at a time, verified close; experiments in scratchDir; temporaries only there
 t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
@@ -589,19 +596,19 @@ for m in programmer academic-research pr-reviewer; do
 done
 R27RM="$ROOT/README.md"; R27SK="$ROOT/plugin/skills/team/SKILL.md"
 R27TR='^\| `roles --mode` fails with "this worktree'"'"'s team is open in mode'
-rule R27 "$R27RM" 'the Planner opens and asks which mode you want (programmer, pr-reviewer or academic-research)' '^Create a worktree from the project'"'"'s .+In a few seconds'
+rule R27 "$R27RM" 'the local coordinator opens and asks which mode you want (this version offers only programmer;' '^Create a worktree from the project'"'"'s .+In a few seconds'
 rule R27 "$R27RM" 'A worktree created from a Jira ticket starts directly in `programmer`, and an explicit `--mode` (or `settings.enableAskModeOnStart: false`)' '^Create a worktree from the project'"'"'s .+In a few seconds'
 rule R27 "$R27RM" "that is Orca's \`branchPrefix\` setting (\`\"git-username\"\`), not the kit" '^- \*\*Branch names:\*\*'
-rule R27 "$R27RM" 'which asks which mode to use and suggests the one `settings.mode` gives' '^\*\*Asking the mode\.\*\*'
+rule R27 "$R27RM" 'which asks which mode to use; this version offers only programmer (to start another mode, close the local coordinator'"'"'s tab and run `roles --mode <mode>` from a terminal of this worktree). It does not ask when' '^\*\*Asking the mode\.\*\*'
 rule R27 "$R27RM" 'or with `settings.enableAskModeOnStart: false`' '^\*\*Asking the mode\.\*\*'
 rule R27 "$R27RM" '`roles --status` shows `Mode: not chosen yet`' '^\*\*Asking the mode\.\*\*'
 rule R27 "$R27RM" 'runs `launch.sh --mode <mode>` from its tab' '^\*\*Switching the mode:\*\*'
 rule R27 "$R27RM" 'stops with an error naming the open tabs and changes nothing' '^\*\*Switching the mode:\*\*'
 grep -qF '**Open team rule:**' "$R27RM" && { echo "FAIL rules R27: README.md still has the old 'Open team rule' paragraph"; FAIL=1; }
-rule R27 "$R27RM" '`true` (default): a new worktree opens only the Planner, which asks the mode.' '^\| `enableAskModeOnStart` \|'
+rule R27 "$R27RM" '`true` (default): a new worktree opens only the front role (the local coordinator in programmer mode), which asks the mode (programmer only in this version).' '^\| `enableAskModeOnStart` \|'
 rule R27 "$R27RM" 'An explicit `--mode` or a Jira ticket never asks.' '^\| `enableAskModeOnStart` \|'
-rule R27 "$R27RM" 'A tab of the team is still open; the error names it. Ask the Planner to switch the mode' "$R27TR"
-rule R27 "$R27SK" 'A new worktree opens only the Planner, which asks the mode (the configured one is the suggestion)' '^\*\*Modes\.\*\*'
+rule R27 "$R27RM" 'A tab of the team is still open; the error names it. In programmer mode this version cannot switch to another mode' "$R27TR"
+rule R27 "$R27SK" 'A new worktree opens only the local coordinator, which asks the mode as plain text in its reply (in this version it offers only `programmer`: for another mode, close its tab and run `roles --mode <mode>` from a terminal of the worktree)' '^\*\*Modes\.\*\*'
 rule R27 "$R27SK" 'or `settings.enableAskModeOnStart: false` skips the question' '^\*\*Modes\.\*\*'
 rule R27 "$R27SK" 'from another terminal a mode change with the team open stops with an error naming the open tabs' '^\*\*Modes\.\*\*'
 grep -qF 'close it first' "$R27SK" && { echo "FAIL rules R27: SKILL.md still has the old 'close it first' sentence"; FAIL=1; }
@@ -8316,15 +8323,15 @@ dsrun early plain --check-only --task task_abc123 --to h-cl; N1="$N1 co-cl:$RC:$
 rm -f "$DSG/orca-roles.env" "$DSG/orca-roles.config.json"
 check "dispatch.sh: no start check (one log line, no worktree ps) for a custom or opencode role, also with --check-only; the checker runs for claude, codex, an unset agent and a handle that is no role" "$N1" " h-cu:0:0:h-cu: no start check for agent custom/ h-oc:0:0:h-oc: no start check for agent opencode/ h-cl:0:ps:h-cl: task_abc123 started/ h-cx:0:ps:h-cx: task_abc123 started/ h-w:0:ps:h-w: task_abc123 started/ h-other:0:ps:h-other: task_abc123 started/ co-cu:0:0:h-cu: no start check for agent custom/ co-cl:0:ps:h-cl: task_abc123 started/"
 # the three Planner prompts carry the same assign line and silent-worker bullet
-PM=""; for m in programmer academic-research pr-reviewer; do f="$ROOT/prompts/$m/planner.md"
-  PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
+PM=""; for m in programmer academic-research pr-reviewer; do f="$ROOT/prompts/$m/planner.md"; [ "$m" != programmer ] || f="$ROOT/prompts/programmer/local-coordinator.md"   # the programmer's tab that dispatches is the local coordinator
+  PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`\( (the Planner.s tasks too)\)\{0,1\}: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
 done
 check "planner prompts (programmer, academic-research, pr-reviewer): the same assign line (dispatch.sh) and the same silent-worker bullet (team-status.sh --run: waiting, stopped without reporting, undelivered), no worker-start --task left" "$PM" " programmer:1:1:1:0 academic-research:1:1:1:0 pr-reviewer:1:1:1:0"
-L1="$(grep '^- Assign with `~/.orca-roles/bin/dispatch.sh' "$ROOT"/prompts/{programmer,academic-research,pr-reviewer}/planner.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"; L2="$(grep 'Watch for silent workers' "$ROOT"/prompts/{programmer,academic-research,pr-reviewer}/planner.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"
+L1="$(grep '^- Assign with `~/.orca-roles/bin/dispatch.sh' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/planner.md | sed -e 's/^[^:]*://' -e "s/ (the Planner's tasks too)//" | sort -u | wc -l | tr -d ' ')"; L2="$(grep 'Watch for silent workers' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/planner.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"
 check "planner prompts: the assign line and the silent-worker bullet are word for word the same in the three modes" "$L1:$L2" "1:1"
-SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT"/prompts/{programmer,academic-research,pr-reviewer}/planner.md | tr '\n' ' ')"
-check "planner prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the three modes, once each" "$SF" "$(printf '%s/prompts/programmer/planner.md:1 %s/prompts/academic-research/planner.md:1 %s/prompts/pr-reviewer/planner.md:1 ' "$ROOT" "$ROOT" "$ROOT")"
-check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The Planner and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the Planner' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
+SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/planner.md | tr '\n' ' ')"
+check "planner prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the three modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/planner.md:1 %s/prompts/pr-reviewer/planner.md:1 ' "$ROOT" "$ROOT" "$ROOT")"
+check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
 }
 
 sec_cli() {
