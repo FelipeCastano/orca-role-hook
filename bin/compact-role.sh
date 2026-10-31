@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Compacts the conversation of a Claude role (/compact) instead of clearing it; it sends no role message.
 # Usage (from the worktree):  compact-role.sh <role> [--instructions "<text>"]
-# The local coordinator runs it (through reset-planner.sh) to reset the Planner when settings.flow.plannerReset is "compact".
-# It never compacts the front role or a role whose agent is not claude, and never one with a task in flight (the caller ensures that).
+# The local coordinator runs it as `compact-role.sh planner` right before giving the Planner its next task.
+# It refuses the local coordinator, and is never run on a role with a task in flight (the caller ensures that). A role whose agent is not
+# claude is cleaned with clean.sh instead (its own waits), and the exit status is clean.sh's.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
@@ -21,7 +22,11 @@ v="$(var_of "$ROLE")"
 h="$(grep "^$v=" "$STATE" | head -1 | cut -d= -f2-)"
 [ -n "$h" ] || { echo "compact-role.sh: unknown role or no handle for '$ROLE'." >&2; exit 2; }
 ag="$(rstr "$CFG" "$ROLE" agent)"
-[ "${ag:-claude}" = claude ] || { echo "compact-role.sh: $ROLE runs $ag; compacting is only for claude roles; use clean.sh." >&2; exit 2; }
+if [ "${ag:-claude}" != claude ]; then
+  "$KIT/bin/clean.sh" "$ROLE"; rc=$?
+  [ "$rc" -ne 0 ] || echo "compact-role: $ROLE runs $ag: compacting is claude-only, cleaned it instead"
+  exit "$rc"
+fi
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null \
   || { echo "compact-role.sh: timed out waiting for $ROLE ($h) to be idle before compacting; nothing was sent." >&2; exit 1; }

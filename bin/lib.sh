@@ -506,7 +506,6 @@ check_config() {
           (if got("workerReportBody") and (.workerReportBody != "full" and .workerReportBody != "short") then P + "settings.flow.workerReportBody must be \"full\" or \"short\"" else empty end),
           (if got("crossCheck") and (.crossCheck != true and .crossCheck != false) then P + "settings.flow.crossCheck must be true or false" else empty end),
           (if got("recordRounds") and (.recordRounds != true and .recordRounds != false) then P + "settings.flow.recordRounds must be true or false" else empty end),
-          (if got("plannerReset") and (.plannerReset != "clear" and .plannerReset != "compact") then P + "settings.flow.plannerReset must be \"clear\" or \"compact\" (got \(.plannerReset | tojson))" else empty end),
           objs("escalation"; "settings.flow.escalation";
             (to_entries[] | select(.value != null) | .key as $r | .value as $v
               | if $r == "planner" then P + "settings.flow.escalation.planner is not allowed (the Planner'"'"'s model is set in roles.planner.model)"
@@ -623,10 +622,6 @@ preexisting_agents() {
 #   crossCheck: true turns on the cross-check (Cross-Dev writes an independent candidate the Tester checks against). programmer mode,
 #   with the cross-dev role active, only
 # flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.   flow_max_steps <config> → stdout: the number, or nothing.
-# planner_reset <config> → stdout: "clear" (default) or "compact", how the Planner's context is reset in programmer mode (settings.flow.plannerReset)
-planner_reset() {
-  jq -r '(.settings.flow? | objects | .plannerReset?) | if . == "compact" then "compact" else "clear" end' "$1" 2>/dev/null || echo clear
-}
 flow_round_cap() {
   local r; r="$(jq -r '(.settings.flow? | objects | .roundCap?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
   case "$r" in

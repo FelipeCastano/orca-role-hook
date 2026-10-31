@@ -337,7 +337,7 @@ rule R10 "$PD/auditor.md" 'A **plan audit** has no code yet' '^3\. Work out whic
 rule R10 "$PD/planner.md" 'you never write to Jira or GitHub' 'applies to you with the local coordinator'
 rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no commit, no pull request, no write to Jira' '^- \*\*Nothing leaves the worktree'
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
-rule R10 "$PD/local-coordinator.md" 'run `~/.orca-roles/bin/reset-planner.sh`' '^\*\*Reset after each task'
+rule R10 "$PD/local-coordinator.md" '**Compact the Planner once, right before its next task.** Before you send the Planner any task other than its first one, run `~/.orca-roles/bin/compact-role.sh planner` once, then create and dispatch the task (for a Planner that does not run on claude, the same command cleans it instead). Never compact it when it finishes a task, never twice before the same task, and never when no Planner task follows.' '^\*\*Compact the Planner once'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
 rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
 rule R10 "$PD/auditor.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
@@ -1488,7 +1488,7 @@ check "clean.sh --msg local-coordinator: Jira ticket of this worktree" "$(case "
 check "clean.sh --all excludes the local coordinator" "$(grep -c 'terminal show --terminal t5' "$LOGF" || true):$(printf '%s\n' "$OUT" | grep -c 'local coordinator' || true)" "0:0"
 check "clean.sh --all goes through the workers, the planner included" "$(grep -c 'terminal show' "$LOGF")" "4"
 check "clean.sh --msg" "$(run_clean --msg dev | sed "s#$TMP/home/.orca-roles#$KIT#g")" "$(cd "$TMP" && worker_msg "$C" dev)"
-# compact-role.sh and reset-planner.sh (fake orca; FAKE_WAIT_FAIL makes the waits time out)
+# compact-role.sh (fake orca; FAKE_WAIT_FAIL makes the waits time out)
 cr_run() { local s="$1"; shift; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
 sent() { grep -c -F -e "$1" "$LOGF" || true; }
 cat > "$TMP/fakebin/orca" <<EOS
@@ -1500,23 +1500,12 @@ exit 0
 EOS
 : > "$LOGF"; try cr_run compact-role.sh planner; A="$RC:$OUT:$(sent 'terminal send --terminal t1 --text /compact --enter'):$(sent 'adopt that role'):$(awk '/--text \x1b/{e=NR} /--text \/compact/{c=NR} END{print (e && c>e)}' "$LOGF")"
 : > "$LOGF"; try cr_run compact-role.sh planner --instructions "keep the plan"; A="$A|$RC:$(sent '--text /compact keep the plan --enter')"
-try cr_run compact-role.sh cx; B="$RC"; try cr_run compact-role.sh nobody; B="$B$RC"; try cr_run compact-role.sh local-coordinator; B="$B$RC"
+cp "$TMP/state.env" "$TMP/state.bak"; echo 'CC=t6' >> "$TMP/state.env"; : > "$LOGF"; try cr_run compact-role.sh cc; B="$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact')"; mv "$TMP/state.bak" "$TMP/state.env"
+try cr_run compact-role.sh cx; B="$B|$RC"; try cr_run compact-role.sh nobody; B="$B$RC"; try cr_run compact-role.sh local-coordinator; B="$B$RC"
 : > "$LOGF"; export FAKE_WAIT_FAIL=1; try cr_run compact-role.sh planner; unset FAKE_WAIT_FAIL; B="$B:$RC:$(sent 'terminal send')"
-check "compact-role.sh: Esc then /compact [instructions], no role message; codex, unknown and local coordinator exit 2; a wait timeout exits 1 and sends nothing" "$A|$B" "0:compacted planner (t1):1:0:1|0:1|222:1:0"
-rm -f "$TMP/rp.json"; cat > "$TMP/fakebin/orca" <<EOS
-#!/bin/sh
-echo "\$*" >> "$LOGF"
-exit 0
-EOS
-mk_rp() { jq "$1" "$C" > "$TMP/rp.json"; }
-rp() { : > "$LOGF"; CR_CFG="$TMP/rp.json" try cr_run reset-planner.sh; }
-mk_rp '.'; rp; R="$RC:$(sent '--text /clear --enter'):$(sent adopt)"
-mk_rp '.settings.flow.plannerReset="compact"'; rp; R="$R|$RC:$(sent '--text /compact --enter'):$(sent '--text /clear')"
-mk_rp '.settings.flow.plannerReset="x"'; rp; R="$R|$RC:$(printf '%s\n' "$OUT" | grep -c -F 'settings.flow.plannerReset must be "clear" or "compact" (got "x")' || true):$(sent 'terminal send')"
-mk_rp '.settings.mode="academic-research"'; rp; R="$R|$RC:$(sent 'terminal send')"
-check "reset-planner.sh reads the saved value each run: unset clears, compact compacts, invalid exits 1 with the error and runs nothing, outside programmer exits 2" "$R" "0:1:1|0:1:0|1:1:0|2:0"
-V=""; for v in '"x"' 1 true '{}' null '"clear"' '"compact"'; do jq ".settings.flow.plannerReset=$v" "$C" > "$TMP/rp.json"; V="$V$(check_config "$TMP/rp.json" 2>&1 | grep -c 'plannerReset must be' || true)"; done
-check "check_config: plannerReset accepts clear, compact and null; rejects any other value" "$V" "1111000"
+check "compact-role.sh: Esc then /compact [instructions], no role message; a role that is not claude is cleaned instead (its clearCommand sent, no /compact, the message printed once, a dead tab exits 1 as clean.sh does); unknown and local coordinator exit 2; a wait timeout exits 1 and sends nothing" "$A|$B" "0:compacted planner (t1):1:0:1|0:1|0:1:1:0|122:1:0"
+V=""; for v in '"x"' 1 true '{}' null '"clear"' '"compact"'; do jq ".settings.flow.plannerReset=$v" "$C" > "$TMP/rp.json"; V="$V$(check_config "$TMP/rp.json" 2>&1 | wc -c | tr -d ' ')"; done
+check "check_config: flow.plannerReset, removed in this version, is accepted and ignored for any value (no output)" "$V" "0000000"
 }
 
 sec_scratch() {
