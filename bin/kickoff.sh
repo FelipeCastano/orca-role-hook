@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the front role (the local coordinator in
-# programmer mode, the Planner in the others), tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
+# Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the front role (the local
+# coordinator), tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
 # Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>" ["<remembered roles>" ["<reused roles>"]]]
 #   resumed: reopened without memory (the front role recovers the state); remembered: reopened with their previous conversation;
 #   reused: in <new roles> only because their tab never got its role message (same handle, not told to the front role as changed).
@@ -193,7 +193,7 @@ composer_watch & WATCH_PID=$!
 
 if is_new "$FRONT"; then
   RESUME=0; case " $RESUMED " in *" $FRONT "*) RESUME=1;; esac; remembers "$FRONT" && RESUME=2
-  if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] && [ ! -e "$GITDIR/orca-roles.mode-pending" ]; then
+  if { [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] || [ "${ORCA_ROLES_MODE_CHOSEN:-0}" = 1 ]; } && [ ! -e "$GITDIR/orca-roles.mode-pending" ]; then
     cmd="$(clear_command "$CFG" "$FRONT")"
     if [ -n "$cmd" ]; then
       orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
@@ -201,11 +201,12 @@ if is_new "$FRONT"; then
       pace 1
       orca terminal send --terminal "${!FRONTV}" --text "$cmd" --enter --json >/dev/null
       orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-      echo "$FLC's conversation was cleared ($cmd) for the mode switch."
+      echo "$FLC's conversation was cleared ($cmd) for the mode $([ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] && echo switch || echo choice)."
     else
       echo "$FLC's agent has no clear command: its role message for the new mode goes into the same conversation."
     fi
-    PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
+    if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ]; then PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
+    else PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"; fi
   else
     PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
   fi

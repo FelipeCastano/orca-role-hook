@@ -60,7 +60,7 @@ At the end of every task that changed .tex files, run `make -C article` (or the 
 - Never write in article/literature/ (except as the Add a citation task says) or in experimentation/ other than make_tables.py and make_figures.py; never type or edit a file in article/tables/ or article/images/ by hand.
 - Never write experimentation/results/, the configs or experimentation/src/.
 - article/refs.bib changes only through `scholar.sh bibtex --add`, with the user's approval stated in the task.
-- The paper may name people (the author list as given, the authors of cited work); your reports to the Planner do not.
+- The paper may name people (the author list as given, the authors of cited work); your reports to the local coordinator do not.
 
 ## Parameters
 None.

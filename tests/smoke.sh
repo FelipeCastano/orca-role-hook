@@ -146,7 +146,7 @@ printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; exit 0; }\nexec /bin/bash "$@"
 pk_setup() {
 PK="$TMP/pk"; PH="$TMP/pkhome"; mkdir -p "$PK" "$PH" "$TMP/pkbin"
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PK/"; chmod +x "$PK"/bin/*.sh
-rm -rf "$PK/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$PK/prompts/academic-research"   # the mode is available once its local-coordinator.md exists: these checks need it unavailable
 ln -sfn "$PK" "$PH/.orca-roles"; PKL="$PH/.orca-roles"
 PKC="$PK/config.default.json"
 }
@@ -190,7 +190,7 @@ sec_prompts() {
 # Every role of the config has a prompt for each of its modes ("all" = every mode named in the config), and each mode has the Planner's and the workers' common prompt
 MODES="$(jq -r '[.roles[].modes | select(type == "array") | .[]] | unique | .[]' "$KIT/config.default.json")"
 for m in $MODES; do
-  for f in planner common-workers; do
+  for f in local-coordinator common-workers; do
     [ -f "$KIT/prompts/$m/$f.md" ] || { echo "FAIL mode $m without prompts/$m/$f.md"; FAIL=1; }
   done
 done
@@ -281,19 +281,19 @@ rule R22 "$PE" "Follow the project's conventions" '^- \*\*Follow'
 check "rules: common-peon.md is at most 3500 bytes" "$([ "$(wc -c < "$PE" | tr -d ' ')" -le 3500 ] && echo y)" "y"
 # R6 install and create only with the user's yes; R7 never approve or merge; R8 credit to lens-review, not copied
 # R5 the pr-reviewer worktree is read-only; R11 its Auditor never experiments in the worktree; R14 no heartbeats; R15 convention check
-prrule R6 planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
-prrule R6 planner "The review skill" 'Do not enable it yourself without their yes'
-prrule R6 planner "The team" '"overwrite": true., only on their yes'
-prrule R8 planner "Reviewing a PR" 'This review follows lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include it: it is installed from its repository \(with your yes when the kit installs it\) and reads it now'
-prrule R8 planner "Reviewing a PR" 'Review method: lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include or copy it: it installs it from its repository and runs it; the method and its lenses belong to that project'
-prrule R8 planner "Reviewing a PR" 'Whatever you post carries the same "Review method: \.\.\." line'
-prrule R8 planner "The review skill" 'does not include or copy it, it installs it from its own repository'
-prrule R6 planner "The team" 'On their yes, create each'
-prrule R7 planner "Reviewing a PR" 'Never approve, request changes or merge'
-prrule R1 planner "Reviewing a PR" 'only with the user.s explicit yes to that exact text'
-prrule R5 planner "Limits" 'No commits, no pushes, no code changes in this mode'
-prrule R1 planner "Limits" 'Nothing leaves the worktree without the user.s explicit yes'
-prrule R15 planner "Limits" 'follows the repository.s own conventions'
+prrule R6 local-coordinator "The review skill" 'review-skill\.sh install. only on their explicit yes'
+prrule R6 local-coordinator "The review skill" 'Do not enable it yourself without their yes'
+prrule R6 local-coordinator "The team" '"overwrite": true., only on their yes'
+prrule R8 local-coordinator "Reviewing a PR" 'This review follows lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include it: it is installed from its repository \(with your yes when the kit installs it\) and reads it now'
+prrule R8 local-coordinator "Reviewing a PR" 'Review method: lens-review <version> \(https://github\.com/romerox3/lens-review\)\. orca-roles does not include or copy it: it installs it from its repository and runs it; the method and its lenses belong to that project'
+prrule R8 local-coordinator "Reviewing a PR" 'Whatever you post carries the same "Review method: \.\.\." line'
+prrule R8 local-coordinator "The review skill" 'does not include or copy it, it installs it from its own repository'
+prrule R6 local-coordinator "The team" 'On their yes, create each'
+prrule R7 local-coordinator "Reviewing a PR" 'Never approve, request changes or merge'
+prrule R1 local-coordinator "Reviewing a PR" 'only with the user.s explicit yes to that exact text'
+prrule R5 local-coordinator "Limits" 'No commits, no pushes, no code changes in this mode'
+prrule R1 local-coordinator "Limits" 'Nothing leaves the worktree without the user.s explicit yes'
+prrule R15 local-coordinator "Limits" 'follows the repository.s own conventions'
 prrule R5 common-workers "Limits" 'The worktree is read-only'
 prrule R5 common-workers "Limits" 'Never post to GitHub'
 prrule R14 common-workers "Communication" 'No heartbeats'
@@ -378,7 +378,7 @@ prrule caps auditor "Limits" 'Cap every process you run at .maxWorkers. parallel
 rule R14 "$PD/common-workers.md" 'No heartbeats'
 # R16 message batches are acknowledged: the Planner never ends a turn with one open; workers ack what they read and the ack is not a heartbeat
 for m in programmer pr-reviewer academic-research; do
-  PL="$ROOT/prompts/$m/planner.md"; CO=Planner; [ "$m" != programmer ] || { PL="$ROOT/prompts/programmer/local-coordinator.md"; CO='local coordinator'; }   # the programmer's local coordinator holds what the other modes' Planner holds
+  PL="$ROOT/prompts/$m/local-coordinator.md"; CO='local coordinator'   # every mode's local coordinator holds the relay and safety rules
   rule R16 "$PL" 'Never end a turn holding an unacknowledged delivery' '^  - Never end a turn'
   rule R16 "$PL" 'orca orchestration check --ack <delivery_id> --json' '^- \*\*Never block waiting'
   rule R16 "$ROOT/prompts/$m/common-workers.md" 'acknowledges each batch once read, with `--ack <delivery_id>`' '^- A worker that reads its messages'
@@ -432,9 +432,9 @@ for m in programmer pr-reviewer academic-research; do
     rule R22 "$ROOT/prompts/$m/common-workers.md" 'never above your role prompt or the local coordinator'"'"'s task'
     rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra experiment, variant or source without asking the local coordinator'
   }
-  [ "$m" != academic-research ] || rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra question, source or dataset without asking the Planner'
+  [ "$m" != academic-research ] || rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra question, source or dataset without asking the local coordinator'
   rule R18 "$PL" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
-  GTY="$(grep -nE -- '--types' "$PL" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/planner.md uses --types without --wait"; FAIL=1; }
+  GTY="$(grep -nE -- '--types' "$PL" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/local-coordinator.md uses --types without --wait"; FAIL=1; }
 done
 # R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into Dev's spec (Phase 2 point 2), and passes 16-18 of the plan review
 PP="$ROOT/prompts/programmer/planner.md"
@@ -458,45 +458,51 @@ R24SET="$(grep -E -- '^   - \*\*Set audit\.\*\*' <<<"$R24P2" || true)"
 r24 "$R24LED" 'Every answer the user gives in the step (how a finding is routed, a Dev decision, whether a change is minor) is a line starting with `User decision:` in the ledger, and every decision the Planner takes in a `decide` task is a line starting with `Ruling (Planner):`: what it decided, why, and what it costs if it is wrong. You write no `Ruling:` line of your own.' end
 r24 "$R24SET" 'or left as notes if the user agrees). Anything the Planner returns as `needs: user` goes to the user as the protocol says. When the Planner'"'"'s decisions leave no open finding at or above medium, and before the full run and the commits, show the user "Rulings of the Planner": every `Ruling (Planner):` line from the set'"'"'s ledgers, grouped by step, each with what it costs if it is wrong. A ruling the user overturns becomes a fix (Dev, then the Tester; ask the user whether it needs the Auditor'"'"'s corrections review, with your recommendation, and record the answer in `changes-log.md`) before the full run. When the set audit (and its corrections review) has no open finding at or above medium, the set is committed' has
 # R25 academic-research rulings: the Ledger bullet ends with the Ruling rule; the Commits section shows "Rulings I made" right after the stage sentence, before the commit proposal
-AP="$ROOT/prompts/academic-research/planner.md"
-r25() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *"$frag" ]] && ok=1;; has) [[ "$f" == *"$frag"* ]] && ok=1;; esac; [ "$ok" = 1 ] || { echo "FAIL rules R25: academic-research/planner.md lost '${frag:0:60}...' in its bullet or section"; FAIL=1; }; }
+AP="$ROOT/prompts/academic-research/local-coordinator.md"
+r25() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *"$frag" ]] && ok=1;; has) [[ "$f" == *"$frag"* ]] && ok=1;; esac; [ "$ok" = 1 ] || { echo "FAIL rules R25: academic-research/local-coordinator.md lost '${frag:0:60}...' in its bullet or section"; FAIL=1; }; }
 R25COM="$(awk '/^## Commits/{s=1;next} /^## /{s=0} s' "$AP")"
 R25MEC="$(awk '/^## Common mechanics for any task/{s=1;next} /^## /{s=0} s' "$AP")"
 R25LED="$(grep -E -- '^- \*\*Ledger\.\*\*' <<<"$R25MEC" || true)"
-r25 "$R25LED" 'Every decision you take on the user'"'"'s behalf (a Dev decision you accept or change, an ambiguity of the request you settle, how you route a finding) is a line starting with `Ruling:` in the ledger: what you decided, why, and what it costs if it is wrong. Decisions the user took are not rulings.' end
-r25 "$R25COM" 'A commit closes a stage (the literature, the plan, an experiment iteration, a section, a phase switch'"'"'s STATE.md, a revision). Before proposing a commit, show the user "Rulings I made": every `Ruling:` line in the ledger since the previous commit, each with what it costs if it is wrong. A ruling the user overturns is fixed before that commit, through the same flow as a finding of that stage. Before each: the convention check' has
+r25 "$R25LED" 'Every answer the user gives in a stage is a line starting with `User decision:` in the ledger, and every decision the Planner takes in a `decide` or `close` task is a line starting with `Ruling (Planner):`: what it decided, why, and what it costs if it is wrong. You write no `Ruling:` line of your own.' end
+r25 "$R25COM" 'A commit closes a stage (the literature, the plan, an experiment iteration, a section, a phase switch'"'"'s STATE.md, a revision). Before proposing a commit, send the Planner a `close` task (see "The Planner") and carry out the decisions it returns until no finding is open; then show the user "Rulings of the Planner": every `Ruling (Planner):` line in the ledger since the previous commit, each with what it costs if it is wrong. A ruling the user overturns is fixed before that commit, through the same flow as a finding of that stage. Before each: the convention check' has
 # R15 the convention check before proposing a commit, PR or Jira text
 rule R15 "$PD/local-coordinator.md" 'checked every time' 'follows the repository.s own conventions'
 rule R15 "$PD/local-coordinator.md" 'Never reuse a format remembered' 'follows the repository.s own conventions'
 # academic-research (A<n> = the rule's number)
 AD="$ROOT/prompts/academic-research"
 # A1 nothing leaves the repository without the user's yes
-rule A1 "$AD/planner.md" 'Nothing leaves the repository without the user'"'"'s explicit yes'
-rule A1 "$AD/planner.md" 'no HPC job submission' 'Nothing leaves the repository'
-rule A1 "$AD/planner.md" 'Never push or touch a remote without the user'"'"'s yes'
+rule A1 "$AD/local-coordinator.md" 'Nothing leaves the repository without the user'"'"'s explicit yes'
+rule A1 "$AD/local-coordinator.md" 'no HPC job submission' 'Nothing leaves the repository'
+rule A1 "$AD/local-coordinator.md" 'Never push or touch a remote without the user'"'"'s yes'
 rule A1 "$AD/common-workers.md" 'Never post or send anything outside the repository'
 rule A1 "$AD/common-workers.md" 'no email' 'Never post or send anything outside the repository'
-# A2 the Planner commits, only on the user's yes to that commit; workers never commit
-rule A2 "$AD/planner.md" 'workers never commit' 'You make every commit'
-rule A2 "$AD/planner.md" 'commit only on a clear yes to that commit' 'You make every commit'
-rule A2 "$AD/planner.md" 'approving a stage is not approving the commit' 'You make every commit'
-rule A2 "$AD/common-workers.md" 'Nobody commits'
-rule A2 "$AD/common-workers.md" 'the Planner commits'
-# A3 no fabrication
+# the academic-research Planner is a worker: its own prompt keeps the safety rules and never talks to the user
+rule A1 "$AD/planner.md" 'Nothing leaves the repository without the user'"'"'s explicit yes'
 rule A3 "$AD/planner.md" '**No fabrication.**'
-rule A3 "$AD/planner.md" 'No invented data, results, citations, quotes or references' 'No fabrication'
+rule A5 "$AD/planner.md" 'Names of people:'
+rule R5 "$AD/planner.md" 'Never create worktrees or terminals'
+rule R1 "$AD/planner.md" 'never talk to the user, never create a Run, never dispatch or assign work to anyone'
+# A2 the Planner commits, only on the user's yes to that commit; workers never commit
+rule A2 "$AD/local-coordinator.md" 'workers never commit' 'You make every commit'
+rule A2 "$AD/local-coordinator.md" 'commit only on a clear yes to that commit' 'You make every commit'
+rule A2 "$AD/local-coordinator.md" 'approving a stage is not approving the commit' 'You make every commit'
+rule A2 "$AD/common-workers.md" 'Nobody commits'
+rule A2 "$AD/common-workers.md" 'the local coordinator commits'
+# A3 no fabrication
+rule A3 "$AD/local-coordinator.md" '**No fabrication.**'
+rule A3 "$AD/local-coordinator.md" 'No invented data, results, citations, quotes or references' 'No fabrication'
 rule A3 "$AD/common-workers.md" '**No fabrication**'
 rule A3 "$AD/common-workers.md" 'never invent data, results, citations, quotes or references' 'No fabrication'
 # A4 no AI attribution, and the check after every commit
-rule A4 "$AD/planner.md" 'never carry attribution to an AI' 'Commit messages, pull requests and Jira'
-rule A4 "$AD/planner.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
-rule A4 "$AD/planner.md" 'git commit --amend' 'never carry attribution to an AI'
+rule A4 "$AD/local-coordinator.md" 'never carry attribution to an AI' 'Commit messages, pull requests and Jira'
+rule A4 "$AD/local-coordinator.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
+rule A4 "$AD/local-coordinator.md" 'git commit --amend' 'never carry attribution to an AI'
 rule A4 "$AD/common-workers.md" 'carries attribution to an AI'
 rule A4 "$AD/common-workers.md" 'no `Co-Authored-By` trailer' 'carries attribution to an AI'
 # A5 no names of people outside the paper
-rule A5 "$AD/planner.md" 'Names of people:' 'never in commit messages, pull requests, Jira'
-rule A5 "$AD/planner.md" 'never in commit messages, pull requests, Jira' 'Names of people:'
-rule A5 "$AD/planner.md" 'The paper itself is different' 'Names of people:'
+rule A5 "$AD/local-coordinator.md" 'Names of people:' 'never in commit messages, pull requests, Jira'
+rule A5 "$AD/local-coordinator.md" 'never in commit messages, pull requests, Jira' 'Names of people:'
+rule A5 "$AD/local-coordinator.md" 'The paper itself is different' 'Names of people:'
 rule A5 "$AD/common-workers.md" 'No names of people in your reports'
 rule A5 "$AD/common-workers.md" 'may name people' 'No names of people in your reports'
 # A6 refs.bib only through scholar.sh bibtex --add (the Writer also needs the user's approval in the task)
@@ -507,17 +513,17 @@ rule A6 "$AD/writer.md" 'Never edit article/refs.bib by hand'
 # A7 PDFs only through scholar.sh pdf; no scraping, no getting past logins or bot challenges
 rule A7 "$AD/sota.md" 'never try to get past a login or a bot challenge' 'Never browse or scrape'
 rule A7 "$AD/sota.md" 'never download a PDF in any way other than `scholar.sh pdf`' 'Never browse or scrape'
-rule A7 "$AD/planner.md" 'never scrape publisher sites or try to get past logins or bot challenges'
+rule A7 "$AD/local-coordinator.md" 'never scrape publisher sites or try to get past logins or bot challenges'
 # A8 HPC job submission only with the user's approval of that job stated in the task
-rule A8 "$AD/planner.md" 'Never submit without that yes' '^4\. \*\*Experiments'
-rule A8 "$AD/planner.md" 'states that the user approved that specific submission' '^4\. \*\*Experiments'
-rule A8 "$AD/planner.md" 'ask the user whether Dev submits it or they do' '^4\. \*\*Experiments'
+rule A8 "$AD/local-coordinator.md" 'Never submit without that yes' '^4\. \*\*Experiments'
+rule A8 "$AD/local-coordinator.md" 'states that the user approved that specific submission' '^4\. \*\*Experiments'
+rule A8 "$AD/local-coordinator.md" 'ask the user whether Dev submits it or they do' '^4\. \*\*Experiments'
 rule A8 "$AD/dev.md" 'only when the task states that the user approved that specific submission'
 rule A8 "$AD/dev.md" 'do not connect to the cluster' 'HPC: prepare the job'
 rule A8 "$AD/common-workers.md" 'HPC job submission only when the task states that the user approved that specific submission' '^- HPC job submission'
 rule A8 "$AD/common-workers.md" 'only Dev submits, and only with that yes' '^- HPC job submission'
 rule A8 "$AD/common-workers.md" '(no push, no submission, no upload, no email)' '^- Never post or send'
-rule A8 "$AD/common-workers.md" 'report it in your `worker_done` and let the Planner ask' '^- Never post or send'
+rule A8 "$AD/common-workers.md" 'report it in your `worker_done` and let the local coordinator ask' '^- Never post or send'
 # A9 the five review roles are read-only
 rule A9 "$AD/common-workers.md" 'the review roles (Methodology, Tech-Verifier, Evidence, Rigor, Style) write nothing in the repository'
 for p in methodology tech-verifier evidence rigor style; do
@@ -554,19 +560,19 @@ rule A7 "$AD/common-workers.md" 'Technical documentation (libraries, tools, data
 rule A7 "$AD/writer.md" 'Exit 2 means no open-access PDF was found' 'Only when the task states that the user approved it'
 rule A7 "$AD/evidence.md" '`scholar.sh` is `~/.orca-roles/bin/scholar.sh`'
 rule A11 "$AD/tester.md" 'Mutate only in a copy of the repository under your scratchDir'
-rule A11 "$AD/planner.md" '**One code task at a time.**'
+rule A11 "$AD/local-coordinator.md" '**One code task at a time.**'
 rule A11 "$AD/evidence.md" 'make_tables.py and make_figures.py in a copy'
-rule A10 "$AD/planner.md" 'those on tables or figures (Evidence'"'"'s and Rigor'"'"'s) go to a Writer "Fix tables or figures" task, the rest to the Writer' '^2\. \*\*Each section'
-rule A10 "$AD/planner.md" 'a finding that needs a new or repeated run means going back to experiment' '^2\. \*\*Each section'
-rule A11 "$AD/planner.md" 'a table or figure finding that needs a new or repeated run' '^- Going back from writing'
+rule A10 "$AD/local-coordinator.md" 'those on tables or figures (Evidence'"'"'s and Rigor'"'"'s) to a Writer "Fix tables or figures" task, the rest to the Writer' '^2\. \*\*Each section'
+rule A10 "$AD/local-coordinator.md" 'a finding that needs a new or repeated run means going back to experiment' '^2\. \*\*Each section'
+rule A11 "$AD/local-coordinator.md" 'a table or figure finding that needs a new or repeated run' '^- Going back from writing'
 rule A10 "$AD/sota.md" '`--from` and `--to` take YYYY-MM-DD' '^1\. For each query'
-rule A10 "$AD/planner.md" 'years go in the brief as `--from <year>-01-01 --to <year>-12-31`' '^2\. \*\*State of the art'
+rule A10 "$AD/local-coordinator.md" 'years go in the brief as `--from <year>-01-01 --to <year>-12-31`' '^2\. \*\*State of the art'
 rule A10 "$AD/writer.md" 'article/literature/manifest.tsv (which papers have a PDF)' '^1\. Read experimentation/PLAN.md'
 # A11 phase switch only with the user's yes; back to experiment needs STATE.md committed
-rule A11 "$AD/planner.md" "Only with the user's yes." '^- Only with'
-rule A11 "$AD/planner.md" 'only with the user'"'"'s yes' '^- Going back from writing'
-rule A11 "$AD/planner.md" 'STATE.md at the repository root' '^- Going back from writing'
-rule A11 "$AD/planner.md" 'you commit it with the user'"'"'s yes; then `phase.sh experiment`' '^- Going back from writing'
+rule A11 "$AD/local-coordinator.md" "Only with the user's yes." '^- Only with'
+rule A11 "$AD/local-coordinator.md" 'only with the user'"'"'s yes' '^- Going back from writing'
+rule A11 "$AD/local-coordinator.md" 'STATE.md at the repository root' '^- Going back from writing'
+rule A11 "$AD/local-coordinator.md" 'you commit it with the user'"'"'s yes; then `phase.sh experiment`' '^- Going back from writing'
 # A12 the Writer cites only existing keys and never invents one
 rule A12 "$AD/writer.md" 'only keys that exist in article/refs.bib' '^2\. Cite only'
 rule A12 "$AD/writer.md" '[CITATION NEEDED:' '^5\. Where a claim needs'
@@ -583,39 +589,39 @@ rule R26 "$ROOT/BACKLOG.md" 'stablyai/orca#32999' '^- \*\*Agent name in tab titl
 grep -qxF '## Revert when Orca fixes it' "$ROOT/BACKLOG.md" 2>/dev/null || { echo "FAIL rules R26: BACKLOG.md lost its 'Revert when Orca fixes it' section"; FAIL=1; }
 # R27 choosing and switching the mode: the Planner prompts' section (right after "Managing the kit and the team", with the summary path, the command and the own-tab paragraph), the Limits exception, and the README and skill texts; the names match the code
 for m in programmer academic-research pr-reviewer; do
-  P27="$ROOT/prompts/$m/planner.md"; [ "$m" != programmer ] || P27="$ROOT/prompts/programmer/local-coordinator.md"   # the programmer's local coordinator only sends the user to a new tab (the kit refuses switching in this version)
+  P27="$ROOT/prompts/$m/local-coordinator.md"   # the programmer's still only sends the user to a new tab (its switching text is step 4's)
   R27SEC="$(awk '/^## Choosing and switching the mode$/{s=1;next} /^## /{s=0} s' "$P27")"
-  r27() { grep -qF -- "$1" <<<"$(grep -E -- "$2" <<<"$R27SEC" || true)" || { echo "FAIL rules R27: $m/planner.md section 'Choosing and switching the mode' lost '$1'"; FAIL=1; }; }
-  [ "$(awk '/^## /{if (p) {print $0; exit}} $0 == "## Managing the kit and the team"{p=1}' "$P27")" = "## Choosing and switching the mode" ] || { echo "FAIL rules R27: $m/planner.md: 'Choosing and switching the mode' is not right after 'Managing the kit and the team'"; FAIL=1; }
+  r27() { grep -qF -- "$1" <<<"$(grep -E -- "$2" <<<"$R27SEC" || true)" || { echo "FAIL rules R27: $m/local-coordinator.md section 'Choosing and switching the mode' lost '$1'"; FAIL=1; }; }
+  [ "$(awk '/^## /{if (p) {print $0; exit}} $0 == "## Managing the kit and the team"{p=1}' "$P27")" = "## Choosing and switching the mode" ] || { echo "FAIL rules R27: $m/local-coordinator.md: 'Choosing and switching the mode' is not right after 'Managing the kit and the team'"; FAIL=1; }
   r27 'run the command it gives' '^A new worktree may start'
-  if [ "$m" = programmer ]; then
-    r27 'tell the user to close this tab and run `roles --mode <mode>` from a terminal of this worktree' '^- For a non-programmer mode'
-    r27 'is refused by the kit in this version: tell the user to start that mode in a new worktree with `roles --mode <mode>`' '^- Switching between'
-  else
-  r27 'only when the user asks for it and never while a task is in flight' '^To switch the mode later'
-  r27 'closes every worker of the current mode and clears your conversation, and ask whether to save a summary' '^1\. '
+  r27 'offering the three modes as plain text in your reply (programmer, academic-research and pr-reviewer' '^A new worktree may start'
+  r27 'between any two of the three, only when the user asks for it and never while a task is in flight' '^To switch the mode later'
+  r27 'you keep your tab, the kit clears it and sends you the new mode' '^To switch the mode later'
+  r27 'closes every worker of the current mode' '^1\. '
+  r27 'clears your conversation, and ask whether to save a summary' '^1\. '
   r27 '`<your scratchDir>/mode-switch-summary.md` (overwrite it)' '^2\. '
   r27 'Run `~/.orca-roles/bin/launch.sh --mode <mode>` from the worktree and end your turn' '^3\. '
   r27 'which tells you to read that summary first' '^3\. '
   r27 'Only your own tab can switch the mode. If `launch.sh` refuses' '^Only your own tab'
+  ! grep -q 'in this version' <<<"$R27SEC" || { echo "FAIL rules R27: $m/local-coordinator.md section 'Choosing and switching the mode' still says 'in this version'"; FAIL=1; }
   rule R27 "$P27" 'Choosing or switching the mode with `~/.orca-roles/bin/launch.sh --mode <mode>` is also allowed, as "Choosing and switching the mode" says.' '^- Never create worktrees or terminals'
-  fi
 done
 R27RM="$ROOT/README.md"; R27SK="$ROOT/plugin/skills/team/SKILL.md"
 R27TR='^\| `roles --mode` fails with "this worktree'"'"'s team is open in mode'
-rule R27 "$R27RM" 'the local coordinator opens and asks which mode you want (this version offers only programmer;' '^Create a worktree from the project'"'"'s .+In a few seconds'
+rule R27 "$R27RM" 'the local coordinator opens and asks which mode you want' '^Create a worktree from the project'"'"'s .+In a few seconds'
+grep -qF 'this version offers only programmer' "$R27RM" && { echo "FAIL rules R27: README.md still says the mode question offers only programmer"; FAIL=1; }
 rule R27 "$R27RM" 'A worktree created from a Jira ticket starts directly in `programmer`, and an explicit `--mode` (or `settings.enableAskModeOnStart: false`)' '^Create a worktree from the project'"'"'s .+In a few seconds'
 rule R27 "$R27RM" "that is Orca's \`branchPrefix\` setting (\`\"git-username\"\`), not the kit" '^- \*\*Branch names:\*\*'
-rule R27 "$R27RM" 'which asks which mode to use; this version offers only programmer (to start another mode, close the local coordinator'"'"'s tab and run `roles --mode <mode>` from a terminal of this worktree). It does not ask when' '^\*\*Asking the mode\.\*\*'
+rule R27 "$R27RM" 'which asks which mode to use and offers the three (suggesting the configured one). It does not ask when' '^\*\*Asking the mode\.\*\*'
 rule R27 "$R27RM" 'or with `settings.enableAskModeOnStart: false`' '^\*\*Asking the mode\.\*\*'
 rule R27 "$R27RM" '`roles --status` shows `Mode: not chosen yet`' '^\*\*Asking the mode\.\*\*'
 rule R27 "$R27RM" 'runs `launch.sh --mode <mode>` from its tab' '^\*\*Switching the mode:\*\*'
 rule R27 "$R27RM" 'stops with an error naming the open tabs and changes nothing' '^\*\*Switching the mode:\*\*'
 grep -qF '**Open team rule:**' "$R27RM" && { echo "FAIL rules R27: README.md still has the old 'Open team rule' paragraph"; FAIL=1; }
-rule R27 "$R27RM" '`true` (default): a new worktree opens only the front role (the local coordinator in programmer mode), which asks the mode (programmer only in this version).' '^\| `enableAskModeOnStart` \|'
+rule R27 "$R27RM" '`true` (default): a new worktree opens only the local coordinator, which asks the mode (the three modes are offered).' '^\| `enableAskModeOnStart` \|'
 rule R27 "$R27RM" 'An explicit `--mode` or a Jira ticket never asks.' '^\| `enableAskModeOnStart` \|'
-rule R27 "$R27RM" 'A tab of the team is still open; the error names it. In programmer mode this version cannot switch to another mode' "$R27TR"
-rule R27 "$R27SK" 'A new worktree opens only the local coordinator, which asks the mode as plain text in its reply (in this version it offers only `programmer`: for another mode, close its tab and run `roles --mode <mode>` from a terminal of the worktree)' '^\*\*Modes\.\*\*'
+rule R27 "$R27RM" 'A tab of the team is still open; the error names it. Ask the local coordinator to switch it (between any two modes)' "$R27TR"
+rule R27 "$R27SK" 'A new worktree opens only the local coordinator, which asks the mode as plain text in its reply (it offers the three modes)' '^\*\*Modes\.\*\*'
 rule R27 "$R27SK" 'or `settings.enableAskModeOnStart: false` skips the question' '^\*\*Modes\.\*\*'
 rule R27 "$R27SK" 'from another terminal a mode change with the team open stops with an error naming the open tabs' '^\*\*Modes\.\*\*'
 grep -qF 'close it first' "$R27SK" && { echo "FAIL rules R27: SKILL.md still has the old 'close it first' sentence"; FAIL=1; }
@@ -624,7 +630,7 @@ rule R27 "$R27SK" 'A tab of the team is still open; the error names it.' "$R27TR
 # the names the docs and prompts use are the ones the code uses
 rule R27 "$ROOT/bin/launch.sh" 'enableAskModeOnStart' '^if \[ "\$NEED" = 1 \]'
 rule R27 "$ROOT/bin/lib.sh" '/mode-switch-summary.md' 'WARNING: the mode was switched'
-rule R27 "$ROOT/bin/lib.sh" '.orca-roles/bin/launch.sh --mode programmer\` from the worktree and end your turn' 'If the user says yes'
+rule R27 "$ROOT/bin/lib.sh" '.orca-roles/bin/launch.sh --mode <mode>\` from the worktree with the chosen mode and end your turn' 'When the user chooses'
 # R28 waking the tabs Orca keeps asleep after a restart: the README paragraph, the troubleshooting rows (README and skill), the backlog entries to revert and to verify; the messages the rows quote are the ones the code prints
 R28RM="$ROOT/README.md"; R28SK="$ROOT/plugin/skills/team/SKILL.md"; R28BL="$ROOT/BACKLOG.md"
 R28B='^- \*\*Orca kept the tabs asleep\*\*'
@@ -652,11 +658,11 @@ rule R28 "$ROOT/bin/close-role.sh" 'orca-roles.tabs' 'TABSF='
 # R2 an ambiguous answer is not a yes to the commits
 rule R2 "$PD/local-coordinator.md" 'neither is an ambiguous answer ("ok, continue"): ask again' '\*\*Set audit\.\*\*'
 # pr-reviewer: no worktrees or terminals, no git state changes, context cleaned only with the user's yes, no AI attribution, kit changes only with the user's yes
-prrule R5 planner "Limits" 'Never create worktrees or terminals'
-prrule R5 planner "Limits" 'nobody checks out, resets or otherwise changes its git state without the user.s explicit yes'
-prrule R1 planner "Limits" 'Never clean a worker.s context without the user.s confirmation'
-prrule R3 planner "Limits" 'never carry attribution to an AI'
-prrule R6 planner "Limits" 'Never change the kit.s configuration or prompts without the user.s confirmation'
+prrule R5 local-coordinator "Limits" 'Never create worktrees or terminals'
+prrule R5 local-coordinator "Limits" 'nobody checks out, resets or otherwise changes its git state without the user.s explicit yes'
+prrule R1 local-coordinator "Limits" 'Never clean a worker.s context without the user.s confirmation'
+prrule R3 local-coordinator "Limits" 'never carry attribution to an AI'
+prrule R6 local-coordinator "Limits" 'Never change the kit.s configuration or prompts without the user.s confirmation'
 prrule R5 common-workers "Limits" 'Never create worktrees or terminals'
 prrule R9 common-workers "Limits" 'Never wrap commands in .bash -c. or .sh -c.'
 prrule R5 lens-reviewer "Limits" 'Do not run the project.s code, tests or build unless the brief says so'
@@ -666,14 +672,14 @@ rule R5 "$AD/common-workers.md" 'Never create worktrees or terminals' '^- Never 
 rule R9 "$AD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`' '^- Never wrap commands'
 rule R11 "$AD/common-workers.md" 'rev-$sha' '^- If you need an earlier version of the code'
 rule R11 "$AD/common-workers.md" 'it is read-only: do not modify it' '^- If you need an earlier version of the code'
-rule R5 "$AD/planner.md" 'Never create worktrees or terminals' '^- Never create worktrees'
-rule R5 "$AD/planner.md" "Never close the roles' tabs" '^- After each'
-rule R6 "$AD/planner.md" "Never change the kit's configuration or prompts without the user's confirmation" '^- Never change the kit'
-rule R1 "$AD/planner.md" "Never clean a worker's context without the user's confirmation" '^- Never clean a worker'
-rule R6 "$AD/planner.md" 'Before writing any kit file or opening tabs, explain what you will change and what it affects, and wait for a yes' '^- Before writing any kit file'
-rule R15 "$AD/planner.md" 'checked every time before you propose it' '^- Everything you draft for outside the repository'
-rule R15 "$AD/planner.md" 'git log -15' '^- Everything you draft for outside the repository'
-rule R15 "$AD/planner.md" 'A subject-only commit is not acceptable unless the history does it' '^- Everything you draft for outside the repository'
+rule R5 "$AD/local-coordinator.md" 'Never create worktrees or terminals' '^- Never create worktrees'
+rule R5 "$AD/local-coordinator.md" "Never close the roles' tabs" '^- After each'
+rule R6 "$AD/local-coordinator.md" "Never change the kit's configuration or prompts without the user's confirmation" '^- Never change the kit'
+rule R1 "$AD/local-coordinator.md" "Never clean a worker's context without the user's confirmation" '^- Never clean a worker'
+rule R6 "$AD/local-coordinator.md" 'Before writing any kit file or opening tabs, explain what you will change and what it affects, and wait for a yes' '^- Before writing any kit file'
+rule R15 "$AD/local-coordinator.md" 'checked every time before you propose it' '^- Everything you draft for outside the repository'
+rule R15 "$AD/local-coordinator.md" 'git log -15' '^- Everything you draft for outside the repository'
+rule R15 "$AD/local-coordinator.md" 'A subject-only commit is not acceptable unless the history does it' '^- Everything you draft for outside the repository'
 rule A8 "$AD/tech-verifier.md" 'Never submit HPC jobs' '^- Never submit'
 rule A10 "$AD/researcher.md" 'Never change a result and never leave out runs that do not fit' '^- Never change a result'
 # programmer Planner: relaunch-role.sh only with the user's confirmation, nothing edited in the kit without their yes, no task to a role that did not start
@@ -698,8 +704,8 @@ rule R5 "$PD/local-coordinator.md" 'before you dispatch the execution' '^   c\. 
 rule R5 "$PD/local-coordinator.md" 'confirm that nothing under `<e2eDir>/` or `<evidenceDir>/` is staged or part of any commit' '\*\*Set audit\.\*\*'
 # W written reports (every mode, workers and Planner; W6 the report language is stated by the Planner and used by the worker, W7 the academic-research paper is out of scope): outline approved by the user before writing and relayed by the Planner, descriptive titles, no names of people, scope excludes worker_done, commits, PRs and Jira
 for m in programmer pr-reviewer academic-research; do
-  for p in reports planner; do
-    wf="$ROOT/prompts/$m/$p.md"; [ "$m:$p" != programmer:planner ] || wf="$ROOT/prompts/programmer/local-coordinator.md"   # the programmer's user-facing session is the local coordinator
+  for p in reports local-coordinator; do
+    wf="$ROOT/prompts/$m/$p.md"
     if [ "$p" = reports ]; then ws="$(awk '$0 == "# Written reports" {f=1; next} /^#+ /{f=0} f' "$wf")"   # the workers' rules live in their own file
     else ws="$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$wf")"; fi
     wrule() { grep -qE -- "$2" <<<"$ws" || { echo "FAIL rules W$1: $m/$p.md Written reports lost '$2'"; FAIL=1; }; }
@@ -717,7 +723,7 @@ for m in programmer pr-reviewer academic-research; do
       wrule 6 'When you hand a report to a worker, state in the task the report.s language .* and its audience'
     fi
     if [ "$m" = academic-research ]; then
-      wrule 7 'nor to the paper and its companion files \(the article, supplementary material, cover letter, rebuttal letter\), which follow writer\.md and the paper rules'
+      wrule 7 '(nor|do not apply either) to the paper and its companion files \(the article, supplementary material, cover letter, rebuttal letter\), which follow writer\.md and the paper rules'
     fi
   done
   # The workers' common prompt only points to reports.md (read on demand, so every worker starts lighter); none of the rules is copied back into it
@@ -728,9 +734,9 @@ for m in programmer pr-reviewer academic-research; do
   [ "$(grep -c '^## Written reports$' "$cw")" = 1 ] || { echo "FAIL rules W: $m/common-workers.md must hold one Written reports heading"; FAIL=1; }
   grep -qF '`reports.md`' <<<"$(awk '$0 == "## Written reports" {f=1; next} /^## /{f=0} f' "$cw")" || { echo "FAIL rules W: $m/common-workers.md Written reports must name reports.md"; FAIL=1; }
   ! grep -qE '^1\. \*\*Titles\.\*\*|^11\. \*\*Before delivering\*\*|^These rules apply to every report the user asks for' "$cw" || { echo "FAIL rules W: $m/common-workers.md still carries the report rules"; FAIL=1; }
-  grep -q '^When the user asks you' <<<"$(grep -F "a worker's outline (rule 3) reaches you with \`ask\`: show it to the user, and reply with their answer or their changes" "$(if [ "$m" = programmer ]; then echo "$ROOT/prompts/programmer/local-coordinator.md"; else echo "$ROOT/prompts/$m/planner.md"; fi)")" || { echo "FAIL rules W3: $m/planner.md lost the outline relay sentence"; FAIL=1; }
-  [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/planner.md")" = 1 ] || { echo "FAIL rules W: $m/planner.md must hold one Written reports section"; FAIL=1; }
-  [ "$m" != programmer ] || { [ "$(grep -c '^## Written reports$' "$ROOT/prompts/programmer/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: programmer/local-coordinator.md must hold one Written reports section"; FAIL=1; }; rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'; }
+  grep -q '^When the user asks you' <<<"$(grep -F "a worker's outline (rule 3) reaches you with \`ask\`: show it to the user, and reply with their answer or their changes" "$ROOT/prompts/$m/local-coordinator.md")" || { echo "FAIL rules W3: $m/local-coordinator.md lost the outline relay sentence"; FAIL=1; }
+  [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
+  [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
 blk_end "rules: the safety and permission rules are in the prompts"
 }
@@ -746,7 +752,7 @@ echo "ok   output rules: role anchor (workers and the programmer Planner get the
 }
 
 sec_config() {
-# Inheritance from defaults and the planner always enabled
+# Inheritance from defaults and the planner following enabled like any role
 cat > "$KIT/config.json" <<'J'
 { "settings": { "launchWaitSeconds": 3 },
   "defaults": { "agent": "claude", "permissionMode": "auto", "mcp": [], "allowedTools": ["Read"], "params": {} },
@@ -759,7 +765,7 @@ cat > "$KIT/config.json" <<'J'
   } }
 J
 C="$KIT/config.json"
-check "planner always enabled even with enabled=false" "$(enabled_roles "$C" | tr '\n' ' ')" "planner dev extra "
+check "the planner follows enabled like any role (disabled it is dropped; launch.sh stops with the R3 error)" "$(enabled_roles "$C" | tr '\n' ' ')" "dev extra "
 check "rstr inherits from defaults" "$(rstr "$C" dev agent)" "claude"
 check "rstr prefers the role" "$(rstr "$C" dev permissionMode)" "acceptEdits"
 check "rcfg role mcp" "$(rcfg "$C" dev mcp)" '["ctx"]'
@@ -928,25 +934,26 @@ rm -f "$CW/.git/orca-roles.coordinated/cw"; printf 'run_beef34\n' > "$TMP/orca-r
 check "planner_msg: the kept Run reaches every mode (no hold without the marker)" "$(for r in 0 1 2 3; do cpm $r | grep -c 'whose Run is run_beef34.*--to run:run_beef34 '; done | tr '\n' ' ')$(cpm 0 | grep -c 'opened by a coordinator')" "1 1 1 1 0"
 rm -f "$TMP/orca-roles.coordinator"
 check "planner_msg: no marker and no kept Run -> byte-identical" "$(cpm 0)" "$MC0"
-# planner_ask_msg: the local coordinator's message, in order: who it is, the prompt to read, the language rule of planner_msg, the question about programmer mode, the launch command, the other modes
-ASK1="You are the local coordinator of the orca-roles kit in this worktree, and no mode has been chosen yet. Read $KIT/prompts/programmer/local-coordinator.md and adopt that role from now on, but do not start its startup before the mode is chosen."
-ASK3='Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer). Then end your turn and wait for the user'"'"'s typed answer.'
-ASK45='Do not start any work before the answer. If the user says yes, run `~/.orca-roles/bin/launch.sh --mode programmer` from the worktree and end your turn: the kit opens the team and sends you your role message for it. If the user wants another mode, tell them that this version starts other modes only after they close this tab (yours) and run `roles --mode <mode>` from a terminal of this worktree, and run nothing.'
+# planner_ask_msg: the local coordinator's message, in order: who it is (mode-neutral: it reads no prompt before the choice), the language rule of planner_msg, the question about the three modes with the configured one suggested, the launch command
+ASK1="You are the local coordinator of the orca-roles kit in this worktree, and no mode has been chosen yet. Do not start any work and do not read any prompt before the mode is chosen: once the user chooses, the kit sends you your role message for that mode."
+ASK3='Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) which mode to start in, offering these three: programmer (plan and build code with a team: Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer), academic-research (write a research paper with a team: Planner and the phase'"'"'s roles), and pr-reviewer (review a pull request or a diff with the review lenses). Suggest programmer, the configured one. Then end your turn and wait for the user'"'"'s typed answer.'
+ASK45='When the user chooses, run `~/.orca-roles/bin/launch.sh --mode <mode>` from the worktree with the chosen mode and end your turn: the kit opens the team and sends you your role message for it.'
 check "planner_ask_msg: exact message with language auto, one line, no trailing newline" "$(planner_ask_msg "$KIT/config.default.json"; printf x)" "$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"x
 jq '.settings.language = "Spanish"' "$KIT/config.default.json" > "$TMP/askl.json"; jq '.settings.language = ""' "$KIT/config.default.json" > "$TMP/askl2.json"
-check "planner_ask_msg: settings.language names the language; an empty one is the user's language" "$(planner_ask_msg "$TMP/askl.json")|$(planner_ask_msg "$TMP/askl2.json")" "$ASK1 Always reply to the user in Spanish, whatever language they write in. $ASK3 $ASK45|$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"
-# front_role / front_of with the mode question pending: the local coordinator whatever settings.mode says (so kickoff gives it its own message and agent.sh the front role's flags); without the marker, or in another git dir, the Planner in a non-programmer mode
+jq '.settings.mode = "pr-reviewer"' "$KIT/config.default.json" > "$TMP/askl3.json"
+check "planner_ask_msg: settings.language names the language; an empty one is the user's language; the suggested mode is the configured one (an unknown one falls back to programmer)" "$(planner_ask_msg "$TMP/askl.json")|$(planner_ask_msg "$TMP/askl2.json")|$(planner_ask_msg "$TMP/askl3.json" | grep -o 'Suggest [a-z-]*,')"  "$ASK1 Always reply to the user in Spanish, whatever language they write in. $ASK3 $ASK45|$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45|Suggest pr-reviewer,"
+# front_role / front_of with the mode question pending: the local coordinator whatever settings.mode says (so kickoff gives it its own message and agent.sh the front role's flags); without the marker it is the local coordinator too
 FRD="$TMP/frd"; mkdir -p "$FRD/pend" "$FRD/none"; : > "$FRD/pend/orca-roles.mode-pending"; printf '{"settings":{"mode":"academic-research"}}\n' > "$FRD/cfg.json"
-check "front_role and front_of: with orca-roles.mode-pending in the git dir the front role is the local coordinator in every mode; without it, the saved mode decides (the Planner in academic-research and pr-reviewer)" "$(front_role academic-research "$FRD/pend") $(front_role pr-reviewer "$FRD/pend") $(front_of "$FRD/cfg.json" "$FRD/pend") $(front_role academic-research "$FRD/none") $(front_of "$FRD/cfg.json" "$FRD/none") $(front_role academic-research)" "local-coordinator local-coordinator local-coordinator planner planner planner"
-# planner_msg resume 4 (after a mode switch): both modes, the summary file, the still-there sentence only for a planner that cannot be cleared; 0-3 do not change
+check "front_role and front_of: with orca-roles.mode-pending in the git dir the front role is the local coordinator in every mode; without it too (no mode makes the Planner the front role)" "$(front_role academic-research "$FRD/pend") $(front_role pr-reviewer "$FRD/pend") $(front_of "$FRD/cfg.json" "$FRD/pend") $(front_role academic-research "$FRD/none") $(front_of "$FRD/cfg.json" "$FRD/none") $(front_role academic-research)" "local-coordinator local-coordinator local-coordinator local-coordinator local-coordinator local-coordinator"
+# planner_msg resume 4 (after a mode switch): both modes, the summary file, the still-there sentence only for a local coordinator that cannot be cleared; 0-3 do not change
 jq '.settings.mode = "academic-research"' "$KIT/config.json" > "$TMP/r4m.json"
-R4="$(planner_msg "$TMP/r4m.json" "planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)"
-case "$R4" in *" WARNING: the mode was switched from pr-reviewer to academic-research and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in "*"/planner/mode-switch-summary.md: read it first. Start with the startup.") R4A=ok;; *) R4A="bad: $R4";; esac
+R4="$(planner_msg "$TMP/r4m.json" "local-coordinator planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)"
+case "$R4" in *" WARNING: the mode was switched from pr-reviewer to academic-research and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in "*"/local-coordinator/mode-switch-summary.md: read it first. Start with the startup.") R4A=ok;; *) R4A="bad: $R4";; esac
 case "$R4" in *"still there"*) R4A="$R4A still-there";; esac
-jq '.roles.planner.agent = "custom" | .roles.planner.command = "echo x"' "$TMP/r4m.json" > "$TMP/r4a.json"; jq '.roles.planner.clearCommand = "/reset"' "$TMP/r4a.json" > "$TMP/r4b.json"; jq '.roles.planner.agent = "codex"' "$TMP/r4m.json" > "$TMP/r4c.json"
-R4B="$(planner_msg "$TMP/r4a.json" "planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)"
+jq '.roles["local-coordinator"].agent = "custom" | .roles["local-coordinator"].command = "echo x"' "$TMP/r4m.json" > "$TMP/r4a.json"; jq '.roles["local-coordinator"].clearCommand = "/reset"' "$TMP/r4a.json" > "$TMP/r4b.json"; jq '.roles["local-coordinator"].agent = "codex"' "$TMP/r4m.json" > "$TMP/r4c.json"
+R4B="$(planner_msg "$TMP/r4a.json" "local-coordinator planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)"
 case "$R4B" in *"read it first. Your previous conversation is still there: follow only this mode's prompt from now on. Start with the startup.") R4B=ok;; *) R4B="bad: $R4B";; esac
-R4C=""; for c in r4b r4c; do case "$(planner_msg "$TMP/$c.json" "planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)" in *"still there"*) R4C="$R4C still-there";; *"read it first. Start with the startup.") R4C="${R4C}ok ";; *) R4C="${R4C}bad ";; esac; done
+R4C=""; for c in r4b r4c; do case "$(planner_msg "$TMP/$c.json" "local-coordinator planner dev" "$TMP/state.env" "" "" 4 pr-reviewer)" in *"still there"*) R4C="$R4C still-there";; *"read it first. Start with the startup.") R4C="${R4C}ok ";; *) R4C="${R4C}bad ";; esac; done
 check "planner_msg resume 4: the variant names both modes and the summary file; the still-there sentence only without a clear command (custom without clearCommand), not with clearCommand or codex" "$R4A:$R4B:$R4C" "ok:ok:ok ok "
 R0=""; for r in 0 1 2 3; do
   PA="$(planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" $r)"; PB="$(planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" $r pr-reviewer)"
@@ -2556,13 +2563,13 @@ B1="$B1$(akcase saved-team akseed)$(akcase saved-mode ak_mode)$(akcase saved-set
 B1="$B1$(akcase config-false ak_cfgfalse)$(akcase project-false ak_prjfalse)$(akcase set-false ak_none --set settings.enableAskModeOnStart=false)"
 check "launch: each condition false alone -> no ask and no marker (--mode and its = form, --set settings.mode, a saved team, a saved .mode, a saved settings.mode path, a Jira key from the link and from the branch, the setting off in config.json, .orca-roles.json and --set)" "$B1" "mode=0:none:$TEAM;mode-eq=0:none:$TEAM;set-mode=0:none:$TEAM;set-eq-mode=0:none:$TEAM;saved-team=0:none:$TEAM;saved-mode=0:none:$TEAM;saved-set-path=0:none:$TEAM;jira-link=0:none:$TEAM;jira-branch=0:none:$TEAM;config-false=0:none:$TEAM;project-false=0:none:$TEAM;set-false=0:none:$TEAM;"
 check "launch: a Jira link with jiraHandoff false is not a Jira ticket (B4 does not apply): the ask happens; with it on, the same link starts the programmer team" "$(akcase link-off ak_linkoff)$(akcase link-on ak_link)" "link-off=0:marker:LOCAL_COORDINATOR ;link-on=0:none:$TEAM;"
-# the choice (the only mode this version offers), from the local coordinator's tab and from another terminal
+# the choice (programmer here; the first choice clears the local coordinator's tab before its front message), from the local coordinator's tab and from another terminal
 CH=""
 for H in h-Lcoord other; do
-  akstart ak_none; AKH="$H" akrun --mode programmer; CR="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c '^Mode chosen: programmer\.$'):$(printf '%s\n' "$OUT" | grep -ci 'team is open'):$(akhandles | grep -c PLANNER):$(akcnt create):$(aksent 'Mode: programmer'):$(aksent 'no mode has been chosen yet')"
+  akstart ak_none; AKH="$H" akrun --mode programmer; CR="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c '^Mode chosen: programmer\.$'):$(printf '%s\n' "$OUT" | grep -ci 'team is open'):$(akhandles | grep -c PLANNER):$(akcnt create):$(aksent 'Mode: programmer'):$(aksent 'no mode has been chosen yet'):$(tr '\037' '\n' < "$AK/sent.h-Lcoord" | awk '/^\/clear$/{c=NR} /Mode: programmer/{m=NR} END{print (c && m && c < m) ? "clear-first" : "no-clear"}')"
   AKH="$H" akrun; CH="$CH$CR|$RC:$(akmark):$(aksent 'Mode: programmer'):$(aksent 'no mode has been chosen yet');"
 done
-check "launch: choosing the mode (from the local coordinator's tab and from another terminal) -> no refusal, marker removed, the workers and the Planner opened, the live local coordinator gets its front message for it, and a later run does not ask again" "$CH" "0:none:1:0:1:4:1:1|0:none:1:1;0:none:1:0:1:4:1:1|0:none:1:1;"
+check "launch: choosing the mode (from the local coordinator's tab and from another terminal) -> no refusal, marker removed, the workers and the Planner opened, the live local coordinator is cleared (/clear) and then gets its front message for it, and a later run does not ask again" "$CH" "0:none:1:0:1:4:1:1:clear-first|0:none:1:1;0:none:1:0:1:4:1:1:clear-first|0:none:1:1;"
 # C2: a live kickoff that lists the local coordinator does not stop its role message
 akstart ak_none; mkdir -p "$AKG/orca-roles.kickoff.d"; sleep 30 & KP=$!; echo local-coordinator > "$AKG/orca-roles.kickoff.d/$KP"
 AKH=h-Lcoord try akl --mode programmer; { kill "$KP"; wait "$KP"; } 2>/dev/null || true; rm -f "$AKG/orca-roles.kickoff.d/$KP"; akdrain
@@ -2571,15 +2578,14 @@ check "launch: choosing the mode while a live kickoff lists the local coordinato
 akstart ak_none; C0="$(akcnt create)"; akrun --mode nope; R1="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c 'Mode chosen'):$(akcnt create):$(akhandles)"
 AKH=restored akrun --mode programmer; R2="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -cxF 'ERROR: your tab was restored by Orca after a restart: run roles (without options) first so the kit reopens you, then choose the mode. If it cannot reopen you, run roles from another terminal of this worktree. Nothing was changed.'):$(akcnt create):$(akhandles):$(aksent 'Mode: programmer')"
 check "launch: an invalid mode, and a choice from a local coordinator tab Orca restored (new handle, saved ptyId), fail with the marker kept and nothing opened or sent" "$([ "$C0" = 1 ] && echo c1):$R1|$R2" "c1:1:marker:0:1:LOCAL_COORDINATOR |1:marker:1:1:LOCAL_COORDINATOR :0"
-# the pending choice of another mode: refused while the local coordinator's tab exists (live handle or restored by ptyId), nothing changes; with no such tab the chosen mode starts fresh with the Planner in front
-PCE="ERROR: pr-reviewer cannot be chosen while the local coordinator's tab is open: close it and run roles --mode pr-reviewer from a terminal of this worktree"
-akstart ak_none; B="$(cat "$AKG"/orca-roles.env "$AKG"/orca-roles.pty | cksum)"; C0="$(akcnt create)"
-AKH=other akrun --mode pr-reviewer; PC1="$RC:$(printf '%s\n' "$OUT" | grep -cxF "$PCE"):$(akmark):$(akcnt create):$([ "$(cat "$AKG"/orca-roles.env "$AKG"/orca-roles.pty | cksum)" = "$B" ] && echo same || echo CHANGED)"
-printf 'LOCAL_COORDINATOR=gone\n' > "$AKG/orca-roles.env"; printf 'LOCAL_COORDINATOR=pty-h-Lcoord\n' > "$AKG/orca-roles.pty"; echo '{"terminals":[{"handle":"restored","ptyId":"pty-h-Lcoord"}]}' > "$AK/list.json"
-AKH=other akrun --mode pr-reviewer; PC2="$RC:$(printf '%s\n' "$OUT" | grep -cxF "$PCE"):$(akmark)"
-printf 'LOCAL_COORDINATOR=gone\n' > "$AKG/orca-roles.env"; printf 'LOCAL_COORDINATOR=pty-gone\n' > "$AKG/orca-roles.pty"
-AKH=other akrun --mode pr-reviewer; PC3="$RC:$(printf '%s\n' "$OUT" | grep -cF 'cannot be chosen'):$(akmark):$(akhandles)"
-check "launch: choosing another mode while the local coordinator's tab is open (live, or restored by its ptyId) is refused with nothing changed; with no such tab the mode starts fresh, the Planner in front" "$C0:$PC1|$PC2|$PC3" "1:1:1:marker:1:same|1:1:marker|0:0:none:PLANNER AUDITOR "
+# the pending choice of another mode is allowed with the local coordinator's tab open (live handle, or restored by its ptyId): no refusal, the marker goes, the tab is kept and gets the mode's front message, and pr-reviewer has no Planner
+PCR=""
+for PC in live pty; do
+  akstart ak_none
+  if [ "$PC" = pty ]; then printf 'LOCAL_COORDINATOR=gone\n' > "$AKG/orca-roles.env"; printf 'LOCAL_COORDINATOR=pty-h-Lcoord\n' > "$AKG/orca-roles.pty"; echo '{"terminals":[{"handle":"restored","ptyId":"pty-h-Lcoord"}]}' > "$AK/list.json"; fi
+  AKH=other akrun --mode pr-reviewer; PCR="$PCR$RC:$(printf '%s\n' "$OUT" | grep -c 'cannot be chosen'):$(akmark):$(akhandles):$(aksent 'Mode: pr-reviewer');"
+done
+check "launch: choosing another mode from the pending state while the local coordinator's tab is open (live, or restored by its ptyId) opens that mode's team without a refusal: the marker goes, the local coordinator is kept and gets its front message, no Planner" "$PCR" "0:0:none:LOCAL_COORDINATOR AUDITOR :1;0:0:none:LOCAL_COORDINATOR AUDITOR :1;"
 # programmer mode needs the local-coordinator role: missing or disabled stops the launch (ask start and --mode programmer) before anything is written; another mode launches
 LCE="ERROR: programmer mode needs the local-coordinator role, missing or disabled in $TMP/home/.orca-roles/config.json: run install.sh again, or remove the override that disables it"
 LM=""
@@ -2587,8 +2593,16 @@ for V in 'del(.roles["local-coordinator"])' '.roles["local-coordinator"].enabled
   akreset; aksetting "$V"; akrun; LM="$LM$RC:$(printf '%s\n' "$OUT" | grep -cxF "$LCE"):$(find "$AKG" -maxdepth 1 -name 'orca-roles.*' | wc -l | tr -d ' '):$(akcnt create)|"
   akreset; aksetting "$V"; akrun --mode programmer; LM="$LM$RC:$(printf '%s\n' "$OUT" | grep -cxF "$LCE"):$(find "$AKG" -maxdepth 1 -name 'orca-roles.*' | wc -l | tr -d ' ')|"
 done
-akreset; aksetting 'del(.roles["local-coordinator"])'; akrun --mode pr-reviewer; LM="$LM$RC:$(akhandles)"
-check "launch: a config without the local-coordinator role, or with it disabled, stops a programmer launch (ask start or --mode programmer) before anything is written; --mode pr-reviewer launches as before" "$LM" "1:1:0:0|1:1:0|1:1:0:0|1:1:0|0:PLANNER AUDITOR "
+akreset; aksetting 'del(.roles["local-coordinator"])'; akrun --mode pr-reviewer; LM="$LM$RC:$(printf '%s\n' "$OUT" | grep -cxF "${LCE/programmer/pr-reviewer}"):$(find "$AKG" -maxdepth 1 -name 'orca-roles.*' | wc -l | tr -d ' ')"
+check "launch: a config without the local-coordinator role, or with it disabled, stops a launch in any mode (ask start, --mode programmer, --mode pr-reviewer) before anything is written" "$LM" "1:1:0:0|1:1:0|1:1:0:0|1:1:0|1:1:0"
+# R3: the Planner missing or disabled stops programmer and academic-research with the same error form; pr-reviewer has no Planner role and launches
+PM=""
+for MD in programmer academic-research pr-reviewer; do
+  for V in 'del(.roles.planner)' '.roles.planner.enabled = false'; do
+    akreset; aksetting "$V"; akrun --mode "$MD"; PM="$PM$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: $MD mode needs the planner role, missing or disabled in $TMP/home/.orca-roles/config.json: run install.sh again, or remove the override that disables it"):$(akhandles | grep -c PLANNER || true)|"
+  done
+done
+check "launch: the Planner missing or disabled stops programmer and academic-research before anything is opened; pr-reviewer launches with no Planner" "$PM" "1:1:0|1:1:0|1:1:0|1:1:0|0:0:0|0:0:0|"
 # a Jira ticket starts in programmer, whatever settings.mode says
 JR=""
 for V in ak_link ak_branch; do
@@ -2663,92 +2677,92 @@ swrun() { try swl "$@"; akdrain; }
 swseed() {
   akreset; rm -rf "$SWD"/sent.* "$SWD"/st.* "$SWD"/cf.* "$SWD"/cc.* "$SWD"/sf.* "$SWD"/cft.* "$SWD"/ch.* "$SWD"/chn.* "$SWD"/pty.* "$SWD/orca.log" "$SWD/list.json"; : > "$SWD/orca.log"
   cp "$SWD/cfg.json" "$KIT/config.json"; cp "$SWD/cfg.json" "$AKG/orca-roles.config.json"
-  printf 'PLANNER=h-Planner\nDEV=h-Dev\nTESTER=h-Tester\nDEPLOYER=h-Deployer\nE2E_TESTER=h-E2E-old\n' | tee "$AKG/orca-roles.env" > "$AKG/orca-roles.kicked"
-  printf 'PLANNER=pty-h-Planner\nDEV=pty-h-Dev\nTESTER=pty-h-Tester\nDEPLOYER=pty-h-Deployer\nE2E_TESTER=pty-h-E2E\n' > "$AKG/orca-roles.pty"
+  printf 'LOCAL_COORDINATOR=h-LC\nPLANNER=h-Pl\nDEV=h-Dev\nTESTER=h-Tester\nDEPLOYER=h-Deployer\nE2E_TESTER=h-E2E-old\n' | tee "$AKG/orca-roles.env" > "$AKG/orca-roles.kicked"
+  printf 'LOCAL_COORDINATOR=pty-h-LC\nPLANNER=pty-h-Pl\nDEV=pty-h-Dev\nTESTER=pty-h-Tester\nDEPLOYER=pty-h-Deployer\nE2E_TESTER=pty-h-E2E\n' > "$AKG/orca-roles.pty"
   echo noagent > "$SWD/st.h-Tester"; echo orphan > "$SWD/st.h-Deployer"; echo stale > "$SWD/st.h-E2E-old"
   echo '{"terminals":[{"handle":"restored-e2e","ptyId":"pty-h-E2E"}]}' > "$SWD/list.json"
 }
 swstate() { { cat "$AKG/orca-roles.env" "$AKG/orca-roles.pty" "$AKG/orca-roles.kicked" "$AKG/orca-roles.config.json" 2>/dev/null || true; } | cksum; { cat "$AKG/orca-roles.overrides.json" 2>/dev/null || true; } | cksum; }
 swclosed() { grep '^terminal close' "$SWD/orca.log" | sed 's/.*--terminal \([^ ]*\).*/\1/' | tr '\n' ' '; }
 swcnt() { grep -cE "^terminal $1" "$SWD/orca.log" || true; }
-swsent() { local f="$SWD/sent.${2:-h-Planner}"; { tr '\037' '\n' < "$f" 2>/dev/null | grep -cF -- "$1"; } || true; }
-swplanner() { local e; while IFS= read -r e; do case "$e" in $'\e') printf 'ESC,';; /clear) printf 'CLEAR,';; *"switched from "*) printf 'MSG,';; esac; done < <(tr '\037' '\n' 2>/dev/null < "$SWD/sent.h-Planner"); }
-swkept() { grep -c '^PLANNER=' "$AKG/orca-roles.env" "$AKG/orca-roles.pty" 2>/dev/null | tr '\n' ' ' | sed "s#$AKG/##g"; }
-SWOPEN="Planner (h-Planner), Dev (h-Dev), Tester (h-Tester), Deployer (h-Deployer), E2E-Tester (restored-e2e)"
+swsent() { local f="$SWD/sent.${2:-h-LC}"; { tr '\037' '\n' < "$f" 2>/dev/null | grep -cF -- "$1"; } || true; }
+swplanner() { local e; while IFS= read -r e; do case "$e" in $'\e') printf 'ESC,';; /clear) printf 'CLEAR,';; *"switched from "*) printf 'MSG,';; esac; done < <(tr '\037' '\n' 2>/dev/null < "$SWD/sent.h-LC"); }
+swkept() { grep -c '^LOCAL_COORDINATOR=' "$AKG/orca-roles.env" "$AKG/orca-roles.pty" 2>/dev/null | tr '\n' ' ' | sed "s#$AKG/##g"; }
+SWOPEN="Lcoord (h-LC), Planner (h-Pl), Dev (h-Dev), Tester (h-Tester), Deployer (h-Deployer), E2E-Tester (restored-e2e)"
 swerr() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
 # B5: the Planner's own tab switches the mode: every old worker closed whatever its state, the new team opened, the Planner cleared and told
-swseed; : > "$SWD/cft.h-Dev"; SWH=h-Planner swrun --mode pr-reviewer
-S1="$RC:$(swerr "Switching mode from academic-research to pr-reviewer: closing Dev, Tester, Deployer, E2E-Tester; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared."):$(swclosed)"
+swseed; : > "$SWD/cft.h-Dev"; SWH=h-LC swrun --mode pr-reviewer
+S1="$RC:$(swerr "Switching mode from academic-research to pr-reviewer: closing Planner, Dev, Tester, Deployer, E2E-Tester; the local coordinator keeps its tab and gets its role message for pr-reviewer after its conversation is cleared."):$(swclosed)"
 S2="$(grep -cE '^terminal close --terminal h-Dev --tab ' "$SWD/orca.log" || true)$(grep -cE '^terminal close --terminal h-Dev --json' "$SWD/orca.log" || true):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.pty" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.kicked" | tr '\n' ' ')"
 S3="$(swplanner):$(swsent 'switched from academic-research to pr-reviewer'):$(swsent 'mode-switch-summary.md'):$(swsent 'Roles reopened'):$(swsent 'Role handles changed'):$(swsent 'Your previous conversation is still there'):$(swsent 'adopt that role' h-Auditor-1):$(swcnt create)"
-check "switch from the Planner's tab: every old worker is closed (alive with the --tab form refused, agent gone, orphaned, and the tab found by its saved ptyId, not the stale saved handle), the Planner's tab is not, only the Planner lines stay in the state files and the Auditor opens; the Planner gets Esc, /clear and then the variant-4 message naming both modes and the summary path, and no reopened/changed message" "$S1|$S2|$S3" "0:1:h-Dev h-Dev h-Tester h-Deployer restored-e2e |11:PLANNER AUDITOR :PLANNER AUDITOR :PLANNER AUDITOR |ESC,CLEAR,MSG,:1:1:0:0:0:1:1"
+check "switch from the Planner's tab: every old worker is closed (alive with the --tab form refused, agent gone, orphaned, and the tab found by its saved ptyId, not the stale saved handle), the Planner's tab is not, only the Planner lines stay in the state files and the Auditor opens; the Planner gets Esc, /clear and then the variant-4 message naming both modes and the summary path, and no reopened/changed message" "$S1|$S2|$S3" "0:1:h-Pl h-Dev h-Dev h-Tester h-Deployer restored-e2e |11:LOCAL_COORDINATOR AUDITOR :LOCAL_COORDINATOR AUDITOR :LOCAL_COORDINATOR AUDITOR |ESC,CLEAR,MSG,:1:1:0:0:0:1:1"
 # a role of both modes gets a new tab and its message for the new mode (C15)
-swseed; for f in "$KIT/config.json" "$AKG/orca-roles.config.json"; do jq '.settings.mode = "pr-reviewer"' "$SWD/cfg.json" > "$f"; done; SWH=h-Planner swrun --mode academic-research
+swseed; for f in "$KIT/config.json" "$AKG/orca-roles.config.json"; do jq '.settings.mode = "pr-reviewer"' "$SWD/cfg.json" > "$f"; done; SWH=h-LC swrun --mode academic-research
 D1="$RC:$(grep '^DEV=' "$AKG/orca-roles.env" | grep -cvx 'DEV=h-Dev'):$(swclosed | grep -c 'h-Dev '):$(swsent 'prompts/academic-research/dev.md' "$(grep '^DEV=' "$AKG/orca-roles.env" | cut -d= -f2)"):$(swsent 'prompts/pr-reviewer/dev.md' "$(grep '^DEV=' "$AKG/orca-roles.env" | cut -d= -f2)"):$(swplanner)"
 check "switch: a role the old and the new mode share (dev) gets a new tab, the old one is closed, and the new tab's message reads the new mode's prompt" "$D1" "0:1:1:1:0:ESC,CLEAR,MSG,"
 # a Planner without a clear command: no Esc, no /clear, and the message says the old conversation is still there
-swseed; jq '.roles.planner.agent = "custom" | .roles.planner.command = "true"' "$SWD/cfg.json" > "$KIT/config.json"; cp "$KIT/config.json" "$AKG/orca-roles.config.json"
-SWH=h-Planner swrun --mode pr-reviewer
+swseed; jq '.roles["local-coordinator"].agent = "custom" | .roles["local-coordinator"].command = "true"' "$SWD/cfg.json" > "$KIT/config.json"; cp "$KIT/config.json" "$AKG/orca-roles.config.json"
+SWH=h-LC swrun --mode pr-reviewer
 check "switch: a Planner whose agent has no clear command gets no Esc and no clear, and variant 4 tells it the previous conversation is still there" "$RC:$(swplanner):$(swsent 'Your previous conversation is still there: follow only this mode'"'"'s prompt from now on.'):$(swsent 'switched from academic-research to pr-reviewer')" "0:MSG,:1:1"
 # B6: any other terminal is refused with every open tab named, and nothing changes
 R6=""
 for H in "" other; do
   swseed; B="$(swstate)"; SWH="$H" swrun --mode pr-reviewer
-  R6="$R6$RC:$(swerr "ERROR: this worktree's team is open in mode 'academic-research' and mode 'pr-reviewer' was requested. Open tabs: $SWOPEN. Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED);"
+  R6="$R6$RC:$(swerr "ERROR: this worktree's team is open in mode 'academic-research' and mode 'pr-reviewer' was requested. Open tabs: $SWOPEN. Ask the local coordinator to switch modes, or close those tabs, then run roles again. Nothing was changed."):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED);"
 done
 check "B6: a mode change from another terminal or from none, with the team open, lists every open tab (the Planner too, the restored handle where one was found), closes and opens nothing and saves nothing" "$R6" "1:1:0:same;1:1:0:same;"
 # C6: the Planner's tab restored by Orca (new handle, saved ptyId)
-swseed; echo pty-h-Planner > "$SWD/pty.restored"; echo '{"terminals":[{"handle":"restored","ptyId":"pty-h-Planner"}]}' > "$SWD/list.json"; B="$(swstate)"; SWH=restored swrun --mode pr-reviewer
+swseed; echo pty-h-LC > "$SWD/pty.restored"; echo '{"terminals":[{"handle":"restored","ptyId":"pty-h-LC"}]}' > "$SWD/list.json"; B="$(swstate)"; SWH=restored swrun --mode pr-reviewer
 check "C6: a mode change from a Planner tab Orca restored after a restart gets the restart error, nothing closed, opened or saved" "$RC:$(swerr 'ERROR: your tab was restored by Orca after a restart: run roles (without options) first so the kit reopens you, then switch the mode. If it cannot reopen you, run roles from another terminal of this worktree. Nothing was changed.'):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED)" "1:1:0:same"
 # C7: a kickoff of the previous launch is still running
 swseed; mkdir -p "$AKG/orca-roles.kickoff.d"; sleep 30 & KP=$!; echo planner > "$AKG/orca-roles.kickoff.d/$KP"; B="$(swstate)"
-SWH=h-Planner try swl --mode pr-reviewer; { kill "$KP"; wait "$KP"; } 2>/dev/null || true; rm -f "$AKG/orca-roles.kickoff.d/$KP"
+SWH=h-LC try swl --mode pr-reviewer; { kill "$KP"; wait "$KP"; } 2>/dev/null || true; rm -f "$AKG/orca-roles.kickoff.d/$KP"
 check "C7: a switch while a kickoff of the previous launch is alive is refused with its pid, nothing closed or saved" "$RC:$(swerr "ERROR: the previous launch's kickoff is still running (pid $KP): try again in a moment. Nothing was changed."):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED)" "1:1:0:same"
 # C12: Orca not ready for one tab -> nothing closed; a tab that cannot be closed in either form -> error naming it, the roles closed before stay removed
-swseed; echo rt > "$SWD/st.h-Tester"; B="$(swstate)"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; echo rt > "$SWD/st.h-Tester"; B="$(swstate)"; SWH=h-LC swrun --mode pr-reviewer
 N1="$RC:$(swerr 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree'"'"'s team is still open. Nothing was changed. Run roles again once Orca is ready.'):$(swcnt 'close|create'):$([ "$(swstate)" = "$B" ] && echo same || echo CHANGED)"
-swseed; : > "$SWD/cf.h-Deployer"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/cf.h-Deployer"; SWH=h-LC swrun --mode pr-reviewer
 N2="$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(swclosed):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.pty" | tr '\n' ' '):$(swcnt create)"
-check "C12: a tab the kit cannot tell about stops the switch before anything is closed; a tab that fails to close in both forms stops it naming that tab, with the roles closed before it already removed from the state files and nothing opened" "$N1|$N2" "1:1:0:same|1:1:h-Dev h-Tester h-Deployer h-Deployer :PLANNER DEPLOYER E2E_TESTER :PLANNER DEPLOYER E2E_TESTER :0"
+check "C12: a tab the kit cannot tell about stops the switch before anything is closed; a tab that fails to close in both forms stops it naming that tab, with the roles closed before it already removed from the state files and nothing opened" "$N1|$N2" "1:1:0:same|1:1:h-Pl h-Dev h-Tester h-Deployer h-Deployer :LOCAL_COORDINATOR DEPLOYER E2E_TESTER :LOCAL_COORDINATOR DEPLOYER E2E_TESTER :0"
 # n14 step 2: a close that gets no answer (124) in the mode-switch close loop: the other form is not tried; the tab is gone (show says stale) -> the switch goes on, else it fails as when both forms fail, without the "did not confirm" message
-swseed; : > "$SWD/ch.h-Tester"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/ch.h-Tester"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 SWH=h-LC swrun --mode pr-reviewer
 H1="$RC:$(swerr "ERROR: could not close Tester's tab (h-Tester); close it by hand and switch again."):$(grep -c '^terminal close --terminal h-Tester' "$SWD/orca.log" || true):$(grep -c 'Orca did not confirm' <<<"$OUT" || true):$(grep -c 'h-Deployer' <<<"$(swclosed)" || true)"
-swseed; : > "$SWD/chn.h-Tester"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/chn.h-Tester"; ORCA_ROLES_CLI_TIMEOUT=60 ORCA_ROLES_CLOSE_TIMEOUT=1 SWH=h-LC swrun --mode pr-reviewer
 H1="$H1|$RC:$(swerr "ERROR: could not close Tester's tab (h-Tester); close it by hand and switch again."):$(grep -c '^terminal close --terminal h-Tester' "$SWD/orca.log" || true):$(grep -c 'Orca did not confirm' <<<"$OUT" || true)"
 check "C15: mode switch: a close with no answer is not retried in the other form; gone afterwards -> the switch goes on; still there -> it fails naming the tab, with no 'did not confirm' line" "$H1" "0:0:1:0:1|1:1:1:0"
 # no saved tab is open: the mode change is a normal launch
-swseed; for h in Planner Dev Tester Deployer; do echo stale > "$SWD/st.h-$h"; done; echo '{"terminals":[]}' > "$SWD/list.json"; SWH=other swrun --mode pr-reviewer
-check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new Planner and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:PLANNER AUDITOR :"
+swseed; for h in LC Pl Dev Tester Deployer; do echo stale > "$SWD/st.h-$h"; done; echo '{"terminals":[]}' > "$SWD/list.json"; SWH=other swrun --mode pr-reviewer
+check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new local coordinator and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:LOCAL_COORDINATOR AUDITOR :"
 # C2/C10/C11: a switch that fails once the old workers are closed leaves orca-roles.switch-from (the old mode) and every failure after that says to run roles again; the rerun finishes the switch, kickoff.sh removes the file
 SWF="$AKG/orca-roles.switch-from"; SWDONE="The workers of mode academic-research were already closed: run roles again to finish the switch."
 swfin() { printf '%s\n' "$OUT" | grep -cxF 'Finishing the mode switch from academic-research to pr-reviewer that a previous launch left unfinished.' || true; }
 swfinany() { printf '%s\n' "$OUT" | grep -c 'Finishing the mode switch' || true; }
 swfile() { cat "$SWF" 2>/dev/null || echo none; }
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/cc.Auditor"; SWH=h-LC swrun --mode pr-reviewer
 SWV1="$RC:$(swerr "ERROR: could not open Auditor. Check $AKG/orca-roles-launch.log. $SWDONE"):$(swfile):$(swplanner):$(swfin):$(swclosed)"
-rm -f "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+rm -f "$SWD/cc.Auditor"; SWH=h-LC swrun --mode pr-reviewer
 SWV2="$RC:$(swfin):$(swfile):$(swplanner):$(swsent 'switched from academic-research to pr-reviewer')"
-: > "$SWF"; SWH=h-Planner swrun --mode pr-reviewer
+: > "$SWF"; SWH=h-LC swrun --mode pr-reviewer
 SWV3="$RC:$(swfinany):$(swplanner)"
-rm -f "$SWF"; SWH=h-Planner swrun --mode pr-reviewer
+rm -f "$SWF"; SWH=h-LC swrun --mode pr-reviewer
 SWV3="$SWV3:$(swfinany):$(swplanner)"
-check "switch interrupted after the old workers were closed (the new team's Auditor cannot be opened): the failure carries the 'already closed: run roles again' sentence, orca-roles.switch-from holds the old mode and the Planner is untouched; the rerun prints the 'Finishing the mode switch' line, clears the Planner and sends the new-mode message once, and kickoff.sh removes the file; an empty file or no file is not a switch to finish (no line, no second clear)" "$SWV1|$SWV2|$SWV3" "1:1:academic-research::0:h-Dev h-Tester h-Deployer restored-e2e |0:1:none:ESC,CLEAR,MSG,:1|0:0:ESC,CLEAR,MSG,:0:ESC,CLEAR,MSG,"
+check "switch interrupted after the old workers were closed (the new team's Auditor cannot be opened): the failure carries the 'already closed: run roles again' sentence, orca-roles.switch-from holds the old mode and the Planner is untouched; the rerun prints the 'Finishing the mode switch' line, clears the Planner and sends the new-mode message once, and kickoff.sh removes the file; an empty file or no file is not a switch to finish (no line, no second clear)" "$SWV1|$SWV2|$SWV3" "1:1:academic-research::0:h-Pl h-Dev h-Tester h-Deployer restored-e2e |0:1:none:ESC,CLEAR,MSG,:1|0:0:ESC,CLEAR,MSG,:0:ESC,CLEAR,MSG,"
 # kickoff.sh removes the file whatever the result of sending to the Planner
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"; : > "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/cc.Auditor"; SWH=h-LC swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"; : > "$SWD/sf.h-LC"; SWH=h-LC swrun --mode pr-reviewer
 V4="$RC:$(swfin):$(swfile):$(swplanner)"
-rm -f "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
+rm -f "$SWD/sf.h-LC"; SWH=h-LC swrun --mode pr-reviewer
 V4="$V4:$RC:$(swfin):$(swfile):$(swplanner)"
 check "switch rerun with the Planner's tab refusing every send: kickoff.sh still removes orca-roles.switch-from, so the next run does not clear the Planner again" "$V4" "0:1:none::0:0:none:"
 # the sentence also follows a failure that happens before the switch block of a later run, and only while the file holds a mode
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
-SWH=h-Planner swrun --enable nobody; V5="$RC:$(printf '%s\n' "$OUT" | grep -c "^ERROR: unknown roles: nobody\..* $SWDONE\$" || true)"
-: > "$SWF"; SWH=h-Planner swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
-rm -f "$SWF"; SWH=h-Planner swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
-swseed; : > "$SWD/cf.h-Deployer"; SWH=h-Planner swrun --mode pr-reviewer; V5="$V5:$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(printf '%s\n' "$OUT" | grep -c 'already closed' || true):$(swfile)"
+swseed; : > "$SWD/cc.Auditor"; SWH=h-LC swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
+SWH=h-LC swrun --enable nobody; V5="$RC:$(printf '%s\n' "$OUT" | grep -c "^ERROR: unknown roles: nobody\..* $SWDONE\$" || true)"
+: > "$SWF"; SWH=h-LC swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
+rm -f "$SWF"; SWH=h-LC swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
+swseed; : > "$SWD/cf.h-Deployer"; SWH=h-LC swrun --mode pr-reviewer; V5="$V5:$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(printf '%s\n' "$OUT" | grep -c 'already closed' || true):$(swfile)"
 # the appended sentence follows exactly one period: a message that already ends with one (Orca not ready on a rerun) and one that does not (the log pointer, in the V1 check above)
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
-echo rt > "$SWD/st.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer; P1="$RC:$(swerr "ERROR: Orca is not ready (runtime_unavailable) for Planner: no tab was closed or opened. Run roles again once Orca is ready. $SWDONE"):$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true)"
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/cc.Auditor"; SWH=h-LC swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
+echo rt > "$SWD/st.h-LC"; SWH=h-LC swrun --mode pr-reviewer; P1="$RC:$(swerr "ERROR: Orca is not ready (runtime_unavailable) for Lcoord: no tab was closed or opened. Run roles again once Orca is ready. $SWDONE"):$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true)"
+swseed; : > "$SWD/cc.Auditor"; SWH=h-LC swrun --mode pr-reviewer
 P1="$P1:$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true):$(printf '%s\n' "$OUT" | grep -c 'orca-roles-launch\.log\. The workers of mode academic-research were already closed' || true)"; rm -f "$SWD/cc.Auditor"
 check "the 'already closed' sentence is joined with exactly one period whether the message ends with a period or not (never '..' or a run-on without one)" "$P1" "1:1:0:0:1"
 check "the 'already closed' sentence ends a failure of a later run while orca-roles.switch-from holds a mode (also one raised before the switch block), not with an empty or missing file; the failure to close an old worker, which comes before the file is written, keeps its message and writes no file" "$V5" "1:1:0:0:1:1:0:none"
@@ -2998,14 +3012,14 @@ check "metrics: outside a git repository it fails with a message" "$(cd "$TMP/mt
 
 sec_modes() {
 # Modes: selection (config < .orca-roles.json < --mode), roles per mode, prompts per mode and the open-team rule.
-# Own test kit (never the clone) with a fake second mode, pr-reviewer: planner + rv, and a role with "modes":"all" that has no prompt for it.
+# Own test kit (never the clone) with a fake second mode, pr-reviewer: local coordinator + rv, and a role with "modes":"all" that has no prompt for it.
 pk_setup
-mkdir -p "$PK/prompts/pr-reviewer"; for f in planner common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
+mkdir -p "$PK/prompts/pr-reviewer"; for f in local-coordinator common-workers rv; do echo "# $f" > "$PK/prompts/pr-reviewer/$f.md"; done
 : > "$PK/prompts/programmer/allrole.md"
 cat > "$PK/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Lcoord", "modes": ["programmer"] }, "planner": { "title": "Planner", "modes": "all" },
+  "roles": { "local-coordinator": { "title": "Lcoord", "modes": "all" }, "planner": { "title": "Planner", "modes": ["programmer", "academic-research"] },
              "dev": { "title": "Dev", "modes": ["programmer"] },
              "allrole": { "title": "Allrole", "modes": "all" },
              "rv": { "title": "Rv", "modes": ["pr-reviewer"] } } }
@@ -3016,7 +3030,7 @@ cat > "$TMP/mbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$MLOG"
 case "\$1 \$2" in
-  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; t="\$(echo "\$t" | tr ' ' -)"; echo "{\"handle\":\"h-\$t\"}";;
   "terminal list") [ -f "$TMP/m-listfail" ] && exit 1; exit 0;;
   "terminal show") [ -f "$TMP/m-rt" ] && { echo '{"ok":false,"error":{"code":"runtime_unavailable"}}'; exit 1; }; [ -f "$TMP/m-orphan" ] && { echo '{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}'; exit 0; }; [ -f "$TMP/m-noagent" ] && { echo '{"result":{"terminal":{"handle":"x"}}}'; exit 0; }; [ -f "$TMP/m-alive" ] && { echo '{"agentIdentity":"claude"}'; exit 0; }; echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
 esac
@@ -3038,14 +3052,14 @@ for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr
   check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-research)"
 done
 check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
-check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer",["programmer","academic-research"],["all",["programmer"]],["programmer","pr-reviewer"]]'
 check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "local-coordinator planner researcher dev tester auditor e2e-tester deployer "
 
 # roles and prompts per mode (library level)
 mcfg() { jq -c "$1" "$MC" > "$TMP/m.json"; }
 check "enabled_roles: programmer" "$(KIT="$PK" enabled_roles "$MC" | tr '\n' ' ')" "local-coordinator planner dev allrole "
 jq '.settings.mode = "pr-reviewer"' "$MC" > "$TMP/m-pr.json"
-check "enabled_roles: pr-reviewer = planner + its roles + 'all'" "$(KIT="$PK" enabled_roles "$TMP/m-pr.json" | tr '\n' ' ')" "planner allrole rv "
+check "enabled_roles: pr-reviewer = local coordinator + its roles + 'all' (no Planner)" "$(KIT="$PK" enabled_roles "$TMP/m-pr.json" | tr '\n' ' ')" "local-coordinator allrole rv "
 check "prompts_dir_of follows the mode" "$(KIT="$PK" prompts_dir_of "$TMP/m-pr.json")" "$PK/prompts/pr-reviewer"
 check "prompt_of: default path in the mode's folder" "$(KIT="$PK" prompt_of "$TMP/m-pr.json" rv)" "$PK/prompts/pr-reviewer/rv.md"
 jq '.roles.dev.prompt = "/p/dev.md" | .roles.rv.prompt = {"pr-reviewer": "~/x/rv.md"} | .roles.allrole.prompt = {"programmer": "/p/all.md"}' "$TMP/m-pr.json" > "$TMP/m-pp.json"
@@ -3056,11 +3070,11 @@ jq '.settings.mode = "programmer"' "$TMP/m-pp.json" > "$TMP/m-pp2.json"
 check "prompt_of: string prompt in programmer" "$(KIT="$PK" prompt_of "$TMP/m-pp2.json" dev)" "/p/dev.md"
 check "prompt_of: object entry in programmer" "$(KIT="$PK" prompt_of "$TMP/m-pp2.json" allrole)" "/p/all.md"
 check "worker_msg: common-workers.md from the mode's folder" "$(cd "$M" && KIT="$PK" worker_msg "$TMP/m-pr.json" rv | grep -o "Read [^ ]*common-workers.md and [^ ]*rv.md")" "Read $PK/prompts/pr-reviewer/common-workers.md and $PK/prompts/pr-reviewer/rv.md"
-check "launchable_roles: a role in the mode without prompt is skipped, with a warning" "$(KIT="$PK" launchable_roles "$TMP/m-pr.json" 2>&1 | tr '\n' ' ')" "planner Warning: role allrole is skipped: it has no prompt for mode pr-reviewer (expected $PK/prompts/pr-reviewer/allrole.md). rv "
-jq '.roles.planner.prompt = {"pr-reviewer": "/nonexistent/planner.md"}' "$TMP/m-pr.json" > "$TMP/m-pl.json"
-check "launchable_roles: the planner is never skipped, even without its prompt file" "$(KIT="$PK" launchable_roles "$TMP/m-pl.json" 2>/dev/null | tr '\n' ' ')" "planner rv "
-jq '.roles.planner.modes = ["pr-reviewer"] | .roles.planner.enabled = false' "$MC" > "$TMP/m-pm.json"
-check "enabled_roles: the planner runs in every mode, whatever its modes and enabled say" "$(KIT="$PK" enabled_roles "$TMP/m-pm.json" | tr '\n' ' ')" "local-coordinator planner dev allrole "
+check "launchable_roles: a role in the mode without prompt is skipped, with a warning" "$(KIT="$PK" launchable_roles "$TMP/m-pr.json" 2>&1 | tr '\n' ' ')" "local-coordinator Warning: role allrole is skipped: it has no prompt for mode pr-reviewer (expected $PK/prompts/pr-reviewer/allrole.md). rv "
+jq '.roles["local-coordinator"].prompt = {"pr-reviewer": "/nonexistent/local-coordinator.md"}' "$TMP/m-pr.json" > "$TMP/m-pl.json"
+check "launchable_roles: the local coordinator is never skipped, even without its prompt file" "$(KIT="$PK" launchable_roles "$TMP/m-pl.json" 2>/dev/null | tr '\n' ' ')" "local-coordinator rv "
+jq '.roles.planner.modes = ["pr-reviewer"] | .roles.planner.enabled = false | .roles["local-coordinator"].modes = ["pr-reviewer"] | .roles["local-coordinator"].enabled = false' "$MC" > "$TMP/m-pm.json"
+check "enabled_roles: the local coordinator runs in every mode, whatever its modes and enabled say; the planner follows its own modes and enabled" "$(KIT="$PK" enabled_roles "$TMP/m-pm.json" | tr '\n' ' ')" "local-coordinator dev allrole "
 # validation of modes and prompt
 check "check_config: valid" "$(KIT="$PK" check_config "$MC")" ""
 for v in '["foo"]' '5' '[]' '["programmer","Foo"]' '"programmer"' '[1]'; do
@@ -3083,13 +3097,13 @@ try ml; check "launch: no mode = programmer, today's team" "$RC:$(mh):$(mmode)" 
 case "$OUT" in *"Mode: programmer"*) echo "ok   launch: reports the mode";; *) echo "FAIL launch does not report the mode: $OUT"; FAIL=1;; esac
 check "launch: the front message states the mode and reads the mode's prompt" "$(cd "$M" && KIT="$PK" planner_msg "$MG/orca-roles.config.json" "$(mh | tr 'A-Z_' 'a-z-')" "$MG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*local-coordinator.md\|Mode: [a-z-]*\.')" "$(printf 'Read %s/prompts/programmer/local-coordinator.md\nMode: programmer.' "$PK")"
 rm -f "$M/.git/orca-roles.env"   # the team is closed: no live tab
-try ml --mode pr-reviewer; check "launch --mode pr-reviewer: planner + the mode's roles" "$RC:$(mh):$(mmode)" "0:PLANNER RV :pr-reviewer"
+try ml --mode pr-reviewer; check "launch --mode pr-reviewer: local coordinator + the mode's roles (no Planner)" "$RC:$(mh):$(mmode)" "0:LOCAL_COORDINATOR RV :pr-reviewer"
 case "$OUT" in *"Warning: role allrole is skipped: it has no prompt for mode pr-reviewer (expected $PKL/prompts/pr-reviewer/allrole.md)"*) echo "ok   launch: warns about the skipped role";; *) echo "FAIL launch skip warning: $OUT"; FAIL=1;; esac
-MSG="$(cd "$M" && KIT="$PK" planner_msg "$MG/orca-roles.config.json" "planner rv" "$MG/orca-roles.env" "" "" 0)"
-check "launch pr-reviewer: planner prompt from its folder, only its handles" "$(printf '%s' "$MSG" | grep -o 'Read [^ ]*planner.md\|Mode: [a-z-]*\.\|Handles:.*Rv=h-Rv\.' | tr '\n' '|')" "Read $PK/prompts/pr-reviewer/planner.md|Mode: pr-reviewer.|Handles: Rv=h-Rv.|"
+MSG="$(cd "$M" && KIT="$PK" planner_msg "$MG/orca-roles.config.json" "local-coordinator rv" "$MG/orca-roles.env" "" "" 0)"
+check "launch pr-reviewer: local coordinator prompt from its folder, only its handles" "$(printf '%s' "$MSG" | grep -o 'Read [^ ]*local-coordinator.md\|Mode: [a-z-]*\.\|Handles:.*Rv=h-Rv\.' | tr '\n' '|')" "Read $PK/prompts/pr-reviewer/local-coordinator.md|Mode: pr-reviewer.|Handles: Rv=h-Rv.|"
 check "launch: --mode is saved in the exceptions" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "pr-reviewer"
 rm -f "$MG/orca-roles.env"
-try ml; check "launch: 'roles' without options keeps the saved mode" "$RC:$(mh):$(mmode)" "0:PLANNER RV :pr-reviewer"
+try ml; check "launch: 'roles' without options keeps the saved mode" "$RC:$(mh):$(mmode)" "0:LOCAL_COORDINATOR RV :pr-reviewer"
 rm -f "$MG/orca-roles.env"
 try ml --reset; check "launch: --reset forgets the mode" "$RC:$(mh):$(mmode)" "0:LOCAL_COORDINATOR PLANNER DEV ALLROLE :programmer"
 check "launch: --reset leaves no saved mode" "$(ls "$MG/orca-roles.overrides.json" 2>/dev/null | wc -l | tr -d ' ')" "0"
@@ -3130,7 +3144,7 @@ for o in --enable --disable --only; do
   try ml --mode pr-reviewer "$o" dev; check "launch --mode pr-reviewer $o dev fails" "$RC:$(mstate)" "1:$B"
   case "$OUT" in *"role dev is not part of mode pr-reviewer (its modes: programmer)"*) echo "ok   launch $o: error names the mode";; *) echo "FAIL $o message: $OUT"; FAIL=1;; esac
 done
-try ml --mode pr-reviewer --only rv; check "launch --only with a role of the mode works" "$RC:$(mh)" "0:PLANNER RV "
+try ml --mode pr-reviewer --only rv; check "launch --only with a role of the mode works" "$RC:$(mh)" "0:LOCAL_COORDINATOR RV "
 B="$(mstate)"; N="$(mcreates)"
 for o in "--mode Foo" "--mode academic-research" "--only dev,rv" "--enable dev"; do
   # shellcheck disable=SC2086
@@ -3145,10 +3159,10 @@ rm -f "$M/.orca-roles.json"
 
 # the saved mode is kept when later options omit --mode
 rm -f "$MG/orca-roles.env"; ml --reset --mode pr-reviewer >/dev/null; rm -f "$MG/orca-roles.env"
-try ml --set settings.language=Spanish; check "saved mode: --set without --mode stays in pr-reviewer" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
+try ml --set settings.language=Spanish; check "saved mode: --set without --mode stays in pr-reviewer" "$RC:$(mmode):$(mh)" "0:pr-reviewer:LOCAL_COORDINATOR RV "
 check "saved mode: kept in the overrides" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "pr-reviewer"
 rm -f "$MG/orca-roles.env"
-try ml --enable rv; check "saved mode: --enable of a role of the mode stays in pr-reviewer" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
+try ml --enable rv; check "saved mode: --enable of a role of the mode stays in pr-reviewer" "$RC:$(mmode):$(mh)" "0:pr-reviewer:LOCAL_COORDINATOR RV "
 rm -f "$MG/orca-roles.env"
 try ml --mode pr-reviewer --set settings.mode=programmer; check "--mode beats --set settings.mode" "$RC:$(mmode)" "0:pr-reviewer"
 rm -f "$MG/orca-roles.env"
@@ -3200,7 +3214,7 @@ jq 'del(.settings)' "$MC" > "$TMP/m-nosettings.json"; check "mode_of: no setting
 # a role without modes belongs to programmer even if the mode's folder has a prompt for it
 : > "$PK/prompts/pr-reviewer/nomodes.md"
 jq '.roles.nomodes = {"title": "Nomodes"}' "$MC" > "$TMP/m.json" && mv "$TMP/m.json" "$MC"
-try ml --mode pr-reviewer; check "role without modes and with a prompt in the mode: not launched" "$RC:$(mh)" "0:PLANNER RV "
+try ml --mode pr-reviewer; check "role without modes and with a prompt in the mode: not launched" "$RC:$(mh)" "0:LOCAL_COORDINATOR RV "
 rm -f "$MG/orca-roles.env"; B="$(mstate)"
 try ml --mode pr-reviewer --enable nomodes; check "role without modes: --enable in pr-reviewer is rejected" "$RC:$(mstate)" "1:$B"
 rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
@@ -3226,7 +3240,7 @@ rc=1|saved-same|1|1"
 # an open team blocks a mode change
 ml --reset >/dev/null; : > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
 try ml --mode pr-reviewer; check "open team: a mode change is rejected, nothing changes" "$RC:$(mcreates):$(mstate):$(mmode)" "1:$N:$B:programmer"
-check "open team: the error is B1's (programmer and another mode cannot be switched in this version)" "$(printf '%s\n' "$OUT" | grep -cxF "ERROR: switching between programmer and pr-reviewer is not available in this version: start pr-reviewer in a new worktree with roles --mode pr-reviewer")" "1"
+check "open team: from another terminal the error names the open tabs and the local coordinator that can switch" "$(printf '%s\n' "$OUT" | grep -cF "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: ")$(printf '%s\n' "$OUT" | grep -c 'Ask the local coordinator to switch modes')" "11"
 check "open team: the overrides were not saved" "$(ls "$MG/orca-roles.overrides.json" 2>/dev/null | wc -l | tr -d ' ')" "0"
 try ml --mode programmer; check "open team: the same mode proceeds" "$RC:$(mmode)" "0:programmer"
 check "open team: the same mode is saved" "$(jq -r .mode "$MG/orca-roles.overrides.json")" "programmer"
@@ -3245,17 +3259,20 @@ rm -f "$TMP/m-rt"
 # a tab that still exists but is orphaned, or whose agent is gone, is still an open team: the mode change is refused
 for st in orphan noagent; do
   : > "$TMP/m-$st"; B="$(mstate)"; N="$(mcreates)"
-  try ml --mode pr-reviewer; check "open team: a tab that is $st still blocks a mode change; nothing changes" "$RC:$(printf '%s' "$OUT" | grep -cxF "ERROR: switching between programmer and pr-reviewer is not available in this version: start pr-reviewer in a new worktree with roles --mode pr-reviewer"):$(mcreates):$(mstate)" "1:1:$N:$B"
+  try ml --mode pr-reviewer; check "open team: a tab that is $st still blocks a mode change; nothing changes" "$RC:$(printf '%s' "$OUT" | grep -cF "ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: "):$(mcreates):$(mstate)" "1:1:$N:$B"
   rm -f "$TMP/m-$st"
 done
 rm -f "$TMP/m-alive"
-try ml --mode pr-reviewer; check "closed team: the mode change proceeds" "$RC:$(mmode):$(mh)" "0:pr-reviewer:PLANNER RV "
+try ml --mode pr-reviewer; check "closed team: the mode change proceeds" "$RC:$(mmode):$(mh)" "0:pr-reviewer:LOCAL_COORDINATOR RV "
 # the team is open in pr-reviewer: every way back to another mode is rejected
 : > "$TMP/m-alive"; B="$(mstate)"; N="$(mcreates)"
 for o in --reset "--mode programmer" "--set settings.mode=programmer"; do
   # shellcheck disable=SC2086
-  try ml $o; check "open team in pr-reviewer: $o is rejected with B1's error, nothing changes" "$RC:$(mcreates):$(mstate):$(printf '%s\n' "$OUT" | grep -c '^ERROR: switching between programmer and pr-reviewer is not available in this version: start pr-reviewer in a new worktree with roles --mode pr-reviewer$' || true)" "1:$N:$B:1"
+  try ml $o; check "open team in pr-reviewer: $o from another terminal is rejected with the open tabs named, nothing changes" "$RC:$(mcreates):$(mstate):$(printf '%s\n' "$OUT" | grep -c "^ERROR: this worktree's team is open in mode 'pr-reviewer' and mode 'programmer' was requested\. Open tabs: " || true)" "1:$N:$B:1"
 done
+# the local coordinator's own tab switches between any two modes: it keeps its tab, the Planner and the workers of the old mode are closed, the new mode's open
+N="$(mcreates)"; ORCA_TERMINAL_HANDLE=h-Lcoord try ml --mode programmer
+check "open team in pr-reviewer: the local coordinator's tab switches to programmer: no refusal, its tab kept (no new tab), the Planner and the workers opened, the team closed first" "$RC:$(mmode):$(mh):$(( $(mcreates) - N )):$(printf '%s\n' "$OUT" | grep -c '^Switching mode from pr-reviewer to programmer: closing Rv; the local coordinator keeps its tab')" "0:programmer:LOCAL_COORDINATOR PLANNER DEV ALLROLE :3:1"
 rm -f "$TMP/m-alive"
 # a user config.json from before modes (no settings.mode, no modes) launches the same programmer team as before
 SAME="LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
@@ -3268,19 +3285,19 @@ try ml --reset; check "legacy config after upgrade_config: the same programmer t
 sleep 1
 rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config.json"   # the kit copy is shared with other sections
 
-# pr-reviewer is available in the shipped kit: the default configuration opens the planner and the auditor only
+# pr-reviewer is available in the shipped kit: the default configuration opens the local coordinator and the auditor only
 PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
-rm -rf "$PRK/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$PRK/prompts/academic-research"   # the mode is available once its local-coordinator.md exists: these checks need it unavailable
 ln -sfn "$PRK" "$PRH/.orca-roles"
 jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
 check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
 check "mode_error: academic-research is still not available" "$(KIT="$PRK" mode_error academic-research)" "mode 'academic-research' is not available yet"
-check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
+check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],["all",["programmer"]]]'
 PRP="$TMP/prproj"; mkdir -p "$PRP"; git -C "$PRP" init -q; PRG="$PRP/.git"; : > "$MLOG"
 prl() { (cd "$PRP" && HOME="$PRH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PRH/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and AUDITOR only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER AUDITOR "
+try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: the local coordinator and the auditor only (no Planner)" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:LOCAL_COORDINATOR AUDITOR "
 check "launch pr-reviewer (default config): the auditor reads the mode's prompts" "$(cd "$PRP" && KIT="$PRK" worker_msg "$PRG/orca-roles.config.json" auditor | grep -o "Read [^ ]*common-workers.md and [^ ]*auditor.md")" "Read $PRK/prompts/pr-reviewer/common-workers.md and $PRK/prompts/pr-reviewer/auditor.md"
-check "launch pr-reviewer (default config): the planner reads the mode's planner.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "planner auditor" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md')" "Read $PRK/prompts/pr-reviewer/planner.md"
+check "launch pr-reviewer (default config): the local coordinator reads the mode's local-coordinator.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "local-coordinator auditor" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*local-coordinator.md')" "Read $PRK/prompts/pr-reviewer/local-coordinator.md"
 rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
 }
 
@@ -3290,15 +3307,15 @@ D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
 check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
-check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
+check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
 check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '.roles[$r].model // "-"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
-check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's (HEAD's)" "$(awt "$D")" "$(awt "$TMP/awd-old.json")"
+check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's (HEAD's), pr-reviewer without the Planner" "$(awt "$D")" "$(awt "$TMP/awd-old.json" | sed 's# pr-reviewer/planner=[^ ]*##')"
 check "research-defaults: the programmer team is the local coordinator and the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "8:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
 pk_setup
-mkdir -p "$PK/prompts/academic-research"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; for r in dev tester; do echo "# $r" > "$PK/prompts/academic-research/$r.md"; done; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
-check "research-defaults: academic-research team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-research" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher dev tester sota methodology tech-verifier |planner researcher writer evidence rigor style |"
+mkdir -p "$PK/prompts/academic-research"; echo "# local coordinator" > "$PK/prompts/academic-research/local-coordinator.md"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; for r in dev tester; do echo "# $r" > "$PK/prompts/academic-research/$r.md"; done; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
+check "research-defaults: academic-research team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-research" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "local-coordinator planner researcher dev tester sota methodology tech-verifier |local-coordinator planner researcher writer evidence rigor style |"
 rm -rf "$PK/prompts/academic-research"
 awu() { echo "$1" > "$TMP/awd-user.json"; upgrade_config "$D" "$TMP/awd-user.json"; }
 DT() { jq -c '[.roles.dev.modes, .roles.dev.phases, .roles.tester.modes, .roles.tester.phases, .roles.writer.model]'; }
@@ -3309,6 +3326,7 @@ RM() { jq -c '[.roles.researcher.modes, .roles.researcher.phases]'; }
 check "upgrade_config: researcher modes [programmer] move to the new default, phases added (experiment and writing)" "$(awu '{"roles":{"researcher":{"modes":["programmer"]}}}' | RM)" '[["programmer","academic-research"],["experiment","writing"]]'
 check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-research","programmer"]' '"all"' '[]' '["programmer","academic-research"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-research","programmer"] "all" [] ["programmer","academic-research"] '
 check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-research"],false]:[["programmer","academic-research"],["experiment","writing"]]'
+check "upgrade_config: the old defaults local-coordinator modes [programmer] and planner modes \"all\" move to the new ones (all; programmer and academic-research); the user's own values stay (other lists, order, a string)" "$(awu '{"roles":{"local-coordinator":{"modes":["programmer"]},"planner":{"modes":"all"}}}' | jq -c '[.roles["local-coordinator"].modes, .roles.planner.modes]'):$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '"programmer"'; do awu "$(jq -nc --argjson v "$v" '{roles:{"local-coordinator":{modes:$v},planner:{modes:$v}}}')" | jq -c '[.roles["local-coordinator"].modes, .roles.planner.modes]'; done | tr '\n' ' ')" '["all",["programmer","academic-research"]]:[["programmer","pr-reviewer"],["programmer","pr-reviewer"]] [["pr-reviewer"],["pr-reviewer"]] ["programmer","programmer"] '
 check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-research"],["writing"]]'
 check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,local-coordinator,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style,dev-opencode,cross-dev","mine",false,"C"]'
 check "upgrade_config: the planner's pluginDirs [\"{kit}/plugin\"] move to the default (with superpowers); any other list, order or string is kept; a missing entry gets the default" "$(for v in '["{kit}/plugin"]' '["{kit}/plugin","/mine"]' '["{kit}/plugins/superpowers","{kit}/plugin"]' '["/mine"]' '[]' '"{kit}/plugin"'; do awu "{\"roles\":{\"planner\":{\"pluginDirs\":$v}}}" | jq -c '.roles.planner.pluginDirs'; done | tr '\n' ' ')$(awu '{"roles":{}}' | jq -c '.roles.planner.pluginDirs')" '["{kit}/plugin","{kit}/plugins/superpowers"] ["{kit}/plugin","/mine"] ["{kit}/plugins/superpowers","{kit}/plugin"] ["/mine"] [] "{kit}/plugin" ["{kit}/plugin","{kit}/plugins/superpowers"]'
@@ -3482,11 +3500,11 @@ nr_ph pj-bad '"modes":"programmer",' '["writing"]'; case "$OUT" in *"phases is o
 
 # --repo layout
 NR="$TMP/nrm-repo"; mkdir -p "$NR"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NR/"
-rm -rf "$NR/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$NR/prompts/academic-research"   # the mode is available once its local-coordinator.md exists: these checks need it unavailable
 nrr() { (cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" "$@" 2>&1); }
 nrr_w() { (cd "$TMP" && HOME="$PH" NEW_ROLE_TTY="$1" "$PKL/bin/new-role.sh" --repo "$NR" < /dev/null 2>&1); }
 printf '%s' '{"id":"rp","description":"d","modes":"pr-reviewer","prompt":"# r\n## Report\n"}' > "$TMP/nj.json"
-try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: prompts/<mode>/<id>.md (folder created), no prompt field" "$RC:$([ -f "$NR/prompts/pr-reviewer/rp.md" ] && echo y):$(jq -c '.roles.rp | [.modes, .prompt]' "$NR/config.default.json")" '0:y:[["pr-reviewer"],null]'
+try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: prompts/<mode>/<id>.md (folder created), no prompt field, pr-reviewer (local-coordinator.md, no planner.md) is available in the clone" "$RC:$([ -f "$NR/prompts/pr-reviewer/rp.md" ] && echo y):$(jq -c '.roles.rp | [.modes, .prompt]' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c 'is not available yet' || true)" '0:y:[["pr-reviewer"],null]:0'
 check "modes --repo: nothing in the installation" "$([ -e "$PK/roles/pr-reviewer/rp.md" ] && echo local)" ""
 printf '%s' '{"id":"rp-all","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: all writes three files" "$RC:$(ls "$NR/prompts/programmer/rp-all.md" "$NR/prompts/pr-reviewer/rp-all.md" "$NR/prompts/academic-research/rp-all.md" | wc -l | tr -d ' ')" "0:3"
@@ -3527,7 +3545,7 @@ printf '%s' '{"id":"dev","description":"d","modes":"pr-reviewer","overwrite":tru
 try nrr --from-json "$TMP/nj.json" --repo "$NR"; check "modes --repo: overwriting a default role with fewer modes keeps the lost mode's prompt and lists it" "$RC:$([ -e "$NR/prompts/programmer/dev.md" ] && echo left):$([ -f "$NR/prompts/pr-reviewer/dev.md" ] && echo y):$(jq -c '.roles.dev.modes' "$NR/config.default.json"):$(printf '%s' "$OUT" | grep -c "prompts/programmer/dev.md is no longer used by 'dev'; remove it with: git -C $NR rm prompts/programmer/dev.md")" '0:left:y:["pr-reviewer"]:1'
 # the git hint quotes a clone path with a space
 NS="$TMP/my clone"; mkdir -p "$NS"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$NS/"
-rm -rf "$NS/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
+rm -rf "$NS/prompts/academic-research"   # the mode is available once its local-coordinator.md exists: these checks need it unavailable
 git -C "$NS" init -q && git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m init
 printf '%s' '{"id":"rp-sp","description":"d","modes":"all","prompt":{"programmer":"# p","pr-reviewer":"# r","academic-research":"# a"}}' > "$TMP/nj.json"
 try nrr --from-json "$TMP/nj.json" --repo "$NS"; git -C "$NS" add -A && git -C "$NS" -c user.name=t -c user.email=t@t commit -q -m rp-sp
@@ -3785,8 +3803,8 @@ printf 'LOCAL_COORDINATOR=t0\nPLANNER=t1\nDEV=t6\n' > "$TMP/state.env"; : > "$CR
 try closerole local-coordinator; LCR="$RC:$(printf '%s\n' "$OUT" | grep -c 'the local coordinator is never closed'):$(grep -c 'terminal close' "$CRLOG" || true)"
 try closerole planner; LCR="$LCR|$RC:$(grep -c 'terminal close --terminal t1 --tab' "$CRLOG" || true)"
 cp "$KIT/config.json" "$TMP/cr-prog.json"; jq '.settings.mode = "academic-research"' "$TMP/cr-prog.json" > "$KIT/config.json"; printf 'PLANNER=t1\nDEV=t6\n' > "$TMP/state.env"; : > "$CRLOG"
-try closerole planner; LCR="$LCR|$RC:$OUT:$(grep -c 'terminal close' "$CRLOG" || true)"; cp "$TMP/cr-prog.json" "$KIT/config.json"
-check "close-role: never the local coordinator; the Planner is a worker in programmer and is closed; in academic-research it is never closed" "$LCR" "1:1:0|0:1|1:Planner: the Planner is never closed.:0"
+try closerole planner; LCR="$LCR|$RC:$(grep -c 'terminal close --terminal t1 --tab' "$CRLOG" || true)"; cp "$TMP/cr-prog.json" "$KIT/config.json"
+check "close-role: never the local coordinator; the Planner is a worker in programmer and in academic-research and is closed" "$LCR" "1:1:0|0:1|0:1"
 try closerole nobody; check "close-role: unknown role" "$RC" "1"
 rm -f "$TMP/fakebin/orca"
 }
@@ -4062,7 +4080,7 @@ check "front role argv: with the pinned superpowers loaded the kit deny list fol
 APR='{"defaults":{"mcp":[]},"mcpServers":{},"roles":{"local-coordinator":{"agent":"claude"},"planner":{"agent":"claude"}}}'
 fl() { printf '%s\n' "$1" | { grep -c -- 'AskUserQuestion' || true; } | tr '\n' ','; printf '%s\n' "$1" | { grep -o 'Edit(//' || true; } | wc -l | tr -d ' ' | tr '\n' ','; for k in '"language":"english"' 'Always write in English' 'Skill(orca-roles:team)' 'Skill(superpowers:verification-before-completion)' 'Skill(superpowers:using-superpowers)' 'Skill(superpowers:brainstorming)' 'Skill(superpowers:receiving-code-review)' 'Skill(superpowers:test-driven-development)'; do printf '%s\n' "$1" | { grep -cF -- "$k" || true; } | tr '\n' ','; done; }
 FLP="$(fl "$(agj "$APR" planner)")"; FLC="$(fl "$(agj "$APR" local-coordinator)")"; FLO="$(fl "$(agj "$(printf '%s' "$APR" | jq -c '.settings.mode = "academic-research"')" planner)")"
-check "agent.sh in programmer mode: the Planner is a worker (dialog deny, 16 kit edit denies, English setting and rule, its own skill denies, keeps brainstorming and rulings), the local coordinator is the front role (none of those, its own skill denies); in another mode the Planner is the front role again" "$FLP|$FLC|$FLO" "1,16,1,1,1,1,1,0,0,1,|0,0,0,0,0,0,0,1,1,1,|0,0,0,0,0,0,0,0,0,0,"
+check "agent.sh in programmer mode: the Planner is a worker (dialog deny, 16 kit edit denies, English setting and rule, its own skill denies, keeps brainstorming and rulings), the local coordinator is the front role (none of those, its own skill denies); in academic-research the Planner is a worker too" "$FLP|$FLC|$FLO" "1,16,1,1,1,1,1,0,0,1,|0,0,0,0,0,0,0,1,1,1,|1,16,1,1,1,1,1,0,0,1,"
 DW="$(agj "$APB" dev)"; CW="$(agj "$APB" cx)"
 check "worker argv: the dialog deny, then the role's own disallowedTools, then the settings that disable superpowers; never the kit list or a plugin dir; codex ignores the field (no --disallowedTools, no --settings)" "$(printf '%s\n' "$DW" | grep -cF -- "--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --disallowedTools Mine --settings $NSJ " || true):$(printf '%s\n' "$DW" | grep -c 'Skill(superpowers\|--plugin-dir' || true):$(printf '%s\n' "$CW" | grep -c 'disallowedTools\|--settings' || true)" "1:0:0"
 # the kit deny list follows the physical folder: a trailing slash, a '..', a symlink, ~ and {home} all match; another folder named superpowers does not
@@ -4145,11 +4163,11 @@ J
 : > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
 # the mode cannot change under a team Orca restored after a restart (new handles, same ptyId)
 PRB="$TMP/restart-pr-prompts"; rm -rf "$PRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$PRB"
-mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
 HB="$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" 2>/dev/null | cksum || true)"; : > "$RLOG"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode pr-reviewer 2>&1)" && RC=0 || RC=$?
 check "restart: restored tabs block a mode change; nothing saved, closed or opened" "$RC:$(grep -cE 'terminal (close|create)' "$RLOG" || true):$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum):$([ -e "$RP/.git/orca-roles.overrides.json" ] && echo ovr)" "1:0:$HB:"
-case "$OUT" in *"ERROR: switching between programmer and pr-reviewer is not available in this version: start pr-reviewer in a new worktree with roles --mode pr-reviewer"*) echo "ok   restart: the mode change is refused while the restored tabs exist";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
+case "$OUT" in *"ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: "*) echo "ok   restart: the mode change is refused while the restored tabs exist";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$PRB" ] || cp -R "$PRB" "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"Orca restored the tab of Planner after a restart (rs-pl) without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
@@ -4206,7 +4224,7 @@ chmod +x "$TMP/obin/orca" "$TMP/obin/session-of" "$TMP/obin/session-none" "$TMP/
 cat > "$KIT/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" } } }
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "modes": ["academic-research"] }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" } } }
 J
 : > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
 echo '{"terminals":[]}' > "$TMP/olist"
@@ -4570,16 +4588,16 @@ wcfg() {  # wcfg [extra roles json]: the configuration the saved copy is made fr
   cat > "$KIT/config.json" <<J
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" }${1:-} } }
+  "roles": { "local-coordinator": { "title": "Planner" }, "planner": { "title": "Pl", "modes": ["academic-research"] }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" }${1:-} } }
 J
 }
-wsw_on() {  # the team is in academic-research (its front role is the Planner, as in pr-reviewer), the only mode pair a switch is allowed between
+wsw_on() {  # the team is in academic-research (the local coordinator is the front role in every mode)
   [ ! -d "$KIT/prompts/academic-research" ] || { rm -rf "$TMP/wake-sw-prompts"; cp -R "$KIT/prompts/academic-research" "$TMP/wake-sw-prompts"; }
-  mkdir -p "$KIT/prompts/academic-research"; : > "$KIT/prompts/academic-research/planner.md"; : > "$KIT/prompts/academic-research/dev.md"
+  mkdir -p "$KIT/prompts/academic-research"; : > "$KIT/prompts/academic-research/local-coordinator.md"; : > "$KIT/prompts/academic-research/dev.md"
   cat > "$KIT/config.json" <<'J'
 { "settings": { "mode": "academic-research", "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "planner": { "title": "Planner", "modes": "all" }, "dev": { "title": "Dev", "modes": ["academic-research"] } } }
+  "roles": { "local-coordinator": { "title": "Planner", "modes": "all" }, "planner": { "title": "Pl", "modes": ["programmer"] }, "dev": { "title": "Dev", "modes": ["academic-research"] } } }
 J
 }
 wsw_off() { rm -rf "$KIT/prompts/academic-research"; [ ! -d "$TMP/wake-sw-prompts" ] || { cp -R "$TMP/wake-sw-prompts" "$KIT/prompts/academic-research"; rm -rf "$TMP/wake-sw-prompts"; }; wcfg; }
@@ -4675,16 +4693,16 @@ check "wake readiness: a woken tab that never reaches the list -> 'did not appea
 "a:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1:1 b:1:W:tab-pl W:tab-dev switch:other :1:same c:1:W:tab-pl W:tab-dev switch:other :1:1:same d:0:W:tab-cx W:tab-cu switch:other close:rs-cx close:rs-cu :1:1 e:1:W:tab-cx W:tab-cu switch:other :1:0"
 # 7. a mode switch after a restart: every saved role's tab is woken first (also the ones the new mode does not have), so the switch sees the tabs that exist and closes the workers' tabs, or refuses from another terminal; without the wake they would be left open next to the new team
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
-mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"
 wsw_on
-WSE=$'PLANNER=pl\nDEV=old-dev\n'; WSP=$'PLANNER=wt@@p1\nDEV=wt@@p2\n'
-wst "$WSE" "$WSP" "$WPTP"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wadd tab-dev rs-dev wt@@p2
-OTH=pl wl --mode pr-reviewer; X="a:$RC:$(wev):$(wn 'Switching mode from academic-research to pr-reviewer: closing Dev; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(cat "$WG/orca-roles.switch-from" 2>/dev/null)"
-wst "$WSE" "$WSP" "$WPTP"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wadd tab-dev rs-dev wt@@p2; S0="$(wsum)"
-OTH=other wl --mode pr-reviewer; X="$X b:$RC:$(wev):$(wn "ERROR: this worktree's team is open in mode 'academic-research' and mode 'pr-reviewer' was requested. Open tabs: Planner (pl), Dev (rs-dev). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)"
+WSE=$'LOCAL_COORDINATOR=pl\nDEV=old-dev\n'; WSP=$'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\n'
+wst "$WSE" "$WSP" "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wadd tab-dev rs-dev wt@@p2
+OTH=pl wl --mode pr-reviewer; X="a:$RC:$(wev):$(wn 'Switching mode from academic-research to pr-reviewer: closing Dev; the local coordinator keeps its tab and gets its role message for pr-reviewer after its conversation is cleared.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(cat "$WG/orca-roles.switch-from" 2>/dev/null)"
+wst "$WSE" "$WSP" "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wadd tab-dev rs-dev wt@@p2; S0="$(wsum)"
+OTH=other wl --mode pr-reviewer; X="$X b:$RC:$(wev):$(wn "ERROR: this worktree's team is open in mode 'academic-research' and mode 'pr-reviewer' was requested. Open tabs: Planner (pl), Dev (rs-dev). Ask the local coordinator to switch modes, or close those tabs, then run roles again. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)"
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"; wsw_off
-check "wake before a mode switch: from the Planner's tab the woken worker is closed by the switch (no refusal, no new Dev, its tab ids dropped, the stub kickoff leaves the switch-from file with the old mode); from another terminal the woken tab counts as open: the usual refusal names it and nothing is changed" "$X" \
-"a:0:W:tab-dev switch:pl close:rs-dev :1:PLANNER=tab-pl leaf-pl|:academic-research b:1:W:tab-dev switch:other :1:same"
+check "wake before a mode switch: from the local coordinator's tab the woken worker is closed by the switch (no refusal, no new Dev, its tab ids dropped, the stub kickoff leaves the switch-from file with the old mode); from another terminal the woken tab counts as open: the usual refusal names it and nothing is changed" "$X" \
+"a:0:W:tab-dev switch:pl close:rs-dev :1:LOCAL_COORDINATOR=tab-pl leaf-pl|:academic-research b:1:W:tab-dev switch:other :1:same"
 # 8. --reopen: only roles that are lost and had a tab are reopened; an asleep one is woken first, so it comes back once, with its conversation
 wst "$WALL_E" $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; printf 'LOCAL_COORDINATOR=pl\nDEV=old-dev\nTST=old-tst\n' > "$WG/orca-roles.env"; wadd tab-dev rs-dev wt@@p2
 OTH=other wl --reopen; check "wake with --reopen: the asleep Dev is woken, then closed and reopened once; the live Planner is not touched; Tst, with no saved tab ids, is not woken and is opened new" "$RC:$(wev):$(printf '%s\n' "$OUT" | grep -c 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-dev switch:other close:rs-dev create:Dev create:Tst :1"
@@ -4693,7 +4711,7 @@ wcfgp() {  # wcfgp <phase>: academic-research with one role per phase
   cat > "$KIT/config.json" <<J
 { "settings": { "mode": "academic-research", "phase": "$1", "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Planner" }, "expr": { "title": "Expr", "modes": ["academic-research"], "phases": ["experiment"] }, "wrt": { "title": "Wrt", "modes": ["academic-research"], "phases": ["writing"] } } }
+  "roles": { "local-coordinator": { "title": "Planner" }, "planner": { "title": "Pl", "modes": ["programmer"] }, "expr": { "title": "Expr", "modes": ["academic-research"], "phases": ["experiment"] }, "wrt": { "title": "Wrt", "modes": ["academic-research"], "phases": ["writing"] } } }
 J
 }
 WPAR="$TMP/wake-ar-prompts"; rm -rf "$WPAR"; [ ! -d "$KIT/prompts/academic-research" ] || cp -R "$KIT/prompts/academic-research" "$WPAR"
@@ -4746,24 +4764,24 @@ rm -f "$TMP/wnoproc.od-dev"; OTH=other wl --status; ST1="$ST1|$(printf '%s\n' "$
 check "--status: a tab listed with an identity but no agent process is 'agent gone', the same tab with its process is 'alive'; nothing is woken by a status" "$ST1:$(grep -c '^WAKE ' "$WOLOG" || true)" "Planner pl alive,Dev od-dev agent gone,|Dev od-dev alive,:0"
 # j: the mode switch counts a placeholder that was not woken as an open tab: refused from another terminal, naming it; closed by its old handle from the Planner's tab
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
-mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"
 wsw_on
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPTP"; wph tab-od-dev od-dev rs-dev wt@@p2; S0="$(wsum)"
-WHOOK='' OTH=other wl --mode pr-reviewer; X="a:$RC:$(wn "ERROR: this worktree's team is open in mode 'academic-research' and mode 'pr-reviewer' was requested. Open tabs: Dev (od-dev). Ask the Planner to switch modes, or close those tabs, then run roles again. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)"
-wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPTP"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2
-WHOOK='' OTH=pl wl --mode pr-reviewer; X="$X b:$RC:$(wev):$(wn 'Switching mode from academic-research to pr-reviewer: closing Dev; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared.')"
+WHOOK='' OTH=other wl --mode pr-reviewer; X="a:$RC:$(wn "ERROR: this worktree's team is open in mode 'academic-research' and mode 'pr-reviewer' was requested. Open tabs: Dev (od-dev). Ask the local coordinator to switch modes, or close those tabs, then run roles again. Nothing was changed."):$([ "$(wsum)" = "$S0" ] && echo same)"
+wst $'LOCAL_COORDINATOR=pl\nDEV=od-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2
+WHOOK='' OTH=pl wl --mode pr-reviewer; X="$X b:$RC:$(wev):$(wn 'Switching mode from academic-research to pr-reviewer: closing Dev; the local coordinator keeps its tab and gets its role message for pr-reviewer after its conversation is cleared.')"
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"; wsw_off
-check "a mode switch with a placeholder that could not be woken: from another terminal it is an open tab (refusal naming it, nothing changed); from the Planner's tab its tab is closed by the old handle" "$X" "a:1:1:same b:0:close:od-dev :1"
+check "a mode switch with a placeholder that could not be woken: from another terminal it is an open tab (refusal naming it, nothing changed); from the local coordinator's tab its tab is closed by the old handle" "$X" "a:1:1:same b:0:close:od-dev :1"
 # k: the old handle stays listed, first, next to the new one: the new one is the woken tab, reopened with its conversation; the old one is never taken (not by the wait, not by the reopening, not by a mode switch)
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wphkeep.tab-od-dev"
 OTH=other wl; K="a:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'Could not wake\|could not be read' || true)"
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
-mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"
 wsw_on
-wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPTP"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wphkeep.tab-od-dev"
+wst $'LOCAL_COORDINATOR=pl\nDEV=od-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wphkeep.tab-od-dev"
 OTH=pl wl --mode pr-reviewer; K="$K b:$RC:$(wev)"
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"; wsw_off
-check "wake of a placeholder whose old handle stays listed first next to the new one: the readiness wait finds the new handle, the role is reopened from it with its conversation (no 'could not wake', no unread session) and the old handle is never closed; a mode switch from the Planner's tab closes the new handle, not the old" "$K" \
+check "wake of a placeholder whose old handle stays listed first next to the new one: the readiness wait finds the new handle, the role is reopened from it with its conversation (no 'could not wake', no unread session) and the old handle is never closed; a mode switch from the local coordinator's tab closes the new handle, not the old" "$K" \
 "a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 b:0:W:tab-od-dev switch:pl close:rs-dev "
 # l: the wake does not need the tabs file when 'terminal show' gives the ids: empty, or missing
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' ""; wph tab-od-dev od-dev rs-dev wt@@p2
@@ -4795,17 +4813,17 @@ rm -f "$TMP/wbin/sleep"
 check "wake: the pause between passes of the wait loop is ORCA_ROLES_WAKE_TICK when set and exactly 1 second when it is unset" "$M2" " unset:1, 0.3:0.3,"
 # n: the old handle of a woken placeholder keeps answering 'terminal show' (and stays listed) after the wake: the role is not 'gone'; its restored tab is reopened from the new handle with its conversation and the old handle is never closed (role loop and mode switch)
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
-mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/planner.md"
+mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"
 N=""
 for keep in listed unlisted; do
   wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; [ "$keep" = unlisted ] || : > "$TMP/wphkeep.tab-od-dev"
   OTH=other wl; N="$N $keep:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'is gone' || true)"
 done
 wsw_on
-wst $'PLANNER=pl\nDEV=od-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPTP"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; : > "$TMP/wphkeep.tab-od-dev"
+wst $'LOCAL_COORDINATOR=pl\nDEV=od-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; : > "$TMP/wphkeep.tab-od-dev"
 OTH=pl wl --mode pr-reviewer; N="$N switch:$RC:$(wev)"
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/prompts/pr-reviewer"; wsw_off
-check "wake of a placeholder whose old handle still answers 'terminal show' after the wake (listed or not): classified as no tab, not gone; reopened from the new handle with its conversation, the old handle never closed; a mode switch from the Planner's tab closes the new handle only" "$N" \
+check "wake of a placeholder whose old handle still answers 'terminal show' after the wake (listed or not): classified as no tab, not gone; reopened from the new handle with its conversation, the old handle never closed; a mode switch from the local coordinator's tab closes the new handle only" "$N" \
 " listed:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 unlisted:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 switch:0:W:tab-od-dev switch:pl close:rs-dev "
 # o: an empty leafId from 'terminal show' falls back to the tabs file for the ids to wake with
 wst $'DEV=h-emptyleaf\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-dev h-emptyleaf rs-dev wt@@p2
@@ -5441,7 +5459,7 @@ printf '#!/bin/sh\nexit 0\n' > "$OC/lbin/kickoff"; chmod +x "$OC/lbin/orca" "$OC
 cat > "$KIT/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "dev": { "title": "Dev", "agent": "opencode" } } }
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "modes": ["academic-research"] }, "dev": { "title": "Dev", "agent": "opencode" } } }
 J
 oc_launch() {  # <env dev handle> <terminal list json>
   printf 'LOCAL_COORDINATOR=old-pl\nDEV=%s\n' "$1" > "$LP/.git/orca-roles.env"; printf 'LOCAL_COORDINATOR=wt@@q1\nDEV=wt@@q2\n' > "$LP/.git/orca-roles.pty"
@@ -5735,8 +5753,8 @@ IC="$(ihi | grep -c 'SessionStart hook' || true):$(jq -c '[.hooks.SessionStart[]
 jq '.settings.sessionHook = false' "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; ID="$(ihi | grep -c 'SessionStart hook' || true):$(jq -c '.hooks // "nohooks"' "$IH/.claude/settings.json")"
 jq '.settings.sessionHook = "yes"' "$ROOT/config.default.json" > "$IH/bad.json"; IE="$(check_config "$IH/bad.json" | grep -c 'settings.sessionHook' || true)"
 check "SessionStart hook install: the install adds the entry to settings.json once and says so once (a second install is silent and keeps one entry); settings.sessionHook false removes it, silently; a non-boolean value is an ERROR" "$IA:$IB|$IC|$ID|$IE" "1:1|0:1|0:\"nohooks\"|1"
-PM1="$(planner_ask_msg "$KIT/config.default.json")"; PH="$(for m in programmer pr-reviewer academic-research; do grep -c 'AskUserQuestion' "$ROOT/prompts/$m/$([ "$m" = programmer ] && echo local-coordinator || echo planner).md"; done | tr '\n' ' ')"
-check "mode asked in plain text and Runs re-bound: planner_ask_msg says plain text and names AskUserQuestion only in its 'never' sentence; the three Planner prompts carry the same rule; the coordinator prompt tells it to take a Run bound to a dead handle (run-show, run-use) and never silences the check ack" "$(printf '%s' "$PM1" | grep -o 'plain text' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -o 'AskUserQuestion' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -c 'never with the AskUserQuestion tool'):$PH:$(grep -c 'run-use' "$ROOT/prompts/coordinator.md"):$(grep -c 'Never silence' "$ROOT/prompts/coordinator.md" || true)" "1:1:1:1 1 1 :1:1"
+PM1="$(planner_ask_msg "$KIT/config.default.json")"; PH="$(for m in programmer pr-reviewer academic-research; do grep -c 'AskUserQuestion' "$ROOT/prompts/$m/local-coordinator.md"; done | tr '\n' ' ')"
+check "mode asked in plain text and Runs re-bound: planner_ask_msg says plain text and names AskUserQuestion only in its 'never' sentence; the three local coordinator prompts carry the same rule; the coordinator prompt tells it to take a Run bound to a dead handle (run-show, run-use) and never silences the check ack" "$(printf '%s' "$PM1" | grep -o 'plain text' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -o 'AskUserQuestion' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -c 'never with the AskUserQuestion tool'):$PH:$(grep -c 'run-use' "$ROOT/prompts/coordinator.md"):$(grep -c 'Never silence' "$ROOT/prompts/coordinator.md" || true)" "1:1:1:1 1 1 :1:1"
 }
 
 sec_coordinator() {
@@ -5800,9 +5818,9 @@ check "coordinator prompt: after the worker-start delivery to the local coordina
 check "coordinator prompt: status comes from team-status per worktree (no message, tick or question to a local coordinator when it answers), a stopped worktree is told to the user with feature, worktree, since when and the Planner's last message, a waiting Planner at once, and a 'Dispatch not started' status is looked at with team-status" "$(grep -c -F -e '- **Status comes from `team-status`.** When you report to the user, or the user asks how a feature is going, run `~/.orca-roles/bin/team-status.sh <worktree folder>` for each worktree you manage and answer from it: send no message, tick or question to a local coordinator when it already answers; ask the local coordinator only for a detail only it knows.' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'all `done`, `failed` or `interrupted` while its dispatch has no `worker_done` has stopped: tell the user which feature and worktree, since when and the local coordinator'"'"'s last message' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'A local coordinator `waiting` (a dialog in its tab needs the user): tell the user at once.' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'A `status` "Dispatch not started": look at that worktree with `team-status` and tell the user.' "$ROOT/prompts/coordinator.md")" "1 1 1 1"
 check "coordinator prompt: questions on the project's rules go to the user, never settled by the coordinator" "$(grep -c -F -e '- Project rules: a question about the project'"'"'s own rules or conventions' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'Never settle it yourself, even when the code or the other features suggest an answer.' "$ROOT/prompts/coordinator.md") $(awk '/^  - Doubts:/{d=NR} /^  - Project rules:/{p=NR} /^  - Anything that leaves the worktree/{l=NR} END{print (d && p && l && d < p && p < l) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 ordered"
 for m in programmer pr-reviewer academic-research; do
-  pl="$ROOT/prompts/$m/planner.md"; [ "$m" != programmer ] || pl="$ROOT/prompts/programmer/local-coordinator.md"   # the programmer's user-facing session is the local coordinator
-  check "planner $m: outside a dispatch it writes to the coordinator's Run (question, then one status), never in its tab or a dialog" "$(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c 'Outside one, send it to the coordinator.s Run as your startup message says (`orca orchestration send --to run:<its Run> --type question`, with your own Run bound first). Never in this tab and never in a question dialog\|Outside a dispatch, send those three sentences and the report.s path as one `--type status` message')" "2"
-  check "planner $m: one 'Working under a coordinator' section, before Limits, with ask, one worker_done and the wait for the first dispatch" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`\|no planning and no question dialog before it arrives")" "1 before 3"
+  pl="$ROOT/prompts/$m/local-coordinator.md"
+  check "local coordinator $m: outside a dispatch it writes to the coordinator's Run (question, then one status), never in its tab or a dialog" "$(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c 'Outside one, send it to the coordinator.s Run as your startup message says (`orca orchestration send --to run:<its Run> --type question`, with your own Run bound first). Never in this tab and never in a question dialog\|Outside a dispatch, send those three sentences and the report.s path as one `--type status` message')" "2"
+  check "local coordinator $m: one 'Working under a coordinator' section, before Limits, with ask, one worker_done and the wait for the first dispatch" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "$pl" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`\|no \(planning and no \)\{0,1\}question dialog before it arrives")" "1 before 3"
 done
 if [ -f "$CO/kit-config.json" ]; then mv "$CO/kit-config.json" "$KIT/config.json"; fi
 }
@@ -5925,7 +5943,7 @@ cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$K2/"; chmod +x "
 cat > "$K2/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "dev": { "title": "Dev" } } }
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "modes": ["academic-research"] }, "dev": { "title": "Dev" } } }
 J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$KPB/claude"; chmod +x "$KPB/claude"
 cat > "$KPB/orca" <<EOT
@@ -7204,11 +7222,9 @@ rm -f "$TMP/rl-failclose"
 touch "$TMP/rl-failcreate"; try rr dev --model good --no-check
 check "relaunch: a failing launch after the close says so" "$RC:$(printf '%s' "$OUT" | grep -c 'Its tab was closed but relaunching failed; run roles to reopen it.')" "1:1"
 rm -f "$TMP/rl-failcreate"
-# the Planner is a worker in programmer (relaunched like one) and is not relaunchable in the other modes
+# the Planner is a worker: relaunched like one
 N0="$(grep -c '^terminal create' "$RLOG")"; C0="$(rclosed)"; try rr planner --model good --no-check; P1="$RC:$(( $(rclosed) - C0 )):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(printf '%s' "$OUT" | grep -c 'Relaunched Planner on good;')"
-cp "$RG/orca-roles.config.json" "$TMP/rl-prog.json"; jq '.settings.mode = "pr-reviewer"' "$TMP/rl-prog.json" > "$RG/orca-roles.config.json"; C0="$(rclosed)"
-try rr planner --model good --no-check; P1="$P1|$RC:$(( $(rclosed) - C0 )):$(printf '%s' "$OUT" | grep -c 'The Planner cannot be relaunched from inside the team.' || true)"; cp "$TMP/rl-prog.json" "$RG/orca-roles.config.json"
-check "relaunch: the Planner is relaunched in programmer (one tab closed, one opened); in pr-reviewer it is refused with nothing closed" "$P1" "0:1:2:1|1:0:1"
+check "relaunch: the Planner is relaunched like any worker in programmer (one tab closed, one opened)" "$P1" "0:1:2:1"
 # outside a team: no saved state or configuration in this git dir
 RN="$TMP/rlnone"; rm -rf "$RN"; mkdir -p "$RN"; git -C "$RN" init -q; N0="$(grep -c . "$RLOG")"
 OUT="$(cd "$RN" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/rlbin:$PATH" "$PKL/bin/relaunch-role.sh" dev --model good --no-check 2>&1)" && RC=0 || RC=$?
@@ -7219,11 +7235,11 @@ sec_academic_research() {
 # academic-research: phases (roles per phase, validation, planner message), the document scaffold, launch's git and phase guards, phase.sh
 # Own test kit (never the clone) with a fake academic-research mode.
 pk_setup
-mkdir -p "$PK/prompts/academic-research"; for f in planner common-workers exp wr both nop; do echo "# $f" > "$PK/prompts/academic-research/$f.md"; done
+mkdir -p "$PK/prompts/academic-research"; for f in local-coordinator planner common-workers exp wr both nop; do echo "# $f" > "$PK/prompts/academic-research/$f.md"; done
 cat > "$PK/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "modes": "all", "phases": ["writing"] },
+  "roles": { "local-coordinator": { "title": "Lcoord", "modes": "all" }, "planner": { "title": "Planner", "modes": ["programmer", "academic-research"] },
              "exp": { "title": "Exp", "modes": ["academic-research"], "phases": ["experiment"] },
              "wr": { "title": "Wr", "modes": ["academic-research"], "phases": ["writing"] },
              "both": { "title": "Both", "modes": ["academic-research"], "phases": ["experiment", "writing"] },
@@ -7234,14 +7250,14 @@ AC="$PK/config.json"
 awe() { jq -c --argjson s "$2" '.settings += $s' "$AC" > "$TMP/aw-c.json"; KIT="$PK" enabled_roles "$TMP/aw-c.json" | tr '\n' ' '; }
 
 # library: the phase filter applies only in academic-research, the planner stays, a missing phase is experiment
-check "phases: phase_of, and enabled_roles by phase (planner kept despite its phases)" "$(jq -c '.settings.mode="academic-research"' "$AC" > "$TMP/aw-m.json"; KIT="$PK" phase_of "$TMP/aw-m.json"):$(awe x '{"mode":"academic-research"}'):$(awe x '{"mode":"academic-research","phase":"experiment"}'):$(awe x '{"mode":"academic-research","phase":"writing"}')" "experiment:planner exp both nop :planner exp both nop :planner wr both nop "
-check "phases: ignored in programmer and pr-reviewer, even with settings.phase set" "$(awe x '{"mode":"programmer","phase":"experiment"}'):$(awe x '{"mode":"pr-reviewer","phase":"experiment"}'):$(awe x '{"phase":"writing"}')" "local-coordinator planner pe :planner pe :local-coordinator planner pe "
+check "phases: phase_of, and enabled_roles by phase (the local coordinator and the Planner have no phases: in both)" "$(jq -c '.settings.mode="academic-research"' "$AC" > "$TMP/aw-m.json"; KIT="$PK" phase_of "$TMP/aw-m.json"):$(awe x '{"mode":"academic-research"}'):$(awe x '{"mode":"academic-research","phase":"experiment"}'):$(awe x '{"mode":"academic-research","phase":"writing"}')" "experiment:local-coordinator planner exp both nop :local-coordinator planner exp both nop :local-coordinator planner wr both nop "
+check "phases: ignored in programmer and pr-reviewer, even with settings.phase set" "$(awe x '{"mode":"programmer","phase":"experiment"}'):$(awe x '{"mode":"pr-reviewer","phase":"experiment"}'):$(awe x '{"phase":"writing"}')" "local-coordinator planner pe :local-coordinator pe :local-coordinator planner pe "
 B="$(for v in '[]' '"writing"' '["x"]' '[1]' '{}' 'null' '["writing","Experiment"]'; do jq -c --argjson v "$v" '.roles.exp.phases=$v' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: role exp: phases must be a non-empty list of "experiment", "writing"'; done | tr '\n' ' ')"
 S="$(for v in '"Writing"' '1' 'null' '""' '[]' '"experiment "'; do jq -c --argjson v "$v" '.settings.phase=$v | .settings.mode="programmer"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json" | grep -cxF 'ERROR: invalid configuration: settings.phase must be "experiment" or "writing"'; done | tr '\n' ' ')"
 check "phases: check_config rejects bad phases and settings.phase (any mode), accepts good ones" "$B:$S:$(KIT="$PK" check_config "$AC"):$(jq -c '.settings.phase="writing"' "$AC" > "$TMP/aw-b.json"; KIT="$PK" check_config "$TMP/aw-b.json")" "1 1 1 1 1 1 1 :1 1 1 1 1 1 ::"
 jq -c '.settings.mode="academic-research" | .settings.phase="writing"' "$AC" > "$TMP/aw-m.json"
-printf 'PLANNER=h-P\nWR=h-W\nBOTH=h-B\nNOP=h-N\nPE=h-E\n' > "$TMP/aw-st.env"
-M1="$(KIT="$PK" planner_msg "$TMP/aw-m.json" "planner wr both nop" "$TMP/aw-st.env" "" "" 0)"; M2="$(KIT="$PK" planner_msg "$AC" "planner pe" "$TMP/aw-st.env" "" "" 0)"
+printf 'LOCAL_COORDINATOR=h-L\nPLANNER=h-P\nWR=h-W\nBOTH=h-B\nNOP=h-N\nPE=h-E\n' > "$TMP/aw-st.env"
+M1="$(KIT="$PK" planner_msg "$TMP/aw-m.json" "local-coordinator planner wr both nop" "$TMP/aw-st.env" "" "" 0)"; M2="$(KIT="$PK" planner_msg "$AC" "local-coordinator planner pe" "$TMP/aw-st.env" "" "" 0)"
 check "planner_msg: Phase only in academic-research, right after the mode" "$(printf '%s' "$M1" | grep -c 'Mode: academic-research\. Phase: writing\. Active roles'):$(printf '%s' "$M2" | grep -c 'Phase:')" "1:0"
 
 # scaffold: fresh repo, then idempotent
@@ -7287,7 +7303,7 @@ acl() { grep -c '^terminal close' "$ALOG" || true; }
 check "launch: academic-research outside a git repository fails with its message, opens and creates nothing" "$NGRC:$(grep -c 'mode academic-research needs the project to be a git repository' "$TMP/aw-ng.out"):$(grep -c '^terminal create' "$ALOG"):$(find "$TMP/awnogit" -mindepth 1 ! -name orca-roles-launch.log | wc -l | tr -d ' ')" "1:1:0:0"
 try al --mode academic-research
 SD1="$(ls -A "$AM" | tr '\n' ' ')"
-check "launch: starts in experiment with the experiment roles only, prints Phase, runs the scaffold; --status shows Phase" "$RC:$(ah):$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$SD1:$(jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"):$(al --status | grep -c '^Phase: experiment$')" "0:PLANNER EXP BOTH NOP :1:.git .gitignore article experimentation :unset:1"
+check "launch: starts in experiment with the experiment roles only, prints Phase, runs the scaffold; --status shows Phase" "$RC:$(ah):$(printf '%s\n' "$OUT" | grep -c '^Phase: experiment$'):$SD1:$(jq -r '.settings.phase // "unset"' "$AG/orca-roles.config.json"):$(al --status | grep -c '^Phase: experiment$')" "0:LOCAL_COORDINATOR PLANNER EXP BOTH NOP :1:.git .gitignore article experimentation :unset:1"
 # phase guard
 touch "$TMP/aw-alive"; B="$(astate)"; N="$(grep -c '^terminal create' "$ALOG" || true)"
 C_PH="$(acl)"; try al --set settings.phase=writing; R_A="$RC:$(printf '%s' "$OUT" | grep -c "ERROR: this worktree's team is in phase 'experiment' and phase 'writing' was requested while Exp is still open. Change the phase with ~/.orca-roles/bin/phase.sh writing. Nothing was changed." || true):$(astate):$(grep -c '^terminal create' "$ALOG" || true)"
@@ -7306,14 +7322,14 @@ check "phase.sh: bad arguments exit 1, same phase is a no-op, dirty repo refused
 grep -q . <<<"$(git -C "$AM" status --porcelain)" && echo "FAIL academic-research: repo dirty before the switch"
 N="$(grep -c '^terminal create' "$ALOG" || true)"; C0="$(acl)"
 try ap writing
-check "phase.sh writing: closes only the experiment role, opens the writing one, saves the phase, no 'roles would open it again' hint" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(grep -c 'terminal close --terminal h-Exp ' "$ALOG"):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(jq -c '.set' "$AG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'still enabled in the configuration'):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH NOP PLANNER WR :$((C0 + 1)):1:1:writing:[{\"path\":[\"settings\",\"phase\"],\"value\":\"writing\"}]:0:Phase: writing."
+check "phase.sh writing: closes only the experiment role (the local coordinator and the Planner stay open), opens the writing one, saves the phase, no 'roles would open it again' hint" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(grep -c 'terminal close --terminal h-Exp ' "$ALOG"):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(jq -c '.set' "$AG/orca-roles.overrides.json"):$(printf '%s' "$OUT" | grep -c 'still enabled in the configuration'):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH LOCAL_COORDINATOR NOP PLANNER WR :$((C0 + 1)):1:1:writing:[{\"path\":[\"settings\",\"phase\"],\"value\":\"writing\"}]:0:Phase: writing."
 B="$(astate)"; C1="$(acl)"; try ap experiment; R1="$RC:$(printf '%s' "$OUT" | grep -c 'going back to experiment needs STATE.md committed at the repository root' || true)"
 printf 'state\n' > "$AM/STATE.md"; try ap experiment; R2="$RC:$(printf '%s' "$OUT" | grep -c 'uncommitted changes' || true)"
 check "phase.sh experiment: refused without a committed STATE.md (absent, or untracked), nothing closed or changed" "$R1:$R2:$(astate):$(acl)" "1:1:1:1:$B:$C1"
 (cd "$AM" && git -c user.name=t -c user.email=t@e add STATE.md && git -c user.name=t -c user.email=t@e commit -q -m state)
 N="$(grep -c '^terminal create' "$ALOG" || true)"
 try ap experiment
-check "phase.sh experiment with STATE.md committed: closes the writing role, reopens the experiment one, saves the phase" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH EXP NOP PLANNER :$((C1 + 1)):1:experiment:Phase: experiment."
+check "phase.sh experiment with STATE.md committed: closes the writing role, reopens the experiment one, saves the phase" "$RC:$(ah | tr ' ' '\n' | sort | tr '\n' ' '):$(acl):$(( $(grep -c '^terminal create' "$ALOG") - N )):$(jq -r .settings.phase "$AG/orca-roles.config.json"):$(printf '%s\n' "$OUT" | tail -1)" "0:BOTH EXP LOCAL_COORDINATOR NOP PLANNER :$((C1 + 1)):1:experiment:Phase: experiment."
 # a failing close or launch is reported and does not go on
 AP2="$TMP/aw-prog"; mkdir -p "$AP2"; git -C "$AP2" init -q; (cd "$AP2" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$PH" PATH="$TMP/awbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/awbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PKL/bin/launch.sh" --mode programmer >/dev/null 2>&1)
 try bash -c 'cd "$0" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$1" PATH="$2" "$1/.orca-roles/bin/phase.sh" writing 2>&1' "$AP2" "$PH" "$TMP/awbin:$PATH"
@@ -8318,15 +8334,19 @@ DNOCHECKER=1 dsrun early plain --check-only --task task_abc123 --to h-cu; N1="$N
 dsrun early plain --check-only --task task_abc123 --to h-cl; N1="$N1 co-cl:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog)"
 rm -f "$DSG/orca-roles.env" "$DSG/orca-roles.config.json"
 check "dispatch.sh: no start check (one log line, no worktree ps) for a custom or opencode role, also with --check-only; the checker runs for claude, codex, an unset agent and a handle that is no role" "$N1" " h-cu:0:0:h-cu: no start check for agent custom/ h-oc:0:0:h-oc: no start check for agent opencode/ h-cl:0:ps:h-cl: task_abc123 started/ h-cx:0:ps:h-cx: task_abc123 started/ h-w:0:ps:h-w: task_abc123 started/ h-other:0:ps:h-other: task_abc123 started/ co-cu:0:0:h-cu: no start check for agent custom/ co-cl:0:ps:h-cl: task_abc123 started/"
-# the three Planner prompts carry the same assign line and silent-worker bullet
-PM=""; for m in programmer academic-research pr-reviewer; do f="$ROOT/prompts/$m/planner.md"; [ "$m" != programmer ] || f="$ROOT/prompts/programmer/local-coordinator.md"   # the programmer's tab that dispatches is the local coordinator
+# the three local coordinator prompts carry the same assign line and silent-worker bullet
+PM=""; for m in programmer academic-research pr-reviewer; do f="$ROOT/prompts/$m/local-coordinator.md"
   PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`\( (the Planner.s tasks too)\)\{0,1\}: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
 done
-check "planner prompts (programmer, academic-research, pr-reviewer): the same assign line (dispatch.sh) and the same silent-worker bullet (team-status.sh --run: waiting, stopped without reporting, undelivered), no worker-start --task left" "$PM" " programmer:1:1:1:0 academic-research:1:1:1:0 pr-reviewer:1:1:1:0"
-L1="$(grep '^- Assign with `~/.orca-roles/bin/dispatch.sh' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/planner.md | sed -e 's/^[^:]*://' -e "s/ (the Planner's tasks too)//" | sort -u | wc -l | tr -d ' ')"; L2="$(grep 'Watch for silent workers' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/planner.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"
-check "planner prompts: the assign line and the silent-worker bullet are word for word the same in the three modes" "$L1:$L2" "1:1"
-SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/planner.md | tr '\n' ' ')"
-check "planner prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the three modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/planner.md:1 %s/prompts/pr-reviewer/planner.md:1 ' "$ROOT" "$ROOT" "$ROOT")"
+check "local coordinator prompts (programmer, academic-research, pr-reviewer): the same assign line (dispatch.sh) and the same silent-worker bullet (team-status.sh --run: waiting, stopped without reporting, undelivered), no worker-start --task left" "$PM" " programmer:1:1:1:0 academic-research:1:1:1:0 pr-reviewer:1:1:1:0"
+L1="$(grep '^- Assign with `~/.orca-roles/bin/dispatch.sh' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/local-coordinator.md | sed -e 's/^[^:]*://' -e "s/ (the Planner's tasks too)//" | sort -u | wc -l | tr -d ' ')"; L2="$(grep 'Watch for silent workers' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/local-coordinator.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"
+L3=""; for blk in '/^## Written reports$/{f=1} f{print} /^11\. /{if (f) exit}' '/^## Managing the kit and the team$/{f=1;next} /^## /{f=0} f' '/^## Choosing and switching the mode$/{f=1} f{print} /^Only your own tab/{if (f) exit}' '/^## Working under a coordinator$/{f=1} f{print; if (++n == 5) exit}' '/^- Create: /{print}' '/^- Assign with /{f=1} f{print; if (++n == 14) exit}'; do
+  d="$(for m in programmer academic-research pr-reviewer; do awk "$blk" "$ROOT/prompts/$m/local-coordinator.md" | cksum; done | sort -u | wc -l | tr -d ' ')"; [ "$(awk "$blk" "$ROOT/prompts/programmer/local-coordinator.md" | wc -l)" -gt 0 ] || d=empty   # a vanished start marker gives empty, equal blocks
+  L3="$L3$d"
+done
+check "local coordinator prompts: the assign line and the silent-worker bullet are word for word the same in the three modes, and so are the shared blocks (Written reports, Managing the kit, Choosing and switching the mode, the neutral part of Working under a coordinator, the Create line and the 14 bullets from Assign to the worker-release one)" "$L1:$L2:$L3" "1:1:111111"
+SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/local-coordinator.md | tr '\n' ' ')"
+check "local coordinator prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the three modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/local-coordinator.md:1 %s/prompts/pr-reviewer/local-coordinator.md:1 ' "$ROOT" "$ROOT" "$ROOT")"
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
 }
 
@@ -8368,8 +8388,8 @@ rt_run() { CRC=0; bash "$RT/tests/smoke.sh" rules > "$TMP/cli.out" 2> "$TMP/cli.
 rt_run; check "rules helpers: an unmodified copy of the prompts passes" "$CRC:$(grep -c '^FAIL' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1"
 sed -i.bak "s/Nothing leaves the worktree without the user's explicit yes/Nothing leaves/" "$RT/prompts/programmer/local-coordinator.md"; rm -f "$RT/prompts/programmer/local-coordinator.md.bak"
 rt_run; check "rules helpers: a pinned fragment removed from a prompt -> 'FAIL rules R1' naming the file, FAILURES, exit 1, no ALL OK" "$CRC:$(grep -c "^FAIL rules R1: prompts/programmer/local-coordinator.md lost 'Nothing leaves the worktree without the user's explicit yes'$" "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:1:0"
-rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review skill$/## Review skill/' "$RT/prompts/pr-reviewer/planner.md"; rm -f "$RT/prompts/pr-reviewer/planner.md.bak"
-rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer planner.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
+rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review skill$/## Review skill/' "$RT/prompts/pr-reviewer/local-coordinator.md"; rm -f "$RT/prompts/pr-reviewer/local-coordinator.md.bak"
+rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer local-coordinator.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
 # the parallel runner (SMOKE_JOBS): output in the requested order, one process per section, the serial sections alone at the end, the same result as a sequential run
 CP="$TMP/cli-par"; rm -rf "$CP"; mkdir -p "$CP/tests"; ln -sfn "$ROOT/bin" "$CP/bin"; ln -sfn "$ROOT/prompts" "$CP/prompts"; ln -sfn "$ROOT/config.default.json" "$CP/config.default.json"
 sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\

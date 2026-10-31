@@ -6,7 +6,7 @@
 # exceptions are kept; launch.sh reopens every tab of the team that is missing (normally just this role's), and kicks only the roles it opened
 # (the role's kickoff checks the model again).
 # --default-model relaunches it on the agent's default model (roles.<id>.model=""), without the model check; it excludes --model.
-# The model is saved in the worktree's exceptions ('roles --reset' forgets it). The front role (the local coordinator, or the Planner outside programmer mode) cannot be relaunched.
+# The model is saved in the worktree's exceptions ('roles --reset' forgets it). The front role (the local coordinator) cannot be relaunched.
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,9p "$0"; exit 0;; esac
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
@@ -30,7 +30,6 @@ STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$
 ID="$(resolve_role "$CFG" "$ROLEARG")"
 [ -n "$ID" ] || { echo "Unknown role: $ROLEARG" >&2; exit 1; }
 [ "$ID" != local-coordinator ] || { echo "The local coordinator cannot be relaunched from inside the team." >&2; exit 1; }
-[ "$ID" != planner ] || [ "$(mode_of --saved "$CFG" 2>/dev/null || echo programmer)" = programmer ] || { echo "The Planner cannot be relaunched from inside the team." >&2; exit 1; }
 V="$(var_of "$ID")"; TITLE="$(title_of "$CFG" "$ID")"
 grep -q "^$V=." "$STATE" || { echo "$ID is not open in this worktree; run roles." >&2; exit 1; }
 if [ "$CHECK" = 1 ] && [ "$DEFAULT" = 0 ]; then
