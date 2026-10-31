@@ -7,6 +7,7 @@ ROLE="$1"; shift; RESUME=""
 while [ $# -gt 0 ]; do case "$1" in --resume) RESUME="${2:-}"; shift;; esac; shift; done
 CFG="${ORCA_ROLES_CONFIG:-}"
 if [ -z "$CFG" ] || [ ! -f "$CFG" ]; then CFG="$(mktemp)"; merged_config . > "$CFG"; fi
+FRONT="$(front_of "$CFG")"   # the role that talks to the user in this worktree: the local coordinator in programmer mode (and while no mode is chosen), the Planner in the others
 
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
@@ -87,16 +88,16 @@ case "$AGENT" in
     fi
     TOOLS=(); while IFS= read -r t; do [ -n "$t" ] && TOOLS+=("$t"); done < <(rcfg "$CFG" "$ROLE" allowedTools | jq -r '.[]?')
     [ ${#TOOLS[@]} -gt 0 ] && ARGS+=(--allowedTools "${TOOLS[@]}")
-    # Workers cannot rewrite the kit through the --add-dir above (deny rules win over every permission mode). The Planner can: it
+    # Workers cannot rewrite the kit through the --add-dir above (deny rules win over every permission mode). The front role can: it
     # edits the configuration for the user. As --disallowedTools, not in --settings, which a role's own --settings would replace.
-    if [ "$ROLE" != planner ]; then
+    if [ "$ROLE" != "$FRONT" ]; then
       DENY=(); while IFS= read -r r; do DENY+=("$r"); done < <(kit_deny_rules)
       ARGS+=(--disallowedTools "${DENY[@]}")
     fi
-    # The kit's deny list for superpowers: first, and not removable by the role's own list. The Planner always gets it (its entries are inert
-    # without the plugin, and a superpowers the user installed may load); any other role gets it when it loads the kit's superpowers folder
-    # (compared by physical path: a trailing slash, a '..' or a symlink to the folder match too)
-    DENY_KIT=0; [ "$ROLE" != planner ] || DENY_KIT=1
+    # The kit's deny list for superpowers: first, and not removable by the role's own list. The front role and the Planner always get it (its
+    # entries are inert without the plugin, and a superpowers the user installed may load); any other role gets it when it loads the kit's
+    # superpowers folder (compared by physical path: a trailing slash, a '..' or a symlink to the folder match too)
+    DENY_KIT=0; if [ "$ROLE" = "$FRONT" ] || [ "$ROLE" = planner ]; then DENY_KIT=1; fi
     for x in ${LOADED_PLUGINS[@]+"${LOADED_PLUGINS[@]}"}; do
       if [ -n "$SP_REAL" ] && [ "$(cd "$x" && pwd -P)" = "$SP_REAL" ]; then DENY_KIT=1; break; fi
     done
@@ -104,33 +105,41 @@ case "$AGENT" in
       DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(superpowers_deny)
       ARGS+=(--disallowedTools "${DENY[@]}")
     fi
+    # Planning and rulings are the Planner's, verification and the team skill the local coordinator's (the Planner is the front role in the other modes: no change there)
+    if [ "$ROLE" = planner ] && [ "$FRONT" != planner ]; then
+      SDENY=(); while IFS= read -r t; do SDENY+=("$t"); done < <(planner_skill_deny)
+      ARGS+=(--disallowedTools "${SDENY[@]}")
+    elif [ "$ROLE" = local-coordinator ]; then
+      SDENY=(); while IFS= read -r t; do SDENY+=("$t"); done < <(local_coordinator_skill_deny)
+      ARGS+=(--disallowedTools "${SDENY[@]}")
+    fi
     # The auditor never dispatches subagents (a kit list, like the Planner's superpowers one): the role's own disallowedTools only add to it
     if [ "$ROLE" = auditor ]; then
       ADENY=(); while IFS= read -r t; do ADENY+=("$t"); done < <(auditor_deny)
       ARGS+=(--disallowedTools "${ADENY[@]}")
     fi
-    # Nobody answers a dialog in a worker's tab (the Planner is the only one that talks to the user): workers cannot open one. In permissionMode
+    # Nobody answers a dialog in a worker's tab (the front role is the only one that talks to the user): workers cannot open one. In permissionMode
     # plan the plan tools stay, they are how that mode works. A --disallowedTools in extraArgs adds to this list.
-    if [ "$ROLE" != planner ]; then
+    if [ "$ROLE" != "$FRONT" ]; then
       if [ "$PERM" = plan ]; then ARGS+=(--disallowedTools AskUserQuestion)
       else ARGS+=(--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode); fi
     fi
     # The role's own disallowedTools: it only adds to the lists above, it never removes the kit's
     OWN=(); while IFS= read -r t; do [ -n "$t" ] && OWN+=("$t"); done < <(rcfg "$CFG" "$ROLE" disallowedTools | jq -r '.[]?')
     [ ${#OWN[@]} -gt 0 ] && ARGS+=(--disallowedTools "${OWN[@]}")
-    # Claude Code's own `language` setting (user settings) outranks the prompt: workers override it to English. Not the Planner, which
+    # Claude Code's own `language` setting (user settings) outranks the prompt: workers override it to English. Not the front role, which
     # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
     # extraArgs replaces this one and should carry its own "language". It also keeps superpowers out of the workers even when a project or the
     # user enables it (only those two plugin ids); a --settings in extraArgs replaces it whole.
-    [ "$ROLE" != planner ] && ARGS+=(--settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
-    # settings.superpowers = false: "off" also means off for a superpowers the user installed (the Planner has no other kit --settings)
-    [ "$ROLE" = planner ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    # settings.superpowers = false: "off" also means off for a superpowers the user installed (the front role has no other kit --settings)
+    [ "$ROLE" = "$FRONT" ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
     record_provenance claude || true
-    # Claude Code keeps the kit's tab title (workers only): its session-summary titles hide the agent's name, and Orca then refuses
+    # Claude Code keeps the kit's tab title (every role but the front one): its session-summary titles hide the agent's name, and Orca then refuses
     # dispatches to the tab (stablyai/orca#32090). A value set in defaults.env or roles.<id>.env (exported above) wins.
-    if [ "$ROLE" != planner ]; then export CLAUDE_CODE_DISABLE_TERMINAL_TITLE="${CLAUDE_CODE_DISABLE_TERMINAL_TITLE:-1}"; fi
+    if [ "$ROLE" != "$FRONT" ]; then export CLAUDE_CODE_DISABLE_TERMINAL_TITLE="${CLAUDE_CODE_DISABLE_TERMINAL_TITLE:-1}"; fi
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"
     ;;
   codex)

@@ -282,22 +282,23 @@ mode_of() {
 }
 # The phase of a configuration (settings.phase, "experiment" if unset): academic-research only.  phase_of <config>
 phase_of() { jq -r '(.settings // {}) | .phase // "experiment" | tostring' "$1" 2>/dev/null || echo experiment; }
-# Enabled roles of the configuration's mode, in order; the planner always runs. A role without "modes" belongs to programmer only.
+# Enabled roles of the configuration's mode, in order; the planner and the mode's front role always run. A role without "modes" belongs to programmer only.
 # In academic-research a role with "phases" also needs the current phase in it; in the other modes "phases" is ignored.
 enabled_roles() {
-  local m p; m="$(mode_of --saved "$1")" || return 1
-  p="$(phase_of "$1")"
-  jq -r --arg m "$m" --arg p "$p" '.roles | to_entries[]
-    | select(.key == "planner" or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (index($m) != null) else false end)
+  local m p f; m="$(mode_of --saved "$1")" || return 1
+  p="$(phase_of "$1")"; f="$(front_role "$m")"
+  jq -r --arg m "$m" --arg p "$p" --arg f "$f" '.roles | to_entries[]
+    | select(.key == "planner" or .key == $f or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (index($m) != null) else false end)
         and ($m != "academic-research" or (.value | has("phases") | not) or (.value.phases | type == "array" and index($p) != null))))
     | .key' "$1"
 }
 # The enabled roles that can start: a worker whose prompt file for the mode is missing is skipped with a warning.  launchable_roles <config>
 launchable_roles() {
-  local id m f; m="$(mode_of --saved "$1")" || return 1
+  local id m f fr; m="$(mode_of --saved "$1")" || return 1
+  fr="$(front_role "$m")"
   for id in $(enabled_roles "$1"); do
     f="$(prompt_of "$1" "$id")"
-    if [ "$id" != planner ] && [ ! -f "$f" ]; then echo "Warning: role $id is skipped: it has no prompt for mode $m (expected $f)." >&2; continue; fi
+    if [ "$id" != planner ] && [ "$id" != "$fr" ] && [ ! -f "$f" ]; then echo "Warning: role $id is skipped: it has no prompt for mode $m (expected $f)." >&2; continue; fi
     echo "$id"
   done
 }
@@ -332,6 +333,26 @@ var_of() {
   local s="$1" u=ABCDEFGHIJKLMNOPQRSTUVWXYZ l=abcdefghijklmnopqrstuvwxyz i
   for ((i = 0; i < 26; i++)); do s="${s//"${l:i:1}"/${u:i:1}}"; done
   printf '%s\n' "${s//-/_}"
+}
+# The role that opens first, owns the Run and talks to the user: the local coordinator in programmer mode and while no mode is chosen
+# (the mode-pending marker in <git dir>), the Planner in the other modes.  front_role <mode> [<git dir>]
+front_role() {
+  if [ -n "${2:-}" ] && [ -e "$2/orca-roles.mode-pending" ]; then echo local-coordinator; return 0; fi
+  case "$1" in programmer|"") echo local-coordinator;; *) echo planner;; esac
+}
+front_var() { var_of "$(front_role "$@")"; }
+# The front role of a configuration's saved mode in this worktree (or in <git dir>).  front_of <config> [<git dir>]
+front_of() {
+  local m gd="${2:-}"; m="$(mode_of --saved "$1" 2>/dev/null)" || m=programmer
+  [ -n "$gd" ] || gd="$(git_here git-dir 2>/dev/null)" || gd=""
+  [ -z "$gd" ] || gd="$(cd "$gd" 2>/dev/null && pwd)" || gd=""
+  front_role "$m" "$gd"
+}
+# How messages name a front role.  front_label <role> [cap]
+front_label() {
+  local l="the Planner"; [ "$1" = local-coordinator ] && l="the local coordinator"
+  [ "${2:-}" = cap ] && l="T${l#t}"
+  printf '%s' "$l"
 }
 # The kit's prompts folder for the configuration's mode
 prompts_dir_of() { local m; m="$(mode_of --saved "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
@@ -410,12 +431,13 @@ merge_overrides() {
        set: (((.set // []) | map(select(.path as $p | ($n.set // []) | map(.path) | index([$p]) | not))) + ($n.set // []))}
       + (if ($n.mode // null) != null then {mode: $n.mode} elif (.mode // null) != null then {mode: .mode} else {} end)' "$1"
 }
-# Checks that the exceptions only name existing roles and do not disable the planner.  check_overrides <config> <overrides>
+# Checks that the exceptions only name existing roles and do not disable the planner or the local coordinator.  check_overrides <config> <overrides>
 check_overrides() {
   jq -r --slurpfile o "$2" '(.roles | keys) as $ks | $o[0] as $o
     | ([$o.only[], $o.enable[], $o.disable[]] | unique | map(select(. as $r | $ks | index($r) | not))
        | if length > 0 then "ERROR: unknown roles: \(join(", ")). Available: \($ks | join(", "))" else empty end),
-      (if ($o.disable | index("planner")) then "ERROR: the planner cannot be disabled" else empty end)' "$1"
+      (if ($o.disable | index("planner")) then "ERROR: the planner cannot be disabled" else empty end),
+      (if ($o.disable | index("local-coordinator")) then "ERROR: the local coordinator cannot be disabled" else empty end)' "$1"
 }
 # Checks the configuration the exceptions produce: its mode, the "modes" and "prompt" of every role, and that the roles named by
 # --only/--enable/--disable are part of the mode. One "ERROR: ..." line per problem, nothing if it is fine.  check_config <applied config> [<overrides>]
@@ -484,9 +506,11 @@ check_config() {
           (if got("workerReportBody") and (.workerReportBody != "full" and .workerReportBody != "short") then P + "settings.flow.workerReportBody must be \"full\" or \"short\"" else empty end),
           (if got("crossCheck") and (.crossCheck != true and .crossCheck != false) then P + "settings.flow.crossCheck must be true or false" else empty end),
           (if got("recordRounds") and (.recordRounds != true and .recordRounds != false) then P + "settings.flow.recordRounds must be true or false" else empty end),
+          (if got("plannerReset") and (.plannerReset != "clear" and .plannerReset != "compact") then P + "settings.flow.plannerReset must be \"clear\" or \"compact\" (got \(.plannerReset | tojson))" else empty end),
           objs("escalation"; "settings.flow.escalation";
             (to_entries[] | select(.value != null) | .key as $r | .value as $v
-              | if $r == "planner" then P + "settings.flow.escalation.planner is not allowed (the Planner is never relaunched)"
+              | if $r == "planner" then P + "settings.flow.escalation.planner is not allowed (the Planner'"'"'s model is set in roles.planner.model)"
+                elif $r == "local-coordinator" then P + "settings.flow.escalation.local-coordinator is not allowed (the local coordinator is never relaunched)"
                 elif ($v | type == "object" and ((.to | type == "string" and . != "" and (test("\\s") | not))) and ((got("after") | not) or (.after | pint))) then empty
                 else P + "settings.flow.escalation.\($r) must be {\"to\": \"<model>\", \"after\": <positive integer>}" end)))),
         ($s | objs("oracle"; "settings.oracle";
@@ -512,17 +536,17 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
-  out="$(jq -r --slurpfile o "$2" --arg m "$m" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
-    | select(. != "planner" and $R[.] != null)
+  out="$(jq -r --slurpfile o "$2" --arg m "$m" --arg f "$(front_role "$m")" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
+    | select(. != "planner" and . != $f and $R[.] != null)
     | . as $r | ($R[$r].modes // ["programmer"]) as $rm
     | select($rm | if . == "all" then false elif type == "array" then (index($m) == null) else false end)
     | "ERROR: role \($r) is not part of mode \($m) (its modes: \($rm | if type == "array" then join(", ") else tostring end))"' "$1")" || { echo "ERROR: could not check the exceptions against the mode"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
 }
-# Applies the exceptions to a configuration: --only (the planner always stays), then --enable, --disable, --set and --mode.  apply_overrides <config> <overrides>
+# Applies the exceptions to a configuration: --only (the planner and the local coordinator always stay), then --enable, --disable, --set and --mode.  apply_overrides <config> <overrides>
 apply_overrides() {
   jq --slurpfile o "$2" '$o[0] as $o
-    | if ($o.only | length) > 0 then .roles |= with_entries(.value.enabled = (.key == "planner" or (.key as $k | $o.only | index($k)) != null)) else . end
+    | if ($o.only | length) > 0 then .roles |= with_entries(.value.enabled = (.key == "planner" or .key == "local-coordinator" or (.key as $k | $o.only | index($k)) != null)) else . end
     | reduce $o.enable[] as $r (.; .roles[$r].enabled = true)
     | reduce $o.disable[] as $r (.; .roles[$r].enabled = false)
     | reduce $o.set[] as $s (.; setpath($s.path; $s.value))
@@ -593,12 +617,16 @@ preexisting_agents() {
 }
 # settings.flow: optional per-worktree tuning of the flow that the prompts describe in prose.  Unset = the prompts' own values and
 # the messages are byte-identical to a config without the key; an invalid value is ignored with a warning on stderr.
-#   roundCap: positive integer (rejected rounds of a step before the Planner checks with the user; the prompt says 3). programmer mode only
+#   roundCap: positive integer (rejected Tester rounds of a step before the local coordinator sends the Planner a decide task; the prompt says 3). programmer mode only
 #   maxStepsPerWorker: positive integer, the default `steps` of an OpenCode role (roles.<r>.opencode.steps wins). OpenCode roles only
 #   workerReportBody: "full" (default) or "short" (worker_done body of a few lines, the detail in a file in scratchDir)
 #   crossCheck: true turns on the cross-check (Cross-Dev writes an independent candidate the Tester checks against). programmer mode,
 #   with the cross-dev role active, only
 # flow_round_cap <config> → stdout: the number, or nothing.   flow_report_body <config> → stdout: "short", or nothing.   flow_max_steps <config> → stdout: the number, or nothing.
+# planner_reset <config> → stdout: "clear" (default) or "compact", how the Planner's context is reset in programmer mode (settings.flow.plannerReset)
+planner_reset() {
+  jq -r '(.settings.flow? | objects | .plannerReset?) | if . == "compact" then "compact" else "clear" end' "$1" 2>/dev/null || echo clear
+}
 flow_round_cap() {
   local r; r="$(jq -r '(.settings.flow? | objects | .roundCap?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
   case "$r" in
@@ -639,16 +667,16 @@ flow_cross_check() {
   return 0
 }
 # settings.flow.escalation.<role> = {"to": "<model>", "after": N}: round.sh relaunches that role on "to" once a step has N (default 1)
-# rejected rounds and back on its own model when the step is accepted. The Planner cannot be escalated (it is never relaunched).
+# rejected rounds and back on its own model when the step is accepted. Neither the Planner nor the local coordinator can be escalated.
 # flow_escalation <config> <role> → stdout: "<model> <after>", or nothing (unset, or invalid with a warning on stderr).
 flow_escalation() {
   local r; r="$(jq -r --arg r "$2" '(.settings.flow? | objects | .escalation? | objects | .[$r]?) // empty
-    | if type == "object" and (.to | type) == "string" and (.to | test("^[^[:space:]]+$")) and $r != "planner"
+    | if type == "object" and (.to | type) == "string" and (.to | test("^[^[:space:]]+$")) and $r != "planner" and $r != "local-coordinator"
          and ((.after // 1) | type == "number" and . == floor and . > 0)
       then "ok \(.to) \(.after // 1)" else "bad \(tojson)" end' "$1" 2>/dev/null)"
   case "$r" in
     "ok "*) printf '%s' "${r#ok }";;
-    "bad "*) echo "orca-roles: settings.flow.escalation.$2 must be {\"to\": \"<model>\", \"after\": <positive integer>} and not the Planner (got ${r#bad }); ignoring it" >&2;;
+    "bad "*) echo "orca-roles: settings.flow.escalation.$2 must be {\"to\": \"<model>\", \"after\": <positive integer>} and not the Planner or the local coordinator (got ${r#bad }); ignoring it" >&2;;
   esac
   return 0
 }
@@ -685,14 +713,14 @@ metrics_worktree() {
   metrics_append worktrees.jsonl --arg p "$1" --arg y "$(cd "$1" 2>/dev/null && pwd -P || printf '%s' "$1")" --arg j "$2" --arg t "$3" '{ts: $ts, path: $p, physical: $y, project: $j, task: $t}'
 }
 # The marker a coordinator leaves before it creates a worktree (prompts/coordinator.md), read from inside that worktree:
-# <git common dir>/orca-roles.coordinated/<worktree folder name>. Only the Planner's first start reads it, and kickoff.sh removes it then.
+# <git common dir>/orca-roles.coordinated/<worktree folder name>. Only the front role's first start reads it, and kickoff.sh removes it then.
 coordinated_marker() {
   local common top
   common="$(git_here common-dir)" && top="$(git_here toplevel)" || return 1
   printf '%s/orca-roles.coordinated/%s' "$(cd "$common" && pwd)" "${top##*/}"
 }
 # The Run of the coordinator that opened this worktree: the id it wrote in its marker, or the copy kickoff.sh keeps beside the state
-# (<git dir>/orca-roles.coordinator) so it outlives the marker, the Planner's restarts and its cleared conversations. Fails if none.
+# (<git dir>/orca-roles.coordinator) so it outlives the marker, the front role's restarts and its cleared conversations. Fails if none.
 coordinator_run() {
   local f r
   for f in "$(coordinated_marker)" "$(dirname "$1")/orca-roles.coordinator"; do
@@ -703,20 +731,22 @@ coordinator_run() {
   return 1
 }
 
-# The Planner's startup message.  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
+# The front role's startup message: the Planner's in the other modes, the local coordinator's in programmer (where the Planner is a worker
+# and is one of its handles).  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front
+  front="$(front_role "$(mode_of --saved "$cfg")")"
   # shellcheck source=/dev/null
   . "$state"
   for id in $roles; do
-    [ "$id" = planner ] && continue
+    [ "$id" = "$front" ] && continue
     v="$(var_of "$id")"; t="$(title_of "$cfg" "$id")"
     handles="$handles $t=${!v},"; active="$active $t"
   done
-  extra="$(jq -r --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
-    '[.roles | to_entries[] | select(.key != "planner" and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
-  params="$(jq -r '((.defaults.params // {}) * (.roles.planner.params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
-  msg="Read $(prompt_of "$cfg" planner) and adopt that role from now on. Mode: $(mode_of --saved "$cfg")."
+  extra="$(jq -r --arg f "$front" --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
+    '[.roles | to_entries[] | select(.key != $f and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
+  params="$(jq -r --arg f "$front" '((.defaults.params // {}) * (.roles[$f].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
+  msg="Read $(prompt_of "$cfg" "$front") and adopt that role from now on. Mode: $(mode_of --saved "$cfg")."
   [ "$(mode_of --saved "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
@@ -728,7 +758,7 @@ planner_msg() {
   if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
   cap=""; [ "$(mode_of --saved "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
-  [ -n "$cap" ] && msg="$msg Flow override: stop and check with the user when a step piles up $cap rejected rounds (this replaces the 3 in your prompt)."
+  [ -n "$cap" ] && msg="$msg Flow override: send the Planner a \`decide\` task when a step piles up $cap rejected Tester rounds (this replaces the 3 in your prompt)."
   [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
   xc=""; flow_cross_check "$cfg" "$roles" && xc=1
   [ -n "$xc" ] && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
@@ -751,7 +781,7 @@ planner_msg() {
   oc=""; for id in $roles; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
   [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): Orca's worker-start --terminal times out on their tabs, so dispatch their tasks with \`orca orchestration dispatch --task <task_id> --to <handle> --inject --json\` instead (create the task first, as for worker-start). They are unsupervised for Orca: worker-show, worker-stop and worker-abandon do not apply to them; their worker_done reaches you as usual."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
-  # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the Planner asking in the tab
+  # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the front role asking in the tab
   if cr="$(coordinator_run "$state")"; then
     msg="$msg This worktree works under a coordinator whose Run is $cr, and it does not read this tab. Outside a dispatch from it (for example when it typed your task here), everything your prompt has you ask, propose or report to the user goes to it as an Orca message: bind your own Run first (create it with the task's objective if you have none yet), then \`orca orchestration send --to run:$cr --type question --subject \"<branch>: <topic>\" --body \"<text>\" --json\`, with \`--type status\` for a report or the end of the task and the absolute path of the file that holds it. Its answers reach your Run's mailbox like your workers' messages. Never ask it in this tab or in a question dialog. Inside a dispatch from it, use the preamble's commands. If the user writes in this tab, the user takes precedence."
   fi
@@ -760,58 +790,52 @@ planner_msg() {
   elif [ "$resume" = 3 ]; then
     msg="$msg WARNING: your conversation was cleared (for example with /clear) while the team kept running: the handles above are current and the dispatches in flight are still valid. Before talking to the user, follow the section \"After your conversation was cleared\" of your prompt. Start there."
   elif [ "$resume" = 4 ]; then
-    msg="$msg WARNING: the mode was switched from $oldmode to $(mode_of --saved "$cfg") and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in $(scratch_dir planner)/mode-switch-summary.md: read it first."
-    [ -n "$(clear_command "$cfg" planner)" ] || msg="$msg Your previous conversation is still there: follow only this mode's prompt from now on."
+    msg="$msg WARNING: the mode was switched from $oldmode to $(mode_of --saved "$cfg") and your conversation was cleared on purpose. If the user asked you to save a summary before the switch, it is in $(scratch_dir "$front")/mode-switch-summary.md: read it first."
+    [ -n "$(clear_command "$cfg" "$front")" ] || msg="$msg Your previous conversation is still there: follow only this mode's prompt from now on."
     msg="$msg Start with the startup."
   elif [ "$resume" = 2 ]; then
     msg="$msg WARNING: you are BACK after a restart, with your previous conversation. Every terminal of the team was reopened and the handles above are the new ones; the dispatches that were in flight point to terminals that no longer exist. Before talking to the user, follow the section \"Coming back with your memory\" of your prompt. Start there."
     [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && msg="$msg You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit's settings)."
-  elif cm="$(coordinated_marker)" && [ -f "$cm" ]; then   # a coordinator will dispatch the task: an idle Planner with no dialog open is what lets it in
+  elif cm="$(coordinated_marker)" && [ -f "$cm" ]; then   # a coordinator will dispatch the task: an idle front role with no dialog open is what lets it in
     msg="$msg This worktree was opened by a coordinator that will send you its task as an Orca dispatch (see your section \"Working under a coordinator\"). Do the startup and stop there: do not start phase 1, do not infer a goal from the branch, a linked issue or the Runs, and open no question dialog, because an open dialog blocks the dispatch. End your turn with one line saying you are waiting for the coordinator's task. If the user writes in this tab first, the user takes precedence."
   else
     msg="$msg Start with the startup."
   fi
   printf '%s' "$msg"
 }
-# The Planner's first message while the worktree has no mode yet: ask the user which mode to use.  planner_ask_msg <config>
+# The front role's first message while the worktree has no mode yet: ask the user whether to start in programmer mode (the only mode this
+# version starts from here).  planner_ask_msg <config>
 planner_ask_msg() {
-  local cfg="$1" lang id one list="" sug msg
-  msg="You are the Planner of the orca-roles kit in this worktree, and no mode has been chosen yet."
+  local cfg="$1" lang msg
+  msg="You are the local coordinator of the orca-roles kit in this worktree, and no mode has been chosen yet. Read $KIT/prompts/programmer/local-coordinator.md and adopt that role from now on, but do not start its startup before the mode is chosen."
   lang="$(setting "$cfg" language auto)"
   if [ "$lang" != auto ] && [ -n "$lang" ]; then msg="$msg Always reply to the user in $lang, whatever language they write in."
   else msg="$msg Reply to the user in the language they write in."; fi
-  for id in $MODE_IDS; do
-    [ -z "$(mode_error "$id")" ] || continue
-    case "$id" in
-      programmer) one="plan and build code with a team (Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer)";;
-      academic-research) one="write a research paper: experiments first, then the writing phase";;
-      pr-reviewer) one="review a pull request with a team of reviewers";;
-      *) one="";;
-    esac
-    list="${list:+$list; }$id ($one)"
-  done
-  sug="$(mode_of --saved "$cfg" 2>/dev/null)" || sug=programmer
-  msg="$msg Ask the user which mode to use as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option), listing: $list. Suggested: $sug. Then end your turn and wait for the user's typed answer."
+  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer). Then end your turn and wait for the user's typed answer."
   msg="$msg Do not start any work before the answer."
-  msg="$msg When the user answers, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree and end your turn: the kit opens that mode's team and sends you your role message for it."
+  msg="$msg If the user says yes, run \`~/.orca-roles/bin/launch.sh --mode programmer\` from the worktree and end your turn: the kit opens the team and sends you your role message for it."
+  msg="$msg If the user wants another mode, tell them that this version starts other modes only after they close this tab (yours) and run \`roles --mode <mode>\` from a terminal of this worktree, and run nothing."
   printf '%s' "$msg"
 }
-# Every handle the Planner's tab has had in this worktree: <git dir>/orca-roles.planner-handles, one per line, no duplicates, atomic.
-# If the file does not exist it is first seeded with the PLANNER values of orca-roles.kicked and orca-roles.env.  With an empty handle it only seeds.
+# Every handle the front role's tab has had in this worktree (the name of the file is the one the Planner's had before the local coordinator):
+# <git dir>/orca-roles.planner-handles, one per line, no duplicates, atomic. If the file does not exist it is first seeded with the front
+# role's values of orca-roles.kicked and orca-roles.env.  With an empty handle it only seeds.
 planner_history_add() {  # planner_history_add <git dir> <handle>
-  local f="$1/orca-roles.planner-handles" tmp="$1/orca-roles.planner-handles.tmp.$$"
+  local f="$1/orca-roles.planner-handles" tmp="$1/orca-roles.planner-handles.tmp.$$" fv m
+  m="$(mode_of --saved "$1/orca-roles.config.json" 2>/dev/null)" || m=programmer
+  fv="$(front_var "$m" "$1")"
   {
     if [ -f "$f" ]; then cat "$f"
     else
-      grep '^PLANNER=' "$1/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-
-      grep '^PLANNER=' "$1/orca-roles.env" 2>/dev/null | head -1 | cut -d= -f2-
+      grep "^$fv=" "$1/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-
+      grep "^$fv=" "$1/orca-roles.env" 2>/dev/null | head -1 | cut -d= -f2-
     fi
     printf '%s\n' "$2"
   } | awk 'NF && !seen[$0]++' > "$tmp" && mv "$tmp" "$f"
 }
-# The Run most recently updated that is still bound to a previous tab of the Planner (a handle in the history other than the current one):
+# The Run most recently updated that is still bound to a previous tab of the front role (a handle in the history other than the current one):
 # prints "<id><TAB><old handle><TAB><objective>" (objective on one line, up to 120 characters), nothing if there is none or no history;
-# 1 if the Runs cannot be listed.  stale_run <git dir> <current planner handle>
+# 1 if the Runs cannot be listed.  stale_run <git dir> <current front role handle>
 stale_run() {
   local hist="$1/orca-roles.planner-handles" cursor="" js runs="[]" i=0
   [ -f "$hist" ] || return 0
@@ -829,10 +853,11 @@ stale_run() {
 # The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt
 # (--append-system-prompt), codex as developer_instructions, custom through {anchor} / $ORCA_ROLES_ANCHOR if its command uses them.
 # The role itself arrives as a message, so when that message is gone the agent asks the kit for it again.  role_anchor <config> <role>
-# Workers (every role but the planner) also get the English rule, because the user's own language setting would otherwise win over the prompt.
+# Workers (every role but the mode's front role: the Planner is one in programmer mode) also get the English rule, because the user's own
+# language setting would otherwise win over the prompt.
 role_anchor() {
   local en=""
-  [ "$2" != planner ] && en=" Always write in English (screen, worker_done, ask, escalation), whatever language the task, the repo or your settings use; repo artifacts (code, commits, docs) follow the repo's own language."
+  [ "$2" != "$(front_of "$1")" ] && en=" Always write in English (screen, worker_done, ask, escalation), whatever language the task, the repo or your settings use; repo artifacts (code, commits, docs) follow the repo's own language."
   printf '%s' "You are the $(title_of "$1" "$2") role of the orca-roles kit in this Orca workspace. Your role, its instructions and the team's handles arrive as a message in this conversation. If the conversation has no such message (for example after /clear or /new), before doing anything else run \`$(kit_env)$KIT/bin/clean.sh --msg $2\` in this worktree and follow the message it prints as if it had been sent to you.$en"
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
@@ -868,7 +893,7 @@ kit_deny_rules() {
 }
 # A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
-  printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for the Planner to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
+  printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
 }
 # A role's common-rules file: its "common" field (accepts ~, {kit}, {home}) if the file exists (else a warning), else the mode's common-workers.md
 common_of() {
@@ -906,6 +931,17 @@ superpowers_deny() {
   printf '%s\n' 'Skill(superpowers:subagent-driven-development)' 'Skill(superpowers:executing-plans)' 'Skill(superpowers:dispatching-parallel-agents)' \
     'Skill(superpowers:requesting-code-review)' 'Skill(superpowers:using-git-worktrees)' 'Skill(superpowers:finishing-a-development-branch)' \
     'Skill(superpowers:writing-skills)' 'Skill(superpowers:diagnosing-superpowers)' EnterWorktree ExitWorktree Agent Task
+}
+# Skills the Planner does not use when it is a worker (programmer mode): it keeps brainstorming, writing-plans and receiving-code-review, and the kit's
+# team skill is the local coordinator's.  planner_skill_deny → one Skill(...) per line
+planner_skill_deny() {
+  printf '%s\n' 'Skill(superpowers:verification-before-completion)' 'Skill(superpowers:test-driven-development)' 'Skill(superpowers:systematic-debugging)' \
+    'Skill(superpowers:using-superpowers)' 'Skill(orca-roles:team)'
+}
+# Skills the local coordinator leaves to the Planner (planning and rulings) and to the workers (test-driven development, debugging).  local_coordinator_skill_deny → one Skill(...) per line
+local_coordinator_skill_deny() {
+  printf '%s\n' 'Skill(superpowers:brainstorming)' 'Skill(superpowers:writing-plans)' 'Skill(superpowers:receiving-code-review)' \
+    'Skill(superpowers:test-driven-development)' 'Skill(superpowers:systematic-debugging)'
 }
 # The auditor verifies plans against a repo's rules itself and must never dispatch a gate's reviewer subagents. The list lives in the kit so a
 # user's own disallowedTools (which replace a config default) cannot drop it.  auditor_deny → one tool per line

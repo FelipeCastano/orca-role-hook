@@ -35,6 +35,16 @@
                     "env": { "PLAYWRIGHT_BROWSERS_PATH": "{kit}/browsers" } }
   },
   "roles": {
+    "local-coordinator": {
+      "title": "Local coordinator",
+      "enabled": true,
+      "modes": ["programmer"],
+      "model": "claude-sonnet-5-5",
+      "mcp": "all",
+      "allowedTools": ["Bash(orca:*)", "Read"],
+      "extraDirs": ["{kit}"],
+      "pluginDirs": ["{kit}/plugin", "{kit}/plugins/superpowers"]
+    },
     "planner": {
       "title": "Planner",
       "enabled": true,

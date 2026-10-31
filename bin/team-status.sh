@@ -67,7 +67,7 @@ OUT="$(jq -n -c --argjson roles "$ROLES" --argjson agents "$AGENTS" --argjson no
        else $a.state end) as $st
     | (if $a == null or $a.stateStartedAt == null then null else ($now - $a.stateStartedAt | if . < 0 then 0 else . end) end) as $ms
     | $r + {state: $st, since: age($ms), sinceMs: $ms,
-        task: (($pr | capture("(?<t>task_[0-9a-f]+)") | .t) // (if ($pr | test("^Read ")) and ($pr | test("(common-workers|planner)\\.md")) then "role-message" else "-" end)),
+        task: (($pr | capture("(?<t>task_[0-9a-f]+)") | .t) // (if ($pr | test("^Read ")) and ($pr | test("(common-workers|planner|local-coordinator)\\.md")) then "role-message" else "-" end)),
         tool: (if ($a.toolName // "") == "" then "-" else $a.toolName end),
         summary: (($a.lastAssistantMessage // "") | (split("\n")[0] // "") | gsub("\t"; " ") | if . == "" then "-" else cut(.) end),
         prompt: $pr})')"
