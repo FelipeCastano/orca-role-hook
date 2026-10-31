@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the Planner,
-# tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
+# Sends each agent its role, accepts the trust dialog if it appears, passes the Jira ticket to the front role (the local coordinator in
+# programmer mode, the Planner in the others), tells it whether it is resuming a workspace (previous tabs dead) and closes the composer's extra agent session.
 # Usage: kickoff.sh <worktree> <state> <config> "<new roles>" ["<resumed roles>" ["<remembered roles>" ["<reused roles>"]]]
-#   resumed: reopened without memory (the Planner recovers the state); remembered: reopened with their previous conversation;
-#   reused: in <new roles> only because their tab never got its role message (same handle, not told to the Planner as changed).
+#   resumed: reopened without memory (the front role recovers the state); remembered: reopened with their previous conversation;
+#   reused: in <new roles> only because their tab never got its role message (same handle, not told to the front role as changed).
 # Each role's handle is recorded in orca-roles.kicked (next to <state>) once its message is sent.
 set -uo pipefail
 WT="$1"; STATE="$2"; CFG="$3"; NEW="$4"; RESUMED="${5:-}"; REMEMBERED="${6:-}"; REUSED="${7:-}"
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 # shellcheck source=/dev/null
 . "$STATE"
+FRONT="$(front_role "$(mode_of --saved "$CFG" 2>/dev/null || echo programmer)" "$(dirname "$STATE")")"   # the role that owns the Run and talks to the user
+FRONTV="$(var_of "$FRONT")"; FL="$(front_label "$FRONT")"; FLC="$(front_label "$FRONT" cap)"
 ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 SETTLE="${ORCA_ROLES_KICK_SETTLE:-2}"
@@ -35,15 +37,15 @@ merge_models() {
   done
   rmdir "$MODELS_D" 2>/dev/null || true
 }
-tell_planner() {  # $1 subject, $2 body
-  [ -n "${PLANNER:-}" ] || return 0
-  orca orchestration send --to "$PLANNER" --type escalation --subject "$1" --body "$2" --json >/dev/null 2>&1 || echo "Could not tell the Planner: $1"
+tell_planner() {  # $1 subject, $2 body: to the front role
+  [ -n "${!FRONTV:-}" ] || return 0
+  orca orchestration send --to "${!FRONTV}" --type escalation --subject "$1" --body "$2" --json >/dev/null 2>&1 || echo "Could not tell $FL: $1"
 }
-# A role whose model does not exist answers its first message with an error (see model_error_regex): the kit only detects it and tells the Planner.
+# A role whose model does not exist answers its first message with an error (see model_error_regex): the kit only detects it and tells the front role.
 model_failed() {  # $1 role, $2 model, $3 what showed it (the error text, or why the model is not available)
   local title; title="$(title_of "$CFG" "$1")"
   echo "$1: model $2 is not available ($3)"; record_model "$1" "FAILED:$2"
-  [ "$1" = planner ] || tell_planner "$title model unavailable" "$title did not start: its model $2 is not available ($3). config.json is unchanged. To fix it yourself: set roles.$1.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $1 and run roles (without options, so this worktree's saved options are kept)."
+  [ "$1" = "$FRONT" ] || tell_planner "$title model unavailable" "$title did not start: its model $2 is not available ($3). config.json is unchanged. To fix it yourself: set roles.$1.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $1 and run roles (without options, so this worktree's saved options are kept)."
 }
 check_model() {  # $1 handle, $2 role, $3 model errors on screen before the message was sent, $4 error regex
   local model now text
@@ -130,7 +132,7 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
   fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
   if orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null; then
-    echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != planner ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0
+    echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != "$FRONT" ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0
   fi
   case "$ocm" in
     present) record_model "$2" "$model";;
@@ -189,66 +191,66 @@ composer_watch() {
 }
 composer_watch & WATCH_PID=$!
 
-if is_new planner; then
-  RESUME=0; case " $RESUMED " in *" planner "*) RESUME=1;; esac; remembers planner && RESUME=2
+if is_new "$FRONT"; then
+  RESUME=0; case " $RESUMED " in *" $FRONT "*) RESUME=1;; esac; remembers "$FRONT" && RESUME=2
   if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] && [ ! -e "$GITDIR/orca-roles.mode-pending" ]; then
-    cmd="$(clear_command "$CFG" planner)"
+    cmd="$(clear_command "$CFG" "$FRONT")"
     if [ -n "$cmd" ]; then
-      orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-      orca terminal send --terminal "$PLANNER" --text $'\e' --json >/dev/null 2>&1
+      orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      orca terminal send --terminal "${!FRONTV}" --text $'\e' --json >/dev/null 2>&1
       pace 1
-      orca terminal send --terminal "$PLANNER" --text "$cmd" --enter --json >/dev/null
-      orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-      echo "The Planner's conversation was cleared ($cmd) for the mode switch."
+      orca terminal send --terminal "${!FRONTV}" --text "$cmd" --enter --json >/dev/null
+      orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      echo "$FLC's conversation was cleared ($cmd) for the mode switch."
     else
-      echo "The Planner's agent has no clear command: its role message for the new mode goes into the same conversation."
+      echo "$FLC's agent has no clear command: its role message for the new mode goes into the same conversation."
     fi
     PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
   else
     PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
   fi
   planner_history_add "$GITDIR" ""   # seeds the handle history from the previous kicked/env files before kicked_set overwrites them
-  if STALE="$(stale_run "$GITDIR" "$PLANNER")"; then
+  if STALE="$(stale_run "$GITDIR" "${!FRONTV}")"; then
     if [ -n "$STALE" ]; then
       IFS=$'\t' read -r STALE_ID STALE_OLD STALE_OBJ <<<"$STALE"
       PLANNER_MSG="$PLANNER_MSG Run $STALE_ID ($STALE_OBJ) is still bound to a previous tab of yours. If this is your Run, bind it with \`orca orchestration run-use --id $STALE_ID --json\` before anything else, so worker reports reach you."
-      echo "Run $STALE_ID is bound to an old Planner tab ($STALE_OLD); the Planner was told."
+      echo "Run $STALE_ID is bound to an old ${FL#the } tab ($STALE_OLD); $FL was told."
     fi
   else
-    echo "Could not list the Runs to check the Planner's binding."
+    echo "Could not list the Runs to check $FL's binding."
   fi
-  orca terminal wait --terminal "$PLANNER" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
-  if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "$PLANNER" planner "$(planner_ask_msg "$CFG")" nokick
-  elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends the Planner its role message."
+  orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+  if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "${!FRONTV}" "$FRONT" "$(planner_ask_msg "$CFG")" nokick
+  elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends $FL its role message."
   else
-    if kick "$PLANNER" planner "$PLANNER_MSG"; then PSENT=1; else PSENT=0; fi
-    # a coordinator's marker covers only this first start and is removed once the Planner's role message is sent: its Run id stays beside the state (the Planner keeps messaging that Run), the hold does not
+    if kick "${!FRONTV}" "$FRONT" "$PLANNER_MSG"; then PSENT=1; else PSENT=0; fi
+    # a coordinator's marker covers only this first start and is removed once the front role's role message is sent: its Run id stays beside the state (the front role keeps messaging that Run), the hold does not
     if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
       if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
-      if [ "$PSENT" = 1 ]; then rm -f "$CM"; else echo "Kept the coordinator's marker: the Planner's role was not sent yet."; fi
+      if [ "$PSENT" = 1 ]; then rm -f "$CM"; else echo "Kept the coordinator's marker: $FL's role was not sent yet."; fi
     fi
   fi
   rm -f "$GITDIR/orca-roles.switch-from"
 fi
 OPENED_WORKERS=""; OPENED_IDS=""
 for id in $ROLES; do
-  [ "$id" = planner ] && continue
+  [ "$id" = "$FRONT" ] && continue
   is_new "$id" || continue
   v=$(var_of "$id")
   case " $REUSED " in *" $id "*) ;; *) OPENED_WORKERS="${OPENED_WORKERS:+$OPENED_WORKERS, }$(title_of "$CFG" "$id")"; OPENED_IDS="$OPENED_IDS $id";; esac
   if remembers "$id"; then kick "${!v}" "$id" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$id" "$(worker_msg "$CFG" "$id")"; fi
 done
 
-# A live Planner learns the new handles only from this message: its role message (with the handles) is sent only when it is (re)opened.
-if ! is_new planner && [ -n "$OPENED_WORKERS" ] && [ -n "${PLANNER:-}" ]; then
+# A live front role learns the new handles only from this message: its role message (with the handles) is sent only when it is (re)opened.
+if ! is_new "$FRONT" && [ -n "$OPENED_WORKERS" ] && [ -n "${!FRONTV:-}" ]; then
   if [ "${ORCA_ROLES_SELF_RELAUNCH:-}" = 1 ]; then
-    echo "The Planner will be reopened by its relauncher; its role message carries the handles."
+    echo "$FLC will be reopened by its relauncher; its role message carries the handles."
   elif [ "${ORCA_ROLES_SELF_NO_SESSION:-}" = 1 ]; then
-    echo "The Planner keeps its restored tab (its conversation could not be read, so it was not reopened); run roles from another terminal to give it the handles and the kit's settings."
+    echo "$FLC keeps its restored tab (its conversation could not be read, so it was not reopened); run roles from another terminal to give it the handles and the kit's settings."
   elif [ "${ORCA_ROLES_PLANNER_BUSY:-}" = 1 ]; then
-    echo "The Planner's restored tab was busy and was not reopened; run roles again when it is idle: its role message will carry the handles."
-  elif [ "${ORCA_TERMINAL_HANDLE:-}" = "$PLANNER" ]; then
-    # the Planner ran this launch from its own tab: it learns the outcome from a status message, sent once every kick is done
+    echo "$FLC's restored tab was busy and was not reopened; run roles again when it is idle: its role message will carry the handles."
+  elif [ "${ORCA_TERMINAL_HANDLE:-}" = "${!FRONTV}" ]; then
+    # the front role ran this launch from its own tab: it learns the outcome from a status message, sent once every kick is done
     OK_TITLES=""; FAIL_TITLES=""
     for id in $OPENED_IDS; do
       v=$(var_of "$id")
@@ -258,18 +260,18 @@ if ! is_new planner && [ -n "$OPENED_WORKERS" ] && [ -n "${PLANNER:-}" ]; then
     REOPENED_BODY="roles opened or reopened: ${OK_TITLES:-none}.${FAIL_TITLES:+ Not reached (no role message sent): $FAIL_TITLES.}
 Use these handles from now on:
 $(cat "$STATE")"
-    if orca orchestration send --to "$PLANNER" --type status --subject "Roles reopened" --body "$REOPENED_BODY" --json >/dev/null 2>&1; then
-      echo "Told the Planner the roles were reopened."
+    if orca orchestration send --to "${!FRONTV}" --type status --subject "Roles reopened" --body "$REOPENED_BODY" --json >/dev/null 2>&1; then
+      echo "Told $FL the roles were reopened."
     else
-      echo "Could not tell the Planner the roles were reopened."
+      echo "Could not tell $FL the roles were reopened."
     fi
   else
     HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
 $(cat "$STATE")"
-    if orca orchestration send --to "$PLANNER" --type status --subject "Role handles changed" --body "$HANDLES_BODY" --json >/dev/null 2>&1; then
-      echo "Told the Planner the new handles."
+    if orca orchestration send --to "${!FRONTV}" --type status --subject "Role handles changed" --body "$HANDLES_BODY" --json >/dev/null 2>&1; then
+      echo "Told $FL the new handles."
     else
-      echo "Could not tell the Planner the new handles; tell it to run: cat $STATE"
+      echo "Could not tell $FL the new handles; tell it to run: cat $STATE"
     fi
   fi
 fi

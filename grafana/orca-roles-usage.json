@@ -499,13 +499,270 @@
       }
     },
     {
+      "id": 40,
+      "type": "bargauge",
+      "title": "Cost by model",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sort_desc(sum by (model) (sum by (session_id, model) (max_over_time(claude_code_cost_usage_USD_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range]))))",
+          "legendFormat": "{{model}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 42,
+      "type": "bargauge",
+      "title": "Tokens by model",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 21,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sort_desc(sum by (model) (sum by (session_id, model) (max_over_time(claude_code_token_usage_tokens_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range]))))",
+          "legendFormat": "{{model}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 41,
+      "type": "table",
+      "title": "Cost against tokens per role and model",
+      "description": "Tokens high: the spend comes from volume. Cost per million tokens high: from the model's price or a large share of output tokens; a large cache read share lowers it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (orca_roles_role, model) (sum by (session_id, orca_roles_role, model) (max_over_time(claude_code_token_usage_tokens_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range])))",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (orca_roles_role, model) (sum by (session_id, orca_roles_role, model) (max_over_time(claude_code_cost_usage_USD_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range])))",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "(sum by (orca_roles_role, model) (sum by (session_id, orca_roles_role, model) (max_over_time(claude_code_cost_usage_USD_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range])))) / clamp_min((sum by (orca_roles_role, model) (sum by (session_id, orca_roles_role, model) (max_over_time(claude_code_token_usage_tokens_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range])))), 1) * 1e6",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "(sum by (orca_roles_role, model) (sum by (session_id, orca_roles_role, model) (max_over_time(claude_code_token_usage_tokens_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\", type=\"cacheRead\"}[$__range])))) / clamp_min((sum by (orca_roles_role, model) (sum by (session_id, orca_roles_role, model) (max_over_time(claude_code_token_usage_tokens_total{task=~\"$task\", orca_roles_role=~\"$orca_roles_role\"}[$__range])))), 1)",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "orca_roles_role": "Role",
+              "model": "Model",
+              "Value #A": "Tokens",
+              "Value #B": "Cost",
+              "Value #C": "Cost per Mtok",
+              "Value #D": "Cache read share"
+            },
+            "indexByName": {
+              "orca_roles_role": 0,
+              "model": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Cost",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tokens"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cost per Mtok"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cache read share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
       "id": 12,
       "type": "row",
       "title": "Tokens",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 29,
         "w": 24,
         "h": 1
       },
@@ -521,7 +778,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 22,
+        "y": 30,
         "w": 8,
         "h": 8
       },
@@ -566,7 +823,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 22,
+        "y": 30,
         "w": 4,
         "h": 8
       },
@@ -602,7 +859,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 22,
+        "y": 30,
         "w": 4,
         "h": 8
       },
@@ -637,7 +894,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 22,
+        "y": 30,
         "w": 8,
         "h": 8
       },
@@ -678,7 +935,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 30,
+        "y": 38,
         "w": 24,
         "h": 10
       },
@@ -720,7 +977,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 48,
         "w": 24,
         "h": 1
       },
@@ -736,7 +993,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 49,
         "w": 8,
         "h": 8
       },
@@ -781,7 +1038,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 41,
+        "y": 49,
         "w": 8,
         "h": 8
       },
@@ -826,7 +1083,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 41,
+        "y": 49,
         "w": 8,
         "h": 8
       },
@@ -868,7 +1125,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 49,
+        "y": 57,
         "w": 24,
         "h": 1
       },
@@ -884,7 +1141,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 58,
         "w": 6,
         "h": 6
       },
@@ -920,7 +1177,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 50,
+        "y": 58,
         "w": 6,
         "h": 6
       },
@@ -955,7 +1212,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 50,
+        "y": 58,
         "w": 6,
         "h": 6
       },
@@ -990,7 +1247,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 50,
+        "y": 58,
         "w": 6,
         "h": 6
       },
@@ -1025,7 +1282,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -1066,7 +1323,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 64,
         "w": 6,
         "h": 8
       },
@@ -1111,7 +1368,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 56,
+        "y": 64,
         "w": 6,
         "h": 8
       },
@@ -1153,7 +1410,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 72,
         "w": 24,
         "h": 1
       },
@@ -1169,7 +1426,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 65,
+        "y": 73,
         "w": 12,
         "h": 8
       },
@@ -1215,7 +1472,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 65,
+        "y": 73,
         "w": 12,
         "h": 8
       },
@@ -1257,7 +1514,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 81,
         "w": 24,
         "h": 1
       },
@@ -1273,7 +1530,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 82,
         "w": 8,
         "h": 8
       },
@@ -1318,7 +1575,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 74,
+        "y": 82,
         "w": 8,
         "h": 8
       },
@@ -1363,7 +1620,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 74,
+        "y": 82,
         "w": 8,
         "h": 8
       },
@@ -1405,7 +1662,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 90,
         "w": 24,
         "h": 1
       },
@@ -1421,7 +1678,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 83,
+        "y": 91,
         "w": 12,
         "h": 8
       },
@@ -1467,7 +1724,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 83,
+        "y": 91,
         "w": 12,
         "h": 8
       },

@@ -2,7 +2,8 @@
 # Cleans the context of one or more workers: opens a new conversation in their agent and resends their role.
 # Usage (from the worktree):  clean.sh <role|title|handle> [...]   |   clean.sh --all   |   clean.sh --msg <role>  (only prints the role message;
 # for the Planner, the one for after its conversation was cleared: see role_anchor, which tells each role to ask for it)
-# The Planner runs it after the user confirms. It never cleans the Planner or a worker with a task in flight (the Planner ensures that).
+# The Planner runs it after the user confirms. It never cleans the front role (the local coordinator in programmer, the Planner in the other
+# modes) or a worker with a task in flight (the Planner ensures that). In programmer the Planner is a worker and can be cleaned.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
@@ -13,6 +14,7 @@ STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$
 . "$STATE"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 IDS="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-')"
+MODE="$(mode_of --saved "$CFG" 2>/dev/null || echo programmer)"
 lower() { tr 'A-Z' 'a-z'; }
 
 resolve() {  # <role|title|handle> → role id
@@ -25,16 +27,21 @@ resolve() {  # <role|title|handle> → role id
 
 if [ "$1" = --msg ]; then
   id="$(resolve "${2:-}")"; [ -n "$id" ] || { echo "Unknown role: ${2:-}" >&2; exit 1; }
-  if [ "$id" = planner ]; then
+  if [ "$id" = local-coordinator ] && [ ! -e "$GITDIR/orca-roles.mode-pending" ] || { [ "$id" = planner ] && [ "$MODE" != programmer ]; }; then
     wt="${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}"; { IFS= read -r key; IFS= read -r url; } < <(worktree_jira "${wt:-active}" "$CFG")
     if [ -e "$GITDIR/orca-roles.mode-pending" ]; then planner_ask_msg "$CFG"
     else planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3; fi
+  elif [ "$id" = local-coordinator ]; then planner_ask_msg "$CFG"
   else worker_msg "$CFG" "$id"; fi
   echo; exit 0
 fi
 TARGETS=()
 if [ "$1" = --all ]; then
-  for id in $IDS; do [ "$id" = planner ] || TARGETS+=("$id"); done
+  for id in $IDS; do
+    [ "$id" = local-coordinator ] && continue
+    [ "$id" = planner ] && [ "$MODE" != programmer ] && continue
+    TARGETS+=("$id")
+  done
 else
   for x in "$@"; do id="$(resolve "$x")"; [ -n "$id" ] || { echo "There is no worker '$x' in this workspace. Roles: $(echo $IDS)" >&2; exit 1; }; TARGETS+=("$id"); done
 fi
@@ -43,7 +50,8 @@ fi
 RC=0
 for id in "${TARGETS[@]}"; do
   t="$(title_of "$CFG" "$id")"
-  [ "$id" = planner ] && { echo "$t: the Planner does not clean itself."; RC=1; continue; }
+  [ "$id" = local-coordinator ] && { echo "$t: the local coordinator does not clean itself."; RC=1; continue; }
+  [ "$id" = planner ] && [ "$MODE" != programmer ] && { echo "$t: the Planner does not clean itself."; RC=1; continue; }
   v="$(var_of "$id")"; h="${!v}"
   orca terminal show --terminal "$h" --json >/dev/null 2>&1 || { echo "$t: its tab ($h) does not respond."; RC=1; continue; }
   cmd="$(clear_command "$CFG" "$id")"
@@ -55,6 +63,7 @@ for id in "${TARGETS[@]}"; do
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
     echo "$t: context cleaned ($cmd) and role resent."
+    [ "$id" = planner ] && { orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true; }
     # OpenCode: /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
     if [ -n "$ocf" ]; then
       orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true

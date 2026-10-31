@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Closes the tab of one or more roles in this workspace and forgets their handle (the opposite of what launch.sh does).
 # Usage (from the worktree):  close-role.sh <role|title|handle> [...]
-# The Planner runs it after the user confirms, once the role has no task in flight. It never closes the Planner.
+# The front role (the local coordinator in programmer mode, the Planner in the others) runs it after the user confirms, once the role has no
+# task in flight. It never closes the front role; in programmer mode the Planner is a worker and can be closed.
 # It does not change the configuration: if the role is still enabled, 'roles' would open it again (see the message it prints).
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
@@ -12,6 +13,7 @@ STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$
 # shellcheck source=/dev/null
 . "$STATE"
 IDS="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-')"
+MODE="$(mode_of --saved "$CFG" 2>/dev/null || echo programmer)"
 lower() { tr 'A-Z' 'a-z'; }
 resolve() {  # <role|title|handle> → role id
   local x="$1" id v
@@ -26,7 +28,8 @@ for x in "$@"; do
   id="$(resolve "$x")"
   [ -n "$id" ] || { echo "There is no role '$x' open in this workspace. Roles: $(echo $IDS)" >&2; RC=1; continue; }
   t="$(title_of "$CFG" "$id")"
-  [ "$id" = planner ] && { echo "$t: the Planner is never closed."; RC=1; continue; }
+  [ "$id" = local-coordinator ] && { echo "$t: the local coordinator is never closed."; RC=1; continue; }
+  [ "$id" = planner ] && [ "$MODE" != programmer ] && { echo "$t: the Planner is never closed."; RC=1; continue; }
   v="$(var_of "$id")"; h="${!v}"
   js=""; src=1
   if [ -n "$h" ]; then js="$(orca terminal show --terminal "$h" --json 2>/dev/null)"; src=$?; fi
