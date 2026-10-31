@@ -2,8 +2,8 @@
 # Cleans the context of one or more workers: opens a new conversation in their agent and resends their role.
 # Usage (from the worktree):  clean.sh <role|title|handle> [...]   |   clean.sh --all   |   clean.sh --msg <role>  (only prints the role message;
 # for the Planner, the one for after its conversation was cleared: see role_anchor, which tells each role to ask for it)
-# The Planner runs it after the user confirms. It never cleans the front role (the local coordinator in programmer, the Planner in the other
-# modes) or a worker with a task in flight (the Planner ensures that). In programmer the Planner is a worker and can be cleaned.
+# The local coordinator runs it after the user confirms. It never cleans the front role (the local coordinator) or a worker with a task in
+# flight (the local coordinator ensures that). The Planner is a worker and can be cleaned.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
@@ -14,7 +14,6 @@ STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$
 . "$STATE"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 IDS="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-')"
-MODE="$(mode_of --saved "$CFG" 2>/dev/null || echo programmer)"
 lower() { tr 'A-Z' 'a-z'; }
 
 resolve() {  # <role|title|handle> → role id
@@ -27,7 +26,7 @@ resolve() {  # <role|title|handle> → role id
 
 if [ "$1" = --msg ]; then
   id="$(resolve "${2:-}")"; [ -n "$id" ] || { echo "Unknown role: ${2:-}" >&2; exit 1; }
-  if [ "$id" = local-coordinator ] && [ ! -e "$GITDIR/orca-roles.mode-pending" ] || { [ "$id" = planner ] && [ "$MODE" != programmer ]; }; then
+  if [ "$id" = local-coordinator ] && [ ! -e "$GITDIR/orca-roles.mode-pending" ]; then
     wt="${ORCA_WORKTREE_ID:+id:$ORCA_WORKTREE_ID}"; { IFS= read -r key; IFS= read -r url; } < <(worktree_jira "${wt:-active}" "$CFG")
     if [ -e "$GITDIR/orca-roles.mode-pending" ]; then planner_ask_msg "$CFG"
     else planner_msg "$CFG" "$(echo $IDS)" "$STATE" "$key" "$url" 3; fi
@@ -39,7 +38,6 @@ TARGETS=()
 if [ "$1" = --all ]; then
   for id in $IDS; do
     [ "$id" = local-coordinator ] && continue
-    [ "$id" = planner ] && [ "$MODE" != programmer ] && continue
     TARGETS+=("$id")
   done
 else
@@ -51,7 +49,6 @@ RC=0
 for id in "${TARGETS[@]}"; do
   t="$(title_of "$CFG" "$id")"
   [ "$id" = local-coordinator ] && { echo "$t: the local coordinator does not clean itself."; RC=1; continue; }
-  [ "$id" = planner ] && [ "$MODE" != programmer ] && { echo "$t: the Planner does not clean itself."; RC=1; continue; }
   v="$(var_of "$id")"; h="${!v}"
   orca terminal show --terminal "$h" --json >/dev/null 2>&1 || { echo "$t: its tab ($h) does not respond."; RC=1; continue; }
   cmd="$(clear_command "$CFG" "$id")"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opens the tabs of the worktree's enabled roles and starts their kickoff in the background.
 # Usage: launch.sh [id:<worktree>] [exceptions]
-#   --only a,b       only those roles (the planner and the mode's front role always run)
+#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it)
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
@@ -247,14 +247,17 @@ ERR="$(check_config "$NEWCFG" "$OVRSRC")"
 NEWMODE="$(mode_of "$NEWCFG")"
 ASK=0
 if [ "$NEED" = 1 ] && [ "$(setting "$NEWCFG" enableAskModeOnStart true)" != false ]; then ASK=1; fi
-# The front role of this run (it opens first, owns the Run and talks to the user): the local coordinator while the mode is being asked
-# and in programmer mode, the Planner in the other modes. In programmer the Planner is one of the workers.
+# The front role of this run (it opens first, owns the Run and talks to the user): the local coordinator, in every mode and while the mode is being asked.
 FRONT="$(front_role "$NEWMODE")"
-if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then FRONT=local-coordinator; fi
 FRONTV="$(var_of "$FRONT")"; FL="$(front_label "$FRONT")"; FLC="$(front_label "$FRONT" cap)"
 if [ "$FRONT" = local-coordinator ] && ! jq -e '(.roles["local-coordinator"] | type) == "object" and .roles["local-coordinator"].enabled != false' "$NEWCFG" >/dev/null 2>&1; then
   BASECFG="$KIT/config.json"; [ -f "$BASECFG" ] || BASECFG="$KIT/config.default.json"
-  fail "ERROR: programmer mode needs the local-coordinator role, missing or disabled in $BASECFG: run install.sh again, or remove the override that disables it"
+  fail "ERROR: $NEWMODE mode needs the local-coordinator role, missing or disabled in $BASECFG: run install.sh again, or remove the override that disables it"
+fi
+if [ "$ASK" = 0 ] && { [ "$NEWMODE" = programmer ] || [ "$NEWMODE" = academic-research ]; } \
+   && ! jq -e '(.roles.planner | type) == "object" and .roles.planner.enabled != false' "$NEWCFG" >/dev/null 2>&1; then
+  BASECFG="$KIT/config.json"; [ -f "$BASECFG" ] || BASECFG="$KIT/config.default.json"
+  fail "ERROR: $NEWMODE mode needs the planner role, missing or disabled in $BASECFG: run install.sh again, or remove the override that disables it"
 fi
 if [ "$ASK" = 0 ]; then
   if [ "$NEWMODE" = academic-research ] && ! git_here toplevel >/dev/null 2>&1; then
@@ -305,15 +308,13 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
   if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then WAKE_ALL=1; fi
   # An old-layout team (PLANNER= and no LOCAL_COORDINATOR=) is refused while any of its tabs exists, so every saved tab must be seen: wake them all.
   if [ "$FRONT" = local-coordinator ] && grep -q '^PLANNER=' "$STATE" && ! grep -q '^LOCAL_COORDINATOR=' "$STATE"; then WAKE_ALL=1; fi
-  WAKE_EXTRA=""   # a non-programmer choice from the pending state also needs the local coordinator's tab, to refuse it while it is open
-  if [ "$PENDING" = 1 ] && [ "$ASK" = 0 ] && [ "$REOPEN" = 0 ] && [ "$NEWMODE" != programmer ]; then WAKE_EXTRA=local-coordinator; fi
   WAKE_MSG="Cannot wake tabs Orca kept asleep on this system; their roles are treated as closed."
   W_N=0; W_STOP=0
   for line in $(cat "$STATE"); do
     [ "$W_STOP" = 0 ] || break
     wv="${line%%=*}"; [ -n "${line#*=}" ] || continue
     wid="$(printf '%s' "$wv" | tr 'A-Z_' 'a-z-')"
-    if [ "$WAKE_ALL" = 0 ]; then case " $LROLES $WAKE_EXTRA " in *" $wid "*) ;; *) continue;; esac; fi
+    if [ "$WAKE_ALL" = 0 ]; then case " $LROLES " in *" $wid "*) ;; *) continue;; esac; fi
     wp="$(saved_pty "$wv")"; [ -n "$wp" ] || continue
     wold="$(restored_handle "$wp")"
     wt="$(grep "^$wv=" "$TABS" 2>/dev/null | head -1 | cut -d= -f2-)"
@@ -403,15 +404,6 @@ team_tabs_exist() {
   return 1
 }
 drop_role_lines() { local f; for f in "$STATE" "$PTY" "$KICKED" "$TABS"; do [ -f "$f" ] && { grep -v "^$1=" "$f" > "$f.tmp"; mv "$f.tmp" "$f"; }; done; return 0; }
-# Programmer <-> another mode would move the front role between the local coordinator and the Planner: not in this version.
-if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "$NEWMODE" ] && [ -s "$STATE" ] \
-   && [ "$(front_role "$PREV_MODE")" != "$(front_role "$NEWMODE")" ]; then
-  [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether this worktree's team (mode '$PREV_MODE') is still open: 'orca terminal list' failed. Mode '$NEWMODE' was requested; nothing was changed. Try again once Orca is ready."
-  if team_tabs_exist; then
-    OTHER="$NEWMODE"; [ "$NEWMODE" != programmer ] || OTHER="$PREV_MODE"
-    fail "ERROR: switching between programmer and $OTHER is not available in this version: start $OTHER in a new worktree with roles --mode $OTHER"
-  fi
-fi
 # A team opened by a kit that had no local coordinator (PLANNER= and no LOCAL_COORDINATOR= in the state) cannot be reused by this one: while
 # any of its tabs exists, the user closes them; with none, its state files go and the launch is a fresh one (it keeps the worktree's saved mode).
 if [ "$FRONT" = local-coordinator ] && [ -s "$STATE" ] && grep -q '^PLANNER=' "$STATE" && ! grep -q '^LOCAL_COORDINATOR=' "$STATE"; then
@@ -423,15 +415,6 @@ if [ "$FRONT" = local-coordinator ] && [ -s "$STATE" ] && grep -q '^PLANNER=' "$
   FRESH=1; PREV_MODE=""
   echo "This worktree's earlier team has no open tabs: its saved state was removed and a new team starts."
   if [ "$REOPEN" = 1 ]; then echo "Nothing to reopen: run roles to start the team."; exit 0; fi
-fi
-# A mode other than programmer chosen from the pending state: the local coordinator's tab must be closed first (its conversation is the
-# programmer one). With no such tab, its lines leave the state and the chosen mode starts as a fresh team with the Planner in front.
-if [ "$PENDING" = 1 ] && [ "$ASK" = 0 ] && [ "$REOPEN" = 0 ] && [ "$NEWMODE" != programmer ] && grep -q '^LOCAL_COORDINATOR=' "$STATE" 2>/dev/null; then
-  [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether the local coordinator's tab is still open: 'orca terminal list' failed; nothing was changed. Try again once Orca is ready."
-  if tab_exists LOCAL_COORDINATOR; then
-    fail "ERROR: $NEWMODE cannot be chosen while the local coordinator's tab is open: close it and run roles --mode $NEWMODE from a terminal of this worktree"
-  fi
-  drop_role_lines LOCAL_COORDINATOR
 fi
 SWITCH_FROM=""
 # The mode cannot change under an open team: its tabs belong to the previous mode. Any tab of the saved team that still exists counts: its saved
@@ -640,7 +623,7 @@ for id in $ROLES; do
   sv="ST_$v"; st="${!sv}"
   if [ "$REOPEN" = 1 ] && [ -z "${!v:-}" ]; then echo "$t has no saved tab (closed on purpose or never opened); leaving it closed."; continue; fi
   if [ "$st" = 0 ] && [ "$id" = "$FRONT" ] && [ "$CHOSEN" = 1 ]; then
-    NEW="$NEW $id"; REUSED="$REUSED $id"; echo "$FLC gets its role message for mode $NEWMODE."; continue
+    NEW="$NEW $id"; REUSED="$REUSED $id"; echo "$FLC gets its role message for mode $NEWMODE after a context clear."; continue
   fi
   if [ "$st" = 0 ] && [ "$id" = "$FRONT" ] && [ -n "$SWITCH_FROM" ]; then
     NEW="$NEW $id"; REUSED="$REUSED $id"; echo "$FLC gets its role message for mode $NEWMODE after a context clear."; continue
@@ -785,7 +768,7 @@ if [ -z "$NEW" ]; then echo "All roles are already open."; start_relauncher; exi
 case " $NEW " in *" $FRONT "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${!FRONTV:-}" ] || echo "$FLC kept its tab: it is told the new handles by a message (\"Role handles changed\"); if it does not pick them up, ask it to read its messages.";; esac
 KLOG="$GITDIR/orca-roles-kickoff.log"
 if [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ]; then KLOG="$GITDIR/orca-roles-relaunch.log"; else [ ! -f "$KLOG" ] || mv -f "$KLOG" "$KLOG.1"; : > "$KLOG"; fi   # launched by the relauncher: its log is appended to; otherwise the previous launch's log is kept as .1
-ORCA_ROLES_SWITCH_FROM="$SWITCH_FROM" ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
+ORCA_ROLES_SWITCH_FROM="$SWITCH_FROM" ORCA_ROLES_MODE_CHOSEN="$CHOSEN" ORCA_ROLES_SELF_RELAUNCH="$SELF_RELAUNCH" ORCA_ROLES_PLANNER_BUSY="$PLANNER_BUSY" ORCA_ROLES_SELF_NO_SESSION="$SELF_NO_SESSION" nohup "$KICKOFF" "$WT" "$STATE" "$CFG" "$NEW" "$RESUMED" "$REMEMBERED" "$REUSED" >> "$KLOG" 2>&1 &
 mkdir -p "$KICKOFFS" && printf '%s\n' "${NEW# }" > "$KICKOFFS/$!"
 echo "Role kickoff in progress (log: $KLOG)"
 start_relauncher

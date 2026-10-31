@@ -252,7 +252,7 @@ model_error_regex() {
 }
 # A setting's value as text, or the default when it is absent or null (false is a value: jq's // would drop it).
 setting() { jq -r --arg k "$2" --arg d "$3" '(if (.settings | type) == "object" and (.settings | has($k)) and .settings[$k] != null then .settings[$k] else $d end) | tostring' "$1"; }
-# The kit's modes: fixed, not configurable. A mode is available when its folder has a planner prompt.
+# The kit's modes: fixed, not configurable. A mode is available when its folder has a local coordinator prompt.
 MODE_IDS="programmer pr-reviewer academic-research"
 MODES_JSON='["programmer","pr-reviewer","academic-research"]'
 MODE_LIST="programmer, pr-reviewer, academic-research"
@@ -261,7 +261,7 @@ mode_error() {  # <id>
   local m
   for m in $MODE_IDS; do
     if [ "$m" = "$1" ]; then
-      [ -f "$KIT/prompts/$1/planner.md" ] || echo "mode '$1' is not available yet"
+      [ -f "$KIT/prompts/$1/local-coordinator.md" ] || echo "mode '$1' is not available yet"
       return 0
     fi
   done
@@ -282,13 +282,13 @@ mode_of() {
 }
 # The phase of a configuration (settings.phase, "experiment" if unset): academic-research only.  phase_of <config>
 phase_of() { jq -r '(.settings // {}) | .phase // "experiment" | tostring' "$1" 2>/dev/null || echo experiment; }
-# Enabled roles of the configuration's mode, in order; the planner and the mode's front role always run. A role without "modes" belongs to programmer only.
+# Enabled roles of the configuration's mode, in order; the mode's front role always runs. A role without "modes" belongs to programmer only.
 # In academic-research a role with "phases" also needs the current phase in it; in the other modes "phases" is ignored.
 enabled_roles() {
   local m p f; m="$(mode_of --saved "$1")" || return 1
   p="$(phase_of "$1")"; f="$(front_role "$m")"
   jq -r --arg m "$m" --arg p "$p" --arg f "$f" '.roles | to_entries[]
-    | select(.key == "planner" or .key == $f or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (index($m) != null) else false end)
+    | select(.key == $f or (.value.enabled != false and ((.value.modes // ["programmer"]) | if . == "all" then true elif type == "array" then (index($m) != null) else false end)
         and ($m != "academic-research" or (.value | has("phases") | not) or (.value.phases | type == "array" and index($p) != null))))
     | .key' "$1"
 }
@@ -298,7 +298,7 @@ launchable_roles() {
   fr="$(front_role "$m")"
   for id in $(enabled_roles "$1"); do
     f="$(prompt_of "$1" "$id")"
-    if [ "$id" != planner ] && [ "$id" != "$fr" ] && [ ! -f "$f" ]; then echo "Warning: role $id is skipped: it has no prompt for mode $m (expected $f)." >&2; continue; fi
+    if [ "$id" != "$fr" ] && [ ! -f "$f" ]; then echo "Warning: role $id is skipped: it has no prompt for mode $m (expected $f)." >&2; continue; fi
     echo "$id"
   done
 }
@@ -334,11 +334,10 @@ var_of() {
   for ((i = 0; i < 26; i++)); do s="${s//"${l:i:1}"/${u:i:1}}"; done
   printf '%s\n' "${s//-/_}"
 }
-# The role that opens first, owns the Run and talks to the user: the local coordinator in programmer mode and while no mode is chosen
-# (the mode-pending marker in <git dir>), the Planner in the other modes.  front_role <mode> [<git dir>]
+# The role that opens first, owns the Run and talks to the user: the local coordinator, in every mode and while no mode is chosen.  front_role <mode> [<git dir>]
 front_role() {
   if [ -n "${2:-}" ] && [ -e "$2/orca-roles.mode-pending" ]; then echo local-coordinator; return 0; fi
-  case "$1" in programmer|"") echo local-coordinator;; *) echo planner;; esac
+  echo local-coordinator
 }
 front_var() { var_of "$(front_role "$@")"; }
 # The front role of a configuration's saved mode in this worktree (or in <git dir>).  front_of <config> [<git dir>]
@@ -375,6 +374,7 @@ OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--he
 # ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
 # claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
+# ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
@@ -386,6 +386,8 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.tester.modes |= (if . == ["programmer"] then $d.roles.tester.modes else . end)
     | .roles.writer.model |= (if . == "claude-opus-5-5" then $d.roles.writer.model else . end)
     | .roles.planner.pluginDirs |= (if . == ["{kit}/plugin"] then $d.roles.planner.pluginDirs else . end)
+    | .roles["local-coordinator"].modes |= (if . == ["programmer"] then $d.roles["local-coordinator"].modes else . end)
+    | .roles.planner.modes |= (if . == "all" then $d.roles.planner.modes else . end)
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
@@ -536,7 +538,7 @@ check_config() {
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0
   out="$(jq -r --slurpfile o "$2" --arg m "$m" --arg f "$(front_role "$m")" '$o[0] as $o | .roles as $R | [$o.only[], $o.enable[], $o.disable[]] | unique[]
-    | select(. != "planner" and . != $f and $R[.] != null)
+    | select(. != $f and $R[.] != null)
     | . as $r | ($R[$r].modes // ["programmer"]) as $rm
     | select($rm | if . == "all" then false elif type == "array" then (index($m) == null) else false end)
     | "ERROR: role \($r) is not part of mode \($m) (its modes: \($rm | if type == "array" then join(", ") else tostring end))"' "$1")" || { echo "ERROR: could not check the exceptions against the mode"; return 0; }
@@ -726,7 +728,7 @@ coordinator_run() {
   return 1
 }
 
-# The front role's startup message: the Planner's in the other modes, the local coordinator's in programmer (where the Planner is a worker
+# The front role's startup message: the local coordinator's in every mode (the Planner, where the mode has one, is a worker
 # and is one of its handles).  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
   local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front
@@ -798,18 +800,16 @@ planner_msg() {
   fi
   printf '%s' "$msg"
 }
-# The front role's first message while the worktree has no mode yet: ask the user whether to start in programmer mode (the only mode this
-# version starts from here).  planner_ask_msg <config>
+# The front role's first message while the worktree has no mode yet: ask the user which mode to start in.  planner_ask_msg <config>
 planner_ask_msg() {
-  local cfg="$1" lang msg
-  msg="You are the local coordinator of the orca-roles kit in this worktree, and no mode has been chosen yet. Read $KIT/prompts/programmer/local-coordinator.md and adopt that role from now on, but do not start its startup before the mode is chosen."
+  local cfg="$1" lang msg sug
+  sug="$(jq -r '.settings.mode // "programmer"' "$cfg" 2>/dev/null)"; case " $MODE_IDS " in *" $sug "*) ;; *) sug=programmer;; esac
+  msg="You are the local coordinator of the orca-roles kit in this worktree, and no mode has been chosen yet. Do not start any work and do not read any prompt before the mode is chosen: once the user chooses, the kit sends you your role message for that mode."
   lang="$(setting "$cfg" language auto)"
   if [ "$lang" != auto ] && [ -n "$lang" ]; then msg="$msg Always reply to the user in $lang, whatever language they write in."
   else msg="$msg Reply to the user in the language they write in."; fi
-  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer). Then end your turn and wait for the user's typed answer."
-  msg="$msg Do not start any work before the answer."
-  msg="$msg If the user says yes, run \`~/.orca-roles/bin/launch.sh --mode programmer\` from the worktree and end your turn: the kit opens the team and sends you your role message for it."
-  msg="$msg If the user wants another mode, tell them that this version starts other modes only after they close this tab (yours) and run \`roles --mode <mode>\` from a terminal of this worktree, and run nothing."
+  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) which mode to start in, offering these three: programmer (plan and build code with a team: Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer), academic-research (write a research paper with a team: Planner and the phase's roles), and pr-reviewer (review a pull request or a diff with the review lenses). Suggest $sug, the configured one. Then end your turn and wait for the user's typed answer."
+  msg="$msg When the user chooses, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree with the chosen mode and end your turn: the kit opens the team and sends you your role message for it."
   printf '%s' "$msg"
 }
 # Every handle the front role's tab has had in this worktree (the name of the file is the one the Planner's had before the local coordinator):
@@ -848,7 +848,7 @@ stale_run() {
 # The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt
 # (--append-system-prompt), codex as developer_instructions, custom through {anchor} / $ORCA_ROLES_ANCHOR if its command uses them.
 # The role itself arrives as a message, so when that message is gone the agent asks the kit for it again.  role_anchor <config> <role>
-# Workers (every role but the mode's front role: the Planner is one in programmer mode) also get the English rule, because the user's own
+# Workers (every role but the front role, the local coordinator: the Planner is one) also get the English rule, because the user's own
 # language setting would otherwise win over the prompt.
 role_anchor() {
   local en=""
@@ -927,7 +927,7 @@ superpowers_deny() {
     'Skill(superpowers:requesting-code-review)' 'Skill(superpowers:using-git-worktrees)' 'Skill(superpowers:finishing-a-development-branch)' \
     'Skill(superpowers:writing-skills)' 'Skill(superpowers:diagnosing-superpowers)' EnterWorktree ExitWorktree Agent Task
 }
-# Skills the Planner does not use when it is a worker (programmer mode): it keeps brainstorming, writing-plans and receiving-code-review, and the kit's
+# Skills the Planner does not use (it is a worker in every mode that has it): it keeps brainstorming, writing-plans and receiving-code-review, and the kit's
 # team skill is the local coordinator's.  planner_skill_deny → one Skill(...) per line
 planner_skill_deny() {
   printf '%s\n' 'Skill(superpowers:verification-before-completion)' 'Skill(superpowers:test-driven-development)' 'Skill(superpowers:systematic-debugging)' \

@@ -28,7 +28,7 @@ jq --arg p "$TARGET" '.settings.phase = $p' "$CFG" > "$TCFG" || exit 1
 KEEP="$(enabled_roles "$TCFG")" || exit 1
 CLOSE=""
 for id in $(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-'); do
-  [ "$id" = planner ] && continue
+  [ "$id" = planner ] || [ "$id" = local-coordinator ] && continue
   printf '%s\n' "$KEEP" | grep -qxF "$id" || CLOSE="$CLOSE $id"
 done
 if [ -n "$CLOSE" ]; then
