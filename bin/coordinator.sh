@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Starts the coordinator above the worktrees in this terminal: Claude Code with prompts/coordinator.md as its role. It opens worktrees
-# (each one starts its orca-roles team), gives each Planner its feature as an Orca dispatch and talks to the user (see README, Coordinator).
+# (each one starts its orca-roles team), gives each local coordinator its feature as an Orca dispatch and talks to the user (see README, Coordinator).
 # Usage (in an Orca terminal, e.g. in a project's main checkout):  coordinator.sh [--model <model>]
-# Model and permission mode: --model, else the Planner's in the configuration. Trusts this folder for Claude Code as launch.sh does. Reads Orca's nested worker depth (lib.sh orca_nested_depth) and tells the coordinator.
+# Model and permission mode: --model, else roles.planner's in the configuration (the coordinator is a strong-model role, like the Planner). Trusts this folder for Claude Code as launch.sh does. Reads Orca's nested worker depth (lib.sh orca_nested_depth) and tells the coordinator.
 set -euo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 MODEL=""
@@ -31,7 +31,7 @@ fi
 rm -f "$CFG"
 DEPTH="$(orca_nested_depth)"
 if [ -n "$DEPTH" ] && [ "$DEPTH" -lt 2 ]; then
-  echo "coordinator.sh: Orca's Nested worker depth is $DEPTH; Planners need 2 (Settings → Orchestration → \"Nested worker depth\")."
+  echo "coordinator.sh: Orca's Nested worker depth is $DEPTH; each local coordinator needs 2 (global coordinator -> local coordinator -> Planner and workers: depth 2) (Settings → Orchestration → \"Nested worker depth\")."
 fi
 if session_hook_enabled; then ensure_session_hook_or_warn; fi   # the SessionStart hook that re-binds a reopened tab's Runs
 ARGS=(); [ -n "$MODEL" ] && ARGS+=(--model "$MODEL"); [ -n "$PERM" ] && ARGS+=(--permission-mode "$PERM")
