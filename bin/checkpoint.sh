@@ -2,11 +2,13 @@
 # Records the worktree as it is now (tracked and untracked files, honouring .gitignore) as a commit under refs/orca-roles/checkpoints/,
 # without touching HEAD, the index, the branch or the working tree, so workers can diff a round against the previous one.
 # Usage (from the worktree):  checkpoint.sh [--force] <step> <n>   |   checkpoint.sh --list [<step>]
-#                             checkpoint.sh --clear <step>   |   checkpoint.sh --clear-all
+#                             checkpoint.sh --clear <step>   |   checkpoint.sh --clear-all   |   checkpoint.sh --same <rev>
 # <step> is [a-z0-9-]+ (starting with a letter or digit) and <n> an integer; the ref is refs/orca-roles/checkpoints/<worktree id>/<step>-c<n>.
+# --same <rev>: exit 0 (prints "same <rev>") when the working tree, recorded as a checkpoint would record it, equals <rev>'s tree; 1 (prints "differs <rev>" and the diff stat) when not; 2 on a bad revision. Writes no ref, index or working file (git may keep unreferenced objects).
 set -uo pipefail
 NS=refs/orca-roles/checkpoints
-die() { echo "checkpoint.sh: $*" >&2; exit 1; }
+DIE_RC=1
+die() { echo "checkpoint.sh: $*" >&2; exit "$DIE_RC"; }
 usage() { sed -n 4,5p "$0" >&2; exit 1; }
 valid_step() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]]; }
 valid_n() { [[ "$1" =~ ^(0|[1-9][0-9]{0,8})$ ]]; }
@@ -46,12 +48,35 @@ diff_hints() {  # <step> <n>
   if [ "$2" -gt 0 ] && git show-ref --verify --quiet "$prev"; then echo "Since the previous checkpoint:             git diff $prev $ref"; fi
 }
 
+tree_now() {  # sets TREE: the working tree recorded in a temporary index, leaving the real one alone
+  T="$(mktemp -d "${TMPDIR:-/tmp}/orca-checkpoint.XXXXXX")" || die "cannot create a temporary folder"
+  trap 'rm -rf "$T"' EXIT
+  IDX="$(git rev-parse --path-format=absolute --git-path index)"
+  [ -f "$IDX" ] && cp -p "$IDX" "$T/index"
+  cd "$TOP" || die "cannot enter $TOP"
+  export GIT_INDEX_FILE="$T/index"
+  STALE="$(git ls-files -v | grep -E '^[a-zS] ' | cut -c3-)"
+  if [ -n "$STALE" ]; then
+    echo "Warning: $(printf '%s\n' "$STALE" | wc -l | tr -d ' ') file(s) marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree: $(printf '%s\n' "$STALE" | head -5 | tr '\n' ' ' | sed 's/ $//')" >&2
+  fi
+  git add -A >/dev/null || die "git add failed; nothing written"
+  TREE="$(git write-tree)" || die "git write-tree failed; nothing written"
+  unset GIT_INDEX_FILE
+}
+
 case "${1:-}" in
   --list)
     [ $# -le 2 ] || usage
     [ -z "${2:-}" ] || valid_step "$2" || die "invalid step '$2': use [a-z0-9-]+"
     list_step "${2:-}" | while IFS= read -r r; do echo "$r $(git rev-parse --short "$r") $(git log -1 --format=%cd --date=iso "$r")"; done
     exit 0 ;;
+  --same)
+    [ $# = 2 ] || { echo "checkpoint.sh: --same needs exactly one revision" >&2; exit 2; }
+    REV="$(git rev-parse --verify -q "$2^{commit}")" || { echo "checkpoint.sh: $2 is not a commit" >&2; exit 2; }
+    DIE_RC=2
+    tree_now
+    if [ "$TREE" = "$(git rev-parse "$REV^{tree}")" ]; then echo "same $2"; exit 0; fi
+    echo "differs $2"; git diff --stat "$REV^{tree}" "$TREE"; exit 1 ;;
   --clear-all)
     [ $# = 1 ] || usage
     N=0; while IFS= read -r r; do [ -n "$r" ] || continue; git update-ref -d "$r" && N=$((N + 1)); done < <(list_step "")
@@ -72,19 +97,7 @@ REF="$BASE/$STEP-c$N"
 git check-ref-format "$REF" || die "invalid ref $REF"
 if [ "$FORCE" = 0 ] && git show-ref --verify --quiet "$REF"; then die "$REF already exists (use --force to overwrite it)"; fi
 
-T="$(mktemp -d "${TMPDIR:-/tmp}/orca-checkpoint.XXXXXX")" || die "cannot create a temporary folder"
-trap 'rm -rf "$T"' EXIT
-IDX="$(git rev-parse --path-format=absolute --git-path index)"
-[ -f "$IDX" ] && cp "$IDX" "$T/index"
-cd "$TOP" || die "cannot enter $TOP"
-export GIT_INDEX_FILE="$T/index"
-STALE="$(git ls-files -v | grep -E '^[a-zS] ' | cut -c3-)"
-if [ -n "$STALE" ]; then
-  echo "Warning: $(printf '%s\n' "$STALE" | wc -l | tr -d ' ') file(s) marked assume-unchanged or skip-worktree are recorded as in the index, not as in the working tree: $(printf '%s\n' "$STALE" | head -5 | tr '\n' ' ' | sed 's/ $//')" >&2
-fi
-git add -A >/dev/null || die "git add failed; nothing written"
-TREE="$(git write-tree)" || die "git write-tree failed; nothing written"
-unset GIT_INDEX_FILE
+tree_now
 PARENT=(); git rev-parse --verify -q HEAD >/dev/null && PARENT=(-p HEAD)
 export GIT_AUTHOR_NAME=orca-roles GIT_AUTHOR_EMAIL=orca-roles@localhost GIT_COMMITTER_NAME=orca-roles GIT_COMMITTER_EMAIL=orca-roles@localhost
 SEQ=$(( $(max_seq) + 1 ))

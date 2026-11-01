@@ -6155,6 +6155,21 @@ check "checkpoint: --clear-all deletes every checkpoint of this worktree and rep
 check "checkpoint: --clear-all keeps the other worktree's refs and leaves HEAD and the tree alone" "$(cq for-each-ref refs/orca-roles | grep -c '/w-c1$'):$(cq rev-parse HEAD) $(cq status --porcelain | shasum)" "1:$CQS"
 cqrun --clear-all; check "checkpoint: --clear-all with nothing recorded exits 0" "$CPRC:$CPOUT" "0:Deleted 0 checkpoint(s)"
 cqrun a 1; check "checkpoint: after --clear-all seq restarts at 1 and the first hint falls back to HEAD" "$(cqsubj "$(cqref)")|$(cqhint)" "checkpoint a-c1 seq 1|Whole step since HEAD (the first brief):  git diff HEAD $(cqref)"
+printf 'ign\n' > "$CQ/.gitignore"; cq add -A; cq commit -q -m ign; cqrun sm 1; QSM="$(cqref)"
+cqst() { CD="$CQ" cpstate; }; cqrefs() { cq for-each-ref refs/orca-roles | wc -l | tr -d ' '; }
+cqrun --same "$QSM"; SM0="$CPRC:$CPOUT"
+printf 'x\n' > "$CQ/f"; cq add f; printf 'a\n' > "$CQ/f"; printf 'x\n' > "$CQ/ign"; cqrun --same "$QSM"; SM1="$CPRC:$CPOUT"; rm "$CQ/ign"; cq reset -q
+check "checkpoint --same: unchanged, and staged-then-reverted plus an ignored file, give 0 and 'same <rev>'" "$SM0|$SM1" "0:same $QSM|0:same $QSM"
+SM3=""; SMR="$(cqrefs)"; SMOK=""
+for ch in 'printf "x\n" >> "$CQ/f"' 'printf "x\n" > "$CQ/new"' 'rm "$CQ/f"'; do
+  eval "$ch"; SMS="$(cqst)"; cqrun --same "$QSM"; [ "$(cqst)" = "$SMS" ] || SMOK="$SMOK bad"; SM3="$SM3 $CPRC:$(printf '%s\n' "$CPOUT" | head -1):$(printf '%s\n' "$CPOUT" | sed 1d | grep -cE '^ (f|new) ' || true)"; cq checkout -q -- f; rm -f "$CQ/new"
+done
+check "checkpoint --same: edited, untracked and deleted files give 1, 'differs <rev>' and a stat naming the file" "$SM3" " 1:differs $QSM:1 1:differs $QSM:1 1:differs $QSM:1"
+SM4=""
+for bad in nosuchref '' 'a b'; do eval "cqrun --same $bad"; SM4="$SM4 $CPRC:${#CPOUT}:$([ -n "$CPERR" ] && echo msg)"; done
+TMPDIR="$TMP/no/such" cqrun --same "$QSM"; SM4="$SM4 $CPRC:${#CPOUT}:$([ -n "$CPERR" ] && echo msg)"
+check "checkpoint --same: a bad revision, no argument, two arguments or a failure building the tree give 2, a message and nothing on stdout" "$SM4" " 2:0:msg 2:0:msg 2:0:msg 2:0:msg"
+check "checkpoint --same: writes no ref and leaves HEAD, index and tree unchanged" "$(cqrefs):[$SMOK]" "$SMR:[]"
 cq worktree remove --force "$TMP/cp-seq-wt"
 check "defaults: maxMutants 8 and maxSelfMutants 3 in config" "$(jq -c '[.roles["code-reviewer"].params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json")" '[8,3]'
 mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.tester.params.maxSelfMutants]'; }
