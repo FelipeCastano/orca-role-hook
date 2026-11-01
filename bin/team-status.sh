@@ -3,7 +3,7 @@
 # Usage:  team-status.sh [--json] [--run <run_id>] [<worktree folder>]     (default folder: the current directory)
 #   One line per role, tab-separated: Title, state, since, task, tool, summary.
 #   state: working | waiting (waiting for an answer or a permission) | done | interrupted | failed | no-status (Orca has no row for
-#          the tab) | no-tab (no tab saved) | undelivered (--run only: done, and a dispatch of the run is open but never started and its
+#          the tab) | no-tab (no tab saved) | not-opened (a role that opens on first use or per task and has no tab yet) | undelivered (--run only: done, and a dispatch of the run is open but never started and its
 #          text sits in the composer: Enter lost)
 #   since: age of that state (45s, 12m, 1h05m).  task: the task id of the prompt, or role-message (only got its role).
 #   --json     a JSON array of {role, title, handle, paneKey, state, since, sinceMs, task, tool, summary} instead of the lines
@@ -48,6 +48,13 @@ while IFS='=' read -r var handle; do
   pane=""; [ -z "$tab" ] || [ -z "$leaf" ] || pane="$tab:$leaf"
   ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" --arg h "$handle" --arg p "$pane" '. + [{role: $r, title: $t, handle: $h, paneKey: $p}]')"
 done < "$GITDIR/orca-roles.env"
+if [ "$CFG" != /dev/null ]; then   # roles that open on first use or per task and have no tab yet
+  for id in $(launchable_roles "$CFG" 2>/dev/null); do
+    grep -q "^$(var_of "$id")=" "$GITDIR/orca-roles.env" && continue
+    [ "$(open_of "$CFG" "$id")" != start ] || continue
+    ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" '. + [{role: $r, title: $t, handle: "", paneKey: "", notOpened: true}]')"
+  done
+fi
 
 OUT="$(jq -n -c --argjson roles "$ROLES" --argjson agents "$AGENTS" --argjson now "$NOW" '
   def age($ms): if $ms == null then "-" elif $ms < 60000 then "\($ms / 1000 | floor)s"
@@ -57,7 +64,8 @@ OUT="$(jq -n -c --argjson roles "$ROLES" --argjson agents "$AGENTS" --argjson no
   $roles | map(. as $r
     | ([$agents[] | select(.paneKey == $r.paneKey)] | sort_by(.updatedAt // 0) | last) as $a
     | ($a.prompt // "") as $pr
-    | (if $r.paneKey == "" then "no-tab"
+    | (if $r.notOpened == true then "not-opened"
+       elif $r.paneKey == "" then "no-tab"
        elif $a == null then "no-status"
        elif $a.state == "working" then "working"
        elif $a.state == "waiting" or $a.state == "blocked" then "waiting"
@@ -89,7 +97,7 @@ if [ -n "$RUN" ]; then
 fi
 
 if [ "$JSON" = 1 ]; then
-  printf '%s' "$OUT" | jq 'map(del(.prompt))'
+  printf '%s' "$OUT" | jq 'map(del(.prompt, .notOpened))'
 else
   printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")'
 fi

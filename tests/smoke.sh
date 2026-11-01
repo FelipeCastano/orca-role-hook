@@ -478,7 +478,7 @@ for m in programmer pr-reviewer academic-research; do
     rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra experiment, variant or source without asking the local coordinator'
   }
   [ "$m" != academic-research ] || rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra question, source or dataset without asking the local coordinator'
-  rule R18 "$PL" 'the one exception is `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
+  rule R18 "$PL" 'the exceptions, which need no confirmation, are `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$PL" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/local-coordinator.md uses --types without --wait"; FAIL=1; }
 done
 # R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into Dev's spec (Phase 2 point 2), and passes 16-18 of the plan review
@@ -925,6 +925,9 @@ cvok .roles.dev.opencode '{"permissions":[{"action":"edit","resource":"x/*","eff
 check "check_config: an invalid flow, oracle, telemetry or trust value is exactly one ERROR with the right message" "$(grep -c BAD <<< "$CV1"):$(grep -o 'ok ' <<< "$CV1" | wc -l | tr -d ' ')" "0:91"
 check "check_config: an invalid roles.<r>.opencode is exactly one ERROR with the right message" "$(grep -c BAD <<< "$CV2"):$(grep -o 'ok ' <<< "$CV2" | wc -l | tr -d ' ')" "0:14"
 check "check_config: null, absent and every valid value of those keys give no ERROR" "$(grep -c BAD <<< "$CV3"):$(grep -o 'ok ' <<< "$CV3" | wc -l | tr -d ' ')" "0:64"
+OP=""; for v in '"start"' '"first-use"' '"per-task"' '"later"' 1 '""'; do jq -c --argjson v "$v" '.roles.dev.open = $v' "$ROOT/config.default.json" > "$TMP/op.json"; OP="$OP$(check_config "$TMP/op.json" | grep -c '^ERROR: role dev: open must be' || true)"; done
+jq -c '.defaults.open = "later"' "$ROOT/config.default.json" > "$TMP/op.json"
+check "check_config: roles.<r>.open accepts start, first-use and per-task only, the error names the role, defaults.open is checked too" "$OP:$(check_config "$TMP/op.json" | grep -c '^ERROR: defaults.open must be' || true)" "000111:1"
 check "check_config: config.default.json gives no ERROR, and several invalid values give one line each" "$(check_config "$ROOT/config.default.json" | wc -l | tr -d ' '):$(jq -c '.settings.trust = "x" | .settings.flow.roundCap = "3" | .settings.oracle.timeout = -1' "$ROOT/config.default.json" > "$TMP/cv.json"; check_config "$TMP/cv.json" | grep -c '^ERROR: invalid configuration: settings\.')" "0:3"
 }
 
@@ -965,6 +968,12 @@ AP2="$(AM '{}')"; AP3="$(AM '{"plans":"docs/plans"}')"; AP4="$(AM '{"deployment"
 AP6="$(AM '{"plans":"p"}' 2)"; AP7="$(AM '{"plans":"p"}' 3)"; AP8="$(AM '{"plans":"p"}' 1)"
 apc() { printf '%s' "$1" | grep -cF -- "$2" || true; }
 check "planner_msg artifacts: nothing without settings.artifacts or with an empty object; the exact sentence with one key; all four in the order plans, designs, research, deployment whatever the JSON order; a path with spaces is printed as is; present in the resumed, cleared and restart modes too" "$(apc "$AP1" 'Artifact locations'):$(apc "$AP2" 'Artifact locations'):$(apc "$AP3" "${ASENT}plans=docs/plans."):$(apc "$AP4" "${ASENT}plans=p, designs=s, research=r, deployment=d."):$(apc "$AP5" "${ASENT}research=my docs/res."):$(apc "$AP6" 'Artifact locations'):$(apc "$AP7" 'Artifact locations'):$(apc "$AP8" 'Artifact locations')" "0:0:1:1:1:1:1:1"
+# roles that open on demand: the two sentences, a first-use cross-dev still turns the cross-check sentence on, and with every role at start the message is byte-identical
+jq '.roles["cross-dev"] = {title: "Cross-Dev", agent: "opencode", model: "p/other"} | .roles.deployer = {title: "Deployer"} | .settings.flow = {crossCheck: true}' "$KIT/config.json" > "$TMP/lz0.json"
+jq '.roles.dev.open = "first-use" | .roles["cross-dev"].open = "first-use" | .roles.deployer.open = "per-task"' "$TMP/lz0.json" > "$TMP/lz1.json"; jq '.roles[].open = "start"' "$TMP/lz0.json" > "$TMP/lz2.json"
+printf 'PLANNER=t1\nDEV=t2\nDEPLOYER=t3\nCROSS_DEV=t4\n' > "$TMP/state-lz.env"
+LZ1="$(planner_msg "$TMP/lz1.json" "planner" "$TMP/state-lz.env" "" "" 0 2>/dev/null)"; LZ3="$(planner_msg "$TMP/lz1.json" "planner deployer" "$TMP/state-lz.env" "" "" 0 2>/dev/null)"
+check "planner_msg: first-use roles not open and per-task roles (also while open) in the two sentences, cross-check sentence with a first-use cross-dev, byte-identical with every role at start" "$(apc "$LZ1" 'Roles opened on first use, not open yet (see "The team" in your prompt): Dev (dev), Cross-Dev (cross-dev).'):$(apc "$LZ1" 'Roles opened per task (see "The team" in your prompt): Deployer (deployer).'):$(apc "$LZ3" 'Roles opened per task (see "The team" in your prompt): Deployer (deployer).'):$(apc "$LZ1" 'the cross-check is on: follow your section "Cross-check" with Cross-Dev.'):$([ "$(planner_msg "$TMP/lz2.json" "planner dev deployer cross-dev" "$TMP/state-lz.env" "" "" 0 2>/dev/null)" = "$(planner_msg "$TMP/lz0.json" "planner dev deployer cross-dev" "$TMP/state-lz.env" "" "" 0 2>/dev/null)" ] && echo same)" "1:1:1:1:same"
 # OpenCode workers: the Planner is told to dispatch them with --inject (Orca's worker-start --terminal times out on an opencode mini tab)
 jq '.roles.dev.agent = "opencode"' "$KIT/config.json" > "$TMP/oc-pm.json"
 MO="$(planner_msg "$TMP/oc-pm.json" "planner dev sec" "$TMP/state.env" "" "" 0)"
@@ -1077,7 +1086,7 @@ case "$(PX "$TMP/x6.json" 2>&1 >/dev/null)" in "") echo "ok   flow crossCheck: a
 jq '.settings.flow = {crossCheck: true} | .roles["cross-dev"] = {title: "Cross-Dev"}' "$C" > "$TMP/x7.json"
 case "$(PX "$TMP/x7.json" 2>&1 >/dev/null)" in *"cross-dev runs the same agent and model as dev"*) echo "ok   flow crossCheck: same agent and model as Dev is warned";; *) echo "FAIL flow crossCheck same model: no warning"; FAIL=1;; esac
 case "$(PX "$TMP/x7.json" 2>/dev/null)" in *"$XS"*) echo "ok   flow crossCheck: the same model still turns it on";; *) echo "FAIL flow crossCheck same model: off"; FAIL=1;; esac
-check "flow crossCheck: the prompts it points to exist (the Planner's section, the Tester's matrix, the candidate's two diffs)" "$(grep -c '^## Cross-check' "$KIT/prompts/programmer/planner.md"):$(grep -c 'Cross-check matrix' "$KIT/prompts/programmer/tester.md"):$(for f in cand-code.diff cand-tests.diff; do for p in local-coordinator tester cross-dev; do grep -qF "$f" "$KIT/prompts/programmer/$p.md" || echo "$p lacks $f"; done; done)" "1:1:"
+check "flow crossCheck: the prompts it points to exist (the Planner's section, the Tester's matrix, the candidate's two diffs)" "$(grep -c '^## Cross-check' "$KIT/prompts/programmer/planner.md"):$(grep -c 'Cross-check matrix' "$KIT/prompts/programmer/tester.md"):$(for f in cand-code.diff cand-tests.diff; do for p in local-coordinator-cross-check tester cross-dev; do grep -qF "$f" "$KIT/prompts/programmer/$p.md" || echo "$p lacks $f"; done; done)" "1:1:"
 check "clean.sh --msg of a worker carries the short-body sentence" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" "$(cd "$TMP" && KIT="$TMP/home/.orca-roles" worker_msg "$TMP/f3.json" dev)"
 case "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$TMP/f3.json" "$TMP/home/.orca-roles/bin/clean.sh" --msg dev 2>&1)" in *"at most ~8 lines"*) echo "ok   clean.sh --msg: short-body sentence";; *) echo "FAIL clean.sh --msg: no short-body sentence"; FAIL=1;; esac
 rm -rf "$KIT/tmp"
@@ -2864,6 +2873,41 @@ lnreset; : > "$LN/nopty"; try lnl; R1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Co
 lnreset; : > "$LN/nopty1"; try lnl
 check "launch: a ptyId missing at the first read is read again after 2 s: no message when it shows up, the message once per tab when it never does" "$R1:$RC:$(printf '%s\n' "$OUT" | grep -c 'Could not read the ptyId'):$(grep -c '^DEV=pty-h-Dev$' "$LNG/orca-roles.pty" || true)" "0:4:0:0:1"
 lnreset
+# --open: a role that opens on first use or per task (dev, deployer) opens only when named, and only the named roles are acted on
+LO="$TMP/lo"; mkdir -p "$LO/bin" "$LO/proj"; git -C "$LO/proj" init -q; LOG="$LO/proj/.git"
+printf '#!/bin/sh\nexit 0\n' > "$LO/bin/kickoff"; printf '#!/bin/sh\n[ -f "%s/dead-$1" ] || echo 4242\n' "$LO" > "$LO/bin/agentpid"; chmod +x "$LO/bin/kickoff" "$LO/bin/agentpid"
+cat > "$LO/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LO/orca.log"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\${t% (*}\"}";;
+  "terminal list") echo '{"terminals":[]}';;
+  "terminal show") if [ -f "$LO/stale-\$4" ]; then echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; fi
+    echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\",\"tabId\":\"tab-\$4\",\"leafId\":\"leaf-\$4\"}}}";;
+esac
+exit 0
+EOS
+chmod +x "$LO/bin/orca"
+lol() { (cd "$LO/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LO/bin:$PATH" ORCA_ROLES_KICKOFF="$LO/bin/kickoff" ORCA_ROLES_AGENT_PID="$LO/bin/agentpid" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+loreset() { rm -rf "$LOG"/orca-roles.* "$LO"/dead-* "$LO"/stale-*; : > "$LO/orca.log"; }
+lokeys() { cut -d= -f1 "$LOG/orca-roles.env" | tr '\n' ' '; }
+losum() { cat "$LOG/orca-roles.env" "$LOG/orca-roles.pty" "$LOG/orca-roles.tabs" "$LOG/orca-roles.overrides.json" "$LOG/orca-roles.config.json" 2>/dev/null | cksum || true; }
+lotester() { grep -h '^TESTER=' "$LOG/orca-roles.env" "$LOG/orca-roles.pty" "$LOG/orca-roles.tabs" | tr "\n" "|" || true; }
+locnt() { grep -cE "^terminal create .*--title $1 " "$LO/orca.log" || true; }
+lolines() { printf '%s/%s' "$(printf '%s\n' "$OUT" | grep -cE "^Opened on first use \(.*\): Dev \(dev\)\.$" || true)" "$(printf '%s\n' "$OUT" | grep -cE "^Opened per task \(.*\): Deployer \(deployer\)\.$" || true)"; }
+write_launch_config; jq '.roles.dev.open = "first-use" | .roles.deployer.open = "per-task" | .roles.tester.enabled = true' "$KIT/config.json" > "$LO/cfg.json" && cp "$LO/cfg.json" "$KIT/config.json"
+loreset; try lol; A1="$RC:$(lokeys):$(lolines)"
+try lol --open dev; A2="$RC:$(lokeys):$(cat "$LOG/orca-roles.overrides.json" 2>/dev/null | grep -c dev || true)"
+try lol; A3="$RC:$(lokeys):$(locnt Dev):$(lolines)"
+S0="$(losum)"; try lol --open nosuch; R1="$RC"; try lol --open dev --set roles.dev.model=x; R2="$RC:$(printf '%s\n' "$OUT" | grep -c -- '--open takes no other option')"; R3="$([ "$(losum)" = "$S0" ] && echo same)"
+loreset; try lol --only dev; A4="$RC:$(lokeys)"
+check "launch --open: a plain launch opens the start roles and lists the lazy ones, --open dev adds Dev (not saved), a later plain launch keeps it, an unknown role or another option refuses with nothing changed, --only opens a lazy role" "$A1|$A2|$A3|$R1:$R2:$R3|$A4" "0:LOCAL_COORDINATOR PLANNER TESTER :1/1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :0|0:LOCAL_COORDINATOR PLANNER DEV TESTER :1:0/1|1:1:1:same|0:LOCAL_COORDINATOR PLANNER DEV "
+loreset; try lol; : > "$LO/dead-h-Tester"; B0="$(lotester)"; try lol --open dev; B1="$RC:$(lokeys):$([ "$(lotester)" = "$B0" ] && echo same):$(locnt Tester):$(locnt Dev)"
+loreset; try lol; : > "$LO/stale-h-Tester"; B0="$(lotester)"; try lol --open dev; B2="$RC:$(lokeys):$([ "$(lotester)" = "$B0" ] && echo same):$(printf '%s' "$B0" | tr '|' '\n' | grep -c . || true)"
+check "launch --open: a role it does not name is left as it is: a dead Tester agent is not replaced, and a stale Tester handle keeps its env, pty and tabs lines byte for byte" "$B1|$B2" "0:LOCAL_COORDINATOR PLANNER DEV TESTER :same:1:1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :same:3"
+loreset; try lol; S0="$(losum)"; : > "$LOG/orca-roles.mode-pending"; try lol --open dev; P1="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs a chosen mode')"; rm -f "$LOG/orca-roles.mode-pending"
+jq '.settings.mode = "pr-reviewer"' "$KIT/config.json" > "$LO/cfg-mode.json"; cp "$KIT/config.json" "$LO/cfg-keep.json"; cp "$LO/cfg-mode.json" "$KIT/config.json"; try lol --open dev; P2="$RC:$(grep -c 'terminal close' "$LO/orca.log" || true)"; cp "$LO/cfg-keep.json" "$KIT/config.json"
+check "launch --open: refused with nothing changed (no tab closed) while the mode is pending and after the configuration changed the open team's mode" "$P1|$P2|$([ "$(losum)" = "$S0" ] && echo same)" "1:1|1:0|same"
 akreset; write_launch_config
 }
 
@@ -2895,7 +2939,9 @@ printf 'PLANNER=pty-1\n' > "$G/orca-roles.pty"; printf '{"only":["dev"],"enable"
 ssum() { cat "$G/orca-roles.config.json" "$G/orca-roles.overrides.json" "$G/orca-roles.env" "$G/orca-roles.pty" "$G/orca-roles.models" | cksum; ls "$G" | cksum; }
 S0="$(ssum)"; : > "$SLOG"
 try status --status
-check "status: report" "$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-up|alive|-|m-ok|-|-/Dev|h-none|no tab|m-dev|-|-|-/Deployer|h-gone|agent gone|-|FAILED:m-bad|-|-"
+ST0="$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')"; cp "$G/orca-roles.config.json" "$G/cfg.keep"
+jq '.roles.researcher = {"title": "Researcher", "open": "first-use"} | .roles.auditor = {"title": "Auditor", "open": "per-task"}' "$G/cfg.keep" > "$G/orca-roles.config.json"; try status --status; ST1="$RC:$(printf '%s' "$OUT" | tr '\t\n' '|/')"; mv "$G/cfg.keep" "$G/orca-roles.config.json"
+check "status: report, and a role that opens on first use or per task with no tab is a not-opened row (none without such a role)" "$ST0|$ST1" "0:Kit: unknown (unknown)/Mode: programmer/Planner|h-up|alive|-|m-ok|-|-/Dev|h-none|no tab|m-dev|-|-|-/Deployer|h-gone|agent gone|-|FAILED:m-bad|-|-|0:Kit: unknown (unknown)/Mode: programmer/Planner|h-up|alive|-|m-ok|-|-/Dev|h-none|no tab|m-dev|-|-|-/Deployer|h-gone|agent gone|-|FAILED:m-bad|-|-/Researcher|-|not opened (first use)|-|-|-|-/Auditor|-|not opened (per task)|-|-|-|-"
 check "status: writes nothing" "$([ "$(ssum)" = "$S0" ] && echo unchanged || echo CHANGED):$([ -e "$G/orca-roles-launch.log" ] && echo log)" "unchanged:"
 check "status: only reads terminals" "$(grep -vc '^terminal show ' "$SLOG")" "0"
 try status -h; case "$OUT" in *"--status "*"changes nothing"*) echo "ok   status: -h prints the --status line";; *) echo "FAIL status -h: $OUT"; FAIL=1;; esac
@@ -3338,7 +3384,7 @@ check "open team in pr-reviewer: the local coordinator's tab switches to program
 rm -f "$TMP/m-alive"
 # a user config.json from before modes (no settings.mode, no modes) launches the same programmer team as before
 SAME="LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
-jq 'del(.settings.mode) | del(.roles[].modes) | .settings += {kickoffTimeoutSeconds: 1, launchWaitSeconds: 1, closeComposerAgent: false, jiraHandoff: false, enableAskModeOnStart: false}' "$PKC" > "$TMP/m-legacy.json"
+jq 'del(.settings.mode) | del(.roles[].modes) | .roles[].open = "start" | .settings += {kickoffTimeoutSeconds: 1, launchWaitSeconds: 1, closeComposerAgent: false, jiraHandoff: false, enableAskModeOnStart: false}' "$PKC" > "$TMP/m-legacy.json"
 check "legacy config: has neither settings.mode nor modes" "$(jq -c '[.settings.mode, ([.roles[].modes] | map(select(. != null)) | length)]' "$TMP/m-legacy.json")" "[null,0]"
 rm -f "$MG/orca-roles.env"; cp "$TMP/m-legacy.json" "$MC"
 try ml --reset; check "legacy config: the same programmer team as before" "$RC:$(mh):$(mmode)" "0:$SAME:programmer"
@@ -3351,7 +3397,7 @@ rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config
 PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
 rm -rf "$PRK/prompts/academic-research"   # the mode is available once its local-coordinator.md exists: these checks need it unavailable
 ln -sfn "$PRK" "$PRH/.orca-roles"
-jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
+jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false} | .mcpServers = {} | .defaults.params = {} | .roles[].open = "start"' "$ROOT/config.default.json" > "$PRK/config.json"
 check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
 check "mode_error: academic-research is still not available" "$(KIT="$PRK" mode_error academic-research)" "mode 'academic-research' is not available yet"
 check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],["all",["programmer"]]]'
@@ -3368,10 +3414,10 @@ sec_research_defaults() {
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
-check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
-check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","mcp":["context7"]}'
+check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,open,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,open,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,open,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,open,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,open,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,open,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,open,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
+check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"first-use","modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
-check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
+check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"first-use","modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"first-use","modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '.roles[$r].model // "-"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
 check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's (HEAD's), pr-reviewer without the Planner" "$(awt "$D")" "$(awt "$TMP/awd-old.json" | sed 's# pr-reviewer/planner=[^ ]*##')"
 check "research-defaults: the programmer team is the local coordinator and the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "8:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
@@ -3820,7 +3866,7 @@ closerole() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLE
 try closerole Sec; check "close-role: by title" "$RC:$OUT" "0:Sec: tab closed (t3)."
 check "close-role: closes the whole tab" "$(grep -c 'terminal close --terminal t3 --tab' "$CRLOG")" "1"
 check "close-role: forgets its handle" "$(cut -d= -f1 "$TMP/state.env" | tr '\n' ' ')" "PLANNER DEV "
-try closerole dev; check "close-role: a dead tab is just forgotten" "$RC" "0"; case "$OUT" in *"already gone"*"still enabled"*) echo "ok   close-role: warns that roles would reopen an enabled role";; *) echo "FAIL close-role enabled: $OUT"; FAIL=1;; esac
+try closerole dev; check "close-role: a dead tab is just forgotten; a role that opens on demand says it opens again before its next task, not that roles would reopen it" "$RC:$(cp "$KIT/config.json" "$TMP/cr.keep"; jq '.roles.dev.open = "per-task"' "$TMP/cr.keep" > "$KIT/config.json"; printf 'PLANNER=t1\nDEV=t2\n' > "$TMP/state.env"; closerole dev | grep -E 'opens again|still enabled' | tr '\n' '/'; cp "$TMP/cr.keep" "$KIT/config.json")" "0:Dev: it opens again before its next task (\"open\": \"per-task\")./"; case "$OUT" in *"already gone"*"still enabled"*) echo "ok   close-role: warns that roles would reopen an enabled role";; *) echo "FAIL close-role enabled: $OUT"; FAIL=1;; esac
 printf 'PLANNER=t1\nDEV=t4\n' > "$TMP/state.env"; printf 'DEV=pty4\n' > "$TMP/orca-roles.pty"; printf 'DEV=tabs4\n' > "$TMP/orca-roles.tabs"
 try closerole dev; check "close-role: a failure of terminal show other than terminal_handle_stale is 'Orca did not answer': RC 1, no close, its state lines kept" "$RC:$OUT:$(grep -c 'terminal close --terminal t4' "$CRLOG" || true):$(cat "$TMP/state.env" "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" | tr '\n' ' ')" "1:Dev: Orca did not answer about its tab (t4); nothing was changed.:0:PLANNER=t1 DEV=t4 DEV=pty4 DEV=tabs4 "
 rm -f "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs"
@@ -4000,7 +4046,7 @@ check "status: a live agent process keeps a tab alive when Orca flags it orphane
 OUT="$(dkrun)"
 dkn() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
 dkc() { grep -c "terminal $1 .*$2" "$DKL" || true; }
-check "live process wins over Orca's flags: orphaned + process is kept with the 'detached but its agent is running' line once, identity-less + process is kept without a line; none of them is closed or reopened" "$(dkn "Orca reports the tab of Dev (t-op-live) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles."):$(printf '%s\n' "$OUT" | grep -c 'as detached but its agent is running' || true):$(dkc close 't-op-live'):$(dkc close 't-ei-live'):$(dkc close 't-ok'):$(dkc create '--title Dev'):$(dkc create '--title Aa'):$(dkc create '--title Planner')" "1:1:0:0:0:0:0:0"
+check "live process wins over Orca's flags: orphaned + process is kept with the 'detached but its agent is running' line once, identity-less + process is kept without a line; none of them is closed or reopened" "$(dkn "Orca reports the tab of Dev (t-op-live) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev."):$(printf '%s\n' "$OUT" | grep -c 'as detached but its agent is running' || true):$(dkc close 't-op-live'):$(dkc close 't-ei-live'):$(dkc close 't-ok'):$(dkc create '--title Dev'):$(dkc create '--title Aa'):$(dkc create '--title Planner')" "1:1:0:0:0:0:0:0"
 check "no process: an orphaned tab is ended and reopened (the 'kept its session running' line), an identity-less one takes the 'agent is gone' path; neither is called detached" "$(dkn 'The tab of Tst (t-op-dead) was closed but Orca kept its session running; ending it and opening a new one.'):$(dkn 'The agent in the tab of Bb (t-ei-dead) is gone; closing that tab and opening a new one.'):$(dkc close 't-op-dead'):$(dkc close 't-ei-dead'):$(dkc create '--title Tst'):$(dkc create '--title Bb')" "1:1:1:1:1:1"
 check "a custom role flagged orphaned is handled as before (ended and reopened): no process lookup for it" "$(grep -c 't-oc' "$TMP/dkpid.log" || true):$(dkc close 't-oc'):$(dkc create '--title Cu')" "0:1:1"
 rm -f "$TMP/nopid.t-op-dead" "$TMP/nopid.t-ei-dead"
@@ -6391,7 +6437,7 @@ hnds() { grep '^HND ' "$MF/orca.log" || true; }
 escs() { grep '^ESC ' "$MF/orca.log" || true; }
 nesc() { escs | wc -l | tr -d ' '; }
 DEVOK='"title": "Dev", "model": "claude-opus-5-5"'
-BODY="ESC hp|Dev model unavailable|Dev did not start: its model claude-opus-5-5 is not available (There's an issue with the selected model). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles (without options, so this worktree's saved options are kept)."
+BODY="ESC hp|Dev model unavailable|Dev did not start: its model claude-opus-5-5 is not available (There's an issue with the selected model). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
 # model_error_regex
 MR="$MF/mr.json"; echo '{"defaults":{"agent":"claude"},"roles":{"c":{},"x":{"agent":"codex"},"u":{"agent":"custom"},"u2":{"agent":"custom","modelError":"boom {model}!"}}}' > "$MR"
 check "model_error_regex: claude" "$(model_error_regex "$MR" c m)" "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]"
@@ -6620,7 +6666,7 @@ ocm_run() {  # <role json fields> <models lines> <mode>
   ORCA_ROLES_OC_MODELS_RETRY=0 mf "$(mfc "$1")" clean "dev"
 }
 OCD='"title": "Dev", "agent": "opencode", "model": "p/m"'
-OCMSG="ESC hp|Dev model unavailable|Dev did not start: its model p/m is not available (not in opencode models). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles (without options, so this worktree's saved options are kept)."
+OCMSG="ESC hp|Dev model unavailable|Dev did not start: its model p/m is not available (not in opencode models). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
 ocm_run "$OCD" "p/m
 p/other" ""
 check "opencode model: listed -> recorded, no line, no escalation, one list call run in the worktree" "$(models):$(nesc):$(grep -c 'not available' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' '):$(grep -c "PWD=$(cd "$MF/wt" && pwd -P)\$" "$MF/oc.log")" "DEV=p/m :0:0:1:1"
@@ -7256,7 +7302,7 @@ for args in "dev" "dev --model" "nobody --model good" "local-coordinator --model
   try rr $args; check "relaunch: '$args' fails and changes nothing" "$RC:$(rclosed):$(rstate)" "1:0:$B"
 done
 try rr local-coordinator --model good; case "$OUT" in *"The local coordinator cannot be relaunched from inside the team."*) echo "ok   relaunch: local coordinator message";; *) echo "FAIL relaunch local coordinator: $OUT"; FAIL=1;; esac
-try rr deployer --model good; case "$OUT" in *"deployer is not open in this worktree; run roles."*) echo "ok   relaunch: not open message";; *) echo "FAIL relaunch not open: $OUT"; FAIL=1;; esac
+try rr deployer --model good; case "$OUT" in *"deployer is not open in this worktree; run roles --open deployer."*) echo "ok   relaunch: not open message";; *) echo "FAIL relaunch not open: $OUT"; FAIL=1;; esac
 try rr dev --model gone; check "relaunch: unavailable model" "$RC:$(rclosed):$(rstate):$OUT" "1:0:$B:Model gone is not available for dev; nothing was changed."
 try rr dev --model net; check "relaunch: unknown model" "$RC:$(rclosed):$(rstate):$OUT" "1:0:$B:Could not check model net (boom: no network); use --no-check to relaunch anyway"
 : > "$RKL"; N0="$(grep -c '^terminal create' "$RLOG")"; OLDH="$(grep '^DEV=' "$RG/orca-roles.env")"
@@ -7268,7 +7314,10 @@ case "$OUT" in *"Relaunched Dev on good; this worktree keeps that model (roles -
 check "relaunch: the saved --only is kept, the model is saved and effective" "$(jq -c '[.only,.set]' "$RG/orca-roles.overrides.json"):$(jq -r .roles.dev.model "$RG/orca-roles.config.json"):$(cut -d= -f1 "$RG/orca-roles.env" | tr '\n' ' ')" '[["dev","planner"],[{"path":["roles","dev","model"],"value":"good"}]]:good:LOCAL_COORDINATOR PLANNER DEV '
 check "relaunch: kickoff for that role only" "$(rkicks)" "dev,"
 : > "$RCL"; try rr Dev --model gone --no-check
-check "relaunch: --no-check skips the probe, matches the title in any case" "$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")" "0:0:gone"
+RZ="$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")"
+cp "$PK/config.json" "$TMP/rl.keep"; jq '.roles.dev.open = "first-use"' "$TMP/rl.keep" > "$PK/config.json"; jq '.roles.dev.open = "first-use"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"; N0="$(grep -c '^terminal create' "$RLOG")"; C0="$(rclosed)"; LS0="$(grep -c '^terminal list' "$RLOG" || true)"
+try rr dev --model gone --no-check; RZ="$RZ|$RC:$(( $(rclosed) - C0 )):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(( $(grep -c '^terminal list' "$RLOG" || true) - LS0 )):$(jq -r .roles.dev.model "$RG/orca-roles.config.json"):$(grep -c '^DEV=.' "$RG/orca-roles.env" || true)"; cp "$TMP/rl.keep" "$PK/config.json"; jq '.roles.dev.open = "start"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
+check "relaunch: --no-check skips the probe, matches the title in any case; a role that opens on first use is closed, saved with the model by one launch and opened again by a second one (launch.sh --open)" "$RZ" "0:0:gone|0:1:1:2:gone:1"
 B="$(rstate)"; C0="$(rclosed)"
 for args in "dev --model good --default-model" "dev --default-model --model good"; do
   # shellcheck disable=SC2086
@@ -8288,7 +8337,9 @@ tsr; E1="$RC:$(tsl | tr '\n' '/')"
 check "team-status: one tab-separated line per role in orca-roles.env order: Title, state, since, task, tool, summary (working, waiting for blocked, interrupted, failed, no-status, no-tab, done, the latest row of a shared paneKey, an unknown state as is; the first task id of the prompt, role-message, -; 100 characters kept and 101 cut with an ellipsis, first line only, tabs as spaces, - when empty)" "$E1" "0:Planner|working|45s|task_0f3a9c|Bash|$(printf 'x%.0s' $(seq 100))…/Dev|waiting|12m|-|-|$L100/Tester|interrupted|1h05m|role-message|-|-/aud|failed|-|-|-|a b/dep|no-status|-|-|-|-/gh|no-tab|-|-|-|-/rm|done|1s|role-message|-|-/dup|done|3s|task_0000aa|-|-/uk|weird|5s|-|-|-/ud|done|2s|-|-|-/ud2|done|2s|-|-|-/ud3|done|2s|-|-|-/ud4|done|2s|task_4444|-|-/s1|working|59s|-|-|-/s2|working|1m|-|-|-/s3|working|59m|-|-|-/s4|working|1h00m|-|-|-/s5|working|0s|-|-|-/s6|working|2h01m|-|-|-/"
 tsr --json; J1="$RC:$(printf '%s' "$OUT" | jq -c 'length'):$(printf '%s' "$OUT" | jq -r '[.[] | keys_unsorted | join(",")] | unique | join(";")')"
 tsr; TXT="$OUT"; tsr --json; J2="$(printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")')"
-check "team-status --json: a valid array with role, title, handle, paneKey, state, since, sinceMs, task, tool, summary for every role, and the same content as the text form (no prompt field)" "$J1:$([ "$J2" = "$TXT" ] && echo same):$(printf '%s' "$OUT" | jq -c '[.[] | select(.role == "dev") | [.handle, .paneKey, .sinceMs]][0]')" '0:19:role,title,handle,paneKey,state,since,sinceMs,task,tool,summary:same:["h-dev","tab-DEV:leaf-DEV",720000]'
+JD="$(printf '%s' "$OUT" | jq -c '[.[] | select(.role == "dev") | [.handle, .paneKey, .sinceMs]][0]')"; cp "$TSG/orca-roles.config.json" "$TS/cfg.keep"; jq -c '.roles.researcher = {"title": "Researcher", "open": "first-use"}' "$TS/cfg.keep" > "$TSG/orca-roles.config.json"
+tsr --json; J3="$(printf '%s' "$OUT" | jq -c '[length, ([.[] | keys_unsorted | join(",")] | unique | length), (.[] | select(.role == "researcher") | [.title, .state, .handle, .paneKey])]')"; tsr; J3="$J3:$(tsl | grep '^Researcher|')"; cp "$TS/cfg.keep" "$TSG/orca-roles.config.json"
+check "team-status --json: a valid array with role, title, handle, paneKey, state, since, sinceMs, task, tool, summary for every role, and the same content as the text form (no prompt field); a role that opens on demand with no tab is one not-opened row of the same keys" "$J1:$([ "$J2" = "$TXT" ] && echo same):$JD:$J3" '0:19:role,title,handle,paneKey,state,since,sinceMs,task,tool,summary:same:["h-dev","tab-DEV:leaf-DEV",720000]:[20,1,["Researcher","not-opened","",""]]:Researcher|not-opened|-|-|-|-'
 : > "$TSL"; tsr; C0="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
 : > "$TSL"; tsr --run run_1; C1="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
 tsr --run run_1; R1="$(tsl | awk -F'|' '$1 ~ /^ud/ {printf "%s=%s ", $1, $2}')"

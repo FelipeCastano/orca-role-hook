@@ -6,5 +6,5 @@ If the user asks how to install, configure or use the kit, wants to enable or di
 
 The essentials, so you do not forget:
 - Always ask how long a change should last: **on the fly** (only in this session's specs), **this worktree** (`orca-roles.notes/<role>.md` in the git dir) or **permanent** (configuration and prompts in `~/.orca-roles`, for future worktrees).
-- Before writing any kit file or opening tabs, explain what you will change and what it affects, and wait for a yes.
+- Before writing any kit file or opening tabs, explain what you will change and what it affects, and wait for a yes (except the tabs that "The team" and "Recovering the team yourself" tell you to open or close yourself).
 - New roles are created with `~/.orca-roles/bin/new-role.sh --from-json`, never by editing the configuration by hand. Roles the user created are removed with `new-role.sh --remove <id>`; default roles are disabled, not removed. A role removed from the flow also has its tab closed (`close-role.sh`), unless the user wants to keep it.
