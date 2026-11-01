@@ -51,12 +51,22 @@ SMOKE_SERIAL=(
   scholar         # the arXiv and Crossref pacing checks assert the seconds waited
 )
 smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
+smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running sections and waits up to 5 s for them, so their 'section … aborted' lines come before the total
+  local k t
+  for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done
+  for ((t = 0; t < 50; t++)); do
+    for k in "${SP_PID[@]:-}"; do [ -n "$k" ] && kill -0 "$k" 2>/dev/null && break; k=""; done
+    [ -n "$k" ] || break
+    sleep 0.1
+  done
+  return 0
+}
 smoke_parallel() {
   local d n i k printed=0 running=0 bad=0 last
   local -a SP_PID SP_RC SP_ST
   d="$(mktemp -d)"; n=${#ARGS[@]}
   for ((i = 0; i < n; i++)); do SP_ST[i]=0; done
-  trap 'for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done; rm -rf "$d"; smk_finish interrupted; exit 130' INT TERM
+  trap 'smk_reap; rm -rf "$d"; smk_finish interrupted; exit 130' INT TERM
   while [ "$printed" -lt "$n" ]; do
     for ((i = 0; i < n; i++)); do
       [ "${SP_ST[i]}" = 1 ] && ! kill -0 "${SP_PID[i]}" 2>/dev/null || continue
@@ -8538,7 +8548,8 @@ cp_run 1 slow fast wake; P2="$CRC:$(cp_marks):$(grep -c '^ALL OK$' "$TMP/cli.out
 check "parallel runner: SMOKE_JOBS=3 prints the sections in the requested order although the fast one ends first, one process per section, the serial section (wake) runs with nothing else running, one ALL OK, same output as SMOKE_JOBS=1" "$P1:$P1B|$P2" "0:marker slow,marker fast,marker wake-alone:0,:1:2:1|0:marker slow,marker fast,marker wake-alone:0,:1"
 cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out" | cut -d: -f1):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
-check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK" "$Q1|$Q2" "1:marker fast,:1:1:0|1:marker fast,:1:1:0"
+cp_run 1 bad fast; Q3="$CRC:$(cp_marks):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
+check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK; also with SMOKE_JOBS=1" "$Q1|$Q2|$Q3" "1:marker fast,:1:1:0|1:marker fast,:1:1:0|1:marker fast,:1:0"
 # the timing log (SMOKE_TIMING_LOG, SMOKE_SLOW_CHECK), driven through child suites with two more fake sections: t0 assigns T0 and d, nest starts a nested suite
 CT="$TMP/cli-tlog"; rm -rf "$CT"; mkdir -p "$CT/tests"; ln -sfn "$ROOT/bin" "$CT/bin"; ln -sfn "$ROOT/prompts" "$CT/prompts"; ln -sfn "$ROOT/config.default.json" "$CT/config.default.json"
 sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit t0 nest"/' -e 's/^sec_slow() /sec_t0() { T0="$(echo x | shasum)"; d=abc; sleep 1; check "t0 after a sleep" a a; }\
