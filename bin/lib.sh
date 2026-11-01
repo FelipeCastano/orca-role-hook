@@ -370,16 +370,17 @@ LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
 LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
 # The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
-# 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
+# 5 was the default of maxSelfMutants before 3: a user still on it moves to the new default.
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
 # ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
+# auditor was the team's reviewer before this version split it into plan-reviewer and code-reviewer (and pr-reviewer's verifier): its entry is dropped, never carried over to the new roles (install.sh tells the user).
 # claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
-    | .roles.auditor.params.maxMutants |= (if . == 15 then $d.roles.auditor.params.maxMutants else . end)
+    | del(.roles.auditor)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
     | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
@@ -431,8 +432,19 @@ merge_overrides() {
        set: (((.set // []) | map(select(.path as $p | ($n.set // []) | map(.path) | index([$p]) | not))) + ($n.set // []))}
       + (if ($n.mode // null) != null then {mode: $n.mode} elif (.mode // null) != null then {mode: .mode} else {} end)' "$1"
 }
+# The role auditor was removed (split into plan-reviewer and code-reviewer; pr-reviewer's verifier): a configuration or exception that still
+# names it is an error, never mapped to the new roles.  removed_role_error <config> [<overrides>] → one "ERROR: ..." line, or nothing
+removed_role_error() {
+  local named=0
+  jq -e '(.roles? // {}) | type == "object" and has("auditor")' "$1" >/dev/null 2>&1 && named=1
+  if [ -n "${2:-}" ] && jq -e '([(.only // [])[], (.enable // [])[], (.disable // [])[]] | index("auditor") != null)
+      or ((.set // []) | any(.path[0] == "roles" and .path[1] == "auditor"))' "$2" >/dev/null 2>&1; then named=1; fi
+  [ "$named" = 0 ] || echo "ERROR: the role auditor no longer exists in this version of orca-roles: the Plan-Reviewer (plan-reviewer) and the Code-Reviewer (code-reviewer) do its work in programmer mode, and the Verifier (verifier) in pr-reviewer mode. Remove auditor from where this worktree's team names it (~/.orca-roles/config.json, the project's .orca-roles.json, the setup script's options, or this worktree's saved exceptions: roles --reset), name the new roles instead if you need to, and run roles again. Nothing was changed."
+}
 # Checks that the exceptions only name existing roles and do not disable the planner or the local coordinator.  check_overrides <config> <overrides>
 check_overrides() {
+  local rr; rr="$(removed_role_error "$1" "$2")"
+  if [ -n "$rr" ]; then echo "$rr"; return 0; fi
   jq -r --slurpfile o "$2" '(.roles | keys) as $ks | $o[0] as $o
     | ([$o.only[], $o.enable[], $o.disable[]] | unique | map(select(. as $r | $ks | index($r) | not))
        | if length > 0 then "ERROR: unknown roles: \(join(", ")). Available: \($ks | join(", "))" else empty end),
@@ -442,7 +454,9 @@ check_overrides() {
 # Checks the configuration the exceptions produce: its mode, the "modes" and "prompt" of every role, and that the roles named by
 # --only/--enable/--disable are part of the mode. One "ERROR: ..." line per problem, nothing if it is fine.  check_config <applied config> [<overrides>]
 check_config() {
-  local m out
+  local m out rr
+  rr="$(removed_role_error "$1" "${2:-}")"
+  if [ -n "$rr" ]; then echo "$rr"; return 0; fi
   out="$(jq -r --argjson ms "$MODES_JSON" --arg ml "$MODE_LIST" '.roles | to_entries[] | .key as $r | .value as $v
     | (if ($v | has("modes")) then
         ($v.modes | if . == "all" then empty
@@ -806,7 +820,7 @@ planner_ask_msg() {
   lang="$(setting "$cfg" language auto)"
   if [ "$lang" != auto ] && [ -n "$lang" ]; then msg="$msg Always reply to the user in $lang, whatever language they write in."
   else msg="$msg Reply to the user in the language they write in."; fi
-  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer). Then end your turn and wait for the user's typed answer."
+  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Plan-Reviewer, Code-Reviewer, E2E-Tester, Deployer). Then end your turn and wait for the user's typed answer."
   msg="$msg Do not start any work before the answer."
   msg="$msg If the user says yes, run \`~/.orca-roles/bin/launch.sh --mode programmer\` from the worktree and end your turn: the kit opens the team and sends you your role message for it."
   msg="$msg If the user wants another mode, tell them that this version starts other modes only after they close this tab (yours) and run \`roles --mode <mode>\` from a terminal of this worktree, and run nothing."
@@ -938,9 +952,9 @@ local_coordinator_skill_deny() {
   printf '%s\n' 'Skill(superpowers:brainstorming)' 'Skill(superpowers:writing-plans)' 'Skill(superpowers:receiving-code-review)' \
     'Skill(superpowers:test-driven-development)' 'Skill(superpowers:systematic-debugging)'
 }
-# The auditor verifies plans against a repo's rules itself and must never dispatch a gate's reviewer subagents. The list lives in the kit so a
-# user's own disallowedTools (which replace a config default) cannot drop it.  auditor_deny → one tool per line
-auditor_deny() { printf '%s\n' Agent Task; }
+# The reviewers (Plan-Reviewer, Code-Reviewer, pr-reviewer's Verifier) verify plans, code and findings themselves and must never dispatch a gate's reviewer subagents or subagents of their own. The list lives in the kit so a
+# user's own disallowedTools (which replace a config default) cannot drop it.  reviewer_deny → one tool per line
+reviewer_deny() { printf '%s\n' Agent Task; }
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {

@@ -11,7 +11,7 @@ FRONT="$(front_of "$CFG")"   # the role that talks to the user in this worktree:
 
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
-NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester and the Auditor run lowered
+NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester, the Code-Reviewer and the Verifier run lowered
 RUN=(); if [ -n "$NICE" ] && [ "$NICE" != 0 ] && command -v nice >/dev/null; then RUN=(nice -n "$NICE"); fi
 [ -n "$RESUME" ] && [ "$AGENT" != claude ] && [ "$AGENT" != opencode ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
 # The tab's title, with the agent's name, is what lets Orca dispatch to it (stablyai/orca#32090), and a shell profile may have
@@ -113,11 +113,12 @@ case "$AGENT" in
       SDENY=(); while IFS= read -r t; do SDENY+=("$t"); done < <(local_coordinator_skill_deny)
       ARGS+=(--disallowedTools "${SDENY[@]}")
     fi
-    # The auditor never dispatches subagents (a kit list, like the Planner's superpowers one): the role's own disallowedTools only add to it
-    if [ "$ROLE" = auditor ]; then
-      ADENY=(); while IFS= read -r t; do ADENY+=("$t"); done < <(auditor_deny)
+    # The reviewers never dispatch subagents (a kit list, like the Planner's superpowers one): the role's own disallowedTools only add to it
+    case "$ROLE" in plan-reviewer|code-reviewer|verifier)
+      ADENY=(); while IFS= read -r t; do ADENY+=("$t"); done < <(reviewer_deny)
       ARGS+=(--disallowedTools "${ADENY[@]}")
-    fi
+      ;;
+    esac
     # Nobody answers a dialog in a worker's tab (the front role is the only one that talks to the user): workers cannot open one. In permissionMode
     # plan the plan tools stay, they are how that mode works. A --disallowedTools in extraArgs adds to this list.
     if [ "$ROLE" != "$FRONT" ]; then

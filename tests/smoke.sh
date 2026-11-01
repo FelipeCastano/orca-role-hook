@@ -117,7 +117,7 @@ cat > "$KIT/config.json" <<'J'
     "local-coordinator": { "title": "Local coordinator" },
     "planner": { "title": "Planner" },
     "dev": { "title": "Dev", "params": { "a": 1 } },
-    "auditor": { "title": "Auditor", "agent": "opencode" },
+    "ocode": { "title": "OCode", "agent": "opencode" },
     "cx": { "title": "Codex", "agent": "codex" },
     "cu": { "title": "Custom", "agent": "custom", "command": "x" },
     "cc": { "title": "Custom2", "agent": "custom", "command": "x", "clearCommand": "/reset" } } }
@@ -239,7 +239,7 @@ for p in common-workers local-coordinator; do
 done
 rule R4 "$PRD/common-workers.md" 'No names of people anywhere you write'
 rule R4 "$PRD/common-workers.md" 'Handles (`@user`) and email addresses count as names' 'No names of people anywhere you write'
-rule R4 "$PD/auditor.md" 'Names and stray comments'
+rule R4 "$PD/code-reviewer.md" 'Names and stray comments'
 grep -rEq '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' "$ROOT/prompts/" && { echo "FAIL rules R4: a prompt contains an email address"; FAIL=1; }
 # R5 worker permissions: no worktrees or terminals, no push, no git state changes, read-only reviewer worktree, no writes to external systems
 rule R5 "$PD/common-workers.md" 'Never create worktrees or terminals'
@@ -280,7 +280,7 @@ rule P "$PE" 'come in your startup message'
 rule R22 "$PE" "Follow the project's conventions" '^- \*\*Follow'
 check "rules: common-peon.md is at most 3500 bytes" "$([ "$(wc -c < "$PE" | tr -d ' ')" -le 3500 ] && echo y)" "y"
 # R6 install and create only with the user's yes; R7 never approve or merge; R8 credit to lens-review, not copied
-# R5 the pr-reviewer worktree is read-only; R11 its Auditor never experiments in the worktree; R14 no heartbeats; R15 convention check
+# R5 the pr-reviewer worktree is read-only; R11 its Verifier never experiments in the worktree; R14 no heartbeats; R15 convention check
 prrule R6 planner "The review skill" 'review-skill\.sh install. only on their explicit yes'
 prrule R6 planner "The review skill" 'Do not enable it yourself without their yes'
 prrule R6 planner "The team" '"overwrite": true., only on their yes'
@@ -298,9 +298,9 @@ prrule R5 common-workers "Limits" 'The worktree is read-only'
 prrule R5 common-workers "Limits" 'Never post to GitHub'
 prrule R14 common-workers "Communication" 'No heartbeats'
 prrule R5 lens-reviewer "Limits" 'The worktree is read-only'
-prrule R11 auditor "When you receive a task" 'rsync -a --delete --exclude \.git'
-prrule R5 auditor "When you receive a task" 'never experiment in the worktree'
-prrule R5 auditor "Limits" 'No mutation testing in this mode'
+prrule R11 verifier "When you receive a task" 'rsync -a --delete --exclude \.git'
+prrule R5 verifier "When you receive a task" 'never experiment in the worktree'
+prrule R5 verifier "Limits" 'No mutation testing in this mode'
 rule R8 "$ROOT/README.md" 'does not include or copy it' 'https://github.com/romerox3/lens-review'
 rule R8 "$ROOT/plugin/skills/team/SKILL.md" 'https://github.com/romerox3/lens-review'
 # R9 workers write in English; never wrap commands in bash -c / sh -c
@@ -323,16 +323,16 @@ rule R10 "$PD/local-coordinator.md" 'after the previous report' 'Never pre-creat
 rule R10 "$PD/planner.md" 'You do not write production code'
 rule R10 "$PD/dev.md" 'You do not write the test suite'
 rule R10 "$PD/tester.md" 'do not write text checks or run text mutants' '^2\. If the change only touches prompt'
-rule R10 "$PD/auditor.md" 'do not run text mutants' '^4\. If the change only touches prompt'
+rule R10 "$PD/code-reviewer.md" 'do not run text mutants' '^4\. If the change only touches prompt'
 rule R10 "$PD/tester.md" 'the rest of this list still applies (including cleanup)' '^2\. If the change only touches prompt'
-rule R10 "$PD/auditor.md" 'the rest of the method still applies, including the names-of-people pass' '^4\. If the change only touches prompt'
+rule R10 "$PD/code-reviewer.md" 'the rest of the method still applies, including the names-of-people pass' '^4\. If the change only touches prompt'
 rule R10 "$PD/local-coordinator.md" 'never tells the Tester or the Auditor what to test, mutate or look at' '\*\*Briefed rounds\.\*\*'
 # R10 plan audit: every plan and replan goes to the Auditor before the user sees it; the plan never says to skip the set audit
 rule R10 "$PD/planner.md" 'Every `plan` and every `replan` goes through a plan audit by the Auditor: it always runs, for a simple plan too (a simple plan audits fast).' '^Before you return a plan, audit it'
 rule R10 "$PD/planner.md" 'Write the Auditor'"'"'s brief of a "plan audit" as a file and end the task with `needs: plan-audit: <path>`.' '^Before you return a plan, audit it'
 rule R10 "$PD/planner.md" 'a "plan corrections review"' '^Before you return a plan, audit it'
 rule R10 "$PD/planner.md" 'a plan is never returned without them. The plan never says anything about skipping the set audit. The set audit always runs at the close of every set with code, tests or prompts; a plan never says to skip it.' '^Your report for a `plan`'
-rule R10 "$PD/auditor.md" 'A **plan audit** has no code yet' '^3\. Work out which kind of task'
+rule R10 "$PD/plan-reviewer.md" 'A **plan audit** has no code yet' '^3\. Work out which kind of task'
 # R10 the local coordinator and the Planner split: the Planner never writes outside its scratchDir or to Jira and GitHub, the local coordinator never lets it wait, resets it after each task and keeps the Tester exemption to text
 rule R10 "$PD/planner.md" 'you never write to Jira or GitHub' 'applies to you with the local coordinator'
 rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no commit, no pull request, no write to Jira' '^- \*\*Nothing leaves the worktree'
@@ -340,19 +340,19 @@ rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the
 rule R10 "$PD/local-coordinator.md" '**Compact the Planner once, right before its next task.** Before you send the Planner any task other than its first one, run `~/.orca-roles/bin/compact-role.sh planner` once, then create and dispatch the task (for a Planner that does not run on claude, the same command cleans it instead). Never compact it when it finishes a task, never twice before the same task, and never when no Planner task follows.' '^\*\*Compact the Planner once'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
 rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
-rule R10 "$PD/auditor.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
+rule R10 "$PD/plan-reviewer.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
 # R11 where each role works: in place with .orca-bak, one mutant at a time, verified close; experiments in scratchDir; temporaries only there
 t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
-a27="$(grep '^2\. \*\*Baseline' "$PD/auditor.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)"
+a27="$(grep '^2\. \*\*Baseline' "$PD/code-reviewer.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/code-reviewer.md" || true)"
 for k in 'in place in the worktree' 'mv <f>.orca-bak <f>' 'One mutant at a time' 'Never use `git checkout`, `git stash` or deleting the backup' 'equal the baseline'; do
   grep -qF -- "$k" <<<"$t" || { echo "FAIL rules R11: tester.md mutation step lost '$k'"; FAIL=1; }
-  grep -qF -- "$k" <<<"$a27" || { echo "FAIL rules R11: auditor.md mutation passes lost '$k'"; FAIL=1; }
+  grep -qF -- "$k" <<<"$a27" || { echo "FAIL rules R11: code-reviewer.md mutation passes lost '$k'"; FAIL=1; }
 done
-grep -qF '&& mv' <<<"$t$(grep '^7\. \*\*Mutation, in place' "$PD/auditor.md" || true)" && { echo "FAIL rules R11: the restore mv is chained with && in the mutation text"; FAIL=1; }
-for p in tester auditor; do
+grep -qF '&& mv' <<<"$t$(grep '^7\. \*\*Mutation, in place' "$PD/code-reviewer.md" || true)" && { echo "FAIL rules R11: the restore mv is chained with && in the mutation text"; FAIL=1; }
+for p in tester code-reviewer; do
   GCO="$(grep -F 'git checkout' "$PD/$p.md" || true)"; [ -n "$GCO" ] && grep -vqE 'Never (use|run) .git checkout.' <<<"$GCO" && { echo "FAIL rules R11: $p.md mentions git checkout without forbidding it"; FAIL=1; }
 done
-rule R11 "$PD/auditor.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
+rule R11 "$PD/code-reviewer.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
 rule R11 "$PD/tester.md" 'crosscheck.sh tree <scratchDir>/base' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'report the base check as not run for that reason' '^7\. \*\*Base check'
@@ -368,12 +368,12 @@ check "rules R11: tester.md mutation in place, no copy" "$(grep -c 'in place in 
 check "rules R11: no prompt tells an agent to delete or use /tmp" "$(grep -rnE '\brm\b|mktemp|/tmp|/var/folders' "$ROOT/prompts/" | wc -l | tr -d ' ')" "0"
 # R12 process cleanup
 rule R12 "$PD/common-workers.md" 'stop the processes you started'
-# Tester and Auditor resource caps
-for p in tester auditor; do
+# Tester and Code-Reviewer resource caps
+for p in tester code-reviewer; do
   rule caps "$PD/$p.md" 'No GPU'
   rule caps "$PD/$p.md" 'capped at `maxWorkers` parallel processes or threads' '^- \*\*Resources\*\*'
 done
-prrule caps auditor "Limits" 'Cap every process you run at .maxWorkers. parallel workers'
+prrule caps verifier "Limits" 'Cap every process you run at .maxWorkers. parallel workers'
 # R14 no heartbeats
 rule R14 "$PD/common-workers.md" 'No heartbeats'
 # R16 message batches are acknowledged: the Planner never ends a turn with one open; workers ack what they read and the ack is not a heartbeat
@@ -403,7 +403,7 @@ for m in programmer pr-reviewer academic-research; do
     rule R21 "$PL" 'Wording-only fixes need no Tester round'
     rule R21 "$PL" 'anything that touches code, tests or a pinned rule goes through the Tester as usual' '\*\*Wording-only fixes need no Tester round\.\*\*'
     rule R21 "$PL" 'by the Tester as a task' '\*\*Set audit\.\*\*'
-    rule R21 "$ROOT/prompts/$m/auditor.md" 'run the sections and tests the whole set touches'
+    rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'run the sections and tests the whole set touches'
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
   }
   [ "$m" != academic-research ] || {
@@ -423,11 +423,14 @@ for m in programmer pr-reviewer academic-research; do
     rule R22 "$PL" '**Briefs carry the project'"'"'s conventions.**'
     rule R22 "$PL" '**Say when the kit overrides the project.**'
     rule R22 "$PL" 'Research briefs are bounded'
-    rule R22 "$ROOT/prompts/$m/auditor.md" 'Every rules violation blocks, whatever rejectSeverity says'
-    rule R22 "$ROOT/prompts/$m/auditor.md" 'never dispatch its reviewers, even if its text says so'
-    rule R22 "$ROOT/prompts/$m/auditor.md" 'writes exactly one file, the stamped plan'
-    rule R22 "$ROOT/prompts/$m/auditor.md" 'You never dispatch subagents'
-    rule R22 "$ROOT/prompts/$m/auditor.md" 'rules violations under the Rules verification method always reject' '\*\*Reject only from the threshold\.\*\*'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'Every rules violation blocks, whatever rejectSeverity says'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'never dispatch its reviewers, even if its text says so'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'writes exactly one file, the stamped plan'
+    rule R22 "$ROOT/prompts/$m/code-reviewer.md" 'You never dispatch subagents'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'You never dispatch subagents'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'rules violations under the Rules verification method always reject' '\*\*Reject only from the threshold\.\*\*'
+    rule F1 "$ROOT/prompts/$m/code-reviewer.md" 'If you cannot apply the method' '^- If you cannot apply the method'
+    rule F1 "$ROOT/prompts/$m/plan-reviewer.md" 'If you cannot apply the method' '^- If you cannot apply the method'
     rule R22 "$ROOT/prompts/$m/common-workers.md" '**Follow the project'"'"'s conventions.**'
     rule R22 "$ROOT/prompts/$m/common-workers.md" 'never above your role prompt or the local coordinator'"'"'s task'
     rule R22 "$ROOT/prompts/$m/researcher.md" 'no extra experiment, variant or source without asking the local coordinator'
@@ -660,7 +663,7 @@ prrule R6 planner "Limits" 'Never change the kit.s configuration or prompts with
 prrule R5 common-workers "Limits" 'Never create worktrees or terminals'
 prrule R9 common-workers "Limits" 'Never wrap commands in .bash -c. or .sh -c.'
 prrule R5 lens-reviewer "Limits" 'Do not run the project.s code, tests or build unless the brief says so'
-prrule R5 auditor "Limits" 'every file you write goes in your scratchDir'
+prrule R5 verifier "Limits" 'every file you write goes in your scratchDir'
 # academic-research: the same limits, closing and cleaning only with the user's yes, kit files only after a yes, the earlier-version folder, the convention check
 rule R5 "$AD/common-workers.md" 'Never create worktrees or terminals' '^- Never create worktrees'
 rule R9 "$AD/common-workers.md" 'Never wrap commands in `bash -c` or `sh -c`' '^- Never wrap commands'
@@ -863,6 +866,9 @@ cvok .roles.dev.opencode '{"permissions":[{"action":"edit","resource":"x/*","eff
 check "check_config: an invalid flow, oracle, telemetry or trust value is exactly one ERROR with the right message" "$(grep -c BAD <<< "$CV1"):$(grep -o 'ok ' <<< "$CV1" | wc -l | tr -d ' ')" "0:91"
 check "check_config: an invalid roles.<r>.opencode is exactly one ERROR with the right message" "$(grep -c BAD <<< "$CV2"):$(grep -o 'ok ' <<< "$CV2" | wc -l | tr -d ' ')" "0:14"
 check "check_config: null, absent and every valid value of those keys give no ERROR" "$(grep -c BAD <<< "$CV3"):$(grep -o 'ok ' <<< "$CV3" | wc -l | tr -d ' ')" "0:64"
+jq '.roles.auditor = {"title":"Auditor"}' "$ROOT/config.default.json" > "$TMP/cv-aud.json"; printf '%s' '{"set":[{"path":["roles","auditor","model"],"value":"y"}]}' > "$TMP/cv-aud-ovr.json"
+CA1="$(check_config "$TMP/cv-aud.json")"; CA2="$(check_config "$ROOT/config.default.json" "$TMP/cv-aud-ovr.json")"
+check "check_config: roles.auditor in the config, or a saved set path roles.auditor.*, gives exactly the removed-role line" "$(printf '%s\n' "$CA1" | wc -l | tr -d ' '):$(printf '%s\n' "$CA2" | wc -l | tr -d ' '):$(printf '%s\n%s\n' "$CA1" "$CA2" | grep -c '^ERROR: the role auditor no longer exists in this version of orca-roles')" "1:1:2"
 check "check_config: config.default.json gives no ERROR, and several invalid values give one line each" "$(check_config "$ROOT/config.default.json" | wc -l | tr -d ' '):$(jq -c '.settings.trust = "x" | .settings.flow.roundCap = "3" | .settings.oracle.timeout = -1' "$ROOT/config.default.json" > "$TMP/cv.json"; check_config "$TMP/cv.json" | grep -c '^ERROR: invalid configuration: settings\.')" "0:3"
 }
 
@@ -930,7 +936,7 @@ rm -f "$TMP/orca-roles.coordinator"
 check "planner_msg: no marker and no kept Run -> byte-identical" "$(cpm 0)" "$MC0"
 # planner_ask_msg: the local coordinator's message, in order: who it is, the prompt to read, the language rule of planner_msg, the question about programmer mode, the launch command, the other modes
 ASK1="You are the local coordinator of the orca-roles kit in this worktree, and no mode has been chosen yet. Read $KIT/prompts/programmer/local-coordinator.md and adopt that role from now on, but do not start its startup before the mode is chosen."
-ASK3='Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Auditor, E2E-Tester, Deployer). Then end your turn and wait for the user'"'"'s typed answer.'
+ASK3='Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) whether to start in programmer mode: plan and build code with a team (Planner, Researcher, Dev, Tester, Plan-Reviewer, Code-Reviewer, E2E-Tester, Deployer). Then end your turn and wait for the user'"'"'s typed answer.'
 ASK45='Do not start any work before the answer. If the user says yes, run `~/.orca-roles/bin/launch.sh --mode programmer` from the worktree and end your turn: the kit opens the team and sends you your role message for it. If the user wants another mode, tell them that this version starts other modes only after they close this tab (yours) and run `roles --mode <mode>` from a terminal of this worktree, and run nothing.'
 check "planner_ask_msg: exact message with language auto, one line, no trailing newline" "$(planner_ask_msg "$KIT/config.default.json"; printf x)" "$ASK1 Reply to the user in the language they write in. $ASK3 $ASK45"x
 jq '.settings.language = "Spanish"' "$KIT/config.default.json" > "$TMP/askl.json"; jq '.settings.language = ""' "$KIT/config.default.json" > "$TMP/askl2.json"
@@ -2269,6 +2275,13 @@ check "check_overrides: unknown role" "$(check_overrides "$KIT/config.json" "$TM
 check "check_overrides: the planner cannot be disabled" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: the planner cannot be disabled$')" "1"
 overrides_from_args --disable local-coordinator > "$TMP/ovr.json"
 check "check_overrides: the local coordinator cannot be disabled" "$(check_overrides "$KIT/config.json" "$TMP/ovr.json" | grep -c '^ERROR: the local coordinator cannot be disabled$')" "1"
+RRE="ERROR: the role auditor no longer exists in this version of orca-roles"
+RRN=""; RRC=0
+for o in '{"only":["planner","auditor"],"enable":[],"disable":[],"set":[]}' '{"only":[],"enable":["auditor"],"disable":[],"set":[]}' '{"only":[],"enable":[],"disable":["auditor"],"set":[]}' '{"only":[],"enable":[],"disable":[],"set":[{"path":["roles","auditor","model"],"value":"y"}]}'; do
+  printf '%s' "$o" > "$TMP/ovr.json"; RRO="$(check_overrides "$KIT/config.json" "$TMP/ovr.json")"
+  RRN="$RRN$(printf '%s\n' "$RRO" | wc -l | tr -d ' '):"; RRC=$((RRC + $(printf '%s\n' "$RRO" | grep -c "^$RRE" || true)))
+done
+check "check_overrides: auditor in only, enable or disable, or a set path roles.auditor.*, gives exactly the removed-role line and not the unknown-roles one" "$RRN$RRC" "1:1:1:1:4"
 
 # the options add to the saved ones (library level)
 S0='{"only":["a"],"enable":["x","y"],"disable":["z","w"],"set":[{"path":["roles","dev","model"],"value":"a"},{"path":["k"],"value":1}],"mode":"programmer"}'
@@ -2477,6 +2490,19 @@ fast_poll grep -q 'Another roles is running' "$TMP/lkb.out"   # the launch is bl
 (cd "$LK" && lkseed; for h in l0 p1 d1 x1; do echo alive > "$LK/show.$h"; done; kill "$HP"; rm -rf "$LKG/orca-roles.lock")
 if wait "$LP"; then RC=0; else RC=$?; fi; OUT="$(cat "$TMP/lkb.out")"
 check "launch: blocked by the lock, it reads the state written meanwhile and opens nothing when every role is alive" "$RC:$(printf '%s' "$OUT" | grep -c 'All roles are already open'):$(lkcnt create):$(lkcnt close)" "0:1:0:0"
+# a team opened by an earlier kit version: the note names the live roles whose last provenance line has an old .installed stamp, and writes nothing
+printf 'local@new\n' > "$TMP/home/.orca-roles/.installed"
+lkprov() { printf '%s\n' "{\"role\":\"tester\",\"installed\":\"$1\"}" "{\"role\":\"auditor\",\"installed\":\"$2\"}" "{\"role\":\"dev\",\"installed\":\"$3\"}" > "$LKG/orca-roles.provenance.jsonl"; }
+lknote() { lkseed; printf 'TESTER=t1\nAUDITOR=a1\n' >> "$LKG/orca-roles.env"; try lkl; printf '%s\n' "$OUT" | grep '^Note: orca-roles was updated' || true; }
+lkreset; for h in l0 p1 d1 x1 t1 a1; do echo alive > "$LK/show.$h"; done
+lkprov local@old local@old local@new; PB="$(cksum < "$LKG/orca-roles.provenance.jsonl")"; N1="$(lknote)"; PS="$([ "$PB" = "$(cksum < "$LKG/orca-roles.provenance.jsonl")" ] && echo same || echo changed)"
+echo gone > "$LK/show.a1"; N2="$(lknote)"; echo alive > "$LK/show.a1"
+lkprov local@new local@new local@new; { printf '%s\n' '{"role":"tester","installed":"local@old"}'; cat "$LKG/orca-roles.provenance.jsonl"; } > "$TMP/lkprov.tmp"; mv "$TMP/lkprov.tmp" "$LKG/orca-roles.provenance.jsonl"; N3="$(lknote | wc -l | tr -d ' ')"
+lkprov local@old local@old local@new; rm -f "$TMP/home/.orca-roles/.installed"; N4="$(lknote | wc -l | tr -d ' ')"
+printf 'local@new\n' > "$TMP/home/.orca-roles/.installed"
+lkprov local@old local@old local@new; : > "$LK/listfail"; N5="$(lknote | wc -l | tr -d ' ')"; rm -f "$LK/listfail"
+check "launch: the restart note names the live roles with an old stamp and the stamps, skips a role whose tab is gone, current stamps (a role relaunched after the update included), a kit without .installed and a failed terminal list, and writes no provenance" "$(printf '%s\n' "$N1" | wc -l | tr -d ' '):${N1#*(}:$(printf '%s\n' "$N2" | grep -c 'tabs still run the old version: tester\.'):$N3:$N4:$PS:$N5" "1:local@old → local@new), and these of its tabs still run the old version: auditor, tester. To restart the team with the new version, close all its tabs in Orca and run roles again.:1:0:0:same:0"
+rm -f "$TMP/home/.orca-roles/.installed"
 # worktree id
 lkreset
 try lkl id:AAA; R1="$RC:$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before' || true)"
@@ -2521,7 +2547,7 @@ esac
 exit 0
 EOS
 chmod +x "$AK/bin/orca"
-write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.auditor = {"title": "Auditor", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
+write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.verifier = {"title": "Verifier", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
 akl() { (cd "${AKDIR:-$AK/proj}" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$AK/bin:$PATH" ORCA_TERMINAL_HANDLE="${AKH:-}" ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 10s"; FAIL=1; }; fast_poll akkickgone; }
 akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/list.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
@@ -2579,7 +2605,7 @@ printf 'LOCAL_COORDINATOR=gone\n' > "$AKG/orca-roles.env"; printf 'LOCAL_COORDIN
 AKH=other akrun --mode pr-reviewer; PC2="$RC:$(printf '%s\n' "$OUT" | grep -cxF "$PCE"):$(akmark)"
 printf 'LOCAL_COORDINATOR=gone\n' > "$AKG/orca-roles.env"; printf 'LOCAL_COORDINATOR=pty-gone\n' > "$AKG/orca-roles.pty"
 AKH=other akrun --mode pr-reviewer; PC3="$RC:$(printf '%s\n' "$OUT" | grep -cF 'cannot be chosen'):$(akmark):$(akhandles)"
-check "launch: choosing another mode while the local coordinator's tab is open (live, or restored by its ptyId) is refused with nothing changed; with no such tab the mode starts fresh, the Planner in front" "$C0:$PC1|$PC2|$PC3" "1:1:1:marker:1:same|1:1:marker|0:0:none:PLANNER AUDITOR "
+check "launch: choosing another mode while the local coordinator's tab is open (live, or restored by its ptyId) is refused with nothing changed; with no such tab the mode starts fresh, the Planner in front" "$C0:$PC1|$PC2|$PC3" "1:1:1:marker:1:same|1:1:marker|0:0:none:PLANNER VERIFIER "
 # programmer mode needs the local-coordinator role: missing or disabled stops the launch (ask start and --mode programmer) before anything is written; another mode launches
 LCE="ERROR: programmer mode needs the local-coordinator role, missing or disabled in $TMP/home/.orca-roles/config.json: run install.sh again, or remove the override that disables it"
 LM=""
@@ -2588,7 +2614,7 @@ for V in 'del(.roles["local-coordinator"])' '.roles["local-coordinator"].enabled
   akreset; aksetting "$V"; akrun --mode programmer; LM="$LM$RC:$(printf '%s\n' "$OUT" | grep -cxF "$LCE"):$(find "$AKG" -maxdepth 1 -name 'orca-roles.*' | wc -l | tr -d ' ')|"
 done
 akreset; aksetting 'del(.roles["local-coordinator"])'; akrun --mode pr-reviewer; LM="$LM$RC:$(akhandles)"
-check "launch: a config without the local-coordinator role, or with it disabled, stops a programmer launch (ask start or --mode programmer) before anything is written; --mode pr-reviewer launches as before" "$LM" "1:1:0:0|1:1:0|1:1:0:0|1:1:0|0:PLANNER AUDITOR "
+check "launch: a config without the local-coordinator role, or with it disabled, stops a programmer launch (ask start or --mode programmer) before anything is written; --mode pr-reviewer launches as before" "$LM" "1:1:0:0|1:1:0|1:1:0:0|1:1:0|0:PLANNER VERIFIER "
 # a Jira ticket starts in programmer, whatever settings.mode says
 JR=""
 for V in ak_link ak_branch; do
@@ -2602,7 +2628,7 @@ for V in ak_link ak_branch; do
   for W in cfg prj set; do
     akreset; aksetting '.settings.mode = "pr-reviewer"'; "$V"
     case "$W" in cfg) aksetting '.settings.mode = "pr-reviewer" | .settings.enableAskModeOnStart = false'; akrun;; prj) echo '{"settings":{"enableAskModeOnStart":false}}' > "$AK/proj/.orca-roles.json"; akrun;; set) akrun --set settings.enableAskModeOnStart=false;; esac
-    JF="$JF$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c 'Jira ticket' || true):$(jq -r '.mode // "none"' "$AKG/orca-roles.overrides.json" 2>/dev/null || echo nofile):$(akhandles | grep -c AUDITOR || true);"
+    JF="$JF$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -c 'Jira ticket' || true):$(jq -r '.mode // "none"' "$AKG/orca-roles.overrides.json" 2>/dev/null || echo nofile):$(akhandles | grep -c VERIFIER || true);"
   done
 done
 check "launch: enableAskModeOnStart false (config.json, .orca-roles.json, --set) with settings.mode pr-reviewer and a Jira key (link and branch) -> the pr-reviewer team opens, no Jira line, no saved mode (only --set saves its own setting), no marker" "$JF" "0:none:0:nofile:1;0:none:0:nofile:1;0:none:0:none:1;0:none:0:nofile:1;0:none:0:nofile:1;0:none:0:none:1;"
@@ -2680,8 +2706,8 @@ swerr() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
 swseed; : > "$SWD/cft.h-Dev"; SWH=h-Planner swrun --mode pr-reviewer
 S1="$RC:$(swerr "Switching mode from academic-research to pr-reviewer: closing Dev, Tester, Deployer, E2E-Tester; the Planner keeps its tab and gets its role message for pr-reviewer after its conversation is cleared."):$(swclosed)"
 S2="$(grep -cE '^terminal close --terminal h-Dev --tab ' "$SWD/orca.log" || true)$(grep -cE '^terminal close --terminal h-Dev --json' "$SWD/orca.log" || true):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.pty" | tr '\n' ' '):$(cut -d= -f1 "$AKG/orca-roles.kicked" | tr '\n' ' ')"
-S3="$(swplanner):$(swsent 'switched from academic-research to pr-reviewer'):$(swsent 'mode-switch-summary.md'):$(swsent 'Roles reopened'):$(swsent 'Role handles changed'):$(swsent 'Your previous conversation is still there'):$(swsent 'adopt that role' h-Auditor-1):$(swcnt create)"
-check "switch from the Planner's tab: every old worker is closed (alive with the --tab form refused, agent gone, orphaned, and the tab found by its saved ptyId, not the stale saved handle), the Planner's tab is not, only the Planner lines stay in the state files and the Auditor opens; the Planner gets Esc, /clear and then the variant-4 message naming both modes and the summary path, and no reopened/changed message" "$S1|$S2|$S3" "0:1:h-Dev h-Dev h-Tester h-Deployer restored-e2e |11:PLANNER AUDITOR :PLANNER AUDITOR :PLANNER AUDITOR |ESC,CLEAR,MSG,:1:1:0:0:0:1:1"
+S3="$(swplanner):$(swsent 'switched from academic-research to pr-reviewer'):$(swsent 'mode-switch-summary.md'):$(swsent 'Roles reopened'):$(swsent 'Role handles changed'):$(swsent 'Your previous conversation is still there'):$(swsent 'adopt that role' h-Verifier-1):$(swcnt create)"
+check "switch from the Planner's tab: every old worker is closed (alive with the --tab form refused, agent gone, orphaned, and the tab found by its saved ptyId, not the stale saved handle), the Planner's tab is not, only the Planner lines stay in the state files and the Verifier opens; the Planner gets Esc, /clear and then the variant-4 message naming both modes and the summary path, and no reopened/changed message" "$S1|$S2|$S3" "0:1:h-Dev h-Dev h-Tester h-Deployer restored-e2e |11:PLANNER VERIFIER :PLANNER VERIFIER :PLANNER VERIFIER |ESC,CLEAR,MSG,:1:1:0:0:0:1:1"
 # a role of both modes gets a new tab and its message for the new mode (C15)
 swseed; for f in "$KIT/config.json" "$AKG/orca-roles.config.json"; do jq '.settings.mode = "pr-reviewer"' "$SWD/cfg.json" > "$f"; done; SWH=h-Planner swrun --mode academic-research
 D1="$RC:$(grep '^DEV=' "$AKG/orca-roles.env" | grep -cvx 'DEV=h-Dev'):$(swclosed | grep -c 'h-Dev '):$(swsent 'prompts/academic-research/dev.md' "$(grep '^DEV=' "$AKG/orca-roles.env" | cut -d= -f2)"):$(swsent 'prompts/pr-reviewer/dev.md' "$(grep '^DEV=' "$AKG/orca-roles.env" | cut -d= -f2)"):$(swplanner)"
@@ -2718,38 +2744,38 @@ H1="$H1|$RC:$(swerr "ERROR: could not close Tester's tab (h-Tester); close it by
 check "C15: mode switch: a close with no answer is not retried in the other form; gone afterwards -> the switch goes on; still there -> it fails naming the tab, with no 'did not confirm' line" "$H1" "0:0:1:0:1|1:1:1:0"
 # no saved tab is open: the mode change is a normal launch
 swseed; for h in Planner Dev Tester Deployer; do echo stale > "$SWD/st.h-$h"; done; echo '{"terminals":[]}' > "$SWD/list.json"; SWH=other swrun --mode pr-reviewer
-check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new Planner and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:PLANNER AUDITOR :"
+check "a mode change when no saved tab is open proceeds as a normal launch: no switch line, no close, a new Planner and the new mode's team" "$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode'):$(swcnt close):$(swcnt create):$(cut -d= -f1 "$AKG/orca-roles.env" | tr '\n' ' '):$(swplanner)" "0:0:0:2:PLANNER VERIFIER :"
 # C2/C10/C11: a switch that fails once the old workers are closed leaves orca-roles.switch-from (the old mode) and every failure after that says to run roles again; the rerun finishes the switch, kickoff.sh removes the file
 SWF="$AKG/orca-roles.switch-from"; SWDONE="The workers of mode academic-research were already closed: run roles again to finish the switch."
 swfin() { printf '%s\n' "$OUT" | grep -cxF 'Finishing the mode switch from academic-research to pr-reviewer that a previous launch left unfinished.' || true; }
 swfinany() { printf '%s\n' "$OUT" | grep -c 'Finishing the mode switch' || true; }
 swfile() { cat "$SWF" 2>/dev/null || echo none; }
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
-SWV1="$RC:$(swerr "ERROR: could not open Auditor. Check $AKG/orca-roles-launch.log. $SWDONE"):$(swfile):$(swplanner):$(swfin):$(swclosed)"
-rm -f "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/cc.Verifier"; SWH=h-Planner swrun --mode pr-reviewer
+SWV1="$RC:$(swerr "ERROR: could not open Verifier. Check $AKG/orca-roles-launch.log. $SWDONE"):$(swfile):$(swplanner):$(swfin):$(swclosed)"
+rm -f "$SWD/cc.Verifier"; SWH=h-Planner swrun --mode pr-reviewer
 SWV2="$RC:$(swfin):$(swfile):$(swplanner):$(swsent 'switched from academic-research to pr-reviewer')"
 : > "$SWF"; SWH=h-Planner swrun --mode pr-reviewer
 SWV3="$RC:$(swfinany):$(swplanner)"
 rm -f "$SWF"; SWH=h-Planner swrun --mode pr-reviewer
 SWV3="$SWV3:$(swfinany):$(swplanner)"
-check "switch interrupted after the old workers were closed (the new team's Auditor cannot be opened): the failure carries the 'already closed: run roles again' sentence, orca-roles.switch-from holds the old mode and the Planner is untouched; the rerun prints the 'Finishing the mode switch' line, clears the Planner and sends the new-mode message once, and kickoff.sh removes the file; an empty file or no file is not a switch to finish (no line, no second clear)" "$SWV1|$SWV2|$SWV3" "1:1:academic-research::0:h-Dev h-Tester h-Deployer restored-e2e |0:1:none:ESC,CLEAR,MSG,:1|0:0:ESC,CLEAR,MSG,:0:ESC,CLEAR,MSG,"
+check "switch interrupted after the old workers were closed (the new team's Verifier cannot be opened): the failure carries the 'already closed: run roles again' sentence, orca-roles.switch-from holds the old mode and the Planner is untouched; the rerun prints the 'Finishing the mode switch' line, clears the Planner and sends the new-mode message once, and kickoff.sh removes the file; an empty file or no file is not a switch to finish (no line, no second clear)" "$SWV1|$SWV2|$SWV3" "1:1:academic-research::0:h-Dev h-Tester h-Deployer restored-e2e |0:1:none:ESC,CLEAR,MSG,:1|0:0:ESC,CLEAR,MSG,:0:ESC,CLEAR,MSG,"
 # kickoff.sh removes the file whatever the result of sending to the Planner
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"; : > "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
+swseed; : > "$SWD/cc.Verifier"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Verifier"; : > "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
 V4="$RC:$(swfin):$(swfile):$(swplanner)"
 rm -f "$SWD/sf.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer
 V4="$V4:$RC:$(swfin):$(swfile):$(swplanner)"
 check "switch rerun with the Planner's tab refusing every send: kickoff.sh still removes orca-roles.switch-from, so the next run does not clear the Planner again" "$V4" "0:1:none::0:0:none:"
 # the sentence also follows a failure that happens before the switch block of a later run, and only while the file holds a mode
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
+swseed; : > "$SWD/cc.Verifier"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Verifier"
 SWH=h-Planner swrun --enable nobody; V5="$RC:$(printf '%s\n' "$OUT" | grep -c "^ERROR: unknown roles: nobody\..* $SWDONE\$" || true)"
 : > "$SWF"; SWH=h-Planner swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
 rm -f "$SWF"; SWH=h-Planner swrun --enable nobody; V5="$V5:$(printf '%s\n' "$OUT" | grep -c 'already closed' || true)"
 swseed; : > "$SWD/cf.h-Deployer"; SWH=h-Planner swrun --mode pr-reviewer; V5="$V5:$RC:$(swerr "ERROR: could not close Deployer's tab (h-Deployer); close it by hand and switch again."):$(printf '%s\n' "$OUT" | grep -c 'already closed' || true):$(swfile)"
 # the appended sentence follows exactly one period: a message that already ends with one (Orca not ready on a rerun) and one that does not (the log pointer, in the V1 check above)
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Auditor"
+swseed; : > "$SWD/cc.Verifier"; SWH=h-Planner swrun --mode pr-reviewer; rm -f "$SWD/cc.Verifier"
 echo rt > "$SWD/st.h-Planner"; SWH=h-Planner swrun --mode pr-reviewer; P1="$RC:$(swerr "ERROR: Orca is not ready (runtime_unavailable) for Planner: no tab was closed or opened. Run roles again once Orca is ready. $SWDONE"):$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true)"
-swseed; : > "$SWD/cc.Auditor"; SWH=h-Planner swrun --mode pr-reviewer
-P1="$P1:$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true):$(printf '%s\n' "$OUT" | grep -c 'orca-roles-launch\.log\. The workers of mode academic-research were already closed' || true)"; rm -f "$SWD/cc.Auditor"
+swseed; : > "$SWD/cc.Verifier"; SWH=h-Planner swrun --mode pr-reviewer
+P1="$P1:$(printf '%s\n' "$OUT" | grep -c '\.\. The workers' || true):$(printf '%s\n' "$OUT" | grep -c 'orca-roles-launch\.log\. The workers of mode academic-research were already closed' || true)"; rm -f "$SWD/cc.Verifier"
 check "the 'already closed' sentence is joined with exactly one period whether the message ends with a period or not (never '..' or a run-on without one)" "$P1" "1:1:0:0:1"
 check "the 'already closed' sentence ends a failure of a later run while orca-roles.switch-from holds a mode (also one raised before the switch block), not with an empty or missing file; the failure to close an old worker, which comes before the file is written, keeps its message and writes no file" "$V5" "1:1:0:0:1:1:0:none"
 # a slow Orca (n14 step 1): terminal create past its limit adopts the tab Orca opened; a failing terminal show is 'unknown', not 'agent gone'; the ptyId is read again after 2 s
@@ -3038,8 +3064,8 @@ for bad in Programmer PROGRAMMER ../x programmer/ "a b" foo "" "programmer " "pr
   check "mode_error rejects '$bad'" "$(KIT="$PK" mode_error "$bad")" "unknown mode '$bad' (modes: programmer, pr-reviewer, academic-research)"
 done
 check "mode_of: default is programmer" "$(KIT="$PK" mode_of "$PKC")" "programmer"
-check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique), .roles.auditor.modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer","pr-reviewer"]]'
-check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "local-coordinator planner researcher dev tester auditor e2e-tester deployer "
+check "default config: settings.mode and the roles' modes" "$(jq -c '[.settings.mode, .roles.planner.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "plan-reviewer" and .key != "code-reviewer" and .key != "verifier" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique), .roles["code-reviewer"].modes]' "$PKC")" '["programmer","all",[["programmer"]],["programmer"]]'
+check "enabled_roles: no mode = today's roles" "$(KIT="$PK" enabled_roles "$PKC" | tr '\n' ' ')" "local-coordinator planner researcher dev tester plan-reviewer code-reviewer e2e-tester deployer "
 
 # roles and prompts per mode (library level)
 mcfg() { jq -c "$1" "$MC" > "$TMP/m.json"; }
@@ -3258,7 +3284,7 @@ for o in --reset "--mode programmer" "--set settings.mode=programmer"; do
 done
 rm -f "$TMP/m-alive"
 # a user config.json from before modes (no settings.mode, no modes) launches the same programmer team as before
-SAME="LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
+SAME="LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER PLAN_REVIEWER CODE_REVIEWER E2E_TESTER DEPLOYER "
 jq 'del(.settings.mode) | del(.roles[].modes) | .settings += {kickoffTimeoutSeconds: 1, launchWaitSeconds: 1, closeComposerAgent: false, jiraHandoff: false, enableAskModeOnStart: false}' "$PKC" > "$TMP/m-legacy.json"
 check "legacy config: has neither settings.mode nor modes" "$(jq -c '[.settings.mode, ([.roles[].modes] | map(select(. != null)) | length)]' "$TMP/m-legacy.json")" "[null,0]"
 rm -f "$MG/orca-roles.env"; cp "$TMP/m-legacy.json" "$MC"
@@ -3268,34 +3294,34 @@ try ml --reset; check "legacy config after upgrade_config: the same programmer t
 sleep 1
 rm -rf "$PK/prompts/pr-reviewer" "$PK/prompts/programmer/allrole.md" "$PK/config.json"   # the kit copy is shared with other sections
 
-# pr-reviewer is available in the shipped kit: the default configuration opens the planner and the auditor only
+# pr-reviewer is available in the shipped kit: the default configuration opens the planner and the verifier only
 PRK="$TMP/prk"; PRH="$TMP/prhome"; mkdir -p "$PRK" "$PRH"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$PRK/"; chmod +x "$PRK"/bin/*.sh
 rm -rf "$PRK/prompts/academic-research"   # the mode is available once its planner.md exists: these checks need it unavailable
 ln -sfn "$PRK" "$PRH/.orca-roles"
 jq '.settings += {"kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false} | .mcpServers = {} | .defaults.params = {}' "$ROOT/config.default.json" > "$PRK/config.json"
 check "mode_error: pr-reviewer is available in the shipped kit" "$(KIT="$PRK" mode_error pr-reviewer)" ""
 check "mode_error: academic-research is still not available" "$(KIT="$PRK" mode_error academic-research)" "mode 'academic-research' is not available yet"
-check "default config: the auditor belongs to programmer and pr-reviewer, the other workers to programmer only" "$(jq -c '[.roles.auditor.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "auditor" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer","pr-reviewer"],[["programmer"]]]'
+check "default config: the reviewers and the verifier belong to their modes, the other workers to programmer only" "$(jq -c '[.roles["code-reviewer"].modes, .roles["plan-reviewer"].modes, .roles.verifier.modes, ([.roles | to_entries[] | select(.key != "planner" and .key != "plan-reviewer" and .key != "code-reviewer" and .key != "verifier" and (.value.modes | index("academic-research") | not)) | .value.modes] | unique)]' "$ROOT/config.default.json")" '[["programmer"],["programmer"],["pr-reviewer"],[["programmer"]]]'
 PRP="$TMP/prproj"; mkdir -p "$PRP"; git -C "$PRP" init -q; PRG="$PRP/.git"; : > "$MLOG"
 prl() { (cd "$PRP" && HOME="$PRH" PATH="$TMP/mbin:$PATH" ORCA_ROLES_KICKOFF="$TMP/mbin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 "$PRH/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and AUDITOR only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER AUDITOR "
-check "launch pr-reviewer (default config): the auditor reads the mode's prompts" "$(cd "$PRP" && KIT="$PRK" worker_msg "$PRG/orca-roles.config.json" auditor | grep -o "Read [^ ]*common-workers.md and [^ ]*auditor.md")" "Read $PRK/prompts/pr-reviewer/common-workers.md and $PRK/prompts/pr-reviewer/auditor.md"
-check "launch pr-reviewer (default config): the planner reads the mode's planner.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "planner auditor" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md')" "Read $PRK/prompts/pr-reviewer/planner.md"
-rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER AUDITOR E2E_TESTER DEPLOYER "
+try prl --mode pr-reviewer; check "launch --mode pr-reviewer with the default config: PLANNER and VERIFIER only" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:PLANNER VERIFIER "
+check "launch pr-reviewer (default config): the verifier reads the mode's prompts" "$(cd "$PRP" && KIT="$PRK" worker_msg "$PRG/orca-roles.config.json" verifier | grep -o "Read [^ ]*common-workers.md and [^ ]*verifier.md")" "Read $PRK/prompts/pr-reviewer/common-workers.md and $PRK/prompts/pr-reviewer/verifier.md"
+check "launch pr-reviewer (default config): the planner reads the mode's planner.md" "$(cd "$PRP" && KIT="$PRK" planner_msg "$PRG/orca-roles.config.json" "planner verifier" "$PRG/orca-roles.env" "" "" 0 | grep -o 'Read [^ ]*planner.md')" "Read $PRK/prompts/pr-reviewer/planner.md"
+rm -f "$PRG/orca-roles.env"; try prl --reset; check "launch --reset: back to the programmer team, unchanged" "$RC:$(cut -d= -f1 "$PRG/orca-roles.env" | tr '\n' ' ')" "0:LOCAL_COORDINATOR PLANNER RESEARCHER DEV TESTER PLAN_REVIEWER CODE_REVIEWER E2E_TESTER DEPLOYER "
 }
 
 sec_research_defaults() {
 # academic-research in the default configuration: roles per phase and model, the programmer and pr-reviewer teams untouched, the researcher migration on upgrade
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
-check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester auditor e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
+check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester plan-reviewer code-reviewer verifier e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
 check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
 check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-opus-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
 check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '.roles[$r].model // "-"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
-check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) equal the previous default's (HEAD's)" "$(awt "$D")" "$(awt "$TMP/awd-old.json")"
-check "research-defaults: the programmer team is the local coordinator and the seven old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "8:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/auditor programmer/e2e-tester programmer/deployer "
+check "research-defaults: the programmer and pr-reviewer teams (roles, order, models) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5 programmer/planner=claude-opus-5-5 programmer/researcher=claude-opus-5-5 programmer/dev=claude-sonnet-5-5 programmer/tester=claude-sonnet-5-5 programmer/plan-reviewer=claude-opus-5-5 programmer/code-reviewer=claude-opus-5-5 programmer/e2e-tester=claude-opus-5-5 programmer/deployer=claude-sonnet-5-5 pr-reviewer/planner=claude-opus-5-5 pr-reviewer/verifier=claude-opus-5-5 "
+check "research-defaults: the programmer team is the local coordinator and the eight old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "9:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/plan-reviewer programmer/code-reviewer programmer/e2e-tester programmer/deployer "
 pk_setup
 mkdir -p "$PK/prompts/academic-research"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; for r in dev tester; do echo "# $r" > "$PK/prompts/academic-research/$r.md"; done; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
 check "research-defaults: academic-research team per phase" "$(for p in experiment writing; do jq -c --arg p "$p" '.settings.mode="academic-research" | .settings.phase=$p' "$D" > "$TMP/awd-p.json"; KIT="$PK" enabled_roles "$TMP/awd-p.json" | tr '\n' ' '; echo; done | tr '\n' '|')" "planner researcher dev tester sota methodology tech-verifier |planner researcher writer evidence rigor style |"
@@ -3310,15 +3336,15 @@ check "upgrade_config: researcher modes [programmer] move to the new default, ph
 check "upgrade_config: a user's own researcher modes stay (other lists, order, all, a string)" "$(for v in '["programmer","pr-reviewer"]' '["pr-reviewer"]' '["programmer","programmer"]' '["academic-research","programmer"]' '"all"' '[]' '["programmer","academic-research"]'; do awu "{\"roles\":{\"researcher\":{\"modes\":$v}}}" | jq -c '.roles.researcher.modes'; done | tr '\n' ' ')" '["programmer","pr-reviewer"] ["pr-reviewer"] ["programmer","programmer"] ["academic-research","programmer"] "all" [] ["programmer","academic-research"] '
 check "upgrade_config: a researcher without modes, or without an entry, gets the default" "$(awu '{"roles":{"researcher":{"enabled":false}}}' | jq -c '[.roles.researcher.modes, .roles.researcher.enabled]'):$(awu '{"roles":{"dev":{"model":"x"}}}' | RM)" '[["programmer","academic-research"],false]:[["programmer","academic-research"],["experiment","writing"]]'
 check "upgrade_config: a user's own researcher phases stay" "$(awu '{"roles":{"researcher":{"modes":["programmer"],"phases":["writing"]}}}' | RM)" '[["programmer","academic-research"],["writing"]]'
-check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,local-coordinator,planner,researcher,tester,auditor,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style,dev-opencode,cross-dev","mine",false,"C"]'
+check "upgrade_config: the user's roles keep their order and values, new roles come after" "$(awu '{"roles":{"deployer":{"model":"mine"},"dev":{"enabled":false},"custom":{"title":"C"}}}' | jq -c '[(.roles | keys_unsorted | join(",")), .roles.deployer.model, .roles.dev.enabled, .roles.custom.title]')" '["deployer,dev,custom,local-coordinator,planner,researcher,tester,plan-reviewer,code-reviewer,verifier,e2e-tester,sota,methodology,tech-verifier,writer,evidence,rigor,style,dev-opencode,cross-dev","mine",false,"C"]'
 check "upgrade_config: the planner's pluginDirs [\"{kit}/plugin\"] move to the default (with superpowers); any other list, order or string is kept; a missing entry gets the default" "$(for v in '["{kit}/plugin"]' '["{kit}/plugin","/mine"]' '["{kit}/plugins/superpowers","{kit}/plugin"]' '["/mine"]' '[]' '"{kit}/plugin"'; do awu "{\"roles\":{\"planner\":{\"pluginDirs\":$v}}}" | jq -c '.roles.planner.pluginDirs'; done | tr '\n' ' ')$(awu '{"roles":{}}' | jq -c '.roles.planner.pluginDirs')" '["{kit}/plugin","{kit}/plugins/superpowers"] ["{kit}/plugin","/mine"] ["{kit}/plugins/superpowers","{kit}/plugin"] ["/mine"] [] "{kit}/plugin" ["{kit}/plugin","{kit}/plugins/superpowers"]'
 CDT() { jq -c --argjson v "$1" '.roles.dev.disallowedTools = $v' "$D" > "$TMP/cdt.json"; check_config "$TMP/cdt.json" | tr '\n' '|'; }
 check "check_config: disallowedTools must be a list of strings (a string, a number, an object, null, a list with a non-string are errors; a list of names, an empty list are fine)" "$(for v in '"Foo"' '5' '{}' 'null' '["a",1]' '["a","b"]' '[]'; do CDT "$v"; echo; done | tr '\n' ' ')" "ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names| ERROR: role dev: disallowedTools must be a list of tool names|   "
 check "upgrade_config: a user's own values on a new role stay" "$(awu '{"roles":{"writer":{"model":"mine","enabled":false}}}' | jq -c '.roles.writer | [.model, .enabled, .phases, .modes]')" '["mine",false,["writing"],["academic-research"]]'
 awu '{"roles":{"researcher":{"modes":["programmer"]}}}' > "$TMP/awd-up.json"
-check "upgrade_config: the migrated configuration passes check_config, and its programmer team is the old one" "$(check_config "$TMP/awd-up.json"):$(enabled_roles "$TMP/awd-up.json" | tr '\n' ' ')" ":researcher local-coordinator planner dev tester auditor e2e-tester deployer "
-# the auditor's deny list lives in the kit, not in the config default (a user's own disallowedTools would replace it): the default has no auditor disallowedTools and no settings.artifacts, and upgrade_config adds nothing for either
-check "config default: no roles.auditor.disallowedTools and no settings.artifacts; upgrade_config keeps a user's own auditor disallowedTools and adds none" "$(jq -c '[(.roles.auditor | has("disallowedTools")), (.settings | has("artifacts"))]' "$D"):$(awu '{"roles":{"auditor":{"disallowedTools":["WebFetch"]}}}' | jq -c '.roles.auditor.disallowedTools'):$(awu '{"roles":{}}' | jq -c '[(.roles.auditor | has("disallowedTools")), (.settings | has("artifacts"))]')" '[false,false]:["WebFetch"]:[false,false]'
+check "upgrade_config: the migrated configuration passes check_config, and its programmer team is the old one" "$(check_config "$TMP/awd-up.json"):$(enabled_roles "$TMP/awd-up.json" | tr '\n' ' ')" ":researcher local-coordinator planner dev tester plan-reviewer code-reviewer e2e-tester deployer "
+# the code-reviewer's deny list lives in the kit, not in the config default (a user's own disallowedTools would replace it): the default has no code-reviewer disallowedTools and no settings.artifacts, and upgrade_config adds nothing for either
+check "config default: no roles.code-reviewer.disallowedTools and no settings.artifacts; upgrade_config keeps a user's own code-reviewer disallowedTools and adds none" "$(jq -c '[(.roles["code-reviewer"] | has("disallowedTools")), (.settings | has("artifacts"))]' "$D"):$(awu '{"roles":{"code-reviewer":{"disallowedTools":["WebFetch"]}}}' | jq -c '.roles["code-reviewer"].disallowedTools'):$(awu '{"roles":{}}' | jq -c '[(.roles["code-reviewer"] | has("disallowedTools")), (.settings | has("artifacts"))]')" '[false,false]:["WebFetch"]:[false,false]'
 }
 
 sec_new_role_modes() {
@@ -3796,7 +3822,7 @@ sec_prompts_misc() {
 check "marketplace: lists the orca-roles plugin from ./plugin" "$(jq -r '.plugins[] | "\(.name) \(.source)"' "$ROOT/.claude-plugin/marketplace.json")" "orca-roles ./plugin"
 check "marketplace: same name as the plugin" "$(jq -r '.plugins[0].name' "$ROOT/.claude-plugin/marketplace.json")" "$(jq -r '.name' "$ROOT/plugin/.claude-plugin/plugin.json")"
 
-check "defaults: Tester maxSelfMutants and baseCheck, Auditor rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.tester.params.baseCheck, .roles.auditor.params.rejectSeverity]' "$ROOT/config.default.json")" '[3,true,"high"]'
+check "defaults: Tester maxSelfMutants and baseCheck, Code-Reviewer rejectSeverity" "$(jq -c '[.roles.tester.params.maxSelfMutants, .roles.tester.params.baseCheck, .roles["code-reviewer"].params.rejectSeverity]' "$ROOT/config.default.json")" '[3,true,"high"]'
 check "defaults: every default Tester parameter is listed in tester.md's Parameters" "$(jq -r '.roles.tester.params | keys[]' "$ROOT/config.default.json" | while IFS= read -r k; do awk '/^## Parameters/{f=1;next} /^## /{f=0} f' "$ROOT/prompts/programmer/tester.md" | grep -qF -- "- \`$k\`:" || echo "$k"; done)" ""
 echo "ok   marketplace and defaults"
 # bin/branch-name.sh: <type>/<KEY>-<slug> proposals and the guarded rename of the current branch (temp repos and local bare remotes, no orca on the PATH)
@@ -3949,9 +3975,9 @@ rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/tst.md" "$KIT/pro
 }
 
 sec_agent_flags() {
-check "default config: tester and auditor lowered priority" "$(jq -r '[.roles.tester.nice, .roles.auditor.nice] | join(",")' "$ROOT/config.default.json")" "10,10"
-check "default config: thread caps and no GPU" "$(jq -r '.roles.auditor.env | [.OMP_NUM_THREADS, .GOMAXPROCS, .CUDA_VISIBLE_DEVICES] | join("|")' "$ROOT/config.default.json")" "2|2|"
-check "default config: auditor maxWorkers" "$(jq -r '.roles.auditor.params.maxWorkers' "$ROOT/config.default.json")" "2"
+check "default config: tester and code-reviewer lowered priority" "$(jq -r '[.roles.tester.nice, .roles["code-reviewer"].nice] | join(",")' "$ROOT/config.default.json")" "10,10"
+check "default config: thread caps and no GPU" "$(jq -r '.roles["code-reviewer"].env | [.OMP_NUM_THREADS, .GOMAXPROCS, .CUDA_VISIBLE_DEVICES] | join("|")' "$ROOT/config.default.json")" "2|2|"
+check "default config: code-reviewer maxWorkers" "$(jq -r '.roles["code-reviewer"].params.maxWorkers' "$ROOT/config.default.json")" "2"
 # agent.sh: nice -n and --resume
 cat > "$KIT/config.json" <<'J'
 { "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "planner": {}, "local-coordinator": {}, "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] }, "cx": { "agent": "codex" }, "pw": { "permissionMode": "plan" }, "aq": { "allowedTools": ["Read", "AskUserQuestion"], "extraArgs": ["--disallowedTools", "Foo"] }, "cu": { "agent": "custom", "command": "echo CUSTOM" } } }
@@ -4105,16 +4131,20 @@ CV=""; for v in true false '"false"' 0 null '[]'; do jq -c --argjson v "$v" '.se
 check "settings.superpowers from a project .orca-roles.json turns it off for that project only, --set settings.superpowers=false stores the boolean false, and check_config accepts only true or false" "$(spn "$SPO")$(spd "$SPO"):$(spn "$SPO2")$(spd "$SPO2"):$(jq -c .settings.superpowers "$TMP/sw-set.json"):$CV" "01:11:false:001111"
 rm -f "$KIT/plugins/sp-link"
 rmdir "$SPD" "$KIT/plugins" 2>/dev/null || true
-# the auditor always gets the kit's Agent/Task deny list (before the dialog deny and its own field), whatever its own disallowedTools say; other roles, codex and custom auditors unchanged
-AUC='{"defaults":{"mcp":[]},"mcpServers":{},"roles":{"planner":{"agent":"claude"},"auditor":{"agent":"claude"},"dev":{"agent":"claude"},"tester":{"agent":"claude"}}}'
+# the reviewers always get the kit's Agent/Task deny list (before the dialog deny and their own field), whatever their own disallowedTools say; other roles, codex and custom reviewers unchanged
+AUC='{"defaults":{"mcp":[]},"mcpServers":{},"roles":{"planner":{"agent":"claude"},"plan-reviewer":{"agent":"claude"},"code-reviewer":{"agent":"claude"},"verifier":{"agent":"claude"},"dev":{"agent":"claude"},"tester":{"agent":"claude"}}}'
 DIAL='--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode '
-AUA="$(agj "$AUC" auditor)"; AUO="$(agj "$(printf '%s' "$AUC" | jq -c '.roles.auditor.disallowedTools = ["WebFetch"]')" auditor)"
-AUP="$(agj "$(printf '%s' "$AUC" | jq -c '.roles.auditor.permissionMode = "plan"')" auditor)"
-mkdir -p "$SPD"; AUS="$(agj "$(printf '%s' "$AUC" | jq -c '.roles.auditor.pluginDirs = ["{kit}/plugins/superpowers"]')" auditor)"; rmdir "$SPD" 2>/dev/null || true
-AUX="$(agj "$(printf '%s' "$AUC" | jq -c '.roles.auditor.agent = "codex"')" auditor)"
-AUCU="$(agj "$(printf '%s' "$AUC" | jq -c '.roles.auditor.agent = "custom" | .roles.auditor.command = "echo CUSTOM"')" auditor)"
 AGN() { printf '%s\\n' "$1" | grep -cF -- "$2" || true; }
-check "auditor argv: the kit's --disallowedTools Agent Task comes before the dialog deny (and the role's own list, which only adds), also in permissionMode plan and after the superpowers group; no other role gets it (the Planner's own list is the superpowers one); a codex or custom auditor gets no --disallowedTools" "$(AGN "$AUA" "--disallowedTools Agent Task ${DIAL}--settings"):$(AGN "$AUO" "--disallowedTools Agent Task ${DIAL}--disallowedTools WebFetch --settings"):$(AGN "$AUP" "--disallowedTools Agent Task --disallowedTools AskUserQuestion --settings"):$(AGN "$AUS" "ExitWorktree Agent Task --disallowedTools Agent Task ${DIAL}"):$(AGN "$(agj "$AUC" dev)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" tester)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" planner)" '--disallowedTools Agent Task'):$(AGN "$AUX" 'disallowedTools'):$(AGN "$AUCU" 'disallowedTools')" "1:1:1:1:0:0:0:0:0"
+AUR=""; mkdir -p "$SPD"
+for AUROLE in plan-reviewer code-reviewer verifier; do
+  AUA="$(agj "$AUC" "$AUROLE")"; AUO="$(agj "$(printf '%s' "$AUC" | jq -c --arg r "$AUROLE" '.roles[$r].disallowedTools = ["WebFetch"]')" "$AUROLE")"
+  AUP="$(agj "$(printf '%s' "$AUC" | jq -c --arg r "$AUROLE" '.roles[$r].permissionMode = "plan"')" "$AUROLE")"
+  AUS="$(agj "$(printf '%s' "$AUC" | jq -c --arg r "$AUROLE" '.roles[$r].pluginDirs = ["{kit}/plugins/superpowers"]')" "$AUROLE")"
+  AUX="$(agj "$(printf '%s' "$AUC" | jq -c --arg r "$AUROLE" '.roles[$r].agent = "codex"')" "$AUROLE")"
+  AUCU="$(agj "$(printf '%s' "$AUC" | jq -c --arg r "$AUROLE" '.roles[$r].agent = "custom" | .roles[$r].command = "echo CUSTOM"')" "$AUROLE")"
+  AUR="$AUR$(AGN "$AUA" "--disallowedTools Agent Task ${DIAL}--settings"):$(AGN "$AUO" "--disallowedTools Agent Task ${DIAL}--disallowedTools WebFetch --settings"):$(AGN "$AUP" "--disallowedTools Agent Task --disallowedTools AskUserQuestion --settings"):$(AGN "$AUS" "ExitWorktree Agent Task --disallowedTools Agent Task ${DIAL}"):$(AGN "$AUX" 'disallowedTools'):$(AGN "$AUCU" 'disallowedTools')|"
+done; rmdir "$SPD" 2>/dev/null || true
+check "reviewers argv (plan-reviewer, code-reviewer, verifier): the kit's --disallowedTools Agent Task comes before the dialog deny (and the role's own list, which only adds), also in permissionMode plan and after the superpowers group; a codex or custom reviewer gets no --disallowedTools; no other role gets it (the Planner's own list is the superpowers one)" "$AUR$(AGN "$(agj "$AUC" dev)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" tester)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" planner)" '--disallowedTools Agent Task')" "1:1:1:1:0:0|1:1:1:1:0:0|1:1:1:1:0:0|0:0:0"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 }
 
@@ -5309,10 +5339,12 @@ permissions:
 check "opencode: frontmatter is exactly the expected text (allow first, the role's valid items, then the kit's denies last)" "$FM" "$EXPECT_FM"
 check "opencode: the kit's deny on its prompts comes after a role item that allows them (the last matching rule wins)" "$([ "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"deny\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" -gt "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"allow\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" ] && echo after)" "after"
 check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | sed 's/^  - //' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
-OCA="$OCW/.opencode/agents/orca-auditor.md"; try ocrun opencode-prepare.sh auditor
-check "opencode: the auditor's subagent deny comes right after the question deny" "$(grep -A1 -F '"action":"question"' "$OCA" | tail -1)" '  - {"action":"subagent","resource":"*","effect":"deny"}'
-jq '.roles.auditor = {"title": "Auditor", "agent": "opencode", "opencode": {"permissions": [{"action": "subagent", "resource": "*", "effect": "allow"}]}}' "$OC/cfg.json" > "$OC/cfg-aud.json"; OCCFG="$OC/cfg-aud.json" try ocrun opencode-prepare.sh auditor
-check "opencode: the auditor's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(grep -nF '"action":"subagent"' "$OCA" | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
+OCA="$OCW/.opencode/agents/orca-code-reviewer.md"; try ocrun opencode-prepare.sh code-reviewer
+check "opencode: the code-reviewer's subagent deny comes right after the question deny" "$(grep -A1 -F '"action":"question"' "$OCA" | tail -1)" '  - {"action":"subagent","resource":"*","effect":"deny"}'
+jq '.roles["code-reviewer"] = {"title": "Code-Reviewer", "agent": "opencode", "opencode": {"permissions": [{"action": "subagent", "resource": "*", "effect": "allow"}]}}' "$OC/cfg.json" > "$OC/cfg-aud.json"; OCCFG="$OC/cfg-aud.json" try ocrun opencode-prepare.sh code-reviewer
+check "opencode: the code-reviewer's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(grep -nF '"action":"subagent"' "$OCA" | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
+RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(grep -c '"action":"subagent","resource":"\*","effect":"deny"' "$OCW/.opencode/agents/orca-$r.md" || true)"; done
+check "opencode: the plan-reviewer's and the verifier's files carry the subagent deny" "$RV" "11"
 check "opencode: a dev role's file has no subagent line" "$(grep -c '"action":"subagent"' "$FILE" || true)" "0"
 if python3 -c 'import yaml' 2>/dev/null; then
   check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 21"
@@ -5619,6 +5651,9 @@ MH="$TMP/mig-home"; MK="$MH/.orca-roles"; rm -rf "$MH"; mkdir -p "$MK/roles/acad
 printf '%s' '{ "settings": { "mode": "academic-writer" }, "roles": {} }' > "$MK/config.json"
 if MOUT="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC=0; else MRC=$?; fi
 check "install: a config that still says academic-writer keeps it (exit 0, the renamed message shown, no 'Renamed mode' line), prompts/academic-writer is not linked and the user's roles/academic-writer is left where it is" "$MRC:$(jq -r .settings.mode "$MK/config.json"):$(printf '%s\n' "$MOUT" | grep -c "^mode 'academic-writer' was renamed: use academic-research\$" || true):$(printf '%s\n' "$MOUT" | grep -c '^Renamed mode' || true):$([ -e "$MK/prompts/academic-writer" ] || [ -L "$MK/prompts/academic-writer" ] && echo linked || echo nolink):$([ -d "$MK/roles/academic-writer" ] && [ ! -L "$MK/roles/academic-writer" ] && cat "$MK/roles/academic-writer/a.md")" "0:academic-writer:1:0:nolink:A"
+printf '%s' '{"roles":{"auditor":{"model":"x"}}}' > "$MK/config.json"
+if MOUT2="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC2=0; else MRC2=$?; fi
+check "install: an update from a config with roles.auditor prints the removed-Auditor notice once and drops the key" "$MRC2:$(printf '%s\n' "$MOUT2" | grep -c '^orca-roles was updated: the team.s Auditor role no longer exists'):$(jq -r '.roles | has("auditor")' "$MK/config.json")" "0:1:false"
 }
 
 sec_install() {
@@ -5627,7 +5662,7 @@ VH="$TMP/ver-home"; VK="$VH/.orca-roles"; rm -rf "$VH"; mkdir -p "$VH"
 vrun() { if VOUT="$(cd "$TMP" && HOME="$VH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then VRC=0; else VRC=$?; fi; }
 vwarn() { printf '%s\n' "$VOUT" | grep -c '^WARNING: these files' || true; }
 vrun
-check "install: exit 0, VERSION copied, .installed starts with local@, .manifest written" "$VRC:$(cat "$VK/VERSION"):$(head -c 6 "$VK/.installed"):$([ -s "$VK/.manifest" ] && echo manifest)" "0:$(cat "$ROOT/VERSION"):local@:manifest"
+check "install: exit 0, VERSION copied, .installed starts with local@, .manifest written, no removed-Auditor notice on a fresh install" "$VRC:$(cat "$VK/VERSION"):$(head -c 6 "$VK/.installed"):$([ -s "$VK/.manifest" ] && echo manifest):$(printf '%s\n' "$VOUT" | grep -c 'Auditor role no longer exists' || true)" "0:$(cat "$ROOT/VERSION"):local@:manifest:0"
 check "install: the manifest lists the kit's files with relative sorted paths" "$(grep -c '  bin/launch.sh$' "$VK/.manifest"):$(grep -c '  prompts/programmer/planner.md$' "$VK/.manifest"):$(grep -c ' /' "$VK/.manifest" || true):$(sed 's/^[0-9a-f]*  //' "$VK/.manifest" | LC_ALL=C sort -c && echo sorted)" "1:1:0:sorted"
 if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
   check "install: a local clone records the commit (and -dirty when the tree has changes)" "$(sed 's/^[^ ]* //' "$VK/.installed" | sed 's/-dirty$//')" "$(git -C "$ROOT" rev-parse HEAD)"
@@ -6121,11 +6156,12 @@ check "checkpoint: --clear-all keeps the other worktree's refs and leaves HEAD a
 cqrun --clear-all; check "checkpoint: --clear-all with nothing recorded exits 0" "$CPRC:$CPOUT" "0:Deleted 0 checkpoint(s)"
 cqrun a 1; check "checkpoint: after --clear-all seq restarts at 1 and the first hint falls back to HEAD" "$(cqsubj "$(cqref)")|$(cqhint)" "checkpoint a-c1 seq 1|Whole step since HEAD (the first brief):  git diff HEAD $(cqref)"
 cq worktree remove --force "$TMP/cp-seq-wt"
-check "defaults: maxMutants 8 and maxSelfMutants 3 in config" "$(jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json")" '[8,3]'
-mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.auditor.params.maxMutants, .roles.tester.params.maxSelfMutants]'; }
-check "upgrade_config moves the old defaults 15/5 to 8/3" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":15}},"tester":{"params":{"maxSelfMutants":5}}}}')" "[8,3]"
-check "upgrade_config keeps a user's own maxMutants/maxSelfMutants" "$(mm '{"roles":{"auditor":{"params":{"maxMutants":12}},"tester":{"params":{"maxSelfMutants":4}}}}')" "[12,4]"
-check "upgrade_config gives 8/3 to a config without the keys" "$(mm '{"roles":{}}')" "[8,3]"
+check "defaults: maxMutants 8 and maxSelfMutants 3 in config" "$(jq -c '[.roles["code-reviewer"].params.maxMutants, .roles.tester.params.maxSelfMutants]' "$ROOT/config.default.json")" '[8,3]'
+mm() { echo "$1" > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c '[.roles.tester.params.maxSelfMutants]'; }
+check "upgrade_config moves the old default 5 to 3" "$(mm '{"roles":{"tester":{"params":{"maxSelfMutants":5}}}}')" "[3]"
+check "upgrade_config keeps a user's own maxSelfMutants" "$(mm '{"roles":{"tester":{"params":{"maxSelfMutants":4}}}}')" "[4]"
+check "upgrade_config gives 3 to a config without the keys" "$(mm '{"roles":{}}')" "[3]"
+check "upgrade_config drops roles.auditor, copies none of its values to the new reviewers and keeps their defaults" "$(echo '{"roles":{"auditor":{"model":"x"}}}' > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c --slurpfile d "$ROOT/config.default.json" '[(.roles | has("auditor")), (.roles["code-reviewer"].model == $d[0].roles["code-reviewer"].model), ([.roles["plan-reviewer"], .roles["code-reviewer"], .roles.verifier] | all(. != null))]')" "[false,true,true]"
 echo "ok   checkpoint defaults"
 }
 
@@ -6300,7 +6336,7 @@ mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STA
   rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
-  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'LOCAL_COORDINATOR=hp\nPLANNER=hq\nDEV=hd\nTESTER=ht\nAUDITOR=ha\n' > "$MF/gd/orca-roles.env"
+  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'LOCAL_COORDINATOR=hp\nPLANNER=hq\nDEV=hd\nTESTER=ht\nCODE_REVIEWER=ha\n' > "$MF/gd/orca-roles.env"
   echo "$2" > "$MF/mode"
   (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" "${REUSED:-}" > "$MF/out.log" 2>&1)
 }
@@ -6405,18 +6441,18 @@ mf "$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude
 check "model-check: two roles, both lines" "$(sort "$MF/gd/orca-roles.models" | tr '\n' ' ')" "DEV=FAILED:claude-opus-5-5 TESTER=FAILED:claude-opus-5-5 "
 check "model-check: two roles, both escalations" "$(escs | cut -d'|' -f2 | sort | tr '\n' ' ')" "Dev model unavailable Tester model unavailable "
 check "model-check: no leftover partial files" "$([ -e "$MF/gd/orca-roles.models.d" ] && echo 1 || echo 0)" "0"
-MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"} | .roles.auditor = {"title": "Auditor", "model": "claude-opus-5-5"}')"
+MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"} | .roles["code-reviewer"] = {"title": "Code-Reviewer", "model": "claude-opus-5-5"}')"
 echo 4 > "$MF/waitdelay"; t0=$SECONDS
-mf "$MF3" bad "dev tester auditor"
+mf "$MF3" bad "dev tester code-reviewer"
 check "model-check: the checks of three roles run in parallel" "$(( SECONDS - t0 < 9 ))" "1"
 echo 4 > "$MF/waitdelay"; t0=$SECONDS
-mf "$MF3" clean "dev tester auditor"
+mf "$MF3" clean "dev tester code-reviewer"
 check "model-check: three roles are checked in parallel" "$(( SECONDS - t0 < 9 ))" "1"
 echo 0 > "$MF/waitdelay"
 # kept lines, config untouched, bounded waits
-PRE=$'AUDITOR=claude-x\nDEV=FAILED:old\n'
+PRE=$'CODE_REVIEWER=claude-x\nDEV=FAILED:old\n'
 mf "$(mfc "$DEVOK")" clean "dev"; unset PRE
-check "model-check: other roles' lines kept, own replaced" "$(models)" "AUDITOR=claude-x DEV=claude-opus-5-5 "
+check "model-check: other roles' lines kept, own replaced" "$(models)" "CODE_REVIEWER=claude-x DEV=claude-opus-5-5 "
 check "model-check: config.json is never touched" "$(printf '%s' "$(mfc "$DEVOK")" | cmp -s - "$MF/cfg.json" && echo same || echo changed)" "same"
 mf "$(mfc "$DEVOK")" bad "dev"
 check "model-check: every wait is bounded by kickoffTimeoutSeconds" "$(grep -vc -e '--timeout-ms 1000 ' "$MF/waits.log" || true)" "0"
@@ -6436,7 +6472,7 @@ mkdir -p "$TMP/home"; HB="$(cd "$TMP/home" && find . | sort | shasum)"
 mf "$(mfc "$DEVOK")" bad "dev tester"
 check "model-check: nothing outside the git dir is written" "$(find "$MF/wt" -mindepth 1 -not -path "$MF/wt/.git" -not -path "$MF/wt/.git/*" | wc -l | tr -d ' '):$(ls "$MF/gd" | tr '\n' ' '):$(cd "$TMP/home" && find . | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed)" "0:orca-roles.env orca-roles.kicked orca-roles.models :same"
 # the live local coordinator is told the new handles
-HB1="HND hp|status|Role handles changed|roles opened or reopened: Dev. Use these handles from now on:/LOCAL_COORDINATOR=hp/PLANNER=hq/DEV=hd/TESTER=ht/AUDITOR=ha"
+HB1="HND hp|status|Role handles changed|roles opened or reopened: Dev. Use these handles from now on:/LOCAL_COORDINATOR=hp/PLANNER=hq/DEV=hd/TESTER=ht/CODE_REVIEWER=ha"
 mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: one status to the live local coordinator with every handle (the Planner's too)" "$(hnds)" "$HB1"
 check "handles: the user is told" "$(grep -c '^Told the local coordinator the new handles\.$' "$MF/out.log")" "1"
@@ -6516,7 +6552,7 @@ K2="$K2:$(grep -c 'is still bound' "$MF/text.hp" || true):$(tr '\n' ' ' < "$MF/g
 rm -f "$MF"/rl.page.*
 check "kickoff: run-list failing -> logged, the Planner and the worker still get their messages unchanged; a Run bound to the current handle gets no reminder; with no history (seeded from the env) an old Run is not reminded" "$K2" "1:0:2:0:0:0:hp "
 # kickoff: the 'Roles reopened' status when the Planner ran the launch itself
-CFGT2="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')"; HU='Use these handles from now on:/LOCAL_COORDINATOR=hp/PLANNER=hq/DEV=hd/TESTER=ht/AUDITOR=ha'
+CFGT2="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')"; HU='Use these handles from now on:/LOCAL_COORDINATOR=hp/PLANNER=hq/DEV=hd/TESTER=ht/CODE_REVIEWER=ha'
 OTH=hp mf "$CFGT2" clean "dev tester"; R4="$(hnds | sed 's/^HND //')|$(grep -c '^Told the local coordinator the roles were reopened\.$' "$MF/out.log")"
 OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')|$(grep -c '^TESTER=' "$MF/gd/orca-roles.kicked" || true)"
 OTH=hp SENDFAIL="hd ht" mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"

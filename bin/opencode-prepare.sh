@@ -4,7 +4,7 @@
 # start (temp file + mv), and its pattern goes once into the repo's info/exclude, never into a tracked .gitignore.
 #   frontmatter: description, mode, model, steps (roles.<r>.opencode.steps, else settings.flow.maxStepsPerWorker, else none) and
 #     permissions: allow everything first (a call that matches no rule would wait for an answer that nobody gives in the tab),
-#     then roles.<r>.opencode.permissions as written, then the kit's denies (question, subagent for the Auditor, git push, editing
+#     then roles.<r>.opencode.permissions as written, then the kit's denies (question, subagent for the reviewers (Plan-Reviewer, Code-Reviewer, Verifier), git push, editing
 #     the kit's own files)
 #   body (the agent's system prompt): the role anchor, the role's common rules, the role's prompt
 set -euo pipefail
@@ -57,7 +57,7 @@ OUT="$DIR/orca-$ROLE.md"; TMPF="$(mktemp "$DIR/.orca-$ROLE.XXXXXX")"
     "permissions:",
     (([{action: "*", resource: "*", effect: "allow"}] + $extra
      + [{action: "question", resource: "*", effect: "deny"}]
-     + (if $role == "auditor" then [{action: "subagent", resource: "*", effect: "deny"}] else [] end)
+     + (if ($role == "plan-reviewer" or $role == "code-reviewer" or $role == "verifier") then [{action: "subagent", resource: "*", effect: "deny"}] else [] end)
      + [{action: "shell", resource: "git push*", effect: "deny"}]
      + ($paths | split("\n") | map(select(. != "")) | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"})))[] | "  - \(tojson)")'
   echo "---"
