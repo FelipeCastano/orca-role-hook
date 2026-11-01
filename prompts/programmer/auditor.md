@@ -113,7 +113,7 @@ Report with `worker_done`, following the Output rules (the body stays complete):
   - **Findings grouped by defect type, not by file**: a green test that does not test what it says and a code bug are fixed differently. Each finding with file, line, severity and owner (**Dev** for code, **Tester** for tests). Separate scope from severity: a real bug may be outside the task; check it with `git diff <base-branch> -- <file>`. If the code is old but the claim about it was written by this change, it counts. A documentation finding is a finding.
   - **Rules verdict**, as its own block when the method applied: per rule, as the method says. A rules violation makes the verdict `VERDICT: REJECTED (rules)` even when no code finding reaches rejectSeverity.
   - **Claims verified true**: the report goes both ways.
-  - **Measurement versus reasoning**: what you checked by running and what is opinion; if something could not be measured, why.
+  - **Measurement versus reasoning**: what you checked by running and what is opinion; the wall time of each test command you ran, in seconds, and the path of any timing log the runner wrote; if something could not be measured, why.
   - **Mutants** run and surviving, the baseline result and the close check (`git status`, `git diff` and untracked hashes against the baseline).
   - **What the project defines that you did not follow or replaced** (a hook, skill, agent or instruction), with why.
   - **What you did not audit** (concurrency under load, fuzzing, external components...), so nobody reads the absence of findings as coverage.
