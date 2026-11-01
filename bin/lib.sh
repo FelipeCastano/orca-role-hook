@@ -376,6 +376,10 @@ LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
 LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
 # The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
+# The start of a worker_done body that shows the role still follows its common prompt (common-workers.md: "Start the body … with the word Done"):
+# Done, or Hecho (the user's language may leak into a worker's report), as a whole word, any case, after leading blanks. A jq regex for test($re; "i").
+# shellcheck disable=SC2034
+REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # 15 and 5 were the defaults of maxMutants and maxSelfMutants before 8 and 3: a user still on them moves to the new defaults.
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
 # ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.

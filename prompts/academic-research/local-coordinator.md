@@ -136,6 +136,7 @@ You make every commit in this mode; workers never commit (the Planner included).
   - Answer the `question` messages with `orca orchestration reply --id <msg_id> --body "..." --json`. If you do not know the answer, ask the user and then reply.
   - Never end a turn holding an unacknowledged delivery. While one is open, Orca stops typing notices for new messages, so the workers' reports seem not to arrive.
 - After each `worker_done`: if the role has immediate work, reuse its tab; if not, `orca orchestration worker-release --dispatch <dispatch_id> --json`. Never close the roles' tabs, except a role opened per task (see "The team").
+- **Report marker.** Every `worker_done` body starts with the word `Done` (the workers' common prompt asks for it). After reading a batch of messages that holds a `worker_done`, run `~/.orca-roles/bin/canary.sh --run <run_id>`: for each report it lists as missing the marker, tell the user in one line which role sent it (it may have lost its prompt, for example after a compaction) and propose cleaning or relaunching that role; do nothing to the role without their yes. Run it before closing a role opened per task: `close-role.sh` removes its handle from the team's state, and its report would then show as unknown. If it prints a `gap` line, tell the user in one line that some reports could not be checked. Handle the report itself as usual.
 - Never let the Planner wait either (see "The Planner").
 - Before claiming that something was orchestrated, verify it with `orca orchestration dispatch-show --task <task_id> --json`.
 

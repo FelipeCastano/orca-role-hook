@@ -8,7 +8,8 @@
 #   since: age of that state (45s, 12m, 1h05m).  task: the task id of the prompt, or role-message (only got its role).
 #   --json     a JSON array of {role, title, handle, paneKey, state, since, sinceMs, task, tool, summary} instead of the lines
 #   --run <id> also looks for dispatches whose text was never submitted (one worker-list; for a role in state done with a dispatch still open
-#              whose task its prompt never named, one terminal show)
+#              whose task its prompt never named, one terminal show), and adds a 7th field, report: ok | missing (its last worker_done in that Run
+#              does not start with Done, see canary.sh) | - (no report, or older than the inbox's last 200 messages, or a role without a tab)
 # Exit 0 whatever the states; 2 when the folder has no team, or Orca does not answer or does not know the folder.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
@@ -96,8 +97,18 @@ if [ -n "$RUN" ]; then
   fi
 fi
 
+if [ -n "$RUN" ]; then
+  INB="$(orca orchestration inbox --json --limit 200 2>/dev/null)"
+  printf '%s' "$INB" | jq -e '.result.messages | type == "array"' >/dev/null 2>&1 || INB='{"result":{"messages":[]}}'
+  OUT="$(printf '%s' "$OUT" | jq -c --argjson inb "$INB" --arg run "$RUN" --arg re "$REPORT_MARK_RE" '
+    map(. as $r | ([$inb.result.messages[] | select(.type == "worker_done" and .run_id == $run and .from_handle == $r.handle)] | sort_by(.sequence) | last) as $d
+      | .report = (if $r.handle == "" or $d == null then "-" elif (($d.body // "") | test($re; "i")) then "ok" else "missing" end))')"
+fi
+
 if [ "$JSON" = 1 ]; then
   printf '%s' "$OUT" | jq 'map(del(.prompt, .notOpened))'
+elif [ -n "$RUN" ]; then
+  printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary, .report] | join("\t")'
 else
   printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")'
 fi

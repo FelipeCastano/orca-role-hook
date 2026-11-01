@@ -323,7 +323,7 @@ rule R16 "$PE" 'worker_done' 'ONE'
 rule W "$PE" '`reports.md`'
 rule P "$PE" 'come in your startup message'
 rule R22 "$PE" "Follow the project's conventions" '^- \*\*Follow'
-check "rules: common-peon.md is at most 3500 bytes" "$([ "$(wc -c < "$PE" | tr -d ' ')" -le 3500 ] && echo y)" "y"
+check "rules: common-peon.md is at most 3700 bytes" "$([ "$(wc -c < "$PE" | tr -d ' ')" -le 3700 ] && echo y)" "y"
 # R6 install and create only with the user's yes; R7 never approve or merge; R8 credit to lens-review, not copied
 # R5 the pr-reviewer worktree is read-only; R11 its Auditor never experiments in the worktree; R14 no heartbeats; R15 convention check
 prrule R6 local-coordinator "The review skill" 'review-skill\.sh install. only on their explicit yes'
@@ -8298,6 +8298,7 @@ echo "\$*" >> "$TSL"
 case "\$1 \$2" in
   "worktree ps") [ -e "$TS/psfail" ] && exit 1; cat "$TS/ps.json";;
   "orchestration worker-list") cat "$TS/wl.json";;
+  "orchestration inbox") cat "$TS/inbox.json" 2>/dev/null || exit 1;;
   "terminal show") h=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; shift; done; cat "$TS/show.\$h" 2>/dev/null || exit 1;;
 esac
 exit 0
@@ -8329,6 +8330,8 @@ jq -n -c '{result: {workers: [
   {taskId: "task_aaa333", agentTerminalHandle: "h-ud3", dispatchStatus: "completed"},
   {taskId: "task_4444", agentTerminalHandle: "h-ud4", dispatchStatus: "dispatched"},
   {taskId: "task_aaa555", agentTerminalHandle: "h-pl", dispatchStatus: "dispatched"}]}}' > "$TS/wl.json"
+tsm() { jq -n -c --argjson s "$1" --arg r "$2" --arg t "$3" --arg h "$4" --arg b "$5" --arg k "$6" '{id: "msg_\($s)", sequence: $s, run_id: $r, type: $t, from_handle: $h, body: $b, created_at: "2026-10-31T19:05:45Z", payload: {taskId: $k}}'; }
+{ tsm 9 run_1 worker_done h-tst "Done. earlier round" task_t0; tsm 10 run_1 worker_done h-dev "Done. built it" task_d1; tsm 11 run_1 worker_done h-tst $'VERDICT: ACCEPTED\nall\tgreen' task_t1; tsm 12 run_2 worker_done h-dev "no marker here" task_o1; tsm 13 run_1 status h-dev "working" task_d1; } | jq -s -c '{result: {messages: .}}' > "$TS/inbox.json"
 printf '{"result":{"terminal":{"preview":"> [Pasted text #1 +4 lines]"}}}' > "$TS/show.h-ud"; printf '{"result":{"terminal":{"preview":"> nothing pending"}}}' > "$TS/show.h-ud2"; cp "$TS/show.h-ud" "$TS/show.h-ud3"; cp "$TS/show.h-ud" "$TS/show.h-ud4"
 tst() { (cd "${TSD:-$TS/proj}" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_NOW_MS="$TNOW" "$ROOT/bin/team-status.sh" "$@" 2>"$TS/err"); }
 tsr() { if OUT="$(tst "$@")"; then RC=0; else RC=$?; fi; }
@@ -8344,10 +8347,11 @@ check "team-status --json: a valid array with role, title, handle, paneKey, stat
 : > "$TSL"; tsr --run run_1; C1="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
 tsr --run run_1; R1="$(tsl | awk -F'|' '$1 ~ /^ud/ {printf "%s=%s ", $1, $2}')"
 check "team-status --run: a done role with a dispatch still open whose task its prompt never named AND a pasted text in its composer is undelivered; a closed dispatch, an unseen paste or a task its prompt names stays done" "$R1" "ud=undelivered ud2=done ud3=done ud4=done "
-check "team-status: Orca calls: one 'worktree ps' without --run; with --run also one 'worker-list' and one 'terminal show' per candidate (2 here), nothing else" "$C0|$C1" " 1 worktree ps,| 1 orchestration worker-list, 2 terminal show, 1 worktree ps,"
-tsr --run run_1; RA="$(tsl | awk -F'|' '$1 == "planner" || $1 == "Planner" {print $2}')"
-check "team-status --run: a working role with an open dispatch is not a candidate" "$RA" "working"
-S0="$(cat "$TSG"/orca-roles.* | cksum)"; : > "$TSL"; tsr --run run_1 >/dev/null; check "team-status is read-only: it writes nothing in the git dir and calls only worktree ps, worker-list and terminal show" "$([ "$(cat "$TSG"/orca-roles.* | cksum)" = "$S0" ] && echo unchanged):$(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')" "unchanged:orchestration worker-list,terminal show,worktree ps,"
+check "team-status: Orca calls: one 'worktree ps' without --run; with --run also one 'inbox', one 'worker-list' and one 'terminal show' per candidate (2 here), nothing else" "$C0|$C1" " 1 worktree ps,| 1 orchestration inbox, 1 orchestration worker-list, 2 terminal show, 1 worktree ps,"
+tsr --run run_1; RA="$(tsl | awk -F'|' '$1 == "planner" || $1 == "Planner" {print $2}')"; RB="$(tsl | awk -F'|' '$1 == "Dev" || $1 == "Tester" || $1 == "dep" {printf "%s=%s ", $1, $7}'):$(tsl | awk -F'|' 'NF != 7' | wc -l | tr -d ' ')"
+tsr --run run_1 --json; RB="$RB:$(printf '%s' "$OUT" | jq -r '[.[] | select(.title == "Dev" or .title == "Tester" or .title == "gh") | .report] | join(",")')"; mv "$TS/inbox.json" "$TS/inbox.keep"; tsr --run run_1; RB="$RB:$RC:$(tsl | awk -F'|' '{print $7}' | sort -u | tr '\n' ',')"; mv "$TS/inbox.keep" "$TS/inbox.json"
+check "team-status --run: a working role with an open dispatch is not a candidate; the 7th field report is ok for a role whose last worker_done of the Run starts with Done, missing for one that does not, - without a report (other Runs and types ignored) or a tab, in text and --json; with the inbox failing every report is - and the exit code stays 0" "$RA|$RB" "working|Dev=ok Tester=missing dep=- :0:ok,missing,-:0:-,"
+S0="$(cat "$TSG"/orca-roles.* | cksum)"; : > "$TSL"; tsr --run run_1 >/dev/null; check "team-status is read-only: it writes nothing in the git dir and calls only worktree ps, inbox, worker-list and terminal show" "$([ "$(cat "$TSG"/orca-roles.* | cksum)" = "$S0" ] && echo unchanged):$(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')" "unchanged:orchestration inbox,orchestration worker-list,terminal show,worktree ps,"
 ln -s "$TS/proj" "$TS/link"; tsr "$TS/link"; X1="$RC:$(tsl | wc -l | tr -d ' ')"; TSD="$TS" tsr proj; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"; mkdir -p "$TS/proj/sub"; TSD="$TS/proj/sub" tsr; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"
 check "team-status: the worktree folder is found by its physical path whether it is the current folder, a relative or symlinked argument, or a subfolder" "$X1" "0:19:0:19:0:19"
 tsr; : > "$TSL"
@@ -8360,6 +8364,20 @@ tsr "$TS/nonexistent"; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' ')"; tsr --bogu
 check "team-status: exit 2 with exactly one stderr line and nothing on stdout for a folder without orca-roles.env, a failing or non-JSON worktree ps, no worktree row for the folder, a missing folder or an unknown option" "$E2" " 2:1:err:0 2:1:0 2:1 2:1 2:1 2:1"
 printf '{"ok":true,"result":{"worktrees":[{"path":"%s","agents":[]}]}}' "$TSP" > "$TS/ps.json"; tsr; E3="$RC:$(tsl | awk -F'|' '{print $2}' | sort -u | tr '\n' ',')"; tsr --run r; E3="$E3:$RC"; cp "$TS/ps.keep" "$TS/ps.json"
 check "team-status: a worktree row with no agents gives no-status for every role with a tab and no-tab for the rest, exit 0" "$E3" "0:no-status,no-tab,:0"
+cn() { if CO="$(cd "$TS/proj" && HOME="$TMP/home" PATH="$TS/bin:$PATH" "$ROOT/bin/canary.sh" "$@" 2>"$TS/cerr")"; then CRC=0; else CRC=$?; fi; }
+CS="$TSG/orca-roles.canary-seen"; rm -f "$CS"; : > "$TSL"
+cn --run run_1; K1="$CRC:$(printf '%s' "$CO" | tr '\t\n' '|/')"; cn --run run_1; K1="$K1 $CRC:$(printf '%s' "$CO" | tr '\t\n' '|/')"; K0="$(cat "$CS")"
+cn --run run_1 --all --json; K1="$K1 $CRC:$(printf '%s' "$CO" | jq -c '[.checked, .gap, [.missing[] | [.title, .handle, .taskId, .start]]]'):$([ "$(cat "$CS")" = "$K0" ] && echo same)"
+printf 'covered\trun_1\t5\n' > "$CS"; cn --run run_1; K2="$CRC:$(printf '%s' "$CO" | tr '\t\n' '|/'):$(wc -l < "$TS/cerr" | tr -d ' ')"
+printf 'covered\trun_1\t8\n' > "$CS"; cn --run run_1; K2="$K2 $CRC:$(printf '%s' "$CO" | tr '\t\n' '|/'):$(wc -l < "$TS/cerr" | tr -d ' ')"
+printf 'covered\trun_1\t5\n' > "$CS"; cn --run run_1 --json; K2="$K2 $CRC:$(printf '%s' "$CO" | jq -c '[.checked, .gap]')"; cn --run run_1 --all; K2="$K2 $CRC:$(printf '%s' "$CO" | grep -c '^gap' || true)"
+jq -c '.result.messages |= map(select(.id == "msg_10"))' "$TS/inbox.json" > "$TS/inbox.one"; rm -f "$CS"; mv "$TS/inbox.json" "$TS/inbox.keep"; cp "$TS/inbox.one" "$TS/inbox.json"; cn --run run_1 >/dev/null; mv "$TS/inbox.keep" "$TS/inbox.json"
+K3="$(cat "$CS" | tr '\t\n' '|/')"; K3="$K3 $(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')"; : > "$TSL"
+rm -f "$CS"; printf 'keep\n' > "$CS"; mv "$TS/inbox.json" "$TS/inbox.keep"; cn --run run_1; K4="$CRC:$(wc -l < "$TS/cerr" | tr -d ' '):$(printf '%s' "$CO" | wc -c | tr -d ' '):$(cat "$CS")"; mv "$TS/inbox.keep" "$TS/inbox.json"
+for i in $(seq 1 1100); do echo "old$i"; done > "$CS"; cn --run run_1 >/dev/null; K4="$K4 $(wc -l < "$CS" | tr -d ' '):$(tail -1 "$CS" | tr '\t' '|'):$(find "$TSG" -name 'orca-roles.canary-seen.*' | wc -l | tr -d ' ')"; rm -f "$CS"
+check "canary.sh --run: only the Run's worker_done reports (other Runs and types ignored); a report without Done is one missing line with title, handle, task and the start of its body (newline and tab as spaces), exit 1; a second run checks 0 and exits 0; --all (and --json) lists it again and leaves the seen file as it was; a lowest sequence more than 1 above the saved covered value gives the gap line, gap true and one stderr line with exit 1 even with nothing missing, 1 above does not, --all never, a first check does not; the seen file is the only thing written, orca is called only for inbox, a failing inbox is exit 2 with one stderr line and the seen file untouched, and the file is cut to 1000 lines" "$K1|$K2|$K3|$K4" "1:missing|2026-10-31T19:05:45Z|Tester|h-tst|task_t1|VERDICT: ACCEPTED all green/canary: 3 reports checked, 1 without the Done marker 0:canary: 0 reports checked, 0 without the Done marker 1:[3,false,[[\"Tester\",\"h-tst\",\"task_t1\",\"VERDICT: ACCEPTED all green\"]]]:same|1:missing|2026-10-31T19:05:45Z|Tester|h-tst|task_t1|VERDICT: ACCEPTED all green/gap|5|9/canary: 3 reports checked, 1 without the Done marker:1 1:missing|2026-10-31T19:05:45Z|Tester|h-tst|task_t1|VERDICT: ACCEPTED all green/canary: 3 reports checked, 1 without the Done marker:0 1:[3,true] 1:0|msg_10/covered|run_1|10/ orchestration inbox,|2:1:0:keep 1000:covered|run_1|13:0"
+BT="$(jq -n -c --arg re "$REPORT_MARK_RE" '["Done. VERDICT: ACCEPTED", "done: plan ready", "  Done\nreport", "DONE", "Hecho. Plan listo"] as $p | ["VERDICT: ACCEPTED", "Implemented X", "Doneness check failed", "Hechos", "", "No. Done."] as $f | [$p[] | test($re; "i")] + [$f[] | test($re; "i")]' 2>&1 | tr -d '[]')"
+check "REPORT_MARK_RE: marks Done./done:/blank-led/DONE/Hecho. bodies and none of VERDICT, Implemented, Doneness, Hechos, empty or No. Done." "$BT" "true,true,true,true,true,false,false,false,false,false,false"
 }
 
 sec_dispatch() {
