@@ -8479,6 +8479,13 @@ SMOKE_TIMING_LOG='' XDG_CACHE_HOME="$TMP/tl-prune" tl_run 1 fast; X1="$CRC:$(ls 
 mkdir -p "$TMP/tl-user"; for n in $(seq 100 160); do : > "$TMP/tl-user/old$n.tsv"; done
 SMOKE_TIMING_LOG="$TMP/tl-user/mine.tsv" XDG_CACHE_HOME="$TMP/tl-prune" tl_run 1 fast; X2="$CRC:$(ls "$TMP/tl-user" | wc -l | tr -d ' ')"
 check "timing log: the default folder keeps the 50 newest *.tsv (51 old files plus the new log: the two oldest go); a folder the user named is never pruned" "$X1|$X2" "0:50:pruned:pruned:kept:kept|0:62"
+TCA="$TMP/tc-a.tsv"; TCB="$TMP/tc-b.tsv"; TCN="$TMP/tc-n.tsv"; printf '# smoke.sh timings\tstarted=x\n' > "$TCA"; cp "$TCA" "$TCB"
+printf 'section\tsyn\t3\tok\nsection\tcli\t50\tok\ncheck\tsyn\t9\t2\tm\ntotal\t60\tok\t2\n' >> "$TCA"; printf 'section\tcli\t41\tok\nsection\tsyn\t3\tok\nsection\tguard\t9\tFAIL\n' >> "$TCB"; printf 'not a log\n' > "$TCN"
+T1="$(bash "$ROOT/tests/timing-compare.sh" "$TCA" "$TCB" | tr '\t\n' ' _')"; T2="$(bash "$ROOT/tests/timing-compare.sh" "$TCB" "$TCA" | tail -n 1 | tr '\t' ' ')"
+T3="$(bash "$ROOT/tests/timing-compare.sh" "$TCA" "$TCN" 2>&1 >/dev/null; echo "rc=$?")"; T4="$(bash "$ROOT/tests/timing-compare.sh" "$TCA" 2>&1 >/dev/null; echo "rc=$?")"
+check "timing-compare.sh: a section only in B, a check line ignored, a missing total as -, a non-log or a wrong argument count exits 2" "$T1|$T2|$T3|$T4" "section A B B-A_cli 50 41 -9_syn 3 3 0_guard - 9 -_total 60 - -_|total - 60 -|timing-compare.sh: $TCN is not a smoke.sh timing log
+rc=2|timing-compare.sh: usage: tests/timing-compare.sh <log A> <log B>
+rc=2"
 }
 
 sec_usage_metrics() {

@@ -1112,6 +1112,7 @@ SMOKE_JOBS=1 tests/smoke.sh                    # one process, in order (default:
 SMOKE_CLI_TIMEOUT=60 tests/smoke.sh              # with the 60 s limit on orca calls, as in real use (CI; default: off in the suite)
 SMOKE_TIMING_LOG=off tests/smoke.sh               # no timing log (default: one per run in ~/.cache/orca-roles/smoke-timings/, the 50 newest kept)
 SMOKE_SLOW_CHECK=0 tests/smoke.sh                 # log every check's time (default: the checks that took 5 s or more)
+tests/timing-compare.sh main.tsv branch.tsv       # per-section seconds of two timing logs and their difference
 shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
