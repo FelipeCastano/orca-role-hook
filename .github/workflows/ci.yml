@@ -45,3 +45,12 @@ jobs:
         env:
           SMOKE_CLI_TIMEOUT: 60
           SMOKE_JOBS: ${{ matrix.jobs }}
+          SMOKE_TIMING_LOG: ${{ runner.temp }}/smoke-timings-${{ matrix.os }}.tsv
+      # the timing log of the run (tests/smoke.sh: SMOKE_TIMING_LOG), kept even when the run fails
+      - name: Upload the smoke timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-timings-${{ matrix.os }}
+          path: ${{ runner.temp }}/smoke-timings-${{ matrix.os }}.tsv
+          if-no-files-found: warn

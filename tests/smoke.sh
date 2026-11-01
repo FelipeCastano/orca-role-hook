@@ -11,6 +11,37 @@ for s in "$@"; do
   [ "$known" = 1 ] || { echo "smoke.sh: unknown section '$s'. Sections:"; printf '  %s\n' $SECTIONS; } >&2
   [ "$known" = 1 ] || exit 2
 done
+# Timing log (see README, Development): SMOKE_TIMING_LOG (a path, or off), SMOKE_SLOW_CHECK (seconds). The runner's own variables all start with SMK_ (a section never uses that prefix).
+SMK_TOP=1; SMK_TLOG=""; SMK_DIR=""; SMK_T0=$SECONDS; SMK_TMARK=$SECONDS; SMK_FAIL_BEFORE=0; SMK_STATUS=ok
+SMK_SLOW="${SMOKE_SLOW_CHECK:-5}"
+if [ -n "${SMOKE_TIMING_APPEND+x}" ]; then
+  SMK_TOP=0; SMK_TLOG="$SMOKE_TIMING_APPEND"; unset SMOKE_TIMING_APPEND
+  case "$SMK_SLOW" in *[!0-9]*) SMK_SLOW=5;; esac
+else
+  case "$SMK_SLOW" in *[!0-9]*) echo "smoke.sh: SMOKE_SLOW_CHECK must be a whole number of seconds; using 5" >&2; SMK_SLOW=5;; esac
+  case "${SMOKE_TIMING_LOG:-}" in
+    off) ;;
+    '') SMK_DIR="${XDG_CACHE_HOME:-${HOME:-/nonexistent}/.cache}/orca-roles/smoke-timings"; SMK_TLOG="$SMK_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$$.tsv";;
+    *) SMK_TLOG="$SMOKE_TIMING_LOG";;
+  esac
+fi
+smk_finish() {  # smk_finish <status>: the total line, the path on stderr and the pruning of the default folder (top-level process only)
+  [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ] || return 0
+  { printf 'total\t%s\t%s\t%s\n' "$SECONDS" "$1" "${#ARGS[@]}" >> "$SMK_TLOG"; } 2>/dev/null || true
+  echo "smoke.sh: timings written to $SMK_TLOG" >&2
+  if [ -n "$SMK_DIR" ]; then
+    ls -1 "$SMK_DIR"/*.tsv 2>/dev/null | sort -r | sed -n '51,$p' | while IFS= read -r SMK_OLD; do rm -f "$SMK_OLD"; done || true
+  fi
+  return 0
+}
+smk_tick() {  # smk_tick <description>: the seconds since the previous result of this process; logged when at least SMK_SLOW
+  local smk_d=$((SECONDS - SMK_TMARK))
+  SMK_TMARK=$SECONDS
+  if [ -n "$SMK_TLOG" ] && [ "$smk_d" -ge "$SMK_SLOW" ]; then
+    { printf 'check\t%s\t%s\t%s\n' "$SECTION" "$smk_d" "$(printf '%s' "$1" | tr '\t\n' '  ' | cut -c1-200)" >> "$SMK_TLOG"; } 2>/dev/null || true
+  fi
+  return 0
+}
 # Sections run in parallel (SMOKE_JOBS, default half the CPUs, 1 to 8; 1, or a single section = one process, in order). Each section is its own
 # `smoke.sh <section>` process with its output in a temp file; the parent prints them in the requested order and adds up their results.
 # SMOKE_SERIAL: the sections that hold elapsed-time checks run alone, after the others, so a loaded machine cannot fail them.
@@ -25,7 +56,7 @@ smoke_parallel() {
   local -a SP_PID SP_RC SP_ST
   d="$(mktemp -d)"; n=${#ARGS[@]}
   for ((i = 0; i < n; i++)); do SP_ST[i]=0; done
-  trap 'for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done; rm -rf "$d"; exit 130' INT TERM
+  trap 'for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done; rm -rf "$d"; smk_finish interrupted; exit 130' INT TERM
   while [ "$printed" -lt "$n" ]; do
     for ((i = 0; i < n; i++)); do
       [ "${SP_ST[i]}" = 1 ] && ! kill -0 "${SP_PID[i]}" 2>/dev/null || continue
@@ -35,12 +66,12 @@ smoke_parallel() {
     for ((i = 0; i < n; i++)); do
       [ "$running" -lt "$JOBS" ] || break
       [ "${SP_ST[i]}" = 0 ] && ! smoke_serial "${ARGS[i]}" || continue
-      SMOKE_JOBS=1 bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=$((running + 1))
+      SMOKE_JOBS=1 SMOKE_TIMING_APPEND="$SMK_TLOG" bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=$((running + 1))
     done
     if [ "$running" = 0 ]; then
       for ((i = 0; i < n; i++)); do
         [ "${SP_ST[i]}" = 0 ] || continue
-        SMOKE_JOBS=1 bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=1
+        SMOKE_JOBS=1 SMOKE_TIMING_APPEND="$SMK_TLOG" bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=1
         break
       done
     fi
@@ -54,6 +85,7 @@ smoke_parallel() {
     [ "$printed" -lt "$n" ] && sleep 0.05
   done
   rm -rf "$d"
+  if [ "$bad" = 0 ]; then smk_finish ok; else smk_finish FAIL; fi
   [ "$bad" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
   exit 0
 }
@@ -64,6 +96,12 @@ if [ -z "$JOBS" ]; then
   JOBS=$((JOBS / 2)); [ "$JOBS" -ge 1 ] || JOBS=1; [ "$JOBS" -le 8 ] || JOBS=8
 fi
 case "$JOBS" in ''|*[!0-9]*|0) JOBS=1;; esac
+if [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ]; then
+  if ! { mkdir -p "$(dirname "$SMK_TLOG")" && printf '# smoke.sh timings\tstarted=%s\tcommit=%s\tjobs=%s\tbash=%s\tos=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git -C "$(cd "$(dirname "$0")/.." && pwd)" rev-parse --short HEAD 2>/dev/null || echo -)" "$JOBS" "$BASH_VERSION" "$(uname -s)" > "$SMK_TLOG"; } 2>/dev/null; then
+    echo "smoke.sh: cannot write the timing log $SMK_TLOG; running without it" >&2; SMK_TLOG=""; SMK_DIR=""
+  fi
+fi
+export SMOKE_TIMING_LOG=off   # a smoke.sh started by a check logs nothing
 if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
 unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
@@ -74,7 +112,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
 export ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$TMP/scheduler.log"   # install.sh never touches the real launchctl or crontab from the suite
 SECTION=""; ERR_AT=""
-on_exit() { local rc=$?; rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then echo "smoke.sh: aborted in section $SECTION ${ERR_AT:-(exit status $rc)}" >&2; fi; }
+on_exit() {
+  local rc=$?
+  if [ -n "$SMK_TLOG" ]; then
+    if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then { printf 'section\t%s\t%s\taborted\n' "$SECTION" "$((SECONDS - SMK_T0))" >> "$SMK_TLOG"; } 2>/dev/null || true; fi
+    if [ "$DONE" != 1 ]; then smk_finish aborted; elif [ "$FAIL" = 0 ]; then smk_finish ok; else smk_finish FAIL; fi
+  fi
+  rm -rf "$TMP"; if [ "$DONE" != 1 ] && [ "$rc" = 0 ]; then echo "smoke.sh: ended before its summary" >&2; exit 1; fi; if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then echo "smoke.sh: aborted in section $SECTION ${ERR_AT:-(exit status $rc)}" >&2; fi
+}
 trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
 # where set -e ended the script: the failing command of the main shell (not of a $(...) or a subshell, where its status shows up on the line that ran it); only recorded while errexit is on
 set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINENO: $BASH_COMMAND";; esac' ERR
@@ -85,12 +130,12 @@ NOORCA="$TMP/noorca"; mkdir -p "$NOORCA"; printf '#!/bin/sh\necho "$*" >> "%s/ca
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
 . "$KIT/bin/lib.sh"
 FAIL=0
-check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; }
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; smk_tick "$1"; }
 gshim() {  # gshim <dir> <log>: a git in <dir> that logs each rev-parse with the command line of the process that started it, then runs the real git
   printf '#!/bin/sh\ncase "$*" in *rev-parse*) echo "$(ps -o command= -p $PPID)" >> "%s";; esac\nexec "%s" "$@"\n' "$2" "$(command -v git)" > "$1/git"; chmod +x "$1/git"; : > "$2"
 }
 blk_start() { F0=$FAIL; FAIL=0; }
-blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; return 0; }
+blk_end() { [ "$FAIL" = 0 ] && echo "ok   $1"; [ "$F0" = 0 ] || FAIL=1; smk_tick "$1"; return 0; }
 try() { if OUT="$("$@")"; then RC=0; else RC=$?; fi; }   # captures output and exit code without tripping set -e
 # poll <predicate> [args]: waits until it holds, every 0.2 s for at most 5 s (a slow runner gets the time; the check that follows reports what is still wrong)
 poll() { local n=0; until "$@" 2>/dev/null || [ "$n" -ge 25 ]; do sleep 0.2; n=$((n+1)); done; return 0; }
@@ -8406,6 +8451,34 @@ check "parallel runner: SMOKE_JOBS=3 prints the sections in the requested order 
 cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[b\], got \[a\]$' "$TMP/cli.out" | cut -d: -f1):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK" "$Q1|$Q2" "1:marker fast,:1:1:0|1:marker fast,:1:1:0"
+# the timing log (SMOKE_TIMING_LOG, SMOKE_SLOW_CHECK), driven through child suites with two more fake sections: t0 assigns T0 and d, nest starts a nested suite
+CT="$TMP/cli-tlog"; rm -rf "$CT"; mkdir -p "$CT/tests"; ln -sfn "$ROOT/bin" "$CT/bin"; ln -sfn "$ROOT/prompts" "$CT/prompts"; ln -sfn "$ROOT/config.default.json" "$CT/config.default.json"
+sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit t0 nest"/' -e 's/^sec_slow() /sec_t0() { T0="$(echo x | shasum)"; d=abc; sleep 1; check "t0 after a sleep" a a; }\
+sec_nest() { bash "$(dirname "$0")\/smoke.sh" fast > \/dev\/null; echo "marker nest"; }\
+&/' "$CP/tests/smoke.sh" > "$CT/tests/smoke.sh"
+tl_run() { local j="$1"; shift; CRC=0; RUNDIR="$TMP/cprun" SMOKE_JOBS="$j" bash "$CT/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
+tl_sum() { printf '%s;%s;%s;' "$(grep -c '^# smoke.sh timings	started=[0-9T:Z-]*	commit=[^	]*	jobs=[0-9]*	bash=[^	]*	os=[A-Za-z]*$' "$1")" "$(grep -c '^total	' "$1")" "$(sed -n '$p' "$1" | cut -f1)"; awk -F'\t' '$1=="section"{printf "%s=%s,",$2,$4} $1=="total"{printf "T:%s:%s,",$3,$4} $1=="check"{printf "C:%s:%s,",$2,$4}' "$1" | tr ',' '\n' | sort | tr '\n' ','; }
+TL="$TMP/tl1.tsv"; rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_SLOW_CHECK=0 tl_run 3 slow bad; A1="$CRC:$(tl_sum "$TL"):$(grep -c "^smoke.sh: timings written to $TL$" "$TMP/cli.err")"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_SLOW_CHECK=0 tl_run 1 fast quit wake; A2="$CRC:$(tl_sum "$TL"):$(grep -c "^smoke.sh: timings written to $TL$" "$TMP/cli.err")"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" tl_run 1 fast; A3="$CRC:$(tl_sum "$TL"):$(grep -c '	jobs=1	' "$TL")"
+check "timing log: one header, one section line per started section and a last total line, serial and parallel; ok/FAIL/aborted per section and for the total, a check line per result at SMOKE_SLOW_CHECK=0, no line for a section after an aborted one, the path on stderr" "$A1|$A2|$A3" "1:1;1;total;bad=FAIL,C:bad:marker bad,slow=ok,T:FAIL:2,:1|1:1;1;total;fast=ok,quit=aborted,T:aborted:3,:1|0:1;1;total;fast=ok,T:ok:1,:1"
+rm -rf "$TMP/tl-xdg" "$TMP/tl-xdg2"; SMOKE_TIMING_LOG=off XDG_CACHE_HOME="$TMP/tl-xdg" tl_run 3 fast wake; B1="$CRC:$([ -e "$TMP/tl-xdg" ] && echo made || echo none):$(grep -c 'timings written' "$TMP/cli.err" || true)"
+SMOKE_TIMING_LOG='' XDG_CACHE_HOME="$TMP/tl-xdg" tl_run 1 nest fast; B2="$CRC:$(ls "$TMP/tl-xdg/orca-roles/smoke-timings" | wc -l | tr -d ' '):$(cat "$TMP"/tl-xdg/orca-roles/smoke-timings/*.tsv | grep -c '^section')"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" XDG_CACHE_HOME="$TMP/tl-xdg2" tl_run 1 nest; B3="$CRC:$(grep -c '^section' "$TL"):$(grep -c '^total' "$TL"):$([ -e "$TMP/tl-xdg2" ] && echo made || echo none):$(grep -c 'timings written' "$TMP/cli.err")"
+check "timing log: SMOKE_TIMING_LOG=off writes nothing; a smoke.sh started by a section adds no line to the outer log and creates no log of its own, in the default folder or at a named path" "$B1|$B2|$B3" "0:none:0|0:1:2|0:1:1:none:1"
+SMOKE_TIMING_LOG=off tl_run 3 fast bad; U3="$CRC:$(cat "$TMP/cli.err"):$(sed "s/ [0-9][0-9]*$//" "$TMP/cli.out")"
+: > "$TMP/tl-afile"; WARN="smoke.sh: cannot write the timing log $TMP/tl-afile/x.tsv; running without it"
+SMOKE_TIMING_LOG="$TMP/tl-afile/x.tsv" tl_run 3 fast bad; U1="$CRC:$(cat "$TMP/cli.err"):$(sed "s/ [0-9][0-9]*$//" "$TMP/cli.out")"; U1="${U1/:$WARN:/::}"
+SMOKE_TIMING_LOG="$TMP/tl-afile/x.tsv" tl_run 1 fast; U2="$CRC:$(cat "$TMP/cli.err")"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_SLOW_CHECK=abc tl_run 3 fast; V1="$CRC:$(grep -v 'timings written' "$TMP/cli.err")"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_SLOW_CHECK=1 tl_run 1 t0 fast; W1="$CRC:$(grep -c '^ALL OK$' "$TMP/cli.out"):$(grep -c '^section	t0	[0-9]*	ok$' "$TL"):$(grep -c '^check	t0	' "$TL" || true)"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" tl_run 1 t0; W2="$(grep -c '^check' "$TL" || true)"
+check "timing log: an unwritable path gives one smoke.sh warning and no other stderr line, same stdout and exit code as a run without a log; a non-integer SMOKE_SLOW_CHECK warns once naming the variable and the default; a section that assigns T0 and d keeps its section line and ALL OK; a check after a sleep is logged at SMOKE_SLOW_CHECK=1, not at the default" "$([ "$U1" = "$U3" ] && echo same)|$U2|$V1|$W1|$W2" "same|0:$WARN|0:smoke.sh: SMOKE_SLOW_CHECK must be a whole number of seconds; using 5|0:1:1:1|0"
+PR="$TMP/tl-prune/orca-roles/smoke-timings"; rm -rf "$TMP/tl-prune"; mkdir -p "$PR"; for n in $(seq 100 150); do : > "$PR/2020010${n}T000000Z-1.tsv"; done
+SMOKE_TIMING_LOG='' XDG_CACHE_HOME="$TMP/tl-prune" tl_run 1 fast; X1="$CRC:$(ls "$PR" | wc -l | tr -d ' '):$([ -e "$PR/2020010100T000000Z-1.tsv" ] && echo kept || echo pruned):$([ -e "$PR/2020010101T000000Z-1.tsv" ] && echo kept || echo pruned):$([ -e "$PR/2020010102T000000Z-1.tsv" ] && echo kept || echo pruned):$([ -e "$PR/2020010150T000000Z-1.tsv" ] && echo kept || echo pruned)"
+mkdir -p "$TMP/tl-user"; for n in $(seq 100 160); do : > "$TMP/tl-user/old$n.tsv"; done
+SMOKE_TIMING_LOG="$TMP/tl-user/mine.tsv" XDG_CACHE_HOME="$TMP/tl-prune" tl_run 1 fast; X2="$CRC:$(ls "$TMP/tl-user" | wc -l | tr -d ' ')"
+check "timing log: the default folder keeps the 50 newest *.tsv (51 old files plus the new log: the two oldest go); a folder the user named is never pruned" "$X1|$X2" "0:50:pruned:pruned:kept:kept|0:62"
 }
 
 sec_usage_metrics() {
@@ -9091,7 +9164,14 @@ fstop
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
-for s in "$@"; do SECTION="$s"; ERR_AT=""; "sec_${s//-/_}"; done
+SMK_TMARK=$SECONDS
+for s in "$@"; do
+  SECTION="$s"; ERR_AT=""; SMK_FAIL_BEFORE=$FAIL; FAIL=0; SMK_T0=$SECONDS; SMK_TMARK=$SECONDS
+  "sec_${s//-/_}"
+  SMK_STATUS=ok; [ "$FAIL" = 0 ] || SMK_STATUS=FAIL
+  [ -z "$SMK_TLOG" ] || { printf 'section\t%s\t%s\t%s\n' "$s" "$((SECONDS - SMK_T0))" "$SMK_STATUS" >> "$SMK_TLOG"; } 2>/dev/null || true
+  [ "$SMK_FAIL_BEFORE" = 0 ] || FAIL=1
+done
 SECTION=""
 sleep 1
 
