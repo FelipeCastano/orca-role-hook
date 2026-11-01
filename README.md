@@ -123,7 +123,7 @@ Clone the repo and run the installer from the clone:
 git clone git@github.com:FelipeCastano/orca-role-hook.git && bash orca-role-hook/install.sh
 ```
 
-It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role`, `roles-yaml`, `team-status` and `coordinator` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings. Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
+It installs into `~/.orca-roles/`, creates your `~/.orca-roles/config.json`, adds the `roles`, `new-role`, `roles-yaml`, `team-status`, `coordinator` and `auditor` commands to your shell and explains how to register the kit in your projects. **To update**, pull the changes and run the installer again: your configuration is kept (values and order of your roles) and only the new options are added. A `visual-tester` role from older versions becomes `e2e-tester` with its settings. Update the kit with no team open, or clean the open teams' context afterwards (see [Cleaning the workers' context](#cleaning-the-workers-context)), because running agents keep the old prompt paths.
 
 ```bash
 git -C orca-role-hook pull && bash orca-role-hook/install.sh
@@ -885,6 +885,14 @@ Checked end to end with two worktrees of a toy repo, each with Planner and Dev (
 - On a real repository, before the marker existed, both Planners started planning on their own from the branch name and the linked issue, and each opened a question dialog in its tab. Orca refused both dispatches with `agent_prompt_blocked` while the dialogs were open; `terminal wait --for tui-idle` had already returned, because it is also satisfied with a dialog open. Hence the marker, and the coordinator reading the Planner's tab before it dispatches.
 - On the same repository, a coordinator that fell back to typing the tasks into the Planners' tabs then waited by reading those tabs: a Planner's question went unanswered for hours, because it was asked while the coordinator waited for the user and its watcher only looked at the newest turn. Hence the coordinator's Run in the marker and the Planner's messages to it.
 
+### On-demand Auditor
+
+The Auditor is not a team role: it audits every role and its metrics across worktrees (cost and tokens per role, tool calls and errors, compactions, context, verdicts and rounds, dispatches not started, duplicate test runs), finds the causes in the ledgers and prompts, and proposes changes together with the measure that would show they worked. It changes nothing: it only reports.
+
+No team starts it. Ask the global coordinator for an audit, or run `auditor [--model <model>]` (the alias the installer adds; `~/.orca-roles/bin/auditor.sh` before opening a new terminal after installing) in any terminal and talk to it there. It uses the model given with `--model`, else the Planner's, and the Planner's permission mode. Its scratch folder is `~/.orca-roles/tmp/auditor/` and its reports are `~/.orca-roles/tmp/auditor/audit-<date>.md`.
+
+It reads the metrics store, the events, `team-status`, the roles' scratch folders, the prompts and the configuration; it reads transcripts only for the sessions the request names or a measure flags.
+
 ### MCP in other agents
 
 `mcpServers` defines the servers once and `mcp` picks which ones each role loads, whatever its agent. The kit generates a `{"mcpServers": {...}}` file per role with the chosen ones and hands it to each agent the way that agent can receive it:
@@ -1027,6 +1035,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── e2e-browser.sh           # checks and installs the E2E browser stack (pinned Playwright packages and Chromium) and checks saved sessions
 │   ├── e2e-run.sh               # runs an E2E flow (a Playwright script) on the pinned stack and writes its evidence
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
+│   ├── auditor.sh               # opens the on-demand Auditor (the auditor command): audits the roles and their metrics, changes nothing
 │   ├── team-status.sh           # what each role is doing, from what Orca tracks (the team-status command)
 │   ├── dispatch.sh              # assigns a task to a worker and checks in the background that it started (re-sends Enter once, else tells the local coordinator)
 │   ├── lib.sh                   # shared functions
@@ -1037,6 +1046,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 ├── plugin/                      # Claude Code plugin the local coordinator loads
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
 ├── prompts/
+│   ├── auditor.md               # the on-demand Auditor (mode-independent)
 │   ├── programmer/
 │   ├── pr-reviewer/
 │   └── academic-research/       # each mode's folder holds:

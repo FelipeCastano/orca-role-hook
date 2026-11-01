@@ -141,7 +141,7 @@ else
 fi
 jq empty "$CONF" || { echo "ERROR: $CONF is not valid JSON" >&2; exit 1; }
 
-# Aliases 'roles', 'new-role', 'roles-yaml', 'team-status' and 'coordinator' (once)
+# Aliases 'roles', 'new-role', 'roles-yaml', 'team-status', 'coordinator' and 'auditor' (once)
 # zsh → ~/.zshrc; bash → ~/.bashrc (on macOS, ~/.bash_profile, which is what Terminal reads); other shells → ~/.profile
 case "$(basename "${SHELL:-}")" in
   zsh) RC="$HOME/.zshrc";;
@@ -153,6 +153,7 @@ grep -q 'alias new-role=' "$RC" 2>/dev/null || echo 'alias new-role="$HOME/.orca
 grep -q 'alias roles-yaml=' "$RC" 2>/dev/null || echo 'alias roles-yaml="$HOME/.orca-roles/bin/orca-yaml.sh"' >> "$RC"
 grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME/.orca-roles/bin/team-status.sh"' >> "$RC"
 grep -q 'alias coordinator=' "$RC" 2>/dev/null || echo 'alias coordinator="$HOME/.orca-roles/bin/coordinator.sh"' >> "$RC"
+grep -q 'alias auditor=' "$RC" 2>/dev/null || echo 'alias auditor="$HOME/.orca-roles/bin/auditor.sh"' >> "$RC"
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
 
@@ -307,4 +308,4 @@ else
 fi
 echo "To enable or disable roles, edit \"enabled\" in $CONF."
 "$KIT/bin/apply-hooks.sh"
-echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml', 'team-status' and 'coordinator' commands."
+echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml', 'team-status', 'coordinator' and 'auditor' commands."

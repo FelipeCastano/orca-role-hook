@@ -953,8 +953,20 @@ local_coordinator_skill_deny() {
     'Skill(superpowers:test-driven-development)' 'Skill(superpowers:systematic-debugging)'
 }
 # The reviewers (Plan-Reviewer, Code-Reviewer, pr-reviewer's Verifier) verify plans, code and findings themselves and must never dispatch a gate's reviewer subagents or subagents of their own. The list lives in the kit so a
-# user's own disallowedTools (which replace a config default) cannot drop it.  reviewer_deny → one tool per line
+# user's own disallowedTools (which replace a config default) cannot drop it.  reviewer_deny → one tool per line. The on-demand Auditor (auditor.sh), which is not a team role, uses the same list.
 reviewer_deny() { printf '%s\n' Agent Task; }
+# Same trust as the teams (settings.trust, default "worktree"); with "never" Claude asks, as the user is in this tab anyway. A folder
+# Claude Code already knows keeps its entry: only the flag is set and it is not recorded, so forget-trust.sh never touches it (it only removes the flag the kit set, and an entry only when nothing else is in it).
+trust_launch_folder() { # trust_launch_folder <merged config file>
+if [ "$(trust_of "$1")" = worktree ]; then
+  D="$(pwd -P)"; KNOWN="$(jq -r --arg d "$D" '.projects[$d] | if . == null then "no" elif .hasTrustDialogAccepted == true then "trusted" else "yes" end' "$HOME/.claude.json" 2>/dev/null)" || KNOWN=""
+  case "$KNOWN" in
+    no) trust_folder;;
+    yes) safe_json_edit "$HOME/.claude.json" '.projects[$dir].hasTrustDialogAccepted = true' "$D" "$HOME/.claude.json.lock" \
+           && echo "Marked $D as trusted for Claude Code (its existing entry is kept; forget-trust.sh does not touch it).";;
+  esac
+fi
+}
 expand_path() { local p="${1/#\~/$HOME}"; p="${p//\{kit\}/$KIT}"; printf '%s' "${p//\{home\}/$HOME}"; }
 # Command that opens a new conversation in a role's agent (the clearCommand field, or the agent's own)
 clear_command() {
