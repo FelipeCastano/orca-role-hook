@@ -2906,19 +2906,20 @@ losum() { cat "$LOG/orca-roles.env" "$LOG/orca-roles.pty" "$LOG/orca-roles.tabs"
 lotester() { grep -h '^TESTER=' "$LOG/orca-roles.env" "$LOG/orca-roles.pty" "$LOG/orca-roles.tabs" | tr "\n" "|" || true; }
 locnt() { grep -cE "^terminal create .*--title $1 " "$LO/orca.log" || true; }
 lolines() { printf '%s/%s' "$(printf '%s\n' "$OUT" | grep -cE "^Opened on first use \(.*\): Dev \(dev\)\.$" || true)" "$(printf '%s\n' "$OUT" | grep -cE "^Opened per task \(.*\): Deployer \(deployer\)\.$" || true)"; }
-write_launch_config; jq '.roles.dev.open = "first-use" | .roles.deployer.open = "per-task" | .roles.tester.enabled = true' "$KIT/config.json" > "$LO/cfg.json" && cp "$LO/cfg.json" "$KIT/config.json"
+write_launch_config; jq '.roles.dev.open = "first-use" | .roles.deployer.open = "per-task" | .roles.tester.enabled = true | .roles["local-coordinator"].open = "first-use"' "$KIT/config.json" > "$LO/cfg.json" && cp "$LO/cfg.json" "$KIT/config.json"
 loreset; try lol; A1="$RC:$(lokeys):$(lolines)"
 try lol --open dev; A2="$RC:$(lokeys):$(cat "$LOG/orca-roles.overrides.json" 2>/dev/null | grep -c dev || true)"
 try lol; A3="$RC:$(lokeys):$(locnt Dev):$(lolines)"
 S0="$(losum)"; try lol --open nosuch; R1="$RC"; try lol --open dev --set roles.dev.model=x; R2="$RC:$(printf '%s\n' "$OUT" | grep -c -- '--open takes no other option')"; R3="$([ "$(losum)" = "$S0" ] && echo same)"
 loreset; try lol --only dev; A4="$RC:$(lokeys)"
-check "launch --open: a plain launch opens the start roles and lists the lazy ones, --open dev adds Dev (not saved), a later plain launch keeps it, an unknown role or another option refuses with nothing changed, --only opens a lazy role" "$A1|$A2|$A3|$R1:$R2:$R3|$A4" "0:LOCAL_COORDINATOR PLANNER TESTER :1/1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :0|0:LOCAL_COORDINATOR PLANNER DEV TESTER :1:0/1|1:1:1:same|0:LOCAL_COORDINATOR PLANNER DEV "
+check "launch --open: the local coordinator opens at start even with open first-use; a plain launch opens the start roles and lists the lazy ones, --open dev adds Dev (not saved), a later plain launch keeps it, an unknown role or another option refuses with nothing changed, --only opens a lazy role" "$A1|$A2|$A3|$R1:$R2:$R3|$A4" "0:LOCAL_COORDINATOR PLANNER TESTER :1/1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :0|0:LOCAL_COORDINATOR PLANNER DEV TESTER :1:0/1|1:1:1:same|0:LOCAL_COORDINATOR PLANNER DEV "
 loreset; try lol; : > "$LO/dead-h-Tester"; B0="$(lotester)"; try lol --open dev; B1="$RC:$(lokeys):$([ "$(lotester)" = "$B0" ] && echo same):$(locnt Tester):$(locnt Dev)"
 loreset; try lol; : > "$LO/stale-h-Tester"; B0="$(lotester)"; try lol --open dev; B2="$RC:$(lokeys):$([ "$(lotester)" = "$B0" ] && echo same):$(printf '%s' "$B0" | tr '|' '\n' | grep -c . || true)"
 check "launch --open: a role it does not name is left as it is: a dead Tester agent is not replaced, and a stale Tester handle keeps its env, pty and tabs lines byte for byte" "$B1|$B2" "0:LOCAL_COORDINATOR PLANNER DEV TESTER :same:1:1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :same:3"
 loreset; try lol; S0="$(losum)"; : > "$LOG/orca-roles.mode-pending"; try lol --open dev; P1="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs a chosen mode')"; rm -f "$LOG/orca-roles.mode-pending"
-jq '.settings.mode = "pr-reviewer"' "$KIT/config.json" > "$LO/cfg-mode.json"; cp "$KIT/config.json" "$LO/cfg-keep.json"; cp "$LO/cfg-mode.json" "$KIT/config.json"; try lol --open dev; P2="$RC:$(grep -c 'terminal close' "$LO/orca.log" || true)"; cp "$LO/cfg-keep.json" "$KIT/config.json"
-check "launch --open: refused with nothing changed (no tab closed) while the mode is pending and after the configuration changed the open team's mode" "$P1|$P2|$([ "$(losum)" = "$S0" ] && echo same)" "1:1|1:0|same"
+jq '.settings.mode = "pr-reviewer"' "$KIT/config.json" > "$LO/cfg-mode.json"; cp "$KIT/config.json" "$LO/cfg-keep.json"; cp "$LO/cfg-mode.json" "$KIT/config.json"; try lol --open dev; P2="$RC:$(grep -c 'terminal close' "$LO/orca.log" || true)"; cp "$LO/cfg-keep.json" "$KIT/config.json"; P3S="$([ "$(losum)" = "$S0" ] && echo same)"
+loreset; try lol --open dev; P3="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs an open team' || true):$(grep -c '^terminal create' "$LO/orca.log" || true):$(ls "$LOG"/orca-roles.env 2>/dev/null | wc -l | tr -d ' ' || true)"; loreset
+check "launch --open: refused with nothing changed (no tab closed) while the mode is pending and after the configuration changed the open team's mode, and on a fresh worktree" "$P1|$P2|$P3S|$P3" "1:1|1:0|same|1:1:0:0"
 akreset; write_launch_config
 }
 
@@ -7328,7 +7329,9 @@ check "relaunch: kickoff for that role only" "$(rkicks)" "dev,"
 RZ="$RC:$(wc -c < "$RCL" | tr -d ' '):$(jq -r .roles.dev.model "$RG/orca-roles.config.json")"
 cp "$PK/config.json" "$TMP/rl.keep"; jq '.roles.dev.open = "first-use"' "$TMP/rl.keep" > "$PK/config.json"; jq '.roles.dev.open = "first-use"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"; N0="$(grep -c '^terminal create' "$RLOG")"; C0="$(rclosed)"; LS0="$(grep -c '^terminal list' "$RLOG" || true)"
 try rr dev --model gone --no-check; RZ="$RZ|$RC:$(( $(rclosed) - C0 )):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(( $(grep -c '^terminal list' "$RLOG" || true) - LS0 )):$(jq -r .roles.dev.model "$RG/orca-roles.config.json"):$(grep -c '^DEV=.' "$RG/orca-roles.env" || true)"; cp "$TMP/rl.keep" "$PK/config.json"; jq '.roles.dev.open = "start"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"
-check "relaunch: --no-check skips the probe, matches the title in any case; a role that opens on first use is closed, saved with the model by one launch and opened again by a second one (launch.sh --open)" "$RZ" "0:0:gone|0:1:1:2:gone:1"
+jq '.roles.dev.open = "start"' "$RG/orca-roles.config.json" > "$RG/c.tmp" && mv "$RG/c.tmp" "$RG/orca-roles.config.json"; jq '.roles.dev.open = "first-use"' "$TMP/rl.keep" > "$PK/config.json"; N0="$(grep -c '^terminal create' "$RLOG")"; C0="$(rclosed)"
+try rr dev --model gone --no-check; RZ="$RZ|$RC:$(( $(rclosed) - C0 )):$(( $(grep -c '^terminal create' "$RLOG") - N0 )):$(grep -c '^DEV=.' "$RG/orca-roles.env" || true):$(printf '%s\n' "$OUT" | grep -c 'still enabled in the configuration\|opens again before its next task' || true)"; cp "$TMP/rl.keep" "$PK/config.json"
+check "relaunch: --no-check skips the probe, matches the title in any case; a role that opens on first use is closed, saved with the model by one launch and opened again by a second one (launch.sh --open), also when only config.json says first-use" "$RZ" "0:0:gone|0:1:1:2:gone:1|0:1:1:1:0"
 B="$(rstate)"; C0="$(rclosed)"
 for args in "dev --model good --default-model" "dev --default-model --model good"; do
   # shellcheck disable=SC2086
@@ -7433,7 +7436,8 @@ touch "$TMP/aw-rt"; try al --set settings.phase=writing
 check "launch: a phase change when 'terminal show' gives an unknown error stops with 'Orca is not ready', nothing changed" "$RC:$(printf '%s' "$OUT" | grep -c 'ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree.s team is still open'):$(astate):$(grep -c '^terminal create' "$ALOG" || true):$(acl)" "1:1:$B:$N:$C_PH"
 rm -f "$TMP/aw-rt"
 touch "$TMP/aw-listfail"; try al --set settings.phase=writing; R_B="$RC:$(printf '%s' "$OUT" | grep -c "phase 'experiment'.*Phase 'writing' was requested; nothing was changed" || true):$(astate)"; rm -f "$TMP/aw-listfail"
-check "launch: phase change under an open team of the old phase is refused (also when Orca cannot be listed), nothing changed" "$R_A:$R_B" "1:1:$B:$N:1:1:$B"
+cp "$AC" "$TMP/aw-cfg.keep"; jq '.settings.phase = "writing"' "$TMP/aw-cfg.keep" > "$AC"; try al --open exp; R_C="$RC:$(printf '%s\n' "$OUT" | grep -c 'the phase changed from experiment to writing'):$(astate):$(grep -c '^terminal create' "$ALOG" || true)"; cp "$TMP/aw-cfg.keep" "$AC"
+check "launch: phase change under an open team of the old phase is refused (also when Orca cannot be listed, and with --open with a changed phase), nothing changed" "$R_A:$R_B:$R_C" "1:1:$B:$N:1:1:$B:1:1:$B:$N"
 # phase.sh
 try ap; R1="$RC"; try ap a b; R2="$RC"; try ap Writing; R3="$RC"; try ap ""; R4="$RC"
 B="$(astate)"; try ap experiment; R5="$RC:$OUT"

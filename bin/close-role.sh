@@ -54,6 +54,7 @@ for x in "$@"; do
   PTYF="$(dirname "$STATE")/orca-roles.pty"; [ -f "$PTYF" ] && { grep -v "^$v=" "$PTYF" > "$PTYF.tmp" || true; mv "$PTYF.tmp" "$PTYF"; }
   TABSF="$(dirname "$STATE")/orca-roles.tabs"; [ -f "$TABSF" ] && { grep -v "^$v=" "$TABSF" > "$TABSF.tmp" || true; mv "$TABSF.tmp" "$TABSF"; }
   [ "${ORCA_ROLES_PHASE_SWITCH:-}" = 1 ] && continue   # phase.sh closes roles that the other phase simply does not have: the hint would be wrong
+  [ "${ORCA_ROLES_ROLE_RELAUNCH:-}" = 1 ] && continue   # relaunch-role.sh reopens the role itself and prints the outcome: the hint would be wrong
   om="$(open_of "$CFG" "$id")"
   if [ "$om" != start ]; then echo "$t: it opens again before its next task (\"open\": \"$om\")."; continue; fi
   if merged_config . 2>/dev/null | jq -e --arg r "$id" '.roles[$r] and .roles[$r].enabled != false' >/dev/null 2>&1; then

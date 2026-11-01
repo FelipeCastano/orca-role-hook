@@ -3,7 +3,7 @@
 # Usage (from the worktree):  relaunch-role.sh <role|title> (--model <model> [--no-check] | --default-model)
 # Unless --no-check, it first tests the model with 'models.sh <role> --check --model <model>' and changes nothing if it is not "ok".
 # Then it closes the role's tab (close-role.sh) and runs 'launch.sh --set roles.<id>.model=<model>': the worktree's other saved
-# exceptions are kept; launch.sh reopens every tab of the team that is missing (normally just this role's), and kicks only the roles it opened; for a role that opens on first use or per task it then runs 'launch.sh --open <id>'
+# exceptions are kept; launch.sh reopens every tab of the team that is missing (normally just this role's), and kicks only the roles it opened; for a role whose "open", in the configuration that launch just saved, is first-use or per-task it then runs 'launch.sh --open <id>'
 # (the role's kickoff checks the model again).
 # --default-model relaunches it on the agent's default model (roles.<id>.model=""), without the model check; it excludes --model.
 # The model is saved in the worktree's exceptions ('roles --reset' forgets it). The front role (the local coordinator) cannot be relaunched.
@@ -32,7 +32,6 @@ ID="$(resolve_role "$CFG" "$ROLEARG")"
 [ "$ID" != local-coordinator ] || { echo "The local coordinator cannot be relaunched from inside the team." >&2; exit 1; }
 V="$(var_of "$ID")"; TITLE="$(title_of "$CFG" "$ID")"
 grep -q "^$V=." "$STATE" || { echo "$ID is not open in this worktree; run roles --open $ID." >&2; exit 1; }
-OM="$(open_of "$CFG" "$ID")"
 if [ "$CHECK" = 1 ] && [ "$DEFAULT" = 0 ]; then
   RES="$("$KIT/bin/models.sh" "$ID" --check --model "$MODEL" 2>/dev/null | head -1)"
   case "$(printf '%s' "$RES" | cut -f2)" in
@@ -41,11 +40,12 @@ if [ "$CHECK" = 1 ] && [ "$DEFAULT" = 0 ]; then
     *) echo "Could not check model $MODEL ($(printf '%s' "$RES" | cut -f3)); use --no-check to relaunch anyway" >&2; exit 1;;
   esac
 fi
-"$KIT/bin/close-role.sh" "$ID" || { echo "Could not close the tab of $TITLE; nothing was relaunched." >&2; exit 1; }
+ORCA_ROLES_ROLE_RELAUNCH=1 "$KIT/bin/close-role.sh" "$ID" || { echo "Could not close the tab of $TITLE; nothing was relaunched." >&2; exit 1; }
 if [ "$DEFAULT" = 1 ]; then LSET='roles.'"$ID"'.model=""'; else LSET="roles.$ID.model=$MODEL"; fi
 if ! "$KIT/bin/launch.sh" --set "$LSET"; then
   echo "Its tab was closed but relaunching failed; run roles to reopen it." >&2; exit 1
 fi
+OM="$(open_of "$CFG" "$ID")"   # read after the launch: launch.sh has just saved the configuration in effect in $CFG
 if [ "$OM" != start ] && ! "$KIT/bin/launch.sh" --open "$ID"; then
   echo "Its tab was closed but relaunching failed; run roles --open $ID to reopen it." >&2; exit 1
 fi
