@@ -371,6 +371,7 @@ rule R11 "$PD/local-coordinator.md" "every Tester brief names the step's base re
 check "rules R11: common-workers.md earlier versions in rev-<full sha>, read-only, copy-rev/" "$(grep -c 'rev-\$sha' "$PD/common-workers.md")$(grep -c 'rev-parse "<commit>^{commit}"' "$PD/common-workers.md")$(grep -c -- '--short' "$PD/common-workers.md" || true)$(grep -c 'copy-rev/' "$PD/common-workers.md")" "1101"
 check "rules R11: tester.md mutation in place, no copy" "$(grep -c 'in place in the worktree' "$PD/tester.md")$(grep -c 'rsync' "$PD/tester.md")" "10"
 check "rules R11: no prompt tells an agent to delete or use /tmp" "$(grep -rh '' "$ROOT/prompts/" | sed 's#\.orca-roles/tmp/##g' | grep -cE '\brm\b|mktemp|/tmp|/var/folders' || true)" "0"
+check "rules: no team prompt names the removed team role Auditor (programmer, pr-reviewer, academic-research)" "$(grep -rliw 'auditor' "$ROOT/prompts/programmer" "$ROOT/prompts/pr-reviewer" "$ROOT/prompts/academic-research" 2>/dev/null | wc -l | tr -d ' ')" "0"
 # R12 process cleanup
 rule R12 "$PD/common-workers.md" 'stop the processes you started'
 # Tester and Code-Reviewer resource caps
