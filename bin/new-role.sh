@@ -66,8 +66,8 @@ fi
 in_list() { case " $2 " in *" $1 "*) return 0;; esac; return 1; }
 # Ids that are kit files, not roles: prompts/<mode>/common-workers.md and the planner's and the local coordinator's prompts
 reserved_id() { [ "$1" = planner ] || [ "$1" = local-coordinator ] || [ "$1" = common-workers ]; }
-# A mode counts as unavailable when it has no planner prompt: in the clone with --repo, in the installation otherwise
-mode_unavailable() { if [ -n "$REPO" ]; then [ ! -f "$REPO/prompts/$1/planner.md" ]; else [ -n "$(mode_error "$1")" ]; fi; }
+# A mode counts as unavailable when it has no local coordinator prompt: in the clone with --repo, in the installation otherwise
+mode_unavailable() { if [ -n "$REPO" ]; then [ ! -f "$REPO/prompts/$1/local-coordinator.md" ]; else [ -n "$(mode_error "$1")" ]; fi; }
 # In the clone a new role must not take over a prompt file that is already there (a kit file): refuses with the first one found
 repo_collision_check() {  # uses ID and NEW_MODES
   local m

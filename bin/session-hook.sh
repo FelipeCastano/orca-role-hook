@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code SessionStart hook of the kit: re-binds the Orca Runs of a tab that was reopened with a new terminal handle.
-# Orca notifies a Run only at the terminal that created or last took it (run-create / run-use). When a front role tab (local coordinator or Planner) is reopened
+# Orca notifies a Run only at the terminal that created or last took it (run-create / run-use). When the front role's tab (the local coordinator) is reopened
 # (Orca restart, Orca's own `claude --resume`) its session is the same but its handle is new, so its Runs keep the dead handle and it is never
 # told that messages arrived. This hook remembers the handle of each session ($KIT/state/session-handles/<session_id>) and, when it changed and the
 # old handle is no longer live, takes the Runs bound to the old handle with `orca orchestration run-use` and prints one line for Claude.

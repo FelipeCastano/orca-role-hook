@@ -7,7 +7,7 @@ ROLE="$1"; shift; RESUME=""
 while [ $# -gt 0 ]; do case "$1" in --resume) RESUME="${2:-}"; shift;; esac; shift; done
 CFG="${ORCA_ROLES_CONFIG:-}"
 if [ -z "$CFG" ] || [ ! -f "$CFG" ]; then CFG="$(mktemp)"; merged_config . > "$CFG"; fi
-FRONT="$(front_of "$CFG")"   # the role that talks to the user in this worktree: the local coordinator in programmer mode (and while no mode is chosen), the Planner in the others
+FRONT="$(front_of "$CFG")"   # the role that talks to the user in this worktree: the local coordinator
 
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
 MODEL="$(rstr "$CFG" "$ROLE" model)"
@@ -105,8 +105,8 @@ case "$AGENT" in
       DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(superpowers_deny)
       ARGS+=(--disallowedTools "${DENY[@]}")
     fi
-    # Planning and rulings are the Planner's, verification and the team skill the local coordinator's (the Planner is the front role in the other modes: no change there)
-    if [ "$ROLE" = planner ] && [ "$FRONT" != planner ]; then
+    # Planning and rulings are the Planner's, verification and the team skill the local coordinator's
+    if [ "$ROLE" = planner ]; then
       SDENY=(); while IFS= read -r t; do SDENY+=("$t"); done < <(planner_skill_deny)
       ARGS+=(--disallowedTools "${SDENY[@]}")
     elif [ "$ROLE" = local-coordinator ]; then

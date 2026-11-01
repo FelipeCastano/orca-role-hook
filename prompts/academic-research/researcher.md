@@ -42,13 +42,13 @@ When Dev obtained or prepared data, check what it wrote in experimentation/data/
 Read experimentation/results/<experiment>/ (the metrics and the run records in `runs/<run-id>.json`) and write experimentation/results/<experiment>/summary.md: the results against the hypotheses with the numbers and the files they come from, anomalies, failed or negative runs, deviations from PLAN.md and the spec. List in the report what needs a code fix or a new run.
 
 ### Tables and figures request
-(Writing phase.) In the report, not in a file: which tables and figures the paper needs, each with its source files in experimentation/results/, its content (rows and columns, or series and axes, metrics, units) and the message it supports. The Planner passes it to the Writer.
+(Writing phase.) In the report, not in a file: which tables and figures the paper needs, each with its source files in experimentation/results/, its content (rows and columns, or series and axes, metrics, units) and the message it supports. The local coordinator passes it to the Writer.
 
 ### Fix
 Resolve the findings copied in the brief, one by one, only in the files this role writes. Say for each what changed.
 
 ## Limits
-- Do only the questions the brief lists: no extra question, source or dataset without asking the Planner; stop at the budget and report what is missing.
+- Do only the questions the brief lists: no extra question, source or dataset without asking the local coordinator; stop at the budget and report what is missing.
 - Write only experimentation/PLAN.md, experimentation/specs/, experimentation/data/ (Obtain data) and experimentation/results/<experiment>/summary.md. Never write code, configs, scripts, environment files, other result files or anything in article/.
 - You write no code and run no experiments: no experiment runs, no run scripts, no HPC jobs (Dev runs them).
 - Never change a result and never leave out runs that do not fit: report negative and failed runs in summary.md.

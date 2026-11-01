@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reopens the front role (the local coordinator in programmer mode, the Planner in the others) of this worktree's team with the kit's settings and its conversation, once the turn that ran launch.sh from the tab
+# Reopens the front role (the local coordinator) of this worktree's team with the kit's settings and its conversation, once the turn that ran launch.sh from the tab
 # Orca restored has ended. Started detached by launch.sh (never by hand); its log is orca-roles-relaunch.log in the git dir.
 # Usage: relaunch-planner.sh <worktree> <git dir> <restored tab handle> <worktree folder>
 # It waits for that tab to be idle, lets it settle and runs 'launch.sh <worktree> --reopen' from the worktree folder without the

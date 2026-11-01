@@ -28,7 +28,7 @@ Write each finding with:
 
 ## Limits
 - Read-only (see the common rules).
-- Re-run only within the brief's limits (time, CPU/GPU). For anything longer, ask the Planner.
+- Re-run only within the brief's limits (time, CPU/GPU). For anything longer, ask the local coordinator.
 - Never submit HPC jobs.
 
 ## Parameters
