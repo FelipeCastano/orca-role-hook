@@ -302,6 +302,13 @@ launchable_roles() {
     echo "$id"
   done
 }
+# When a role's tab opens: start (with the team), first-use (before its first task, then it stays) or per-task (before each task, closed after
+# its report). Missing or any other value = start; the front role always starts.  open_of <config> <role>
+open_of() {
+  local v; [ "$2" = "$(front_role "$(mode_of --saved "$1" 2>/dev/null || echo programmer)")" ] && { printf start; return 0; }
+  v="$(rstr "$1" "$2" open)"
+  case "$v" in first-use|per-task) printf '%s' "$v";; *) printf start;; esac
+}
 # The role id a name (id or title, any case) refers to in a configuration; nothing if there is none.  resolve_role <config> <name>
 resolve_role() { jq -r --arg x "$2" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$1" 2>/dev/null | head -1; }
 title_of() { jq -r --arg r "$2" '.roles[$r].title // $r' "$1"; }
@@ -369,6 +376,10 @@ LEGACY_ROLES='{"visual-tester": "e2e-tester"}'
 LEGACY_JQ='def legacy($l): if (.roles? | type) == "object" then .roles |= (to_entries | map(if $l[.key] then .key = $l[.key] | (if .value.title == "Visual-Tester" then .value.title = "E2E-Tester" else . end) else . end) | from_entries) else . end;'
 # The playwright MCP entry of the defaults before the kit pinned its own browser stack: a user still on exactly it moves to the new default entry.
 OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--isolated","--storage-state","{browserState}","--output-dir","{worktree}/{evidenceDir}"]}'
+# The start of a worker_done body that shows the role still follows its common prompt (common-workers.md: "Start the body … with the word Done"):
+# Done, or Hecho (the user's language may leak into a worker's report), as a whole word, any case, after leading blanks. A jq regex for test($re; "i").
+# shellcheck disable=SC2034
+REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # 5 was the default of maxSelfMutants before 3: a user still on it moves to the new default.
 # ["programmer"] was the default of researcher's modes before academic-research joined it: a user still on it moves to the new default.
 # ["programmer"] was the default of dev's and tester's modes before they joined academic-research: a user still on it moves to the new default.
@@ -376,6 +387,7 @@ OLD_PLAYWRIGHT_MCP='{"command":"npx","args":["-y","@playwright/mcp@latest","--he
 # claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
+# {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} was the default of the atlassian MCP server before Atlassian's /v2/mcp endpoint: a user still on exactly it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
@@ -389,6 +401,7 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.planner.pluginDirs |= (if . == ["{kit}/plugin"] then $d.roles.planner.pluginDirs else . end)
     | .roles["local-coordinator"].modes |= (if . == ["programmer"] then $d.roles["local-coordinator"].modes else . end)
     | .roles.planner.modes |= (if . == "all" then $d.roles.planner.modes else . end)
+    | if ($u.mcpServers.atlassian? // null) == {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} then .mcpServers.atlassian = $d.mcpServers.atlassian else . end
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
@@ -479,6 +492,11 @@ check_config() {
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '.roles | to_entries[] | select(.value | has("disallowedTools")) | select(.value.disallowedTools | type != "array" or any(.[]; type != "string"))
     | "ERROR: role \(.key): disallowedTools must be a list of tool names"' "$1" 2>/dev/null)" || true
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '(.roles | to_entries[] | select(.value | type == "object" and has("open")) | select(.value.open | IN("start", "first-use", "per-task") | not)
+      | "ERROR: role \(.key): open must be \"start\", \"first-use\" or \"per-task\" (got \(.value.open | tojson))"),
+    (.defaults? | objects | select(has("open")) | select(.open | IN("start", "first-use", "per-task") | not)
+      | "ERROR: defaults.open must be \"start\", \"first-use\" or \"per-task\" (got \(.open | tojson))")' "$1" 2>/dev/null)" || true
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
     | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
@@ -745,7 +763,7 @@ coordinator_run() {
 # The front role's startup message: the local coordinator's in every mode (the Planner, where the mode has one, is a worker
 # and is one of its handles).  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front lfirst ltask team
   front="$(front_role "$(mode_of --saved "$cfg")")"
   # shellcheck source=/dev/null
   . "$state"
@@ -754,12 +772,22 @@ planner_msg() {
     v="$(var_of "$id")"; t="$(title_of "$cfg" "$id")"
     handles="$handles $t=${!v},"; active="$active $t"
   done
-  extra="$(jq -r --arg f "$front" --argjson act "$(printf '%s\n' $roles | grep . | jq -R . | jq -s .)" \
+  lfirst=""; ltask=""; team="$roles"
+  for id in $(launchable_roles "$cfg" 2>/dev/null); do
+    [ "$id" = "$front" ] && continue
+    case "$(open_of "$cfg" "$id")" in
+      first-use) case " $roles " in *" $id "*) ;; *) lfirst="$lfirst, $(title_of "$cfg" "$id") ($id)"; team="$team $id";; esac;;
+      per-task) ltask="$ltask, $(title_of "$cfg" "$id") ($id)"; case " $roles " in *" $id "*) ;; *) team="$team $id";; esac;;
+    esac
+  done
+  extra="$(jq -r --arg f "$front" --argjson act "$(printf '%s\n' $team | grep . | jq -R . | jq -s .)" \
     '[.roles | to_entries[] | select(.key != $f and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r --arg f "$front" '((.defaults.params // {}) * (.roles[$f].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
   msg="Read $(prompt_of "$cfg" "$front") and adopt that role from now on. Mode: $(mode_of --saved "$cfg")."
   [ "$(mode_of --saved "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
+  [ -n "$lfirst" ] && msg="$msg Roles opened on first use, not open yet (see \"The team\" in your prompt): ${lfirst#, }."
+  [ -n "$ltask" ] && msg="$msg Roles opened per task (see \"The team\" in your prompt): ${ltask#, }."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
   [ -n "$params" ] && msg="$msg Configuration parameters: $params."
@@ -771,10 +799,10 @@ planner_msg() {
   cap=""; [ "$(mode_of --saved "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
   [ -n "$cap" ] && msg="$msg Flow override: send the Planner a \`decide\` task when a step piles up $cap rejected Tester rounds (this replaces the 3 in your prompt)."
   [ "$(flow_report_body "$cfg")" = short ] && msg="$msg Flow override: the workers' worker_done reports are short (a few lines); the full detail is in the file whose absolute path the body names, which you read when you need it."
-  xc=""; flow_cross_check "$cfg" "$roles" && xc=1
+  xc=""; flow_cross_check "$cfg" "$team" && xc=1
   [ -n "$xc" ] && msg="$msg Flow override: the cross-check is on: follow your section \"Cross-check\" with $(title_of "$cfg" cross-dev)."
   esc=""; if [ "$(mode_of --saved "$cfg")" = programmer ]; then   # settings.flow.escalation (see README, Escalation): the active roles with a valid one
-    for id in $roles; do e="$(flow_escalation "$cfg" "$id" 2>/dev/null)"; [ -n "$e" ] && esc="$esc, $(title_of "$cfg" "$id") to ${e% *} after ${e#* } rejected round(s) of a step"; done
+    for id in $team; do e="$(flow_escalation "$cfg" "$id" 2>/dev/null)"; [ -n "$e" ] && esc="$esc, $(title_of "$cfg" "$id") to ${e% *} after ${e#* } rejected round(s) of a step"; done
   fi
   if [ "$(mode_of --saved "$cfg")" = programmer ] && { flow_record_rounds "$cfg" || [ -n "$esc" ]; }; then   # settings.flow.recordRounds (see README, Round log); off = byte-identical message
     if [ -z "$esc" ]; then
@@ -789,7 +817,7 @@ planner_msg() {
   fi
   # Orca's worker-start --terminal never sees an `opencode mini` tab as ready (its agent_readiness stage times out, seen with Orca 1.4.218):
   # those roles get their tasks through dispatch --inject, which Orca documents for processes an operator started
-  oc=""; for id in $roles; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
+  oc=""; for id in $team; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
   [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): Orca's worker-start --terminal times out on their tabs, so dispatch their tasks with \`orca orchestration dispatch --task <task_id> --to <handle> --inject --json\` instead (create the task first, as for worker-start). They are unsupervised for Orca: worker-show, worker-stop and worker-abandon do not apply to them; their worker_done reaches you as usual."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the front role asking in the tab

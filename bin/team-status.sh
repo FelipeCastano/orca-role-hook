@@ -3,12 +3,13 @@
 # Usage:  team-status.sh [--json] [--run <run_id>] [<worktree folder>]     (default folder: the current directory)
 #   One line per role, tab-separated: Title, state, since, task, tool, summary.
 #   state: working | waiting (waiting for an answer or a permission) | done | interrupted | failed | no-status (Orca has no row for
-#          the tab) | no-tab (no tab saved) | undelivered (--run only: done, and a dispatch of the run is open but never started and its
+#          the tab) | no-tab (no tab saved) | not-opened (a role that opens on first use or per task and has no tab yet) | undelivered (--run only: done, and a dispatch of the run is open but never started and its
 #          text sits in the composer: Enter lost)
 #   since: age of that state (45s, 12m, 1h05m).  task: the task id of the prompt, or role-message (only got its role).
 #   --json     a JSON array of {role, title, handle, paneKey, state, since, sinceMs, task, tool, summary} instead of the lines
 #   --run <id> also looks for dispatches whose text was never submitted (one worker-list; for a role in state done with a dispatch still open
-#              whose task its prompt never named, one terminal show)
+#              whose task its prompt never named, one terminal show), and adds a 7th field, report: ok | missing (its last worker_done in that Run
+#              does not start with Done, see canary.sh) | - (no report, or older than the inbox's last 200 messages, or a role without a tab)
 # Exit 0 whatever the states; 2 when the folder has no team, or Orca does not answer or does not know the folder.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
@@ -48,6 +49,13 @@ while IFS='=' read -r var handle; do
   pane=""; [ -z "$tab" ] || [ -z "$leaf" ] || pane="$tab:$leaf"
   ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" --arg h "$handle" --arg p "$pane" '. + [{role: $r, title: $t, handle: $h, paneKey: $p}]')"
 done < "$GITDIR/orca-roles.env"
+if [ "$CFG" != /dev/null ]; then   # roles that open on first use or per task and have no tab yet
+  for id in $(launchable_roles "$CFG" 2>/dev/null); do
+    grep -q "^$(var_of "$id")=" "$GITDIR/orca-roles.env" && continue
+    [ "$(open_of "$CFG" "$id")" != start ] || continue
+    ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" '. + [{role: $r, title: $t, handle: "", paneKey: "", notOpened: true}]')"
+  done
+fi
 
 OUT="$(jq -n -c --argjson roles "$ROLES" --argjson agents "$AGENTS" --argjson now "$NOW" '
   def age($ms): if $ms == null then "-" elif $ms < 60000 then "\($ms / 1000 | floor)s"
@@ -57,7 +65,8 @@ OUT="$(jq -n -c --argjson roles "$ROLES" --argjson agents "$AGENTS" --argjson no
   $roles | map(. as $r
     | ([$agents[] | select(.paneKey == $r.paneKey)] | sort_by(.updatedAt // 0) | last) as $a
     | ($a.prompt // "") as $pr
-    | (if $r.paneKey == "" then "no-tab"
+    | (if $r.notOpened == true then "not-opened"
+       elif $r.paneKey == "" then "no-tab"
        elif $a == null then "no-status"
        elif $a.state == "working" then "working"
        elif $a.state == "waiting" or $a.state == "blocked" then "waiting"
@@ -88,8 +97,18 @@ if [ -n "$RUN" ]; then
   fi
 fi
 
+if [ -n "$RUN" ]; then
+  INB="$(orca orchestration inbox --json --limit 200 2>/dev/null)"
+  printf '%s' "$INB" | jq -e '.result.messages | type == "array"' >/dev/null 2>&1 || INB='{"result":{"messages":[]}}'
+  OUT="$(printf '%s' "$OUT" | jq -c --argjson inb "$INB" --arg run "$RUN" --arg re "$REPORT_MARK_RE" '
+    map(. as $r | ([$inb.result.messages[] | select(.type == "worker_done" and .run_id == $run and .from_handle == $r.handle)] | sort_by(.sequence) | last) as $d
+      | .report = (if $r.handle == "" or $d == null then "-" elif (($d.body // "") | test($re; "i")) then "ok" else "missing" end))')"
+fi
+
 if [ "$JSON" = 1 ]; then
-  printf '%s' "$OUT" | jq 'map(del(.prompt))'
+  printf '%s' "$OUT" | jq 'map(del(.prompt, .notOpened))'
+elif [ -n "$RUN" ]; then
+  printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary, .report] | join("\t")'
 else
   printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")'
 fi

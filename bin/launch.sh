@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opens the tabs of the worktree's enabled roles and starts their kickoff in the background.
 # Usage: launch.sh [id:<worktree>] [exceptions]
-#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it)
+#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it) (a role named by --only or --enable in this run opens now even if its "open" is "first-use" or "per-task")
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
@@ -11,6 +11,7 @@
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
+#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use" or "per-task"; the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -19,18 +20,24 @@
 # Only one launch runs per worktree at a time (orca-roles.lock in its git dir). If Orca cannot tell which tabs are open
 # ("Orca is not ready"), it stops before closing or opening anything.
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,20p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,21p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 type -P orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
-WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=()
+WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=(); OPEN_REQ=""; NAMED_REQ=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
     --status) STATUS=1;;
     --reopen) REOPEN=1;;
-    --only|--enable|--disable|--set|--mode) FLAGS+=("$1" "${2:-}"); shift;;
-    -*) FLAGS+=("$1");;
+    --open) OPEN_REQ="${OPEN_REQ:+$OPEN_REQ,}${2:-}"; shift;;
+    --open=*) OPEN_REQ="${OPEN_REQ:+$OPEN_REQ,}${1#--open=}";;
+    --only|--enable|--disable|--set|--mode)
+      case "$1" in --only|--enable) NAMED_REQ="${NAMED_REQ:+$NAMED_REQ,}${2:-}";; esac
+      FLAGS+=("$1" "${2:-}"); shift;;
+    -*)
+      case "$1" in --only=*|--enable=*) NAMED_REQ="${NAMED_REQ:+$NAMED_REQ,}${1#*=}";; esac
+      FLAGS+=("$1");;
     *) WT="$1";;
   esac
   shift
@@ -39,6 +46,12 @@ if [ "$REOPEN" = 1 ]; then
   OTHERS=""; [ ${#FLAGS[@]} -gt 0 ] && OTHERS="${FLAGS[*]}"
   [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
   [ -z "$OTHERS" ] || { echo "ERROR: --reopen takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
+fi
+if [ -n "$OPEN_REQ" ]; then
+  OTHERS=""; [ ${#FLAGS[@]} -gt 0 ] && OTHERS="${FLAGS[*]}"
+  [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
+  [ "$REOPEN" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reopen"
+  [ -z "$OTHERS" ] || { echo "ERROR: --open takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
 fi
 git_here_init
 # a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
@@ -144,6 +157,14 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
     prov="$(jq -r --arg r "$role" 'select(.role == $r) | "\(.agent // "-")@\(.cliVersion // "-")\t\((.promptSha // "-")[0:7])"' "$GITDIR/orca-roles.provenance.jsonl" 2>/dev/null | tail -1)"; [ -n "$prov" ] || prov="-$(printf '\t')-"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$title" "$handle" "$st" "${cm:--}" "${used:--}" "$prov"
   done < "$STATE"
+  if [ ! -e "$MARKER" ]; then
+    for role in $(launchable_roles "$SCFG" 2>/dev/null); do
+      grep -q "^$(var_of "$role")=" "$STATE" && continue
+      om="$(open_of "$SCFG" "$role")"; [ "$om" != start ] || continue
+      cm="$(rstr "$SCFG" "$role" model)"
+      printf '%s\t-\tnot opened (%s)\t%s\t-\t-\t-\n' "$(title_of "$SCFG" "$role")" "${om/-/ }" "${cm:--}"
+    done
+  fi
   exit 0
 fi
 # One launch per worktree at a time: the lock is a directory (mkdir is atomic) holding the pid of its owner
@@ -300,6 +321,34 @@ for i in $(seq 1 "$WAIT"); do
 done
 LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
 if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then LROLES="$FRONT"; fi
+OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""
+if [ -n "$OPEN_REQ" ]; then
+  [ "$FRESH" = 0 ] || fail "ERROR: --open needs an open team: run roles first. Nothing was changed."
+  { [ "$ASK" = 0 ] && [ "$PENDING" = 0 ]; } || fail "ERROR: --open needs a chosen mode: choose the mode first. Nothing was changed."
+  [ -z "$PREV_MODE" ] || [ "$PREV_MODE" = "$NEWMODE" ] || fail "ERROR: --open: the configuration now gives mode $NEWMODE but the team was opened in mode $PREV_MODE; a mode switch goes through the local coordinator (\"Choosing and switching the mode\"). Nothing was changed."
+  if [ "$NEWMODE" = academic-research ] && [ -f "$CFG" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
+    fail "ERROR: --open: the phase changed from $(phase_of "$CFG") to $(phase_of "$NEWCFG"); change it with ~/.orca-roles/bin/phase.sh. Nothing was changed."
+  fi
+  for n in $(printf '%s' "$OPEN_REQ" | tr ',' ' '); do
+    r="$(resolve_role "$NEWCFG" "$n")"
+    case " $LROLES " in *" ${r:-?} "*) ;; *) fail "ERROR: --open: '$n' is not a role of this worktree's team (mode $NEWMODE: $(echo $LROLES)). Nothing was changed.";; esac
+    OPEN_IDS="$OPEN_IDS $r"
+  done
+fi
+for n in $(printf '%s' "$NAMED_REQ" | tr ',' ' '); do   # roles named by --only/--enable in this run (unknown names were already refused by check_overrides)
+  r="$(resolve_role "$NEWCFG" "$n")"; [ -z "$r" ] || NAMED_IDS="$NAMED_IDS $r"
+done
+if [ "$ASK" = 0 ]; then
+  KEEP=""
+  for id in $LROLES; do
+    om="$(open_of "$NEWCFG" "$id")"
+    if [ "$om" = start ] || grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then KEEP="$KEEP $id"; continue; fi
+    case " $OPEN_IDS $NAMED_IDS " in *" $id "*) KEEP="$KEEP $id"; continue;; esac
+    if [ "$om" = first-use ]; then LAZY_FIRST="${LAZY_FIRST:+$LAZY_FIRST, }$(title_of "$NEWCFG" "$id") ($id)"
+    else LAZY_TASK="${LAZY_TASK:+$LAZY_TASK, }$(title_of "$NEWCFG" "$id") ($id)"; fi
+  done
+  LROLES="${KEEP# }"
+fi
 # After a restart Orca keeps agent tabs asleep: not in the terminal list, no handle, until someone clicks them (then Orca resumes their session itself).
 # Waking them first lets the code below see them as the restored tabs they are and reopen each with its conversation, instead of opening a second tab.
 if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
@@ -549,6 +598,8 @@ else
     "$KIT/bin/academic-scaffold.sh" "$(git_here toplevel)" || echo "Warning: could not create the academic-research folders."
   fi
 fi
+[ -z "$LAZY_FIRST" ] || echo "Opened on first use (not open yet; the local coordinator opens each with launch.sh --open <id> before its first task): $LAZY_FIRST."
+[ -z "$LAZY_TASK" ] || echo "Opened per task (not open yet; the local coordinator opens each before each of its tasks and closes it after its report): $LAZY_TASK."
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
 # title (Claude Code renames it soon after). kickoff.sh uses this snapshot to recognize and close it.
@@ -603,7 +654,7 @@ KEPT_DETACHED=""   # roles kept by the orphaned-with-live-agent rule (recorded a
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
   role_state "$v" "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
-  [ "$st" != 0 ] || [ "$ROLE_DETACHED" != 1 ] || { KEPT_DETACHED="$KEPT_DETACHED $id"; echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles."; }
+  [ "$st" != 0 ] || [ "$ROLE_DETACHED" != 1 ] || { KEPT_DETACHED="$KEPT_DETACHED $id"; echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles --open $id."; }
   [ "$st" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE) for $t: no tab was closed or opened. Run roles again once Orca is ready."
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
@@ -636,6 +687,7 @@ for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
   sv="ST_$v"; st="${!sv}"
   if [ "$REOPEN" = 1 ] && [ -z "${!v:-}" ]; then echo "$t has no saved tab (closed on purpose or never opened); leaving it closed."; continue; fi
+  if [ -n "$OPEN_IDS" ]; then case " $OPEN_IDS " in *" $id "*) ;; *) continue;; esac; fi
   if [ "$st" = 0 ] && [ "$id" = "$FRONT" ] && [ "$CHOSEN" = 1 ]; then
     NEW="$NEW $id"; REUSED="$REUSED $id"; echo "$FLC gets its role message for mode $NEWMODE after a context clear."; continue
   fi
@@ -738,12 +790,17 @@ if metrics_enabled "$CFG"; then   # what the metrics pass cannot read itself: th
   for id in $REMEMBERED $RESUMED; do metrics_event "$MPHYS" reopened "$id"; done
   for id in $KEPT_DETACHED; do metrics_event "$MPHYS" detached-kept "$id"; done
 fi
+PREV_PTY="$(cat "$PTY" 2>/dev/null)"
 PREV_TABS="$(cat "$TABS" 2>/dev/null)"
 : > "$STATE"; : > "$PTY"; : > "$TABS.tmp.$$"
 for id in $ROLES; do   # a role with no saved tab (left closed) is not written back as VAR=
   v="$(var_of "$id")"; [ -n "${!v:-}" ] || continue
   echo "$v=${!v}" >> "$STATE"
-  if [ "$id" = "$FRONT" ] && [ -n "$PLANNER_KEEP_PTY" ]; then
+  oskip=0; if [ -n "$OPEN_IDS" ]; then case " $OPEN_IDS " in *" $id "*) ;; *) oskip=1;; esac; fi
+  if [ "$oskip" = 1 ]; then   # a role --open did not name: its saved ptyId and tabs line are kept as they were (its handle may be stale)
+    echo "$v=$(printf '%s\n' "$PREV_PTY" | grep "^$v=" | head -1 | cut -d= -f2-)" >> "$PTY"
+    tl="$(printf '%s\n' "$PREV_TABS" | grep "^$v=" | head -1 | cut -d= -f2-)"
+  elif [ "$id" = "$FRONT" ] && [ -n "$PLANNER_KEEP_PTY" ]; then
     echo "$v=$PLANNER_KEEP_PTY" >> "$PTY"
     tl="$(printf '%s\n' "$PREV_TABS" | grep "^$v=" | head -1 | cut -d= -f2-)"
   else

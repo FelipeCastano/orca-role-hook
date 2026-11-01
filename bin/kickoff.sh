@@ -45,7 +45,7 @@ tell_planner() {  # $1 subject, $2 body: to the front role
 model_failed() {  # $1 role, $2 model, $3 what showed it (the error text, or why the model is not available)
   local title; title="$(title_of "$CFG" "$1")"
   echo "$1: model $2 is not available ($3)"; record_model "$1" "FAILED:$2"
-  [ "$1" = "$FRONT" ] || tell_planner "$title model unavailable" "$title did not start: its model $2 is not available ($3). config.json is unchanged. To fix it yourself: set roles.$1.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $1 and run roles (without options, so this worktree's saved options are kept)."
+  [ "$1" = "$FRONT" ] || tell_planner "$title model unavailable" "$title did not start: its model $2 is not available ($3). config.json is unchanged. To fix it yourself: set roles.$1.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh $1 and run roles --open $1 (without other options, so this worktree's saved options are kept)."
 }
 check_model() {  # $1 handle, $2 role, $3 model errors on screen before the message was sent, $4 error regex
   local model now text

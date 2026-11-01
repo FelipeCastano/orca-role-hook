@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Closes the tab of one or more roles in this workspace and forgets their handle (the opposite of what launch.sh does).
 # Usage (from the worktree):  close-role.sh <role|title|handle> [...]
-# The local coordinator runs it after the user confirms, once the role has no task in flight. It never closes the local coordinator;
+# The local coordinator runs it after the user confirms (for a role opened per task, without asking, after its report), once the role has no task in flight. It never closes the local coordinator;
 # the Planner is a worker and can be closed.
-# It does not change the configuration: if the role is still enabled, 'roles' would open it again (see the message it prints).
+# It does not change the configuration: if the role is still enabled and opens at start, 'roles' would open it again; a role that opens on first use or per task opens again with 'roles --open <id>' (see the message it prints).
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .)"; GITDIR="$(cd "$GITDIR" && pwd)"
@@ -54,6 +54,9 @@ for x in "$@"; do
   PTYF="$(dirname "$STATE")/orca-roles.pty"; [ -f "$PTYF" ] && { grep -v "^$v=" "$PTYF" > "$PTYF.tmp" || true; mv "$PTYF.tmp" "$PTYF"; }
   TABSF="$(dirname "$STATE")/orca-roles.tabs"; [ -f "$TABSF" ] && { grep -v "^$v=" "$TABSF" > "$TABSF.tmp" || true; mv "$TABSF.tmp" "$TABSF"; }
   [ "${ORCA_ROLES_PHASE_SWITCH:-}" = 1 ] && continue   # phase.sh closes roles that the other phase simply does not have: the hint would be wrong
+  [ "${ORCA_ROLES_ROLE_RELAUNCH:-}" = 1 ] && continue   # relaunch-role.sh reopens the role itself and prints the outcome: the hint would be wrong
+  om="$(open_of "$CFG" "$id")"
+  if [ "$om" != start ]; then echo "$t: it opens again before its next task (\"open\": \"$om\")."; continue; fi
   if merged_config . 2>/dev/null | jq -e --arg r "$id" '.roles[$r] and .roles[$r].enabled != false' >/dev/null 2>&1; then
     echo "$t: still enabled in the configuration, so 'roles' would open it again. Disable it (\"enabled\": false, or --disable $id in the setup script), or remove a role you created with: ~/.orca-roles/bin/new-role.sh --remove $id"
   fi
