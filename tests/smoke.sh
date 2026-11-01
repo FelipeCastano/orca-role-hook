@@ -402,9 +402,13 @@ for m in programmer pr-reviewer academic-research; do
     rule R21 "$PL" 'The full suite runs once per set'
     rule R21 "$PL" 'Wording-only fixes need no Tester round'
     rule R21 "$PL" 'anything that touches code, tests or a pinned rule goes through the Tester as usual' '\*\*Wording-only fixes need no Tester round\.\*\*'
-    rule R21 "$PL" 'by the Tester as a task' '\*\*Set audit\.\*\*'
+    rule R21 "$PL" 'the Tester never runs it' '\*\*Set audit\.\*\*'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'run the sections and tests the whole set touches'
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+    rule R21 "$ROOT/prompts/$m/tester.md" 'Never the full suite, not even when a brief asks for it'
+    rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Never repeat a run that still stands'
+    rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Run it only when your verdict would otherwise be'
+    rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'never run it again: review only the change in front of you'
   }
   [ "$m" != academic-research ] || {
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
@@ -459,7 +463,7 @@ r24() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *
 R24LED="$(grep -E -- '^   - \*\*Ledger\.\*\*' <<<"$R24P2" || true)"
 R24SET="$(grep -E -- '^   - \*\*Set audit\.\*\*' <<<"$R24P2" || true)"
 r24 "$R24LED" 'Every answer the user gives in the step (how a finding is routed, a Dev decision, whether a change is minor) is a line starting with `User decision:` in the ledger, and every decision the Planner takes in a `decide` task is a line starting with `Ruling (Planner):`: what it decided, why, and what it costs if it is wrong. You write no `Ruling:` line of your own.' end
-r24 "$R24SET" 'or left as notes if the user agrees). Anything the Planner returns as `needs: user` goes to the user as the protocol says. When the Planner'"'"'s decisions leave no open finding at or above medium, and before the full run and the commits, show the user "Rulings of the Planner": every `Ruling (Planner):` line from the set'"'"'s ledgers, grouped by step, each with what it costs if it is wrong. A ruling the user overturns becomes a fix (Dev, then the Tester; ask the user whether it needs the Code-Reviewer'"'"'s corrections review, with your recommendation, and record the answer in `changes-log.md`) before the full run. When the set audit (and its corrections review) has no open finding at or above medium, the set is committed' has
+r24 "$R24SET" 'or left as notes if the user agrees). Anything the Planner returns as `needs: user` goes to the user as the protocol says. When the Planner'"'"'s decisions leave no open finding at or above medium, and before the commits, show the user "Rulings of the Planner": every `Ruling (Planner):` line from the set'"'"'s ledgers, grouped by step, each with what it costs if it is wrong. A ruling the user overturns becomes a fix (Dev, then the Tester; ask the user whether it needs the Code-Reviewer'"'"'s corrections review, with your recommendation, and record the answer in `changes-log.md`) before the commits. When the set audit (and its corrections review) has no open finding at or above medium, the set is committed' has
 # R25 academic-research rulings: the Ledger bullet ends with the Ruling rule; the Commits section shows "Rulings I made" right after the stage sentence, before the commit proposal
 AP="$ROOT/prompts/academic-research/planner.md"
 r25() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *"$frag" ]] && ok=1;; has) [[ "$f" == *"$frag"* ]] && ok=1;; esac; [ "$ok" = 1 ] || { echo "FAIL rules R25: academic-research/planner.md lost '${frag:0:60}...' in its bullet or section"; FAIL=1; }; }
