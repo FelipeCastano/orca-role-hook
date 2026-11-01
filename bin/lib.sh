@@ -386,6 +386,7 @@ REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # claude-opus-5-5 was the default of the Writer's model before claude-sonnet-5-5: a user still on it moves to the new default.
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
+# {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} was the default of the atlassian MCP server before Atlassian's /v2/mcp endpoint: a user still on exactly it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
@@ -399,6 +400,7 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.planner.pluginDirs |= (if . == ["{kit}/plugin"] then $d.roles.planner.pluginDirs else . end)
     | .roles["local-coordinator"].modes |= (if . == ["programmer"] then $d.roles["local-coordinator"].modes else . end)
     | .roles.planner.modes |= (if . == "all" then $d.roles.planner.modes else . end)
+    | if ($u.mcpServers.atlassian? // null) == {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} then .mcpServers.atlassian = $d.mcpServers.atlassian else . end
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
 }
 # launch.sh exceptions (options of the project's setup script, or of 'roles') as JSON:
