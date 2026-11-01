@@ -6,7 +6,7 @@ Before you start:
 
 - Install the checkout you want to check: `cd <checkout> && ./install.sh`.
 - Use a throwaway project, never one of your teams: `~/orca-live-checks/project` if a script already created it; otherwise create a git repo with one commit, add it to Orca (`orca repo add --path <folder>`) and run `roles-yaml` in it (no `--mode`, so new worktrees ask the mode).
-- Give it a cheap team: an `.orca-roles.json` with `claude-haiku-5-5` for planner, dev, tester and auditor, and researcher, e2e-tester and deployer disabled (the scripts' project has one).
+- Give it a cheap team: an `.orca-roles.json` with `claude-haiku-5-5` for planner, dev, tester, plan-reviewer and code-reviewer, and researcher, e2e-tester and deployer disabled (the scripts' project has one).
 - Keep a copy of the results table at the end and fill it as you go.
 
 On WSL do the same steps; where a step differs, it says so. The kit's shim is `~/.orca-roles/shim/orca`: if `orca` is not found in a WSL terminal, put `~/.orca-roles/shim` first in your PATH (the scripts do it themselves).
@@ -31,11 +31,11 @@ On WSL do the same steps; where a step differs, it says so. The kit's shim is `~
 | Id | Do | Look at | Expected |
 |---|---|---|---|
 | T1 | In Orca, create a worktree of the project with an agent (the composer: new worktree, pick Claude, any prompt) | the tabs that appear in the first minute; the kickoff log (`<git dir>/orca-roles-kickoff.log`) | Only the Planner's tab stays, plus your shell; the composer's extra agent tab is closed (note its title, and what the log says about it); the Planner asks which mode to use, naming programmer, pr-reviewer and academic-research |
-| T2 | From a terminal of ANOTHER worktree, `cd` into the new worktree and run `roles --mode programmer` | its output and the tabs | "This terminal belongs to worktree ...; using the worktree of the current folder (...)"; Planner, Dev, Tester and Auditor open; the Planner gets its role message |
+| T2 | From a terminal of ANOTHER worktree, `cd` into the new worktree and run `roles --mode programmer` | its output and the tabs | "This terminal belongs to worktree ...; using the worktree of the current folder (...)"; Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer open; the Planner gets its role message |
 | T3 | `cat <git dir>/orca-roles.pty` and `orca terminal show --terminal <each handle> --json` | the ptyIds | Identical, byte for byte (on WSL they contain `\\wsl.localhost\...`) |
 | T4 | `ps -o ni=,pid= -p <Tester's claude pid>` and its environment (`ps eww -p <pid>` on macOS, `/proc/<pid>/environ` on WSL) | nice and `OMP_NUM_THREADS` | `10` and `2` |
 | T5 | Close the Dev's tab with its X, then `roles` from a terminal of the worktree | the kickoff log; the Planner's tab | A new Dev tab; "Told the Planner the new handles."; the Planner sees a "Role handles changed" message |
-| T6 | In the Planner's tab type `!~/.orca-roles/bin/launch.sh --mode pr-reviewer` and Enter | the tabs while it runs; the Planner's screen; how long it takes | Dev and Tester close quickly, the Auditor reopens for pr-reviewer, the Planner's conversation is cleared (Esc, `/clear`) and it gets "the mode was switched from programmer to pr-reviewer"; no tab left over; `orca-roles.switch-from` gone afterwards |
+| T6 | In the Planner's tab type `!~/.orca-roles/bin/launch.sh --mode pr-reviewer` and Enter | the tabs while it runs; the Planner's screen; how long it takes | Dev and Tester close quickly, the Plan-Reviewer and Code-Reviewer close and the Verifier opens for pr-reviewer, the Planner's conversation is cleared (Esc, `/clear`) and it gets "the mode was switched from programmer to pr-reviewer"; no tab left over; `orca-roles.switch-from` gone afterwards |
 | T7 | The same back to `--mode programmer` | the same | The programmer team again, no leftover tab |
 
 ## 3. A real restart (about 10 minutes)

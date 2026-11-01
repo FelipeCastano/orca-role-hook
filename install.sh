@@ -134,12 +134,14 @@ if [ ! -f "$CONF" ]; then
 else
   # Adds new roles or keys from the installed version without overwriting what you already have (or the order of your roles)
   TMPC="$(mktemp)"
+  HAD_AUDITOR=0; jq -e '(.roles? // {}) | has("auditor")' "$CONF" >/dev/null 2>&1 && HAD_AUDITOR=1
   upgrade_config "$KIT/config.default.json" "$CONF" "$KIT" > "$TMPC"
   mv "$TMPC" "$CONF"
+  [ "$HAD_AUDITOR" = 0 ] || printf '%s\n' "orca-roles was updated: the team's Auditor role no longer exists. In programmer mode the Plan-Reviewer (plan audits) and the Code-Reviewer (set audits) do its work, and in pr-reviewer mode the Verifier does. Its entry roles.auditor was removed from your config.json, and values you had changed there were not carried over: set them on the new roles if you want them. Teams open in Orca still run the old version: close all of a team's tabs and run roles in its worktree to restart it."
 fi
 jq empty "$CONF" || { echo "ERROR: $CONF is not valid JSON" >&2; exit 1; }
 
-# Aliases 'roles', 'new-role', 'roles-yaml', 'team-status' and 'coordinator' (once)
+# Aliases 'roles', 'new-role', 'roles-yaml', 'team-status', 'coordinator' and 'auditor' (once)
 # zsh → ~/.zshrc; bash → ~/.bashrc (on macOS, ~/.bash_profile, which is what Terminal reads); other shells → ~/.profile
 case "$(basename "${SHELL:-}")" in
   zsh) RC="$HOME/.zshrc";;
@@ -151,6 +153,7 @@ grep -q 'alias new-role=' "$RC" 2>/dev/null || echo 'alias new-role="$HOME/.orca
 grep -q 'alias roles-yaml=' "$RC" 2>/dev/null || echo 'alias roles-yaml="$HOME/.orca-roles/bin/orca-yaml.sh"' >> "$RC"
 grep -q 'alias team-status=' "$RC" 2>/dev/null || echo 'alias team-status="$HOME/.orca-roles/bin/team-status.sh"' >> "$RC"
 grep -q 'alias coordinator=' "$RC" 2>/dev/null || echo 'alias coordinator="$HOME/.orca-roles/bin/coordinator.sh"' >> "$RC"
+grep -q 'alias auditor=' "$RC" 2>/dev/null || echo 'alias auditor="$HOME/.orca-roles/bin/auditor.sh"' >> "$RC"
 # In Orca's WSL terminals the CLI is called $ORCA_CLI_COMMAND (e.g. orca-ide): 'orca' points to it there, and does nothing elsewhere
 grep -q 'orca-roles: orca alias' "$RC" 2>/dev/null || echo '[ -n "${ORCA_CLI_COMMAND:-}" ] && ! command -v orca >/dev/null 2>&1 && alias orca="$ORCA_CLI_COMMAND"   # orca-roles: orca alias' >> "$RC"
 
@@ -305,4 +308,4 @@ else
 fi
 echo "To enable or disable roles, edit \"enabled\" in $CONF."
 "$KIT/bin/apply-hooks.sh"
-echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml', 'team-status' and 'coordinator' commands."
+echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml', 'team-status', 'coordinator' and 'auditor' commands."

@@ -97,13 +97,13 @@ print(d if not isinstance(d,(dict,list)) else json.dumps(d))' "$1"; }
 # ---------- throwaway project and worktree ----------
 project_setup() {  # $PROJ: a git repo with a cheap team (.orca-roles.json), the kit as setup script, registered in Orca
   [ -d "$PROJ/.git" ] || { mkdir -p "$PROJ" && git -C "$PROJ" init -q -b main && echo "# orca-roles live checks (throwaway)" > "$PROJ/README.md"; }
-  # every role of the installed configuration is disabled except Planner, Dev, Tester and Auditor (and pr-reviewer's auditor-pr if the
+  # every role of the installed configuration is disabled except Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer (and pr-reviewer's verifier if the
   # configuration has it), which run on the cheap model:
   # the same small team in every mode, whatever roles the user's config.json adds
   jq --arg m "$MODEL" '{settings: {jiraHandoff: false, cleanWorkersAfterStep: false, language: "auto"},
       roles: ((.roles | keys | map({key: ., value: {enabled: false}}) | from_entries)
-              + {planner: {model: $m}, dev: {model: $m, enabled: true}, tester: {model: $m, enabled: true}, auditor: {model: $m, enabled: true}}
-              + (if .roles["auditor-pr"] then {"auditor-pr": {model: $m, enabled: true}} else {} end))}' \
+              + {planner: {model: $m}, dev: {model: $m, enabled: true}, tester: {model: $m, enabled: true}, "plan-reviewer": {model: $m, enabled: true}, "code-reviewer": {model: $m, enabled: true}}
+              + (if .roles["verifier"] then {"verifier": {model: $m, enabled: true}} else {} end))}' \
     "$KIT/config.json" > "$PROJ/.orca-roles.json.new" 2>/dev/null || jq '.' "$KIT/config.default.json" > /dev/null
   if [ -s "$PROJ/.orca-roles.json.new" ] && ! cmp -s "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; then mv "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; else rm -f "$PROJ/.orca-roles.json.new"; fi
   if [ -n "$(git -C "$PROJ" status --porcelain -- README.md .orca-roles.json)" ]; then
