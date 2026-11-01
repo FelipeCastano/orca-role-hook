@@ -11,7 +11,8 @@ Install the checkout you want to check (`./install.sh`), then run the script fro
 
 - works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (Planner, Dev, Tester and Auditor on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
 - asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca); type `skip` at a prompt to skip that check;
-- writes one report, `~/orca-live-checks/report-<script>.md`: one row per check (OK, FAIL, INFO, SKIP) plus the logs of the failures. Send it to the Planner.
+- writes one report, `~/orca-live-checks/report-<script>.md`: one row per check (OK, FAIL, INFO, SKIP) plus the logs of the failures. Send it to the Planner;
+- records how long each check took, and how long it waited for you at a prompt, in `~/orca-live-checks/timings-<script>.tsv` (one line per check run, one `# run` line per run of the script), so a slow check shows without timing it again.
 
 The scripts put the kit's shim (`~/.orca-roles/shim`) first in their PATH themselves when `orca` is not found, so a plain WSL terminal needs no PATH setup.
 

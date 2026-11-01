@@ -2252,6 +2252,7 @@ case "$1" in
   lp) local_path "$2";;
   pr) proj_repo;;
   wc) wt_create nm --x y; echo "rc=$? WT=$WT WTID=$WTID";;
+  rc) live_start tp; tpf() { :; }; run_check T1 tpf; run_check T1 tpf; echo "rc=$?";;
 esac
 EOS
 ylive() { env PATH="$YL/bin:$YU/bin:$PATH" ROOT="$ROOT" LD="$YLP/ld" LH="$YLP/home" FAKE_LOG="$YL/log" FAKE_REPOS="$YL/repos.json" FAKE_WTC="$YL/wtc.json" bash "$YL/probe.sh" "$@" 2>&1; }
@@ -2274,6 +2275,9 @@ rc=1 WT= WTID="
 check "live lib wt_create: passes --repo id:<id>, the name, --setup run and the extra options" "$(grep '^worktree create' "$YL/log")" "worktree create --repo id:r9 --name nm --setup run --json --x y"
 jq -nc --arg p "$(yunc live/wt)" '{result:{worktree:{path:$p,id:"w1"}}}' > "$YL/wtc.json"
 check "live lib wt_create: the UNC worktree path comes back as a Linux path" "$(ylive wc | sed "s#$YUP#Y#g")" "rc=0 WT=Y/live/wt WTID=w1"
+rm -f "$YLP/ld/timings-tp.tsv" "$YLP/ld/state-tp" "$YLP/ld/report-tp.md"; M="$(ylive rc)"
+check "live lib timings: live_start appends one '# run' line and the Timings header bullet, run_check twice appends one '<id> <seconds> <ask seconds> <end>' line" "$M:$(grep -c '^# run	' "$YLP/ld/timings-tp.tsv"):$(grep -c '^- Timings: .*/timings-tp.tsv$' "$YLP/ld/report-tp.md"):$(grep -cE '^T1	[0-9]+	0	[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$' "$YLP/ld/timings-tp.tsv"):$(wc -l < "$YLP/ld/timings-tp.tsv" | tr -d ' ')" "(T1 already done in an earlier run)
+rc=0:1:1:1:2"
 # error class: a project whose orca.yaml path is a directory (fails for any user, root included)
 mkdir "$YA/ro/orca.yaml"; printf '%s\n' "$(jq -c '.result.repos += [{displayName:"ro",path:($d+"/ro"),kind:"git",gitUsername:"SECRET-USER"}]' --arg d "$YA" "$YA/list.json")" > "$YA/list.json"
 yallrun --all; rmdir "$YA/ro/orca.yaml"

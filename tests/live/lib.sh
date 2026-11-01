@@ -12,8 +12,13 @@ MODEL="${ORCA_LIVE_MODEL:-claude-haiku-5-5}"   # every agent of the throwaway te
 mkdir -p "$LIVE_DIR"
 
 # ---------- report ----------
+live_tw() {  # warns once per process that the timings file is unwritable
+  [ -n "${LIVE_TW_DONE:-}" ] && return 0
+  LIVE_TW_DONE=1
+  echo "WARNING: cannot write $TIMINGS; timings are not recorded" >&2
+}
 live_start() {  # live_start <script name>: opens (or continues) the report and the state file
-  NAME="$1"; REPORT="$LIVE_DIR/report-$NAME.md"; STATE="$LIVE_DIR/state-$NAME"
+  NAME="$1"; REPORT="$LIVE_DIR/report-$NAME.md"; STATE="$LIVE_DIR/state-$NAME"; TIMINGS="$LIVE_DIR/timings-$NAME.tsv"
   if [ ! -f "$STATE" ]; then
     {
       echo "# Live checks: $NAME"
@@ -22,12 +27,14 @@ live_start() {  # live_start <script name>: opens (or continues) the report and 
       echo "- Kit checkout: $(git -C "$LIVE_ROOT" rev-parse --short HEAD 2>/dev/null) ($(git -C "$LIVE_ROOT" branch --show-current 2>/dev/null)), $(git -C "$LIVE_ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ') uncommitted files"
       echo "- Orca: $(orca --version 2>/dev/null | head -1)   Claude Code: $(claude --version 2>/dev/null | head -1)"
       echo "- System: $(uname -sr)$(live_is_wsl && echo ' (WSL)')"
+      echo "- Timings: $TIMINGS"
       echo
       echo "| Check | Result | Detail |"
       echo "|---|---|---|"
     } > "$REPORT"
     : > "$STATE"
   fi
+  { printf '# run\tstarted=%s\tkit=%s\tsystem=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git -C "$LIVE_ROOT" rev-parse --short HEAD 2>/dev/null || echo -)" "$(uname -sr)" >> "$TIMINGS"; } 2>/dev/null || live_tw
 }
 row() {  # row <id> <OK|FAIL|INFO|SKIP> <detail>
   local d; d="$(printf '%s' "$3" | tr '\n|' ' /' | cut -c1-600)"
@@ -52,7 +59,9 @@ done_check() { [ "$(st_get "done.$1")" = 1 ]; }   # a check already run in an ea
 mark_done() { st_set "done.$1" 1; }
 ask() {  # ask <text>: a step only the user can do; waits for Enter
   printf '\n>>> %s\n>>> Press Enter when done (or type "skip" to skip this check): ' "$1"
-  local a; read -r a < /dev/tty; [ "$a" != skip ]
+  local a t0=$SECONDS; read -r a < /dev/tty
+  LIVE_ASK_S=$(( ${LIVE_ASK_S:-0} + SECONDS - t0 ))
+  [ "$a" != skip ]
 }
 
 # ---------- environment ----------
@@ -372,7 +381,9 @@ restart_instructions() {
 }
 run_check() {  # run_check <id> <function> [args...]: runs a check once; a later run of the script skips it
   done_check "$1" && { echo "($1 already done in an earlier run)"; return 0; }
+  LIVE_ASK_S=0; local t0=$SECONDS
   "$2" "$1" "${@:3}"; mark_done "$1"
+  { printf '%s\t%s\t%s\t%s\n' "$1" "$((SECONDS - t0))" "$LIVE_ASK_S" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TIMINGS"; } 2>/dev/null || live_tw
 }
 # The common sequence of mac.sh and wsl.sh: everything before the restart, then (on the next run) everything after it.
 live_main() {
