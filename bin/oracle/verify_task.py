@@ -564,6 +564,17 @@ def save_result(res, task, dry_run):
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, 'verify.json'), 'w') as fh:
         json.dump(res, fh, indent=1, ensure_ascii=False)
+    line = dict(
+        task=task, verified_at=res.get('verified_at'), status=res.get('status'),
+        duration_s=res.get('duration_s'), waited_for_load_s=res.get('waited_for_load_s'),
+        commands=[dict(cmd=(c.get('cmd') or '')[:120], seconds=c.get('seconds'), attempts=c.get('attempts'))
+                  for c in res.get('commands') or []])
+    path = os.path.join(root, 'timings.jsonl')
+    try:
+        with open(path, 'a') as fh:
+            fh.write(json.dumps(line, ensure_ascii=False) + '\n')
+    except OSError as e:
+        print('verify_task.py: cannot append to %s: %s' % (path, e), file=sys.stderr)
 
 
 def main(argv):

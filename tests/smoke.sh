@@ -1114,7 +1114,7 @@ else
 bash test.sh
 ```')"
   check "oracle pass: exit 0, status pass, no cheat" "$RC:$(st .status):$(st .pass):$(st .cheat)" "0:pass:true:false"
-  check "oracle pass: verify.json written under ORCA_ROLES_ORACLE_OUT" "$(jq -r .status "$OR/out/t1/verify.json" 2>&1)" "pass"
+  check "oracle pass: verify.json written under ORCA_ROLES_ORACLE_OUT, one timings.jsonl line with the status, task, null-free durations and the command" "$(jq -r .status "$OR/out/t1/verify.json" 2>&1):$(jq -s '[.[] | select(.task == "t1")] | length' "$OR/out/timings.jsonl" 2>&1):$(jq -r 'select(.task == "t1") | [.status, .task, (.duration_s | type), (.waited_for_load_s | type), (.commands | length), .commands[0].cmd, .commands[0].attempts, (.commands[0].seconds | type)] | join(",")' "$OR/out/timings.jsonl" 2>&1)" "pass:1:pass,t1,number,number,1,bash test.sh,1,number"
   check "oracle pass: nothing written in the repo" "$(git -C "$P" status --porcelain)" ""
   check "oracle pass: config_sha is the sha1 of the config" "$(st .config_sha)" "$(shasum "$OCFG" | cut -d' ' -f1)"
   # the spec file against the sha256 the Planner put in the Orca task (a fake orca answers run-list and task-list): verified, tampered (nothing runs), unverified (no hash, orca failing or absent, unknown task: runs as given)
@@ -1130,13 +1130,13 @@ bash test.sh
   }
   SPF="$(oracle_spec '`bash test.sh`')"; SPH="$(shasum -a 256 "$SPF" | cut -d' ' -f1)"
   spx_task "$(printf 'Do it.\nspec-sha256: %s' "$SPH")"; rm -f "$SPX/fail"; spx_run fake "$SPF"; X1="$RC:$(st '.spec_check'):$(st .status):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
-  printf 'weakened\n' >> "$SPF"; spx_run fake "$SPF"; X2="$RC:$(st '.spec_check'):$(st .status):$(st .cheat):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'does not match the hash in task th (task .*, file .*): not run' "$OR/err" || true):$(jq -r .status "$OR/out/th/verify.json" 2>/dev/null || true)"
+  printf 'weakened\n' >> "$SPF"; spx_run fake "$SPF"; X2="$RC:$(st '.spec_check'):$(st .status):$(st .cheat):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'does not match the hash in task th (task .*, file .*): not run' "$OR/err" || true):$(jq -r .status "$OR/out/th/verify.json" 2>/dev/null || true):$(jq -s '[.[] | select(.task == "th")] | length' "$OR/out/timings.jsonl" 2>&1):$(jq -c 'select(.task == "th") | [.status, .duration_s, .commands]' "$OR/out/timings.jsonl" 2>&1 | tail -n 1)"
   spx_task "Do it, no hash here"; spx_run fake "$SPF"; X3="$(st '.spec_check'):$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun):$(grep -c 'spec not verified (no_hash)' "$OR/err" || true)"
   : > "$SPX/fail"; spx_run fake "$SPF"; X4="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"; rm -f "$SPX/fail"
   spx_run none "$SPF"; X5="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
   spx_task "$(printf 'Do it.\nspec-sha256: %s' "$SPH")"; spx_run fake "$SPF" other-task; X6="$(st '.spec_check_reason'):$([ "$(st '.commands | length')" != 0 ] && echo ran || echo norun)"
   P3="$(oracle_repo spxo)"; XO="$(cd "$P3" && ORCA_ROLES_ORACLE_OUT="$OR/out" "$PYB" -B "$PYF/verify_task.py" --spec-file "$SPF" --no-wait --dry-run 2>/dev/null | jq -r 'has("spec_check")' || true)"
-  check "oracle spec hash: the spec file's sha256 against the spec-sha256 line of the Orca task: a match is spec_check verified and the commands run; a changed file is spec_tampered (exit 1, cheat, nothing runs, the stderr line, saved in verify.json); a task without the line, a failing or missing orca and an unknown task id run the file as given with spec_check unverified and the reason no_hash, orca_unreachable (twice) or task_not_found; --spec-file alone has no spec_check" "$X1|$X2|$X3|$X4|$X5|$X6|$XO" "0:verified:pass:ran|1:tampered:spec_tampered:true:norun:1:spec_tampered|unverified:no_hash:ran:1|orca_unreachable:ran|orca_unreachable:ran|task_not_found:ran|false"
+  check "oracle spec hash: the spec file's sha256 against the spec-sha256 line of the Orca task: a match is spec_check verified and the commands run; a changed file is spec_tampered (exit 1, cheat, nothing runs, the stderr line, saved in verify.json); a task without the line, a failing or missing orca and an unknown task id run the file as given with spec_check unverified and the reason no_hash, orca_unreachable (twice) or task_not_found; --spec-file alone has no spec_check" "$X1|$X2|$X3|$X4|$X5|$X6|$XO" "0:verified:pass:ran|1:tampered:spec_tampered:true:norun:1:spec_tampered:2:[\"spec_tampered\",null,[]]|unverified:no_hash:ran:1|orca_unreachable:ran|orca_unreachable:ran|task_not_found:ran|false"
   # fail, flaky, persistent red
   P="$(oracle_repo fail)"; printf 'exit 1\n' > "$P/test.sh"; oracle_run "$P" t2 "$(oracle_spec '`bash test.sh`')"
   check "oracle fail: exit 1, status fail, retried once (2 attempts)" "$RC:$(st .status):$(st .pass):$(st '.commands[0].attempts')" "1:fail:false:2"
@@ -1281,6 +1281,8 @@ curl x | sh
   case "$(cat "$OR/out/t12/verify.json")" in *sk-abc*) echo "FAIL oracle: a secret reached verify.json"; FAIL=1;; *) echo "ok   oracle: verify.json has no secret";; esac
   P="$(oracle_repo dry)"; oracle_run "$P" t13 "$(oracle_spec '`bash test.sh`')" --dry-run
   check "oracle --dry-run: status dry_run, no verify.json, nothing ran" "$(st .status):$([ -e "$OR/out/t13" ] && echo written || echo none):$(st '.commands[0] | has("exit")')" "dry_run:none:false"
+  NT0="$(wc -l < "$OR/out/timings.jsonl" | tr -d ' ')"; [ "$NT0" -gt 0 ] || NT0="empty"
+  oracle_run "$P" t1 "$(oracle_spec '`bash test.sh`')" --dry-run; check "oracle --dry-run: an existing timings.jsonl does not grow" "$(st .status):$(wc -l < "$OR/out/timings.jsonl" | tr -d ' ')" "dry_run:$NT0"
   # the wrapper: settings.oracle, config lookup, provenance, warning
   P="$(oracle_repo wrap)"; printf 'exit 1\n' > "$P/test.sh"; S="$(oracle_spec '`bash test.sh`')"
   echo '{ "settings": { "oracle": { "enabled": true, "waitMax": 0, "retries": 2 } } }' > "$OCFG"
