@@ -403,6 +403,20 @@ team_tabs_exist() {
   for line in $(cat "$STATE" 2>/dev/null); do tab_exists "${line%%=*}" && return 0; done
   return 1
 }
+# A team opened by an earlier version of the kit keeps running that version in its open tabs: say so, so the user restarts it.
+# Each role's last provenance line records the .installed stamp of the kit that started it (agent.sh record_provenance).
+# Costs up to ~10 s per saved role whose tab is gone (role_alive retries); runs only when Orca answered (LISTOK).
+KI_NOW="$(head -1 "$KIT/.installed" 2>/dev/null)"
+if [ "$LISTOK" = 1 ] && [ -n "$KI_NOW" ] && [ -s "$STATE" ] && [ -s "$GITDIR/orca-roles.provenance.jsonl" ]; then
+  OLD_TABS=""; OLD_KI=""
+  while IFS=$'\t' read -r rid rki; do
+    v="$(var_of "$rid")"; grep -q "^$v=" "$STATE" || continue
+    tab_exists "$v" || continue
+    OLD_TABS="$OLD_TABS${OLD_TABS:+, }$rid"; [ -n "$OLD_KI" ] || OLD_KI="$rki"
+  done < <(jq -rs --arg k "$KI_NOW" 'map(select(type == "object" and (.role | type) == "string")) | group_by(.role) | map(last)
+      | map(select(.installed != null and .installed != $k)) | .[] | "\(.role)\t\(.installed)"' "$GITDIR/orca-roles.provenance.jsonl" 2>/dev/null)
+  [ -z "$OLD_TABS" ] || echo "Note: orca-roles was updated after this team was opened ($OLD_KI → $KI_NOW), and these of its tabs still run the old version: $OLD_TABS. To restart the team with the new version, close all its tabs in Orca and run roles again."
+fi
 drop_role_lines() { local f; for f in "$STATE" "$PTY" "$KICKED" "$TABS"; do [ -f "$f" ] && { grep -v "^$1=" "$f" > "$f.tmp"; mv "$f.tmp" "$f"; }; done; return 0; }
 # A team opened by a kit that had no local coordinator (PLANNER= and no LOCAL_COORDINATOR= in the state) cannot be reused by this one: while
 # any of its tabs exists, the user closes them; with none, its state files go and the launch is a fresh one (it keeps the worktree's saved mode).

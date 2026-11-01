@@ -9,7 +9,7 @@ To follow the same checks by hand instead, step by step, use [manual-checks.md](
 
 Install the checkout you want to check (`./install.sh`), then run the script from that checkout (`cd` into it) in any terminal, with Orca open. Each script:
 
-- works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (Planner, Dev, Tester and Auditor on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
+- works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
 - asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca); type `skip` at a prompt to skip that check;
 - writes one report, `~/orca-live-checks/report-<script>.md`: one row per check (OK, FAIL, INFO, SKIP) plus the logs of the failures. Send it to the Planner.
 
@@ -70,7 +70,7 @@ These depend on how a live model applies the prompts, or on services the scripts
 
 - The Planner re-reads the history before each step and waits for the user's yes before every commit and push (#22); it shows the text and waits before writing to Jira or GitHub (#8).
 - Workers follow the report rules (#32) and stop after their `worker_done` (this PR); briefs name only the affected tests (#40).
-- The Planner reads a project's conventions and the Auditor checks plans against a plan gate on a real repo (#41); the plan passes and "Rulings I made" (#42).
+- The Planner reads a project's conventions and the Plan-Reviewer checks plans against a plan gate on a real repo (#41); the plan passes and "Rulings I made" (#42).
 - academic-research workers on a real experiment, a data download or an HPC submission (#28, #37).
 - Codex workers never open `request_user_input` (#38: they rely on the prompt rule).
 - `glab` and JQL against a real GitLab and Jira (#22).

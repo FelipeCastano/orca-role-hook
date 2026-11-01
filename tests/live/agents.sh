@@ -16,7 +16,7 @@ agents_project() {  # a throwaway project whose team runs on the other agents: P
     jq -n --argjson cx "$HAS_CODEX" --argjson oc "$HAS_OC" '
       {settings: {jiraHandoff: false, cleanWorkersAfterStep: false, enableAskModeOnStart: false, superpowers: true},
        mcpServers: {"live-echo": {type: "stdio", command: "cat", args: []}},
-       roles: ({researcher: {enabled: false}, auditor: {enabled: false}, "e2e-tester": {enabled: false}, deployer: {enabled: false}}
+       roles: ({researcher: {enabled: false}, "plan-reviewer": {enabled: false}, "code-reviewer": {enabled: false}, "e2e-tester": {enabled: false}, deployer: {enabled: false}}
          + (if $cx == 1 then {planner: {agent: "codex", model: ""}, dev: {agent: "codex", model: "", mcp: ["live-echo"]}}
             else {dev: {enabled: false}} end)
          + (if $oc == 1 then {tester: {agent: "custom", command: "opencode", clearCommand: "/new", model: ""}}
