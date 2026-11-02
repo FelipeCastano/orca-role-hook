@@ -97,13 +97,13 @@ print(d if not isinstance(d,(dict,list)) else json.dumps(d))' "$1"; }
 # ---------- throwaway project and worktree ----------
 project_setup() {  # $PROJ: a git repo with a cheap team (.orca-roles.json), the kit as setup script, registered in Orca
   [ -d "$PROJ/.git" ] || { mkdir -p "$PROJ" && git -C "$PROJ" init -q -b main && echo "# orca-roles live checks (throwaway)" > "$PROJ/README.md"; }
-  # every role of the installed configuration is disabled except Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer (and pr-reviewer's verifier if the
-  # configuration has it), which run on the cheap model:
+  # every role of the installed configuration is disabled except the local coordinator, Planner, Dev, Tester, Plan-Reviewer, Code-Reviewer and the
+  # Researcher (and pr-reviewer's verifier if the configuration has it); all but the Researcher run on the cheap model:
   # the same small team in every mode, whatever roles the user's config.json adds
   jq --arg m "$MODEL" '{settings: {jiraHandoff: false, cleanWorkersAfterStep: false, language: "auto"},
       roles: ((.roles | keys | map({key: ., value: {enabled: false}}) | from_entries)
-              + {planner: {model: $m}, dev: {model: $m, enabled: true}, tester: {model: $m, enabled: true}, "plan-reviewer": {model: $m, enabled: true}, "code-reviewer": {model: $m, enabled: true}}
-              + (if .roles["verifier"] then {"verifier": {model: $m, enabled: true}} else {} end))}' \
+              + {"local-coordinator": {model: $m, enabled: true}, planner: {model: $m, open: "start"}, dev: {model: $m, enabled: true, open: "start"}, tester: {model: $m, enabled: true, open: "start"}, "plan-reviewer": {model: $m, enabled: true, open: "start"}, "code-reviewer": {model: $m, enabled: true, open: "start"}, researcher: {enabled: true, open: "first-use"}}
+              + (if .roles["verifier"] then {"verifier": {model: $m, enabled: true, open: "start"}} else {} end))}' \
     "$KIT/config.json" > "$PROJ/.orca-roles.json.new" 2>/dev/null || jq '.' "$KIT/config.default.json" > /dev/null
   if [ -s "$PROJ/.orca-roles.json.new" ] && ! cmp -s "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; then mv "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; else rm -f "$PROJ/.orca-roles.json.new"; fi
   if [ -n "$(git -C "$PROJ" status --porcelain -- README.md .orca-roles.json)" ]; then
@@ -112,9 +112,9 @@ project_setup() {  # $PROJ: a git repo with a cheap team (.orca-roles.json), the
   (cd "$PROJ" && "$KIT/bin/orca-yaml.sh" >/dev/null 2>&1) || true    # setup script without --mode: a new worktree asks the mode
   orca repo add --path "$PROJ" --json >/dev/null 2>&1 || true
 }
-team_for() {  # team_for <mode>: the state variables of the team the kit opens in the worktree in that mode, sorted, space-ended
+team_for() {  # team_for <mode>: the state variables of the team the kit opens at start in the worktree in that mode, sorted, space-ended
   local t; t="$(mktemp)"
-  bash -c '. "$1/bin/lib.sh"; merged_config "$2" | jq --arg m "$3" ".settings.mode = \$m" > "$4"; launchable_roles "$4" 2>/dev/null | tr "a-z-" "A-Z_" | sort | tr "\n" " "' _ "$KIT" "$WT" "$1" "$t"
+  bash -c '. "$1/bin/lib.sh"; merged_config "$2" | jq --arg m "$3" ".settings.mode = \$m" > "$4"; for r in $(launchable_roles "$4" 2>/dev/null); do [ "$(open_of "$4" "$r")" = start ] && echo "$r"; done | tr "a-z-" "A-Z_" | sort | tr "\n" " "' _ "$KIT" "$WT" "$1" "$t"
   rm -f "$t"
 }
 launch_wait() {  # launch_wait <launch log lines before>: waits (up to 180 s) for a launch to end and its kickoff with it
@@ -282,18 +282,18 @@ c_e2e() {  # the pinned E2E stack: install, a real login (cookie + localStorage)
   [ $rc = 0 ] && ok "$id.flow" "e2e-run.sh ran a flow with the saved session against a real app" || { fail "$id.flow" "rc=$rc"; attach "$id e2e-run" "$out"; }
   kill "$srv" 2>/dev/null
 }
-c_fresh_worktree() {  # a new worktree created by Orca with an agent: the setup script runs the kit, only the Planner opens and asks the mode; the composer's extra session (#1, #45)
+c_fresh_worktree() {  # a new worktree created by Orca with an agent: the setup script runs the kit, only the local coordinator opens and asks the mode; the composer's extra session (#1, #45)
   local id=$1 terms
   wt_create "live-$(date +%H%M%S)" --agent claude --model "$MODEL" --prompt "Reply only: ok" || { fail "$id" "orca worktree create failed"; return 1; }
   for _ in $(seq 1 90); do [ -s "$GD/orca-roles-kickoff.log" ] && [ -z "$(ls -A "$GD/orca-roles.kickoff.d" 2>/dev/null)" ] && break; sleep 2; done
-  # judged from the first launch's block of the log: the Planner (or you) may choose the mode seconds later
+  # judged from the first launch's block of the log: the local coordinator (or you) may choose the mode seconds later
   local first; first="$(awk '/^== /{n++} n==1' "$GD/orca-roles-launch.log")"
-  printf '%s' "$first" | grep -q 'No mode chosen yet: only the Planner is opened' && ok "$id.ask" "the first launch only opened the Planner and left the mode pending" || fail "$id.ask" "the first launch did not ask the mode"
-  check "$id.only-planner" "the first launch opened only the Planner" "$(printf '%s\n' "$first" | grep -oE '^[A-Z_]+=term_' | cut -d= -f1 | tr '\n' ' ')" "PLANNER "
-  wait_screen "$(env_of PLANNER)" 'pr-reviewer' 120 && ok "$id.asks" "the Planner asks which mode (its screen names the modes)" || fail "$id.asks" "the Planner's screen does not name the modes after 120 s"
+  printf '%s' "$first" | grep -q 'No mode chosen yet: only the local coordinator is opened' && ok "$id.ask" "the first launch only opened the local coordinator and left the mode pending" || fail "$id.ask" "the first launch did not ask the mode"
+  check "$id.only-lc" "the first launch opened only the local coordinator" "$(printf '%s\n' "$first" | grep -oE '^[A-Z_]+=term_' | cut -d= -f1 | tr '\n' ' ')" "LOCAL_COORDINATOR "
+  wait_screen "$(env_of LOCAL_COORDINATOR)" 'pr-reviewer' 120 && ok "$id.asks" "the local coordinator asks which mode (its screen names the modes)" || fail "$id.asks" "the local coordinator's screen does not name the modes after 120 s"
   terms="$(wt_terms)"
   info "$id.composer" "kickoff: $(grep -iE 'composer|Closed' "$GD/orca-roles-kickoff.log" | tr '\n' ' ' | cut -c1-300); seen titles: $(jq -c '[.[]?.title]' "$GD/orca-roles.composer-seen.json" 2>/dev/null)"
-  check "$id.composer-closed" "no tab other than the Planner's runs an agent" "$(printf '%s\n' "$terms" | awk -F'\t' '$4 != ""' | grep -vc "$(env_of PLANNER)" | tr -d ' ')" 0
+  check "$id.composer-closed" "no tab other than the local coordinator's runs an agent" "$(printf '%s\n' "$terms" | awk -F'\t' '$4 != ""' | grep -vc "$(env_of LOCAL_COORDINATOR)" | tr -d ' ')" 0
   attach "$id terminals after the fresh start" "$terms"
 }
 c_choose_mode() {  # the mode chosen from another worktree's terminal: the kit takes the folder's worktree (n13 B5) and opens the team (#45)
@@ -318,26 +318,32 @@ c_tester_nice() {  # the Tester runs at nice 10 with the thread caps (#8)
   check "$id.nice" "the Tester's agent runs at nice 10" "$(ps -o ni= -p "$pid" | tr -d ' ')" 10
   check "$id.threads" "the Tester's environment caps threads (OMP_NUM_THREADS=2)" "$(env_of_pid "$pid" | grep -x 'OMP_NUM_THREADS=2')" OMP_NUM_THREADS=2
 }
-c_handles_changed() {  # a worker reopened while the Planner keeps its tab: kickoff's background shell tells the Planner (#29)
+c_handles_changed() {  # a worker reopened while the local coordinator keeps its tab: kickoff's background shell tells the local coordinator (#29)
   local id=$1 dev
   dev="$(env_of DEV)"; orca terminal close --terminal "$dev" --tab --json >/dev/null 2>&1; sleep 2
   roles_run
-  grep -q 'Told the Planner the new handles' "$GD/orca-roles-kickoff.log" && ok "$id" "kickoff sent the Planner 'Role handles changed' (Told the Planner the new handles.)" || fail "$id" "the kickoff log has no 'Told the Planner the new handles'"
+  grep -q 'Told the local coordinator the new handles' "$GD/orca-roles-kickoff.log" && ok "$id" "kickoff sent the local coordinator 'Role handles changed' (Told the local coordinator the new handles.)" || fail "$id" "the kickoff log has no 'Told the local coordinator the new handles'"
   attach "$id kickoff log" "$GD/orca-roles-kickoff.log"
 }
-c_switch_from_planner() {  # a mode switch typed in the Planner's own tab: workers closed quickly, Esc + clear while kickoff runs, role message (#45)
-  local id=$1 to=$2 pl t0 t1 n expect
-  pl="$(env_of PLANNER)"; expect="$(team_for "$to")"; n="$(wc -l < "$GD/orca-roles-launch.log" | tr -d ' ')"
-  orca terminal wait --terminal "$pl" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
+c_switch_from_lc() {  # a mode switch typed in the local coordinator's own tab: workers closed quickly, Esc + clear while kickoff runs, role message (#45)
+  local id=$1 to=$2 lc t0 t1 n expect
+  lc="$(env_of LOCAL_COORDINATOR)"; expect="$(team_for "$to")"; n="$(wc -l < "$GD/orca-roles-launch.log" | tr -d ' ')"
+  orca terminal wait --terminal "$lc" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
   t0=$SECONDS
-  orca terminal send --terminal "$pl" --text '!' --json >/dev/null 2>&1; sleep 1
-  orca terminal send --terminal "$pl" --text "$KIT/bin/launch.sh --mode $to" --enter --json >/dev/null 2>&1
+  orca terminal send --terminal "$lc" --text '!' --json >/dev/null 2>&1; sleep 1
+  orca terminal send --terminal "$lc" --text "$KIT/bin/launch.sh --mode $to" --enter --json >/dev/null 2>&1
   launch_wait "$n"; t1=$SECONDS
   attach "$id launch log" "$(tail -n +"$((n + 1))" "$GD/orca-roles-launch.log")"
   check "$id.team" "after switching to $to the team is" "$(cut -d= -f1 "$GD/orca-roles.env" | sort | tr '\n' ' ')" "$expect"
   check "$id.file" "the switch-from file is gone" "$([ -e "$GD/orca-roles.switch-from" ] && echo present || echo gone)" gone
-  grep -q 'cleared' "$GD/orca-roles-kickoff.log" && ok "$id.clear" "the Planner's conversation was cleared ($(grep -o 'cleared ([^)]*)' "$GD/orca-roles-kickoff.log" | head -1))" || fail "$id.clear" "no clear in the kickoff log"
-  wait_screen "$pl" "switched from" 90 && ok "$id.msg" "the Planner got the new mode's role message" || fail "$id.msg" "no 'switched from' on the Planner's screen"
+  grep -q 'cleared' "$GD/orca-roles-kickoff.log" && ok "$id.clear" "the local coordinator's conversation was cleared ($(grep -o 'cleared ([^)]*)' "$GD/orca-roles-kickoff.log" | head -1))" || fail "$id.clear" "no clear in the kickoff log"
+  local k=0 got=""
+  while [ "$k" -lt 60 ]; do
+    awk -v h="$lc" '/was cleared/{c=NR} /^Prompt sent to /{if($NF==h)p=NR} END{exit !(c && p>c)}' "$GD/orca-roles-kickoff.log" 2>/dev/null && { got=1; break; }
+    sleep 1; k=$((k + 1))
+  done
+  if [ -n "$got" ]; then ok "$id.msg" "the local coordinator was sent the new mode's role message after the clear (kickoff log)"
+  else fail "$id.msg" "no 'Prompt sent to $lc' after the clear in the kickoff log"; attach "$id kickoff log" "$(tail -n 40 "$GD/orca-roles-kickoff.log")"; fi
   local nt; nt="$(wt_terms | awk -F'\t' '$3 ~ /\(claude\)$/ || $4 != ""' | wc -l | tr -d ' ')"
   check "$id.tabs" "role tabs open in the worktree (one per role, no leftovers)" "$nt" "$(grep -c . "$GD/orca-roles.env")"
   [ "$nt" = "$(grep -c . "$GD/orca-roles.env")" ] || attach "$id terminals of the worktree (handle, ptyId, title, agent)" "$(wt_terms)"
@@ -409,8 +415,8 @@ live_main() {
     run_check T3 c_pty_file
     run_check T4 c_tester_nice
     run_check T5 c_handles_changed
-    run_check T6 c_switch_from_planner pr-reviewer
-    run_check T7 c_switch_from_planner programmer
+    run_check T6 c_switch_from_lc pr-reviewer
+    run_check T7 c_switch_from_lc programmer
     "${EXTRA_TEAM:-:}"
     c_restart_prepare; st_set phase restarted
     echo; restart_instructions
