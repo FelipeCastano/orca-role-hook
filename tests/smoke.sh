@@ -147,7 +147,7 @@ if [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ]; then
 fi
 export SMOKE_TIMING_LOG=off   # a smoke.sh started by a check logs nothing
 if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
-unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET SMOKE_MAX_LOAD SMOKE_LOAD_FILE SMOKE_NCPU   # the suite gives the same result from any terminal; a test that needs one sets it itself
+unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET SMOKE_MAX_LOAD SMOKE_LOAD_FILE SMOKE_NCPU SMOKE_SLOW_CHECK   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
 export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
 export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and poll waits, and the stop tick of bounded(), shortened; a check that needs the real value sets it itself
