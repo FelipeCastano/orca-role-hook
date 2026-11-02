@@ -1440,6 +1440,18 @@ def decoys(wt):
 case('5001 ignored decoys do not hide a conftest hidden by info/exclude', True, mk({'.gitignore': 'node_modules/\n', 'a.py': '1'}, decoys, []))
 def citscript(wt): w(wt, 'package.json', pkg({'test': 'node evil.js'}))
 case('npm cit with a changed test script', True, mk({'package.json': pkg({'test': 'jest'}), 'x.js': '1'}, citscript, ['npm cit']))
+def addpost(t):
+    return lambda wt: w(wt, 'package.json', pkg({'test': t, 'postinstall': 'node patch.js'}))
+def inst(t): return {'package.json': pkg({'test': t}), 'a.py': '1'}
+for t in ['npm ci && jest', 'yarn && jest', 'CI=1 pnpm install && jest', 'npm --silent ci', 'npm --loglevel silent ci', 'npm --prefix . ci', 'pnpm -C . install', 'yarn --cwd . install']:
+    case('postinstall behind a package script: ' + t, True, mk(inst(t), addpost(t), ['npm test']))
+case('two levels: test -> setup -> npm ci + postinstall', True, mk({'package.json': pkg({'test': 'npm run setup', 'setup': 'npm ci'}), 'a.py': '1'}, lambda wt: w(wt, 'package.json', pkg({'test': 'npm run setup', 'setup': 'npm ci', 'postinstall': 'node patch.js'})), ['npm test']))
+case('npm --silent test, test changed', True, mk({'package.json': pkg({'test': 'jest'}), 'a.py': '1'}, lambda wt: w(wt, 'package.json', pkg({'test': 'node evil.js'})), ['npm --silent test']))
+case('npm run --silent test, test changed', True, mk({'package.json': pkg({'test': 'jest'}), 'a.py': '1'}, lambda wt: w(wt, 'package.json', pkg({'test': 'node evil.js'})), ['npm run --silent test']))
+for t in ['npm ci && jest', 'npm --silent ci']:
+    case('install in a script, only a.py changed: ' + t, False, mk(inst(t), lambda wt: w(wt, 'a.py', '2'), ['npm test']))
+case('echo npm ci is not an install, plus postinstall', False, mk(inst('echo npm ci && jest'), addpost('echo npm ci && jest'), ['npm test']))
+case('npm --silent run lint, only test changed', False, mk({'package.json': pkg({'test': 'jest', 'lint': 'x'}), 'a.py': '1'}, lambda wt: w(wt, 'package.json', pkg({'test': 'node evil.js', 'lint': 'x'})), ['npm --silent run lint']))
 case("sh -c 'echo hi'", False, mk({'a.py': '1', 'ci.sh': 'a'}, lambda wt: w(wt, 'ci.sh', 'changed'), ["sh -c 'echo hi'"]))
 case('plain source change', False, mk({'a.py': '1', 'package.json': pkg({'test': 'jest'})}, lambda wt: w(wt, 'a.py', '2'), ['npm test']))
 case('unicode/space path test file modified normally', False, mk({'tests/é x.py': 'a', 'a.py': '1'}, lambda wt: w(wt, 'a.py', '2'), []))
@@ -1449,7 +1461,7 @@ case('conftest hidden by the global excludes file', True, mk({'a.py': '1'}, gx, 
 print('%d/%d' % (sum(res), len(res)))
 PYE
 OC="$(cd "$TMP" && python3 -B "$TMP/ocases.py" "$ROOT/bin/oracle" 2>&1 | tail -5 | tr '\n' '|')"
-check "oracle integrity: install commands follow the lifecycle hooks (npm ci/it/i, pnpm install, yarn, CI=1 npm ci: a new postinstall is a cheat); a changed runner .sh tied to a script or an acceptance command is a cheat however it is run (bash with options, env prefixes, ./x.sh, sh -c, npx cross-env, after a pipe, sudo -E, a quoted name with spaces; an unbalanced quote counts every changed .sh); a test file turned into a symlink or a new symlink under tests/ is a cheat; a test config hidden by .git/info/exclude, the global excludes file, an untracked tests/.gitignore or a .gitignore changed since the base is a cheat; ignored files that were ignored before (node_modules, dist, .venv, a venv's own .gitignore), sh -c 'echo hi', a plain source change and a non-ASCII test path are not" "$OC" "37/37|"
+check "oracle integrity: install commands follow the lifecycle hooks (npm ci/it/i, pnpm install, yarn, CI=1 npm ci: a new postinstall is a cheat); a changed runner .sh tied to a script or an acceptance command is a cheat however it is run (bash with options, env prefixes, ./x.sh, sh -c, npx cross-env, after a pipe, sudo -E, a quoted name with spaces; an unbalanced quote counts every changed .sh); a test file turned into a symlink or a new symlink under tests/ is a cheat; a test config hidden by .git/info/exclude, the global excludes file, an untracked tests/.gitignore or a .gitignore changed since the base is a cheat; ignored files that were ignored before (node_modules, dist, .venv, a venv's own .gitignore), sh -c 'echo hi', a plain source change and a non-ASCII test path are not; an install command inside a reached package script (npm ci && jest) follows the hooks; options before the subcommand or script name (npm --silent ci, npm run --silent test) are skipped; echo npm ci is not followed" "$OC" "52/52|"
 PATH="${PATH#"$OR/nobin:"}"   # the orca of this section goes out of the PATH
 }
 

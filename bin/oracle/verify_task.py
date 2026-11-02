@@ -93,6 +93,17 @@ PNPM_INSTALL = {'install', 'i', 'add', 'rebuild', 'rb'}
 WRAPPERS = {'npx', 'cross-env', 'env', 'exec', 'time', 'nice', 'nohup', 'command', 'sudo'}
 SHELLS = {'bash', 'sh', 'zsh', 'dash'}
 ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+GLOBAL_VALUE_OPTS = {'npm': {'--prefix', '--workspace', '-w', '--userconfig', '--cache', '--loglevel', '--registry'},
+                     'pnpm': {'-C', '--dir', '--filter', '-F', '--loglevel', '--registry'},
+                     'yarn': {'--cwd', '--registry', '--cache-folder', '--modules-folder'}}
+
+
+def skip_opts(tool, words):
+    """words without its leading options; an option of GLOBAL_VALUE_OPTS written without '=' also drops the word after it."""
+    i = 0
+    while i < len(words) and words[i].startswith('-'):
+        i += 2 if words[i] in GLOBAL_VALUE_OPTS.get(tool, ()) else 1
+    return words[i:]
 
 
 def skip_prefix(tokens):
@@ -117,27 +128,29 @@ def script_names(tokens):
     if not tokens:
         return []
     tool = tokens[0]
-    if tool == 'yarn' and all(t.startswith('-') for t in tokens[1:]):
+    rest = skip_opts(tool, tokens[1:])
+    if tool == 'yarn' and not rest:
         return list(INSTALL_HOOKS)
-    if len(tokens) < 2:
+    if not rest:
         return []
-    a1 = tokens[1]
+    a1 = rest[0]
     if tool == 'npm':
         if a1 in ('test', 't'):
             return ['test']
-        if a1 in ('run', 'run-script') and len(tokens) > 2:
-            return [tokens[2]]
+        if a1 in ('run', 'run-script'):
+            name = skip_opts(tool, rest[1:])
+            return name[:1]
         if a1 in NPM_INSTALL:
             return list(INSTALL_HOOKS)
         if a1 in NPM_INSTALL_TEST:
             return INSTALL_HOOKS + ['test']
     elif tool in ('pnpm', 'yarn'):
         if a1 == 'run':
-            return [tokens[2]] if len(tokens) > 2 else []
+            name = skip_opts(tool, rest[1:])
+            return name[:1]
         if tool == 'pnpm' and a1 in PNPM_INSTALL or tool == 'yarn' and a1 in ('install', 'add'):
             return list(INSTALL_HOOKS)
-        if not a1.startswith('-'):
-            return [a1]
+        return [a1]
     return []
 
 
@@ -213,6 +226,8 @@ def reached_scripts(start, scripts):
             if not isinstance(text, str):
                 continue
             nxt += [m.group(1) for m in SCRIPT_REF.finditer(text)]
+            for seg in segments(text) or []:
+                nxt += script_names(seg)
             if NPM_TEST_REF.search(text):
                 nxt.append('test')
         level = nxt
