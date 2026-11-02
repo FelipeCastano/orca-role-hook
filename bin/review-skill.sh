@@ -30,25 +30,13 @@ fi
 TO="${ORCA_ROLES_SKILL_TIMEOUT:-60}"
 case "$TO" in ''|*[!0-9]*|0*) echo "review-skill.sh: ORCA_ROLES_SKILL_TIMEOUT must be a whole number of seconds; using 60" >&2; TO=60;; esac
 first_line() { head -1 | tr '\t\r' '  '; }
-# <name> <command...>: runs it in the background with stdout/err in $T/<name>.out/.err, kills it after $TO seconds. Sets RC and TIMED.
-bounded() {
-  local i="$1" pid sl MAXN=$((TO * 10)); shift
-  [ -z "${ORCA_ROLES_TICK:-}" ] || MAXN="$(awk -v t="$TO" -v k="$ORCA_ROLES_TICK" 'BEGIN { printf "%d", t / k + 0.5 }')"
-  rm -f "$T/$i.stop" "$T/$i.to"
-  "$@" > "$T/$i.out" 2> "$T/$i.err" < /dev/null & pid=$!
-  ( n=0; s0=$SECONDS; while [ ! -e "$T/$i.stop" ] && [ "$n" -lt "$MAXN" ] && [ $((SECONDS - s0)) -le "$TO" ]; do sleep "${ORCA_ROLES_TICK:-0.1}"; n=$((n + 1)); done; [ -e "$T/$i.stop" ] || { : > "$T/$i.to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
-  wait $pid 2>/dev/null; RC=$?
-  : > "$T/$i.stop"; wait $sl 2>/dev/null
-  TIMED=0; [ -f "$T/$i.to" ] && TIMED=1
-  return 0
-}
 # Sets ST (installed|disabled|missing|error), STLINE (the status line) and STRC (its exit code). INSTALLPATH when installed.
 status() {
   local row
   INSTALLPATH=""; STRC=1; ST=error
   command -v claude >/dev/null 2>&1 || { STLINE="error claude not found"; return 0; }
   bounded list claude plugin list --json
-  if [ "$TIMED" = 1 ]; then STLINE="error claude timed out"; return 0; fi
+  if [ "$TIMED" = 1 ]; then STLINE="error $(bounded_msg claude "$TO")"; return 0; fi
   if [ "$RC" != 0 ]; then
     row="$(first_line < "$T/list.err")"; [ -n "$row" ] || row="$(first_line < "$T/list.out")"; [ -n "$row" ] || row="claude plugin list exited $RC"
     STLINE="error $row"; return 0
@@ -72,7 +60,7 @@ show_path() {  # after status: prints the skill path, or the failure and sets th
 must() {
   local n="$1"; shift
   bounded "$n" "$@"
-  if [ "$TIMED" = 1 ]; then echo "error claude timed out" >&2; exit 1; fi
+  if [ "$TIMED" = 1 ]; then echo "error $(bounded_msg claude "$TO")" >&2; exit 1; fi
   [ "$RC" = 0 ] && return 0
   cat "$T/$n.out" "$T/$n.err" >&2; [ -s "$T/$n.out" ] || [ -s "$T/$n.err" ] || echo "claude $* exited $RC" >&2
   return 1
@@ -88,7 +76,7 @@ case "$CMD" in
     if [ "$ST" = error ]; then echo "$STLINE" >&2; exit 1; fi
     if [ "$ST" = disabled ]; then echo "$STLINE" >&2; echo "the plugin is disabled: enable it with claude plugin enable $PLUGIN (install would re-enable it)" >&2; exit 3; fi
     bounded market claude plugin marketplace add "$MARKET"
-    if [ "$TIMED" = 1 ]; then echo "error claude timed out" >&2; exit 1; fi
+    if [ "$TIMED" = 1 ]; then echo "error $(bounded_msg claude "$TO")" >&2; exit 1; fi
     if [ "$RC" != 0 ] && ! grep -qi 'already exists' "$T/market.out" "$T/market.err"; then
       cat "$T/market.out" "$T/market.err" >&2; [ -s "$T/market.out" ] || [ -s "$T/market.err" ] || echo "claude plugin marketplace add exited $RC" >&2
       exit 1

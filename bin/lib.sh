@@ -47,7 +47,7 @@ orca_nested_depth() {
   if [ "$a" = sqlite ]; then
     command -v sqlite3 >/dev/null 2>&1 || return 0
     u="$p/profile-state.db"; u="${u//%/%25}"; u="${u//\?/%3f}"; u="${u//#/%23}"
-    v="$(run_limited 5 orca-depth sqlite3 -readonly "file:$u?mode=ro" "select case when typeof(v) in ('integer','real') and v = cast(v as integer) then cast(v as integer) else '' end from (select json_extract(payload,'\$.nestedWorkerMaxDepth') as v from profile_state_documents where domain='settings')" 2>/dev/null)" || return 0
+    v="$(bounded_run 5 orca-depth sqlite3 -readonly "file:$u?mode=ro" "select case when typeof(v) in ('integer','real') and v = cast(v as integer) then cast(v as integer) else '' end from (select json_extract(payload,'\$.nestedWorkerMaxDepth') as v from profile_state_documents where domain='settings')" 2>/dev/null)" || return 0
   else
     v="$(jq -r '.settings.nestedWorkerMaxDepth | if type == "number" and . == floor then floor else "" end' "$p/orca-data.json" 2>/dev/null)" || return 0
   fi
@@ -76,21 +76,59 @@ orca_shim
 # Kills a process and all its descendants (children first).  kill_tree <pid>
 kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
 
-# Runs a command with a time limit, keeping its stdin, stdout and stderr: run_limited <secs> <label> <command> [args...].
-# Past the limit its process tree is killed, "<label>: no answer in <secs> s; stopped." goes to stderr and the status is 124.
-run_limited() {
-  local secs="$1" label="$2" m pid wd rc=0 caller=$$
-  shift 2
-  "$@" <&0 & pid=$!
+# The one timeout sentence.  bounded_msg <label> <secs>
+bounded_msg() { printf '%s: no answer in %s s; stopped.\n' "$1" "$2"; }
+# Runs a command with a time limit, keeping its stdin, stdout and stderr (redirect the call to change them): bounded_run [--quiet] [--cd <dir>] <secs> <label> <command> [args...].
+# Past the limit its process tree is killed, the status is 124, BOUNDED_TIMED is 1 (0 otherwise, so a command's own exit 124 is not a timeout; it does not survive $(...)) and bounded_msg goes to stderr unless --quiet.
+# --cd runs an external command in <dir> (a shell function gives 127 and bash's own "not found"; a <dir> that fails gives 1 and cd's own message). <secs> must be a number above 0 (0 means no limit only in orca()): anything else prints a message, returns 2 and runs nothing.
+# If no marker can be created in the temp folder the command runs without a limit. If the caller dies, the watchdog still stops the command at the limit and removes the markers.
+# shellcheck disable=SC2034  # BOUNDED_TIMED is read by the callers
+bounded_run() {
+  local quiet=0 dir="" secs label m pid wd s="" rc=0 caller=$$
+  BOUNDED_TIMED=0
+  while :; do
+    case "${1:-}" in
+      --quiet) quiet=1; shift;;
+      --cd) dir="$2"; shift 2;;
+      *) break;;
+    esac
+  done
+  secs="$1"; label="$2"; shift 2
+  case "$secs" in
+    *[!0-9.]*|*.*.*) rc=2;;
+    *[1-9]*) ;;
+    *) rc=2;;
+  esac
+  if [ "$rc" = 2 ]; then echo "bounded_run: bad limit '$secs' for $label" >&2; return 2; fi
+  if [ -n "$dir" ]; then ( cd "$dir" && exec "$@" ) <&0 & pid=$!
+  else "$@" <&0 & pid=$!; fi
   m="${TMPDIR:-/tmp}/orca-roles-limit.$$.$pid"
   { : > "$m"; } 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
-  ( trap 'kill "$s" 2>/dev/null; exit 0' TERM; sleep "$secs" & s=$!; wait "$s"
-    if [ -e "$m" ] && kill -0 "$pid" 2>/dev/null; then : > "$m.fired"; kill_tree "$pid"; kill -0 "$caller" 2>/dev/null || rm -f "$m" "$m.fired"; fi ) </dev/null >/dev/null 2>&1 & wd=$!
+  # No signal goes to the watchdog (a trapped TERM can be lost or held until its sleep ends): it writes its sleep's pid to $m.s before it looks for $m, and the caller removes $m before it reads $m.s, so one of the two always kills that sleep
+  ( sleep "$secs" & s=$!; echo "$s" > "$m.s" || { kill "$s"; exit 0; }
+    if [ ! -e "$m" ]; then kill "$s" 2>/dev/null; exit 0; fi
+    wait "$s"
+    if [ -e "$m" ] && kill -0 "$pid" 2>/dev/null; then : > "$m.fired"; kill_tree "$pid"; fi
+    kill -0 "$caller" 2>/dev/null || rm -f "$m" "$m.fired" "$m.s" ) </dev/null >/dev/null 2>&1 & wd=$!
   wait "$pid" 2>/dev/null || rc=$?
-  kill -TERM "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
-  if [ -e "$m.fired" ]; then printf '%s: no answer in %s s; stopped.\n' "$label" "$secs" >&2; rc=124; fi
-  rm -f "$m" "$m.fired"
+  rm -f "$m"
+  if [ ! -e "$m.fired" ]; then
+    { read -r s < "$m.s"; } 2>/dev/null || true
+    if [ -n "$s" ]; then kill "$s" 2>/dev/null || true; fi
+  fi
+  wait "$wd" 2>/dev/null || true
+  if [ -e "$m.fired" ]; then BOUNDED_TIMED=1; rc=124; [ "$quiet" = 1 ] || bounded_msg "$label" "$secs" >&2; fi
+  rm -f "$m.fired" "$m.s"
   return "$rc"
+}
+
+# For scripts with a temp folder $T and a limit $TO: runs <command...> with stdout/err in $T/<name>.out/.err and stdin closed. Sets RC and TIMED; returns 0.  bounded <name> <command...>
+# shellcheck disable=SC2034  # RC and TIMED are read by the callers
+bounded() {
+  local i="$1"; shift
+  RC=0; bounded_run --quiet "$TO" "$i" "$@" > "$T/$i.out" 2> "$T/$i.err" < /dev/null || RC=$?
+  TIMED="$BOUNDED_TIMED"
+  return 0
 }
 
 # A fixed retry or poll wait of <secs> seconds; ORCA_ROLES_PACE replaces it (tests).
@@ -111,7 +149,7 @@ orca() {
     if [ "$prev" = --timeout-ms ]; then case "$a" in ''|*[!0-9]*) ;; *) lim=$(( (a + 999) / 1000 + 60 ));; esac; fi
     prev="$a"
   done
-  run_limited "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca "$@"
+  bounded_run "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca "$@"
 }
 
 # After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale), else tells it was not confirmed and returns 1.
@@ -160,15 +198,9 @@ oc_session_file() {
 # Runs `opencode <args>` in the current worktree (OpenCode scopes sessions to the directory), stdin closed, output in <file>, cut after
 # <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
 oc_bounded() {
-  local to="$1" out="$2" pid sl wt stop; shift 2
+  local to="$1" out="$2" wt; shift 2
   wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
-  stop="$out.stop"; rm -f "$stop" "$out.to"
-  ( cd "$wt" && exec opencode "$@" ) > "$out" 2>&1 < /dev/null & pid=$!
-  ( n=0; while [ ! -e "$stop" ] && [ "$n" -lt $((to * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$stop" ] || { : > "$out.to"; kill_tree "$pid"; } ) > /dev/null 2>&1 & sl=$!
-  OC_RC=0; wait "$pid" 2>/dev/null || OC_RC=$?
-  : > "$stop"; wait "$sl" 2>/dev/null
-  [ -f "$out.to" ] && OC_RC=124
-  rm -f "$stop" "$out.to"
+  OC_RC=0; bounded_run --quiet --cd "$wt" "$to" opencode opencode "$@" > "$out" 2>&1 < /dev/null || OC_RC=$?
   return 0
 }
 # Best-effort delete of one OpenCode session of this worktree (it interrupts a running turn).  oc_delete_id <id>
@@ -180,7 +212,7 @@ oc_delete_id() {
   command -v opencode >/dev/null 2>&1 || { echo "Could not delete OpenCode session $1: opencode is not in the PATH."; return 0; }
   tmp="$(mktemp)" || return 0
   oc_bounded "$to" "$tmp" session delete "$1"
-  if [ "$OC_RC" = 124 ]; then echo "Could not delete OpenCode session $1: timed out after $to s."
+  if [ "$OC_RC" = 124 ]; then echo "Could not delete OpenCode session $1: $(bounded_msg opencode "$to")"
   elif [ "$OC_RC" != 0 ]; then echo "Could not delete OpenCode session $1: opencode exited with $OC_RC."; fi
   rm -f "$tmp"; return 0
 }
@@ -1311,9 +1343,9 @@ wake_tab() {
     rcl="${rcl%|wsl}"
     wenv="${WSLENV:-}"
     case ":$wenv:" in *:ELECTRON_RUN_AS_NODE:*|*:ELECTRON_RUN_AS_NODE/*) ;; *) wenv="${wenv:+$wenv:}ELECTRON_RUN_AS_NODE";; esac
-    err="$(cd "$(dirname "$bin")" && ELECTRON_RUN_AS_NODE=1 WSLENV="$wenv" run_limited 30 "wake-tab" "$bin" "$(wslpath -w "$KIT/bin/wake-tab.cjs")" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+    err="$(cd "$(dirname "$bin")" && ELECTRON_RUN_AS_NODE=1 WSLENV="$wenv" bounded_run 30 "wake-tab" "$bin" "$(wslpath -w "$KIT/bin/wake-tab.cjs")" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
   else
-    err="$(ELECTRON_RUN_AS_NODE=1 run_limited 30 "wake-tab" "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+    err="$(ELECTRON_RUN_AS_NODE=1 bounded_run 30 "wake-tab" "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
   fi
   printf '%s\n' "$err" | head -1
   return 1

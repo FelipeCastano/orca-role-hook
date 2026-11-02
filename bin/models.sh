@@ -34,18 +34,6 @@ first_line() { head -1 | tr '\t\r' '  '; }
 TO="${ORCA_ROLES_PROBE_TIMEOUT:-90}"
 case "$TO" in ''|*[!0-9]*|0*) echo "models.sh: ORCA_ROLES_PROBE_TIMEOUT must be a whole number of seconds; using 90" >&2; TO=90;; esac
 PROBE="$(mopt probe)"
-# <i> <command...>: runs the probe in the background with stdout/err in $T/<i>.out/.err, kills it after $TO seconds. Sets RC and TIMED.
-bounded() {
-  local i="$1" pid sl MAXN=$((TO * 10)); shift
-  [ -z "${ORCA_ROLES_TICK:-}" ] || MAXN="$(awk -v t="$TO" -v k="$ORCA_ROLES_TICK" 'BEGIN { printf "%d", t / k + 0.5 }')"
-  rm -f "$T/$i.stop" "$T/$i.to"
-  "$@" > "$T/$i.out" 2> "$T/$i.err" < /dev/null & pid=$!
-  ( n=0; s0=$SECONDS; while [ ! -e "$T/$i.stop" ] && [ "$n" -lt "$MAXN" ] && [ $((SECONDS - s0)) -le "$TO" ]; do sleep "${ORCA_ROLES_TICK:-0.1}"; n=$((n + 1)); done; [ -e "$T/$i.stop" ] || { : > "$T/$i.to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
-  wait $pid 2>/dev/null; RC=$?
-  : > "$T/$i.stop"; wait $sl 2>/dev/null
-  TIMED=0; [ -f "$T/$i.to" ] && TIMED=1
-  return 0
-}
 CANDS="$T/cands"; : > "$CANDS"
 emit() { [ -z "$1" ] || printf '%s\n' "$1" >> "$CANDS"; }
 case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Unknown agent for $ROLE: $AGENT (use claude, codex, opencode or custom)" >&2; exit 1;; esac
@@ -56,7 +44,7 @@ case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Unknown agent for $RO
   codex)
     emit "$MODEL"
     bounded dm codex debug models
-    if [ "$TIMED" = 1 ]; then echo "codex debug models timed out after $TO s" >&2
+    if [ "$TIMED" = 1 ]; then bounded_msg "codex debug models" "$TO" >&2
     elif [ "$RC" = 0 ] && jq -e . "$T/dm.out" >/dev/null 2>&1; then
       while IFS= read -r m; do emit "$m"; done < <(jq -r '.models[]? | select(.visibility == "list") | .slug' "$T/dm.out")
     else
@@ -67,7 +55,7 @@ case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Unknown agent for $RO
     LIST="$(mopt list)"; PARSE="$(mopt parse)"; PARSE="${PARSE:-lines}"
     [ -n "$LIST" ] || [ "$AGENT" != opencode ] || LIST="opencode models"   # one provider/model per line
     if [ -z "$LIST" ]; then echo "$ROLE has no models.list in its configuration" >&2
-    elif bounded list bash -c "$LIST"; [ "$TIMED" = 1 ]; then echo "models.list timed out after $TO s" >&2
+    elif bounded list bash -c "$LIST"; [ "$TIMED" = 1 ]; then bounded_msg models.list "$TO" >&2
     elif [ "$RC" != 0 ]; then echo "models.list failed: $(first_line < "$T/list.err")" >&2
     else
       case "$PARSE" in

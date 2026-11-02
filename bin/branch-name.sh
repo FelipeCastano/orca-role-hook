@@ -53,7 +53,7 @@ rename() {
   if [ "$cur" = "$new" ]; then echo "already $new"; exit 0; fi
   up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" && no "it tracks $up"
   for r in $(git remote 2>/dev/null); do
-    if out="$(GIT_TERMINAL_PROMPT=0 run_limited 10 "ls-remote $r" git ls-remote --heads "$r" "refs/heads/$cur" 2>/dev/null)"; then
+    if out="$(GIT_TERMINAL_PROMPT=0 bounded_run 10 "ls-remote $r" git ls-remote --heads "$r" "refs/heads/$cur" 2>/dev/null)"; then
       [ -z "$out" ] || no "it exists on $r"
     else
       echo "branch-name.sh: could not check remote $r; renaming anyway"
