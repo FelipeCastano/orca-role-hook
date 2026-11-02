@@ -16,13 +16,13 @@ Install the checkout you want to check (`./install.sh`), then run the script fro
 
 The scripts put the kit's shim (`~/.orca-roles/shim`) first in their PATH themselves when `orca` is not found, so a plain WSL terminal needs no PATH setup.
 
-A check already done is not repeated when you run the script again. To start over: `rm ~/orca-live-checks/state-<script>`.
+A check already done is not repeated when you run the script again. To start over: `rm ~/orca-live-checks/state-<script>`. A later run also reuses the worktree of the earlier one, which keeps the team it opened with: after the kit's roles or a script's team change, start over.
 
 | Script | Who | Steps |
 |---|---|---|
 | `tests/live/mac.sh` | macOS, Claude Code | Run it; at the end it asks for a real restart of Orca (Cmd+Q, then `pkill -f 'out/main/daem'` in macOS's Terminal app). Reopen Orca, open one terminal of this checkout (do not click the live-checks worktree's tabs) and run it again. |
 | `tests/live/wsl.sh` | Windows + WSL, Claude Code | The same; the restart is closing Orca and ending every Orca process (Task Manager, or a Windows reboot). |
-| `tests/live/agents.sh` | Anyone with Codex and/or OpenCode signed in | One run, no restart; Claude Code is not needed. |
+| `tests/live/agents.sh` | Anyone with Codex and/or OpenCode signed in | One run, no restart; Claude Code runs the local coordinator, the other roles of the check run on those agents. |
 
 After the restart run `roles` in each of your own worktrees: the installed kit wakes their tabs too.
 
@@ -67,6 +67,15 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | A3 | After `/new` Codex keeps its developer instructions (it still names its role) | #14 |
 | A4 | OpenCode as a custom agent: `clean.sh` clears it and resends its role | #14 |
 | A5 | A Codex Planner starts without superpowers (Claude only) | #39 |
+| A6 | OpenCode runtime deny of subagents: the same request with the same neutral prompt; a role with no deny lists the folder (the control; the screen does not show that its subagent did it), the Code-Reviewer replies that its subagent tool is refused and lists nothing | #58 |
+
+## Manual checklist
+
+For the person running the checks; each line says what to do and what to see.
+
+- **G. Restart note after an update.** Run `./install.sh` while a team is open, then `roles`: the note asks to restart the open tabs.
+- **H. On-demand Auditor on real data.** Run `auditor` in the global coordinator's folder and ask it to audit the roles of a real worktree: it reports problems and proposals and changes no file.
+- **I. The Researcher on Sonnet on a real task.** Give the Researcher a real research question through the local coordinator: its tab opens on first use, it answers within its brief, its report starts with `Done`.
 
 ## Not scriptable: observed in normal use
 

@@ -76,6 +76,7 @@ Use a project whose `.orca-roles.json` puts the Planner and the Dev on `codex` (
 | A3 | In the Dev's tab `/new`, then ask "Which role do you have in this team?" | the answer | "Dev" |
 | A4 | `~/.orca-roles/bin/clean.sh tester` | the Tester's tab | `/new`, then its role message |
 | A5 | The Codex Planner's arguments | superpowers | None (Claude only) |
+| A6 | With the Code-Reviewer and the Researcher on OpenCode with the same neutral prompt, send both: "Use your subagent tool to list this folder, and do not list it any other way. Show the file names it returns. If that tool is refused or missing, reply with the word SUBAGENT, a hyphen, then the word REFUSED, with no spaces." | each tab's screen | The Researcher (no deny) lists the folder (if its tab shows its tool calls, one of them is its subagent tool); the Code-Reviewer replies SUBAGENT-REFUSED and lists nothing |
 
 ## Results
 
@@ -105,4 +106,4 @@ Copy this table and fill it; send it to the Planner with anything odd you saw.
 | R2 | | |
 | W0 | | |
 | W1 | | |
-| A1-A5 | | |
+| A1-A6 | | |
