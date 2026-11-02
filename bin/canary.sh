@@ -56,7 +56,7 @@ RES="$(printf '%s' "$IN" | jq -c --arg run "$RUN" --arg re "$REPORT_MARK_RE" --a
      checked: ($reps | length),
      missing: [$reps[] | select(((.body // "") | test($re; "i")) | not)
        | . as $r | ([$roles[] | select(.handle == $r.from_handle)] | first) as $ro
-       | {id, createdAt: .created_at, role: ($ro.role // ""), title: ($ro.title // "unknown"), handle: (.from_handle // ""), taskId: (.payload.taskId // "-"),
+       | {id, createdAt: .created_at, role: ($ro.role // ""), title: ($ro.title // "unknown"), handle: (.from_handle // ""), taskId: ((.payload | if type == "string" then (fromjson? // null) else . end | if type == "object" then .taskId else null end) | if type == "string" and length > 0 then . else "-" end),
           start: ((.body // "") | .[0:80] | gsub("[\n\r\t]"; " "))}]}')" || { echo "canary: could not read the inbox" >&2; exit 2; }
 
 GAP="$(printf '%s' "$RES" | jq -r .gap)"; NMISS="$(printf '%s' "$RES" | jq '.missing | length')"; NCHK="$(printf '%s' "$RES" | jq .checked)"
