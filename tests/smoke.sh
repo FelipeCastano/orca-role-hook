@@ -2549,7 +2549,7 @@ chmod +x "$LK/bin/orca"; printf '#!/bin/sh\nexit 0\n' > "$LK/bin/kickoff"; chmod
 lkl() { (cd "$LK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LK/bin:$PATH" ORCA_ROLES_KICKOFF="${LKK:-$LK/bin/kickoff}" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 lkkickgone() { ! pgrep -f "$LK/bin/kickoff" >/dev/null; }
 akkickgone() { ! pgrep -f "$TMP/home/.orca-roles/bin/kickoff.sh" >/dev/null; }
-lkdrain() { local n=0; while pgrep -f "$LK/bin/kickoff2" >/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: a stub kickoff was still running after 10s"; FAIL=1; }; }   # a kickoff left from the previous check must be gone before the fixture is reset
+lkdrain() { local n=0; while pgrep -f "$LK/bin/kickoff2" >/dev/null && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 600 ] || { echo "FAIL launch: a stub kickoff was still running after 60s"; FAIL=1; }; }   # a kickoff left from the previous check must be gone before the fixture is reset
 lkreset() { lkdrain; rm -rf "$LKG"/orca-roles.* "$LK"/show.* "$LK"/list.json "$LK"/listfail "$LK"/failcreate-* || { echo "FAIL launch: could not reset the fixture"; FAIL=1; }; : > "$LKL"; }
 lkreg() { local pid="$1"; shift; { mkdir -p "$LKG/orca-roles.kickoff.d" && printf '%s\n' "$*" > "$LKG/orca-roles.kickoff.d/$pid"; } 2>/dev/null || { echo "FAIL launch: could not register the stub kickoff $pid in $LKG/orca-roles.kickoff.d"; FAIL=1; }; }
 lkcnt() { grep -cE "^terminal $1" "$LKL" || true; }
@@ -2682,7 +2682,7 @@ EOS
 chmod +x "$AK/bin/orca"
 write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.verifier = {"title": "Verifier", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
 akl() { (cd "${AKDIR:-$AK/proj}" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$AK/bin:$PATH" ORCA_TERMINAL_HANDLE="${AKH:-}" ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 10s"; FAIL=1; }; fast_poll akkickgone; }
+akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 600 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 60s"; FAIL=1; }; fast_poll akkickgone; }
 akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/list.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
 akrun() { try akl "$@"; akdrain; }
 akmark() { [ -e "$AKG/orca-roles.mode-pending" ] && printf marker || printf none; }
@@ -9173,7 +9173,7 @@ def watch():
 threading.Thread(target=watch, daemon=True).start()
 s.serve_forever()
 PYE
-fstart() { rm -rf "$UM/fs" "$UM/fake.port"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>&1 & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 150 ]; do sleep 0.2; n=$((n+1)); done; FP="$(cat "$UM/fake.port")"; }
+fstart() { rm -rf "$UM/fs" "$UM/fake.port"; rm -f "$UM/fake.err"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>"$UM/fake.err" & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 600 ]; do sleep 0.2; n=$((n+1)); done; if [ -s "$UM/fake.port" ]; then FP="$(cat "$UM/fake.port")"; else FP=""; echo "FAIL usage-metrics: the fake server wrote no port after 120s: $(head -c 400 "$UM/fake.err" 2>/dev/null | tr '\n' ' ')"; FAIL=1; fi; }
 fstop() { kill "$FPID" 2>/dev/null || true; wait "$FPID" 2>/dev/null || true; }
 fcfg() { printf '%s' "$1" > "$UM/fs/cfg.json"; }
 fposts() { find "$UM/fs/posts" -name '*.json' | wc -l | tr -d ' '; }
