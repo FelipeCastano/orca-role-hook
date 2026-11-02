@@ -30,13 +30,17 @@ On WSL do the same steps; where a step differs, it says so. The kit's shim is `~
 
 | Id | Do | Look at | Expected |
 |---|---|---|---|
-| T1 | In Orca, create a worktree of the project with an agent (the composer: new worktree, pick Claude, any prompt) | the tabs that appear in the first minute; the kickoff log (`<git dir>/orca-roles-kickoff.log`) | Only the Planner's tab stays, plus your shell; the composer's extra agent tab is closed (note its title, and what the log says about it); the Planner asks which mode to use, naming programmer, pr-reviewer and academic-research |
-| T2 | From a terminal of ANOTHER worktree, `cd` into the new worktree and run `roles --mode programmer` | its output and the tabs | "This terminal belongs to worktree ...; using the worktree of the current folder (...)"; Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer open; the Planner gets its role message |
+| T1 | In Orca, create a worktree of the project with an agent (the composer: new worktree, pick Claude, any prompt) | the tabs that appear in the first minute; the kickoff log (`<git dir>/orca-roles-kickoff.log`) | Only the local coordinator's tab stays, plus your shell; the composer's extra agent tab is closed (note its title, and what the log says about it); the local coordinator asks which mode to use, naming programmer, pr-reviewer and academic-research |
+| T2 | From a terminal of ANOTHER worktree, `cd` into the new worktree and run `roles --mode programmer` | its output and the tabs | "This terminal belongs to worktree ...; using the worktree of the current folder (...)"; Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer open; the local coordinator gets its role message |
 | T3 | `cat <git dir>/orca-roles.pty` and `orca terminal show --terminal <each handle> --json` | the ptyIds | Identical, byte for byte (on WSL they contain `\\wsl.localhost\...`) |
 | T4 | `ps -o ni=,pid= -p <Tester's claude pid>` and its environment (`ps eww -p <pid>` on macOS, `/proc/<pid>/environ` on WSL) | nice and `OMP_NUM_THREADS` | `10` and `2` |
-| T5 | Close the Dev's tab with its X, then `roles` from a terminal of the worktree | the kickoff log; the Planner's tab | A new Dev tab; "Told the Planner the new handles."; the Planner sees a "Role handles changed" message |
-| T6 | In the Planner's tab type `!~/.orca-roles/bin/launch.sh --mode pr-reviewer` and Enter | the tabs while it runs; the Planner's screen; how long it takes | Dev and Tester close quickly, the Plan-Reviewer and Code-Reviewer close and the Verifier opens for pr-reviewer, the Planner's conversation is cleared (Esc, `/clear`) and it gets "the mode was switched from programmer to pr-reviewer"; no tab left over; `orca-roles.switch-from` gone afterwards |
+| T5 | Close the Dev's tab with its X, then `roles` from a terminal of the worktree | the kickoff log; the local coordinator's tab | A new Dev tab; "Told the local coordinator the new handles."; the local coordinator sees a "Role handles changed" message |
+| T6 | In the local coordinator's tab type `!~/.orca-roles/bin/launch.sh --mode pr-reviewer` and Enter | the tabs while it runs; the local coordinator's screen; how long it takes | Dev and Tester close quickly, the Plan-Reviewer and Code-Reviewer close and the Verifier opens for pr-reviewer, the local coordinator's conversation is cleared (Esc, `/clear`) and it gets "the mode was switched from programmer to pr-reviewer"; no tab left over; `orca-roles.switch-from` gone afterwards |
 | T7 | The same back to `--mode programmer` | the same | The programmer team again, no leftover tab |
+| T8 | In the local coordinator's tab type `!~/.orca-roles/bin/launch.sh --mode academic-research` and Enter | the same as T6 | The academic-research team opens, the local coordinator is cleared and gets its role message; no tab left over |
+| T9 | The same back to `--mode programmer` | the same | The programmer team again, no leftover tab |
+| T10 | `roles --open researcher` from a terminal of the worktree; look at its tab and `orca-roles.provenance.jsonl` | the tabs; the Researcher's model | The Researcher had no tab before; only it opens, the other tabs are as they were; it runs its configured model (Sonnet) |
+| T11 | From a terminal in the project's main checkout, `orca terminal create --worktree current --title live-current --json`, then `pwd -P` in the new tab | the tab's folder | The main checkout |
 
 ## 3. A real restart (about 10 minutes)
 
@@ -72,6 +76,7 @@ Use a project whose `.orca-roles.json` puts the Planner and the Dev on `codex` (
 | A3 | In the Dev's tab `/new`, then ask "Which role do you have in this team?" | the answer | "Dev" |
 | A4 | `~/.orca-roles/bin/clean.sh tester` | the Tester's tab | `/new`, then its role message |
 | A5 | The Codex Planner's arguments | superpowers | None (Claude only) |
+| A6 | With the Code-Reviewer and the Researcher on OpenCode with the same neutral prompt, send both: "Use your subagent tool to list this folder, and do not list it any other way. Show the file names it returns. If that tool is refused or missing, reply with the word SUBAGENT, a hyphen, then the word REFUSED, with no spaces." | each tab's screen | The Researcher (no deny) lists the folder (if its tab shows its tool calls, one of them is its subagent tool); the Code-Reviewer replies SUBAGENT-REFUSED and lists nothing |
 
 ## Results
 
@@ -93,8 +98,12 @@ Copy this table and fill it; send it to the Planner with anything odd you saw.
 | T5 | | |
 | T6 | | |
 | T7 | | |
+| T8 | | |
+| T9 | | |
+| T10 | | |
+| T11 | | |
 | R1 | | |
 | R2 | | |
 | W0 | | |
 | W1 | | |
-| A1-A5 | | |
+| A1-A6 | | |

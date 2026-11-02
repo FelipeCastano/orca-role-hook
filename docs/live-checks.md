@@ -9,20 +9,20 @@ To follow the same checks by hand instead, step by step, use [manual-checks.md](
 
 Install the checkout you want to check (`./install.sh`), then run the script from that checkout (`cd` into it) in any terminal, with Orca open. Each script:
 
-- works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
+- works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (local coordinator, Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`; the Researcher stays on its own model and opens on first use). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
 - asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca); type `skip` at a prompt to skip that check;
 - writes one report, `~/orca-live-checks/report-<script>.md`: one row per check (OK, FAIL, INFO, SKIP) plus the logs of the failures. Send it to the Planner;
 - records how long each check took, and how long it waited for you at a prompt, in `~/orca-live-checks/timings-<script>.tsv` (one line per check run, one `# run` line per run of the script), so a slow check shows without timing it again.
 
 The scripts put the kit's shim (`~/.orca-roles/shim`) first in their PATH themselves when `orca` is not found, so a plain WSL terminal needs no PATH setup.
 
-A check already done is not repeated when you run the script again. To start over: `rm ~/orca-live-checks/state-<script>`.
+A check already done is not repeated when you run the script again. To start over: `rm ~/orca-live-checks/state-<script>`. A later run also reuses the worktree of the earlier one, which keeps the team it opened with: after the kit's roles or a script's team change, start over.
 
 | Script | Who | Steps |
 |---|---|---|
 | `tests/live/mac.sh` | macOS, Claude Code | Run it; at the end it asks for a real restart of Orca (Cmd+Q, then `pkill -f 'out/main/daem'` in macOS's Terminal app). Reopen Orca, open one terminal of this checkout (do not click the live-checks worktree's tabs) and run it again. |
 | `tests/live/wsl.sh` | Windows + WSL, Claude Code | The same; the restart is closing Orca and ending every Orca process (Task Manager, or a Windows reboot). |
-| `tests/live/agents.sh` | Anyone with Codex and/or OpenCode signed in | One run, no restart; Claude Code is not needed. |
+| `tests/live/agents.sh` | Anyone with Codex and/or OpenCode signed in | One run, no restart; Claude Code runs the local coordinator, the other roles of the check run on those agents. |
 
 After the restart run `roles` in each of your own worktrees: the installed kit wakes their tabs too.
 
@@ -39,12 +39,15 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | X5 | A fresh install into a temporary HOME: the real superpowers fetch from GitHub, a Claude session that loads its skills, and `project-plugins.sh install` doing a real `claude plugin marketplace add` and `install` (in a temporary Claude config) | #39 |
 | X6 | The new-role wizard typed by you, in that temporary kit | #28 |
 | X7 | The pinned E2E stack: install, `browser-login.sh` saving a real session (a local page sets a cookie and localStorage), `e2e-browser.sh session`, and `e2e-run.sh` running a flow with that session against the page | #31 |
-| T1 | A worktree created by Orca with an agent: the setup script runs the kit, only the Planner opens and asks the mode; the composer's extra session (its title is reported) is closed | #1, #45 |
+| T1 | A worktree created by Orca with an agent: the setup script runs the kit, only the local coordinator opens and asks the mode; the composer's extra session (its title is reported) is closed | #1, #45 |
 | T2 | Choosing the mode from a terminal of another worktree: the kit takes the folder's worktree and opens the programmer team | #45, this PR |
 | T3 | `orca-roles.pty` holds Orca's ptyId byte for byte (on WSL the ptyIds have backslashes) | this PR |
 | T4 | The Tester's agent runs at nice 10 with its thread caps | #8 |
-| T5 | A worker reopened while the Planner keeps its tab: kickoff's background shell sends "Role handles changed" | #29 |
-| T6, T7 | A mode switch typed in the Planner's own tab, to pr-reviewer and back: old workers closed, Esc + clear while kickoff runs, the new role message, no leftover tab, how long it took | #45 |
+| T5 | A worker reopened while the local coordinator keeps its tab: kickoff's background shell sends "Role handles changed" | #29 |
+| T6, T7 | A mode switch typed in the local coordinator's own tab, to pr-reviewer and back: old workers closed, Esc + clear while kickoff runs, the new role message, no leftover tab, how long it took | #45 |
+| T8, T9 | The same switch to `academic-research` and back to programmer | #58 |
+| T10 | A first-use role: `launch --open researcher` opens only it, the other tabs stay as they were, and it runs its configured model (the Researcher on Sonnet) | #58 |
+| T11 | `orca terminal create --worktree current` from a main checkout opens the terminal in that checkout | #58 |
 | R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took | this PR, #8, #38, BACKLOG |
 | R2 | T3 again after the restart | this PR |
 
@@ -64,6 +67,15 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | A3 | After `/new` Codex keeps its developer instructions (it still names its role) | #14 |
 | A4 | OpenCode as a custom agent: `clean.sh` clears it and resends its role | #14 |
 | A5 | A Codex Planner starts without superpowers (Claude only) | #39 |
+| A6 | OpenCode runtime deny of subagents: the same request with the same neutral prompt; a role with no deny lists the folder (the control; the screen does not show that its subagent did it), the Code-Reviewer replies that its subagent tool is refused and lists nothing | #58 |
+
+## Manual checklist
+
+For the person running the checks; each line says what to do and what to see.
+
+- **G. Restart note after an update.** Run `./install.sh` while a team is open, then `roles`: the note asks to restart the open tabs.
+- **H. On-demand Auditor on real data.** Run `auditor` in the global coordinator's folder and ask it to audit the roles of a real worktree: it reports problems and proposals and changes no file.
+- **I. The Researcher on Sonnet on a real task.** Give the Researcher a real research question through the local coordinator: its tab opens on first use, it answers within its brief, its report starts with `Done`.
 
 ## Not scriptable: observed in normal use
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Live checks of the agents other than Claude Code (Codex, OpenCode): what the smoke tests cannot cover (see docs/live-checks.md).
-# For whoever has those agents installed and signed in; Claude Code is not needed.
+# For whoever has those agents installed and signed in; Claude Code runs the local coordinator; the other roles of the check run on those agents.
 # Usage (from any terminal, with Orca open and this checkout installed: ./install.sh):  tests/live/agents.sh
 # One run, no restart. Report: ~/orca-live-checks/report-agents.md. To start over: rm ~/orca-live-checks/state-agents
 set -uo pipefail
@@ -10,18 +10,23 @@ HAS_CODEX=0; command -v codex >/dev/null 2>&1 && HAS_CODEX=1
 HAS_OC=0; command -v opencode >/dev/null 2>&1 && HAS_OC=1
 [ "$HAS_CODEX$HAS_OC" != 00 ] || { echo "Neither codex nor opencode is installed: nothing to check." >&2; exit 1; }
 
-agents_project() {  # a throwaway project whose team runs on the other agents: Planner and Dev on Codex, Tester on OpenCode
+agents_project() {  # a throwaway project whose team runs on the other agents: Planner and Dev on Codex, Tester, Code-Reviewer and Researcher on OpenCode
   if [ ! -d "$PROJ/.git" ]; then
     mkdir -p "$PROJ" && git -C "$PROJ" init -q -b main && echo "# agents live checks (throwaway)" > "$PROJ/README.md"
-    jq -n --argjson cx "$HAS_CODEX" --argjson oc "$HAS_OC" '
-      {settings: {jiraHandoff: false, cleanWorkersAfterStep: false, enableAskModeOnStart: false, superpowers: true},
-       mcpServers: {"live-echo": {type: "stdio", command: "cat", args: []}},
-       roles: ({researcher: {enabled: false}, "plan-reviewer": {enabled: false}, "code-reviewer": {enabled: false}, "e2e-tester": {enabled: false}, deployer: {enabled: false}}
-         + (if $cx == 1 then {planner: {agent: "codex", model: ""}, dev: {agent: "codex", model: "", mcp: ["live-echo"]}}
-            else {dev: {enabled: false}} end)
-         + (if $oc == 1 then {tester: {agent: "custom", command: "opencode", clearCommand: "/new", model: ""}}
-            else {tester: {enabled: false}} end))}' > "$PROJ/.orca-roles.json"
-    git -C "$PROJ" add -A && git -C "$PROJ" -c user.name=live -c user.email=live@localhost commit -qm "agents live checks project"
+  fi
+  printf '%s\n' 'You are a test role. Do what the message in your tab asks.' > "$LIVE_DIR/neutral-role.md"
+  jq -n --argjson cx "$HAS_CODEX" --argjson oc "$HAS_OC" --arg np "$LIVE_DIR/neutral-role.md" '
+    {settings: {jiraHandoff: false, cleanWorkersAfterStep: false, enableAskModeOnStart: false, superpowers: true},
+     mcpServers: {"live-echo": {type: "stdio", command: "cat", args: []}},
+     roles: ({researcher: {enabled: false}, "plan-reviewer": {enabled: false}, "code-reviewer": {enabled: false}, "e2e-tester": {enabled: false}, deployer: {enabled: false}}
+       + (if $cx == 1 then {planner: {agent: "codex", model: "", open: "start"}, dev: {agent: "codex", model: "", mcp: ["live-echo"], open: "start"}}
+          else {dev: {enabled: false}} end)
+       + (if $oc == 1 then {tester: {agent: "custom", command: "opencode", clearCommand: "/new", model: "", open: "start"},
+            "code-reviewer": {agent: "opencode", model: "", enabled: true, open: "start", prompt: $np}, researcher: {agent: "opencode", model: "", enabled: true, open: "start", prompt: $np}}
+          else {tester: {enabled: false}} end))}' > "$PROJ/.orca-roles.json.new"
+  if [ -s "$PROJ/.orca-roles.json.new" ] && ! cmp -s "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; then mv "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; else rm -f "$PROJ/.orca-roles.json.new"; fi
+  if [ -n "$(git -C "$PROJ" status --porcelain -- README.md .orca-roles.json)" ]; then
+    git -C "$PROJ" add README.md .orca-roles.json && git -C "$PROJ" -c user.name=live -c user.email=live@localhost commit -qm "agents live checks project"
   fi
   (cd "$PROJ" && "$KIT/bin/orca-yaml.sh" --mode programmer >/dev/null 2>&1) || true
   orca repo add --path "$PROJ" --json >/dev/null 2>&1 || true
@@ -69,6 +74,23 @@ a_planner_superpowers() {  # superpowers is for Claude Planners only (#39): a Co
   h="$(env_of PLANNER)"; pid="$(pid_of_handle "$h")" || { fail "$id" "no Codex process for the Planner"; return; }
   ps -o args= -p "$pid" | grep -q superpowers && fail "$id" "the Codex Planner got superpowers arguments" || info "$id" "the Codex Planner runs without superpowers (claude only); launch log: $(grep -i superpowers "$GD/orca-roles-launch.log" | tail -1)"
 }
+a_opencode_deny() {  # the kit's subagent deny works at run time in OpenCode (F of the live plan): the same request with the same neutral prompt, a role with no deny does it and the Code-Reviewer is refused
+  local id=$1 h c text
+  [ "$HAS_OC" = 1 ] || { skip "$id" "opencode is not installed"; return; }
+  c="$(env_of RESEARCHER)"; [ -n "$c" ] || { fail "$id" "no Researcher tab for the control"; return; }
+  h="$(env_of CODE_REVIEWER)"; [ -n "$h" ] || { fail "$id" "no Code-Reviewer tab"; return; }
+  # the sentinel must not be in the prompt: wait_screen reads the last 80 lines, which hold what was typed
+  text="Use your subagent tool to list this folder, and do not list it any other way. Show the file names it returns. If that tool is refused or missing, reply with the word SUBAGENT, a hyphen, then the word REFUSED, with no spaces."
+  orca terminal wait --terminal "$c" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
+  orca terminal send --terminal "$c" --text "$text" --enter --json >/dev/null 2>&1
+  wait_screen "$c" 'README\.md' 180 && ok "$id.control" "the role with no deny listed the folder (README.md on its screen; the screen does not show whether its subagent did it)" || { fail "$id.control" "the role with no deny listed nothing, so this run shows nothing about the deny"; attach "$id control's screen" "$(screen "$c" 30)"; return; }
+  orca terminal wait --terminal "$h" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
+  orca terminal send --terminal "$h" --text "$text" --enter --json >/dev/null 2>&1
+  if wait_screen "$h" 'SUBAGENT-REFUSED' 120; then
+    if screen "$h" 80 | grep -q 'README.md'; then fail "$id" "it reported a refusal but the folder listing is on the screen"; else ok "$id" "the Code-Reviewer on OpenCode replied that its subagent tool was refused, and listed nothing"; fi
+  else fail "$id" "no refusal on the screen after 120 s: a subagent may have run"; fi
+  attach "$id Code-Reviewer's screen" "$(screen "$h" 30)"
+}
 
 live_start agents; live_preflight
 agents_project
@@ -84,5 +106,6 @@ run_check A2 a_codex_mcp
 run_check A3 a_codex_new
 run_check A4 a_opencode_new
 run_check A5 a_planner_superpowers
+run_check A6 a_opencode_deny
 wt_cleanup; st_set phase finished
 echo; echo "Finished. Send the report to the Planner: $REPORT"
