@@ -349,6 +349,27 @@ c_switch_from_lc() {  # a mode switch typed in the local coordinator's own tab: 
   [ "$nt" = "$(grep -c . "$GD/orca-roles.env")" ] || attach "$id terminals of the worktree (handle, ptyId, title, agent)" "$(wt_terms)"
   info "$id.time" "switch took $((t1 - t0)) s"
 }
+c_lazy_researcher() {  # a role that opens on first use: launch --open opens it and only it; its agent runs the default model (D of the live plan)
+  local id=$1 before want got
+  check "$id.closed" "the Researcher has no tab before its first use" "$(env_of RESEARCHER)" ""
+  before="$(grep -v '^RESEARCHER=' "$GD/orca-roles.env" | sort | tr '\n' ' ')"
+  roles_run --open researcher
+  [ -n "$(env_of RESEARCHER)" ] && ok "$id.open" "launch --open researcher opened it" || { fail "$id.open" "no RESEARCHER handle after launch --open"; attach "$id launch" "$LIVE_DIR/last-roles.log"; return; }
+  check "$id.others" "the other roles' tabs are as they were" "$(grep -v '^RESEARCHER=' "$GD/orca-roles.env" | sort | tr '\n' ' ')" "$before"
+  want="$(bash -c '. "$1/bin/lib.sh"; merged_config "$2"' _ "$KIT" "$WT" | jq -r '.roles.researcher.model // empty')"
+  [ -n "$want" ] || { fail "$id.model" "no model is configured for the Researcher in the merged config"; return; }
+  got="$(jq -r 'select(.role == "researcher") | .model' "$GD/orca-roles.provenance.jsonl" 2>/dev/null | tail -1)"
+  check "$id.model" "the Researcher runs its configured model (config.default: claude-sonnet-5-5)" "$got" "$want"
+}
+c_terminal_current() {  # orca terminal create --worktree current from a main checkout lands in that checkout (unverified in #58)
+  local id=$1 h f; f="$LIVE_DIR/terminal-current.pwd"; rm -f "$f"
+  h="$(cd "$PROJ" && orca terminal create --worktree current --title live-current --json 2>/dev/null | handle_of)"
+  [ -n "$h" ] || { fail "$id" "orca terminal create --worktree current gave no handle"; return; }
+  orca terminal send --terminal "$h" --text "pwd -P > '$f'" --enter --json >/dev/null 2>&1
+  for _ in $(seq 1 15); do [ -s "$f" ] && break; sleep 1; done
+  check "$id" "the terminal opened in the project's main checkout" "$(cat "$f" 2>/dev/null)" "$(cd "$PROJ" && pwd -P)"
+  orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1
+}
 c_restart_prepare() {  # before the restart: what each role had
   cp "$GD/orca-roles.env" "$LIVE_DIR/env-before-restart"; wt_terms > "$LIVE_DIR/terms-before-restart"
 }
@@ -417,6 +438,10 @@ live_main() {
     run_check T5 c_handles_changed
     run_check T6 c_switch_from_lc pr-reviewer
     run_check T7 c_switch_from_lc programmer
+    run_check T8 c_switch_from_lc academic-research
+    run_check T9 c_switch_from_lc programmer
+    run_check T10 c_lazy_researcher
+    run_check T11 c_terminal_current
     "${EXTRA_TEAM:-:}"
     c_restart_prepare; st_set phase restarted
     echo; restart_instructions
