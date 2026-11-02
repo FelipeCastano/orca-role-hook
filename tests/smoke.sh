@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -13,6 +13,7 @@ for s in "$@"; do
 done
 # Timing log (see README, Development): SMOKE_TIMING_LOG (a path, or off), SMOKE_SLOW_CHECK (seconds). The runner's own variables all start with SMK_ (a section never uses that prefix).
 SMK_TOP=1; SMK_TLOG=""; SMK_DIR=""; SMK_T0=$SECONDS; SMK_TMARK=$SECONDS; SMK_FAIL_BEFORE=0; SMK_STATUS=ok
+SMK_LIMIT=0; SMK_HELD=0; SMK_HSEC=-1; SMK_LSEC=-1; SMK_LVAL=""; SMK_OVER=0; SMK_PAR=0; SMK_MAX=0.8; SMK_NCPU=1
 SMK_SLOW="${SMOKE_SLOW_CHECK:-5}"
 if [ -n "${SMOKE_TIMING_APPEND+x}" ]; then
   SMK_TOP=0; SMK_TLOG="$SMOKE_TIMING_APPEND"; unset SMOKE_TIMING_APPEND
@@ -27,11 +28,34 @@ else
 fi
 smk_finish() {  # smk_finish <status>: the total line, the path on stderr and the pruning of the default folder (top-level process only)
   [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ] || return 0
+  if [ "$SMK_PAR" = 1 ] && [ "$SMK_LIMIT" != 0 ]; then { printf 'held\t%s\t%s\t%s\n' "$SMK_HELD" "$SMK_MAX" "$SMK_NCPU" >> "$SMK_TLOG"; } 2>/dev/null || true; fi
   { printf 'total\t%s\t%s\t%s\n' "$SECONDS" "$1" "${#ARGS[@]}" >> "$SMK_TLOG"; } 2>/dev/null || true
   echo "smoke.sh: timings written to $SMK_TLOG" >&2
   if [ -n "$SMK_DIR" ]; then
     ls -1 "$SMK_DIR"/*.tsv 2>/dev/null | sort -r | sed -n '51,$p' | while IFS= read -r SMK_OLD; do rm -f "$SMK_OLD"; done || true
   fi
+  return 0
+}
+smk_load() {  # smk_load: the 1-minute load average, or nothing when it cannot be read
+  local smk_w=""
+  if [ -n "${SMOKE_LOAD_FILE:-}" ]; then
+    { read -r smk_w _ < "$SMOKE_LOAD_FILE"; } 2>/dev/null || true
+  elif [ -r /proc/loadavg ]; then
+    read -r smk_w _ < /proc/loadavg 2>/dev/null || true
+  else
+    smk_w="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')" || true
+  fi
+  printf '%s' "${smk_w//,/.}"
+  return 0
+}
+smk_hold() {  # smk_hold <running>: succeeds when a new section must wait for the machine's load (decided once per second; never with nothing running)
+  [ "$SMK_LIMIT" != 0 ] && [ "$1" != 0 ] || return 1
+  if [ "$SECONDS" != "$SMK_LSEC" ]; then
+    SMK_LSEC=$SECONDS; SMK_LVAL="$(smk_load)"; SMK_OVER=0
+    if [ -n "$SMK_LVAL" ] && LC_ALL=C awk -v l="$SMK_LVAL" -v m="$SMK_LIMIT" 'BEGIN { exit !(l + 0 >= m + 0) }'; then SMK_OVER=1; fi
+  fi
+  [ "$SMK_OVER" = 1 ] || return 1
+  if [ "$SECONDS" != "$SMK_HSEC" ]; then SMK_HELD=$((SMK_HELD + 1)); SMK_HSEC=$SECONDS; fi
   return 0
 }
 smk_tick() {  # smk_tick <description>: the seconds since the previous result of this process; logged when at least SMK_SLOW
@@ -64,6 +88,7 @@ smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running section
 smoke_parallel() {
   local d n i k printed=0 running=0 bad=0 last
   local -a SP_PID SP_RC SP_ST
+  SMK_PAR=1
   d="$(mktemp -d)"; n=${#ARGS[@]}
   for ((i = 0; i < n; i++)); do SP_ST[i]=0; done
   trap 'smk_reap; rm -rf "$d"; smk_finish interrupted; exit 130' INT TERM
@@ -76,6 +101,7 @@ smoke_parallel() {
     for ((i = 0; i < n; i++)); do
       [ "$running" -lt "$JOBS" ] || break
       [ "${SP_ST[i]}" = 0 ] && ! smoke_serial "${ARGS[i]}" || continue
+      if smk_hold "$running"; then break; fi
       SMOKE_JOBS=1 SMOKE_TIMING_APPEND="$SMK_TLOG" bash "$0" "${ARGS[i]}" > "$d/$i.out" 2> "$d/$i.err" < /dev/null & SP_PID[i]=$!; SP_ST[i]=1; running=$((running + 1))
     done
     if [ "$running" = 0 ]; then
@@ -95,15 +121,23 @@ smoke_parallel() {
     [ "$printed" -lt "$n" ] && sleep 0.05
   done
   rm -rf "$d"
+  [ "$SMK_HELD" = 0 ] || echo "smoke.sh: new sections were held $SMK_HELD s by the machine's load (limit $SMK_MAX x $SMK_NCPU CPUs)" >&2
   if [ "$bad" = 0 ]; then smk_finish ok; else smk_finish FAIL; fi
   [ "$bad" = 0 ] && echo "ALL OK" || { echo "FAILURES"; exit 1; }
   exit 0
 }
 ARGS=("$@"); [ ${#ARGS[@]} -gt 0 ] || read -r -a ARGS <<< "$SECTIONS"
 JOBS="${SMOKE_JOBS:-}"
+SMK_NCPU="${SMOKE_NCPU:-}"
+case "$SMK_NCPU" in ''|*[!0-9]*|0) SMK_NCPU="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"; case "$SMK_NCPU" in ''|*[!0-9]*) SMK_NCPU=2;; esac;; esac
 if [ -z "$JOBS" ]; then
-  JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"; case "$JOBS" in ''|*[!0-9]*) JOBS=2;; esac
-  JOBS=$((JOBS / 2)); [ "$JOBS" -ge 1 ] || JOBS=1; [ "$JOBS" -le 8 ] || JOBS=8
+  JOBS=$((SMK_NCPU / 2)); [ "$JOBS" -ge 1 ] || JOBS=1; [ "$JOBS" -le 8 ] || JOBS=8
+  if [ "$SMK_TOP" = 1 ]; then
+    SMK_MAX="${SMOKE_MAX_LOAD:-0.8}"
+    case "$SMK_MAX" in ''|*[!0-9.]*|*.*.*|.) echo "smoke.sh: SMOKE_MAX_LOAD must be a non-negative number (got '$SMK_MAX'); using 0.8" >&2; SMK_MAX=0.8;; esac
+    SMK_LIMIT="$(LC_ALL=C awk -v m="$SMK_MAX" -v c="$SMK_NCPU" 'BEGIN { printf "%.2f", m * c }')"
+    [ "$SMK_LIMIT" != 0.00 ] || SMK_LIMIT=0
+  fi
 fi
 case "$JOBS" in ''|*[!0-9]*|0) JOBS=1;; esac
 if [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ]; then
@@ -113,7 +147,7 @@ if [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ]; then
 fi
 export SMOKE_TIMING_LOG=off   # a smoke.sh started by a check logs nothing
 if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
-unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET   # the suite gives the same result from any terminal; a test that needs one sets it itself
+unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET SMOKE_MAX_LOAD SMOKE_LOAD_FILE SMOKE_NCPU SMOKE_SLOW_CHECK   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
 export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
 export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and poll waits, and the stop tick of bounded(), shortened; a check that needs the real value sets it itself
@@ -2515,7 +2549,7 @@ chmod +x "$LK/bin/orca"; printf '#!/bin/sh\nexit 0\n' > "$LK/bin/kickoff"; chmod
 lkl() { (cd "$LK/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LK/bin:$PATH" ORCA_ROLES_KICKOFF="${LKK:-$LK/bin/kickoff}" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 lkkickgone() { ! pgrep -f "$LK/bin/kickoff" >/dev/null; }
 akkickgone() { ! pgrep -f "$TMP/home/.orca-roles/bin/kickoff.sh" >/dev/null; }
-lkdrain() { local n=0; while pgrep -f "$LK/bin/kickoff2" >/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: a stub kickoff was still running after 10s"; FAIL=1; }; }   # a kickoff left from the previous check must be gone before the fixture is reset
+lkdrain() { local n=0; while pgrep -f "$LK/bin/kickoff2" >/dev/null && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 600 ] || { echo "FAIL launch: a stub kickoff was still running after 60s"; FAIL=1; }; }   # a kickoff left from the previous check must be gone before the fixture is reset
 lkreset() { lkdrain; rm -rf "$LKG"/orca-roles.* "$LK"/show.* "$LK"/list.json "$LK"/listfail "$LK"/failcreate-* || { echo "FAIL launch: could not reset the fixture"; FAIL=1; }; : > "$LKL"; }
 lkreg() { local pid="$1"; shift; { mkdir -p "$LKG/orca-roles.kickoff.d" && printf '%s\n' "$*" > "$LKG/orca-roles.kickoff.d/$pid"; } 2>/dev/null || { echo "FAIL launch: could not register the stub kickoff $pid in $LKG/orca-roles.kickoff.d"; FAIL=1; }; }
 lkcnt() { grep -cE "^terminal $1" "$LKL" || true; }
@@ -2648,7 +2682,7 @@ EOS
 chmod +x "$AK/bin/orca"
 write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.verifier = {"title": "Verifier", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
 akl() { (cd "${AKDIR:-$AK/proj}" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE HOME="$TMP/home" PATH="$AK/bin:$PATH" ORCA_TERMINAL_HANDLE="${AKH:-}" ORCA_ROLES_KICK_SETTLE=0 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 100 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 10s"; FAIL=1; }; fast_poll akkickgone; }
+akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 600 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 60s"; FAIL=1; }; fast_poll akkickgone; }
 akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/list.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
 akrun() { try akl "$@"; akdrain; }
 akmark() { [ -e "$AKG/orca-roles.mode-pending" ] && printf marker || printf none; }
@@ -8565,6 +8599,61 @@ check "local coordinator prompts: the status-first sentence (answer from team-st
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
 }
 
+sec_test_run() {
+# test-run.sh: runs a command, passes stdio and exit code through, appends one JSON line to the test log (temp logs only)
+TR="$TMP/trun"; rm -rf "$TR"; mkdir -p "$TR/plain"; TRS="$ROOT/bin/test-run.sh"; TRL="$TR/log.jsonl"
+trc() { [ "$2" = "$3" ] || TRF="$TRF [${1#test-run: }: got $2]"; }
+tr_run() { ORCA_ROLES_TEST_LOG="$TRL" "$TRS" "$@"; }
+TRF=""
+try tr_run -- sh -c 'echo out; echo err >&2; exit 3' 2> "$TR/e1"
+trc "test-run: the command's exit code and stdout pass through, stderr gets the wall line" "$RC:$OUT:$(grep -c '^err$' "$TR/e1"):$(grep -c 'test-run: exit 3 in ' "$TR/e1")" "3:out:1:1"
+try tr_run -- true 2>/dev/null; trc "test-run: true gives 0" "$RC" "0"
+try tr_run -- /nonexistent/cmd 2>/dev/null; trc "test-run: a missing command gives 127" "$RC" "127"
+: > "$TR/noexec"; try tr_run -- "$TR/noexec" 2>/dev/null; trc "test-run: a file without the execute bit gives 126" "$RC" "126"
+trc "test-run: stdin reaches the command" "$(echo hi | tr_run -- cat 2>/dev/null)" "hi"
+: > "$TRL"; ORCA_ROLES_TEST_LOG="$TRL" "$TRS" -- sleep 2 2>/dev/null & TRP=$!
+poll eval 'pgrep -P "$TRP" sleep >/dev/null'; kill -TERM "$TRP"; TRRC=0; wait "$TRP" 2>/dev/null || TRRC=$?
+trc "test-run: TERM gives 143 and an aborted record" "$TRRC:$(tail -1 "$TRL" | jq -r '"\(.exit) \(.result)"')" "143:143 aborted"
+check "test-run: passthrough" "$TRF" ""
+TRF=""
+: > "$TRL"; tr_run --role tester --label "a b" -- sh -c 'sleep 1' 2>/dev/null
+TRTOP="$(git -C "$ROOT" rev-parse --show-toplevel)"
+trc "test-run: one record with the fields" "$(wc -l < "$TRL" | tr -d ' '):$(jq -r --arg w "$TRTOP" '[.kind,.role,.label,.exit,.result,(.wall_s>=1),(.cmd|startswith("sh -c sleep 1")),(.ts|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$")),(.worktree==$w),(.head|length),(.dirty|type),(.ncpu|type)]|join(" ")' "$TRL")" "1:run tester a b 0 ok true true true true 12 number number"
+: > "$TRL"; tr_run -- false 2>/dev/null || true; trc "test-run: a failing command is result fail, no role is an empty role" "$(jq -r '"\(.result) [\(.role)] \(.exit)"' "$TRL")" "fail [] 1"
+: > "$TRL"; (cd "$TR/plain" && tr_run -- true 2>/dev/null); trc "test-run: outside git head is empty, dirty 0, worktree is the folder" "$(jq -r '"[\(.head)] \(.dirty) \(.worktree)"' "$TRL")" "[] 0 $(cd "$TR/plain" && pwd)"
+: > "$TRL"; tr_run -- true "$(printf '%0400d' 0)" 2>/dev/null; trc "test-run: cmd keeps its first 300 characters" "$(jq -r '.cmd|length' "$TRL")" "300"
+if [ ! -r /proc/loadavg ]; then
+  mkdir -p "$TR/stub"; printf '#!/bin/sh\necho "{ 1,83 2,00 1,98 }"\n' > "$TR/stub/sysctl"; chmod +x "$TR/stub/sysctl"
+  : > "$TRL"; PATH="$TR/stub:$PATH" tr_run -- true 2>/dev/null; trc "test-run: the macOS load is the 1-minute figure" "$(jq -r '.load_start' "$TRL")" "1.83"
+  printf '#!/bin/sh\necho "{ abc 2,00 1,98 }"\n' > "$TR/stub/sysctl"
+  : > "$TRL"; PATH="$TR/stub:$PATH" tr_run -- true 2>/dev/null; trc "test-run: an unreadable load is null and the record is still written" "$(wc -l < "$TRL" | tr -d ' '):$(jq -r '.load_start' "$TRL")" "1:null"
+fi
+check "test-run: record" "$TRF" ""
+TRF=""
+: > "$TRL"; TRBAD=0
+for TRA in "" "--" "--bogus x --" "--role --" "--role a --role b -- true" "-- X=1 touch $TR/marker"; do
+  # shellcheck disable=SC2086
+  try tr_run $TRA 2> "$TR/eu"; [ "$RC" = 2 ] || TRBAD=1
+done
+trc "test-run: usage errors exit 2, log nothing and run nothing" "$TRBAD:$(wc -c < "$TRL" | tr -d ' '):$([ -e "$TR/marker" ] && echo marker):$(grep -c 'put environment assignments before test-run.sh' "$TR/eu")" "0:0::1"
+trc "test-run: an assignment before the wrapper reaches the command" "$(X=1 tr_run -- sh -c 'echo "$X"' 2>/dev/null)" "1"
+check "test-run: usage" "$TRF" ""
+TRF=""
+TRC="$TR/c"; unset TRX; TRX="$(env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" --path)"; env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" -- true 2>/dev/null
+trc "test-run: the default path follows XDG_CACHE_HOME and a run writes there" "$TRX:$(wc -l < "$TRC/orca-roles/test-runs.jsonl" | tr -d ' ')" "$TRC/orca-roles/test-runs.jsonl:1"
+TRO="$(ORCA_ROLES_TEST_LOG=off "$TRS" --path)"; ORCA_ROLES_TEST_LOG=off XDG_CACHE_HOME="$TR/offc" "$TRS" -- true 2> "$TR/eo"
+trc "test-run: off prints an empty path and writes nothing" "[$TRO]:$(grep -c ', log off' "$TR/eo"):$([ -e "$TR/offc" ] && echo 1 || echo 0)" "[]:1:0"
+: > "$TR/reg"; try env ORCA_ROLES_TEST_LOG="$TR/reg/x.jsonl" "$TRS" -- sh -c 'echo o; exit 4' 2> "$TR/en"
+trc "test-run: an unwritable log keeps the output and the exit code" "$RC:$OUT:$(grep -c ', log not written' "$TR/en")" "4:o:1"
+head -c 5242881 /dev/zero > "$TRL"; tr_run -- true 2>/dev/null
+trc "test-run: a log over 5 MB moves to .1" "$(wc -l < "$TRL" | tr -d ' '):$(wc -c < "$TRL.1" | tr -d ' ')" "1:5242881"
+try env -u HOME -u XDG_CACHE_HOME -u ORCA_ROLES_TEST_LOG "$TRS" -- sh -c 'exit 5' 2> "$TR/eh"
+trc "test-run: with no HOME the command still runs and the log is not written" "$RC:$(grep -c ', log not written' "$TR/eh")" "5:1"
+TT="$ROOT/prompts/programmer/tester.md"; TCR="$ROOT/prompts/programmer/code-reviewer.md"
+trc "test-run: the Tester and Code-Reviewer prompts name the wrapper" "$(grep -c 'test-run.sh --role tester --' "$TT" | sed 's/^[1-9][0-9]*$/y/'):$(grep -c 'test-run.sh --role code-reviewer --' "$TCR" | sed 's/^[1-9][0-9]*$/y/'):$(grep -c 'Environment assignments go before it' "$TT" "$TCR" | tr '\n' ' '):$(grep -c -e '--role tester --label base-check --' "$TT"):$(grep -c -e '--role tester --label cross-check --' "$TT")" "y:y:$(printf '%s:1 %s:1 ' "$TT" "$TCR"):1:1"
+check "test-run: log file" "$TRF" ""
+}
+
 sec_cli() {
 # The runner contract (all / some in order / --list / unknown -> exit 2), on a copy whose sections are stubs
 CR="$TMP/cli-root"; mkdir -p "$CR/tests"; ln -sfn "$ROOT/bin" "$CR/bin"; ln -sfn "$ROOT/prompts" "$CR/prompts"; ln -sfn "$ROOT/config.default.json" "$CR/config.default.json"
@@ -8624,8 +8713,11 @@ cp_run 1 bad fast; Q3="$CRC:$(cp_marks):$(grep -c '^FAILURES$' "$TMP/cli.out"):$
 check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK; also with SMOKE_JOBS=1" "$Q1|$Q2|$Q3" "1:marker fast,:1:1:0|1:marker fast,:1:1:0|1:marker fast,:1:0"
 # the timing log (SMOKE_TIMING_LOG, SMOKE_SLOW_CHECK), driven through child suites with two more fake sections: t0 assigns T0 and d, nest starts a nested suite
 CT="$TMP/cli-tlog"; rm -rf "$CT"; mkdir -p "$CT/tests"; ln -sfn "$ROOT/bin" "$CT/bin"; ln -sfn "$ROOT/prompts" "$CT/prompts"; ln -sfn "$ROOT/config.default.json" "$CT/config.default.json"
-sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit t0 nest"/' -e 's/^sec_slow() /sec_t0() { T0="$(echo x | shasum)"; d=abc; sleep 1; check "t0 after a sleep" a a; }\
+sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit t0 nest c1 c2 envs"/' -e 's/^sec_slow() /sec_c1() { : > "$RUNDIR\/c.1"; sleep 1; echo "marker c1 $(ls "$RUNDIR" | grep -c "^c\\.")"; sleep 0.5; rm -f "$RUNDIR\/c.1"; }\
+sec_c2() { : > "$RUNDIR\/c.2"; sleep 1; echo "marker c2 $(ls "$RUNDIR" | grep -c "^c\\.")"; sleep 0.5; rm -f "$RUNDIR\/c.2"; }\
+sec_t0() { T0="$(echo x | shasum)"; d=abc; sleep 1; check "t0 after a sleep" a a; }\
 sec_nest() { bash "$(dirname "$0")\/smoke.sh" fast > \/dev\/null; echo "marker nest"; }\
+sec_envs() { echo "marker envs ${SMOKE_MAX_LOAD-u}:${SMOKE_LOAD_FILE-u}:${SMOKE_NCPU-u}"; }\
 &/' "$CP/tests/smoke.sh" > "$CT/tests/smoke.sh"
 tl_run() { local j="$1"; shift; CRC=0; RUNDIR="$TMP/cprun" SMOKE_JOBS="$j" bash "$CT/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
 tl_sum() { printf '%s;%s;%s;' "$(grep -c '^# smoke.sh timings	started=[0-9T:Z-]*	commit=[^	]*	jobs=[0-9]*	bash=[^	]*	os=[A-Za-z]*$' "$1")" "$(grep -c '^total	' "$1")" "$(sed -n '$p' "$1" | cut -f1)"; awk -F'\t' '$1=="section"{printf "%s=%s,",$2,$4} $1=="total"{printf "T:%s:%s,",$3,$4} $1=="check"{printf "C:%s:%s,",$2,$4}' "$1" | tr ',' '\n' | LC_ALL=C sort | tr '\n' ','; }
@@ -8657,6 +8749,33 @@ T3="$(bash "$ROOT/tests/timing-compare.sh" "$TCA" "$TCN" 2>&1 >/dev/null; echo "
 check "timing-compare.sh: a section only in B, a check line ignored, a missing total as -, a non-log or a wrong argument count exits 2" "$T1|$T2|$T3|$T4" "section A B B-A_cli 50 41 -9_syn 3 3 0_guard - 9 -_total 60 - -_|total - 60 -|timing-compare.sh: $TCN is not a smoke.sh timing log
 rc=2|timing-compare.sh: usage: tests/timing-compare.sh <log A> <log B>
 rc=2"
+# the load throttle: SMOKE_JOBS empty means unset; SMOKE_NCPU=8 makes JOBS 4 on any machine; SMOKE_LOAD_FILE stands in for the load average
+tl_held() { printf '%s:%s:%s:' "$CRC" "$(grep -c '^marker c[12] [12]$' "$TMP/cli.out" || true)" "$(grep -c '^smoke.sh: new sections were held' "$TMP/cli.err" || true)"; awk -F'\t' '$1=="held"{printf "%s/%s/%s/", ($2>=1?"pos":$2),$3,$4}' "$TL"; }
+tl_mk() { grep '^marker c[12] ' "$TMP/cli.out" | tr '\n' ','; }
+NC=8; TLF="$TMP/tl-load"; TL="$TMP/tl2.tsv"
+echo '6,40' > "$TLF"; rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=$NC SMOKE_LOAD_FILE="$TLF" tl_run "" wake c1 c2; H1="$(tl_mk)$(tl_held)$(sed -n '$p' "$TMP/cli.out")|$(grep '^section' "$TL" | cut -f2 | tr '\n' ',' || true)"
+echo 0.5 > "$TLF"; rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=$NC SMOKE_LOAD_FILE="$TLF" tl_run "" c1 c2; H2="$(tl_mk)$(tl_held)"
+H3="marker c1 1,marker c2 1,pos"
+if [ ! -r /proc/loadavg ]; then
+  mkdir -p "$TMP/tl-stub"; printf '#!/bin/sh\necho "{ 9,00 1,00 1,00 }"\n' > "$TMP/tl-stub/sysctl"; chmod +x "$TMP/tl-stub/sysctl"
+  rm -f "$TL"; PATH="$TMP/tl-stub:$PATH" SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=$NC tl_run "" c1 c2; H3="$(tl_mk)$(awk -F'\t' '$1=="held"{print ($2>=1?"pos":$2)}' "$TL")"
+fi
+check "load throttle: a load at or above 0.8 x CPUs, with a decimal comma too and read from sysctl on macOS, with SMOKE_JOBS unset runs the sections one at a time and the serial section still last (exit 0, ALL OK, a held line of at least 1 s with 0.8 and 8, a note on stderr); below it they run together, held 0, no note" "$H1|$H2|$H3" "marker c1 1,marker c2 1,0:2:1:pos/0.8/8/ALL OK|c1,c2,wake,|marker c1 2,marker c2 2,0:2:0:0/0.8/8/|marker c1 1,marker c2 1,pos"
+echo 9.0 > "$TLF"; rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=$NC SMOKE_LOAD_FILE="$TLF" tl_run 3 c1 c2; N1="$(tl_mk)$(grep -c '^held' "$TL" || true)"
+rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=8 SMOKE_LOAD_FILE="$TLF" SMOKE_MAX_LOAD=0 tl_run "" c1 c2; N2="$(tl_mk)$(grep -c '^held' "$TL" || true)"
+echo 0.5 > "$TLF"; rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=8 SMOKE_LOAD_FILE="$TLF" SMOKE_MAX_LOAD=x tl_run "" c1 c2; N3="$(grep -c 'must be a non-negative number' "$TMP/cli.err" || true):$(grep '^held' "$TL" | cut -f2,3 | tr '\t' '/' || true)"
+rm -f "$TL" "$TLF.none"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=8 SMOKE_LOAD_FILE="$TLF.none" tl_run "" c1 c2; N4="$(tl_mk)$(grep '^held' "$TL" | cut -f2 || true):$(grep -vc 'timings written' "$TMP/cli.err" || true)"
+echo 9.0 > "$TLF"; rm -f "$TL"; SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=2 SMOKE_LOAD_FILE="$TLF" tl_run "" c1 c2; N5="$(grep -c '	jobs=1	' "$TL"):$(grep -c '^held' "$TL" || true)"
+SMOKE_MAX_LOAD=0 SMOKE_LOAD_FILE="$TLF" SMOKE_NCPU=8 tl_run 1 envs; N6="$(grep '^marker envs ' "$TMP/cli.out" || true)"
+TLC=""
+for TLK in es_ES.UTF-8 de_DE.UTF-8 fr_FR.UTF-8 it_IT.UTF-8 pt_BR.UTF-8 nl_NL.UTF-8; do
+  if [ "$(LC_ALL="$TLK" awk 'BEGIN { printf "%.1f", 0.5 }' 2>/dev/null)" = "0,5" ]; then TLC="$TLK"; break; fi
+done
+N7="marker c1 2,marker c2 2,0"   # no comma locale here: nothing to run
+if [ -n "$TLC" ]; then
+  echo 9.0 > "$TLF"; rm -f "$TL"; LC_ALL="$TLC" SMOKE_TIMING_LOG="$TL" SMOKE_NCPU=8 SMOKE_LOAD_FILE="$TLF" SMOKE_MAX_LOAD=0 tl_run "" c1 c2; N7="$(tl_mk)$(grep -c '^held' "$TL" || true)"
+fi
+check "load throttle: not applied with SMOKE_JOBS set, SMOKE_MAX_LOAD=0 (under a comma locale too, when one exists), an unreadable load file (no error on stderr) or one CPU's worth of jobs (no held line); an invalid SMOKE_MAX_LOAD warns and uses 0.8; the sections do not see the throttle's variables" "$N1|$N2|$N3|$N4|$N5|$N6|$N7" "marker c1 2,marker c2 2,0|marker c1 2,marker c2 2,0|1:0/0.8|marker c1 2,marker c2 2,0:0|1:0|marker envs u:u:u|marker c1 2,marker c2 2,0"
 }
 
 sec_usage_metrics() {
@@ -9054,7 +9173,7 @@ def watch():
 threading.Thread(target=watch, daemon=True).start()
 s.serve_forever()
 PYE
-fstart() { rm -rf "$UM/fs" "$UM/fake.port"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>&1 & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 150 ]; do sleep 0.2; n=$((n+1)); done; FP="$(cat "$UM/fake.port")"; }
+fstart() { rm -rf "$UM/fs" "$UM/fake.port"; rm -f "$UM/fake.err"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>"$UM/fake.err" & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 600 ]; do sleep 0.2; n=$((n+1)); done; if [ -s "$UM/fake.port" ]; then FP="$(cat "$UM/fake.port")"; else FP=""; echo "FAIL usage-metrics: the fake server wrote no port after 120s: $(head -c 400 "$UM/fake.err" 2>/dev/null | tr '\n' ' ')"; FAIL=1; fi; }
 fstop() { kill "$FPID" 2>/dev/null || true; wait "$FPID" 2>/dev/null || true; }
 fcfg() { printf '%s' "$1" > "$UM/fs/cfg.json"; }
 fposts() { find "$UM/fs/posts" -name '*.json' | wc -l | tr -d ' '; }
