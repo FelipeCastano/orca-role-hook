@@ -11,7 +11,7 @@ tool names, durations, verdict words and line counts.
 Store: $KIT/metrics/state.json (offsets and running totals, rewritten every pass) and $KIT/metrics/sessions-YYYY-MM-DD.jsonl (UTC day of the pass):
 one JSON line per kit session that changed in that pass, with all its cumulative values:
   ts                 pass time (ISO-8601 UTC)
-  session_id, task, project, orca_roles_role   labels (task/project: the longest worktrees.jsonl path that holds the session's first cwd, "" if none;
+  session_id, task, project, orca_roles_role   labels (task/project: the longest worktrees.jsonl path that holds the session's first cwd; else, for role "coordinator" or "auditor", "global-coordinator" or "global-auditor" and that folder's name; "" if neither;
                      role: from the kit's role message, "" if none), effort (the last api-request's output_config.effort, default "medium"),
                      query_source ("main"), service_version
   first, last        timestamps of the session's first and last line
@@ -86,6 +86,7 @@ TYPES = ("input", "output", "cacheRead", "cacheWrite")
 ROLE_RE = re.compile(r"Read (.*?) and adopt that role", re.S)
 MD_RE = re.compile(r"[^/\s]+\.md")
 TASK_RE = re.compile(r"task_[0-9a-f]{8,}")
+GLOBAL_TASKS = {"coordinator": "global-coordinator", "auditor": "global-auditor"}
 VERDICT_RE = re.compile(r"\b(ACCEPTED|REJECTED)\b")
 INS_RE = re.compile(r"(\d+) insertions?\(\+\)")
 DEL_RE = re.compile(r"(\d+) deletions?\(-\)")
@@ -567,6 +568,16 @@ def wt_match(wts, cwd):
     return None
 
 
+def session_labels(wts, S):
+    """(task, project) of a session: the mapped worktree that holds its first cwd; else, for the global coordinator or the global Auditor, whose folders no launch maps, its GLOBAL_TASKS task and the folder's name; else empty."""
+    hit = wt_match(wts, S["cwd"]) if S["cwd"] else None
+    if hit:
+        return hit
+    if S["role"] in GLOBAL_TASKS:
+        return GLOBAL_TASKS[S["role"]], os.path.basename((S["cwd"] or "").rstrip("/"))
+    return "", ""
+
+
 def claude_root():
     r = os.environ.get("ORCA_ROLES_CLAUDE_PROJECTS")
     return r if r else os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude"), "projects")
@@ -709,8 +720,8 @@ def store(state, changed, wts, ts):  # wts: the worktrees map
     with open(path, "a") as f:
         for sid in sorted(changed):
             S = state["sessions"][sid]
-            hit = wt_match(wts, S["cwd"]) if S["cwd"] else None
-            f.write(json.dumps(snapshot(S, ts, hit[0] if hit else "", hit[1] if hit else ""), separators=(",", ":")) + "\n")
+            task, project = session_labels(wts, S)
+            f.write(json.dumps(snapshot(S, ts, task, project), separators=(",", ":")) + "\n")
 
 
 def rotate(state, today, keep_days):
@@ -1144,8 +1155,7 @@ def push(state):
     wts = load_worktrees()
 
     def task_of(sid):
-        hit = wt_match(wts, state["sessions"][sid]["cwd"]) if state["sessions"][sid]["cwd"] else None
-        return hit[0] if hit else ""
+        return session_labels(wts, state["sessions"][sid])[0]
     for i in range(0, len(ready), BATCH):
         chunk = ready[i:i + BATCH]
         saved = {sid: dict(pushed[sid]["vals"]) for sid in chunk}
@@ -1398,8 +1408,7 @@ def build_backfill(state, prom, since, until, task_filter, head_start, wts, scra
     for sid, S0 in sorted(state["sessions"].items()):
         if not S0.get("kit"):
             continue
-        hit = wt_match(wts, S0["cwd"]) if S0["cwd"] else None
-        task = hit[0] if hit else ""
+        task = session_labels(wts, S0)[0]
         if task_filter is not None and task != task_filter:
             continue
         if (parse_ts(S0["last"]) or 0) < since:
