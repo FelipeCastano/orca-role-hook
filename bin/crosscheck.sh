@@ -125,14 +125,10 @@ case "$CMD" in
     case "$TO" in ''|*[!0-9]*|0) die "--timeout must be a positive number of seconds";; esac
     D="$(abs_dir "$DIR")" || die "no such directory: $DIR"
     is_copy "$D" || die "$DIR is not a copy made by crosscheck.sh tree"
-    LOGF="$D.$LABEL.log"; T="$(mktemp -d "${TMPDIR:-/tmp}/orca-crosscheck.XXXXXX")" || die "cannot create a temporary folder"
-    trap 'rm -rf "$T"' EXIT
+    LOGF="$D.$LABEL.log"
     START="$(date +%s)"
-    ( cd "$D" && exec "$@" ) > "$LOGF" 2>&1 < /dev/null & pid=$!
-    ( n=0; while [ ! -e "$T/stop" ] && [ "$n" -lt $((TO * 10)) ]; do sleep 0.1; n=$((n + 1)); done; [ -e "$T/stop" ] || { : > "$T/to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
-    wait $pid 2>/dev/null; RC=$?
-    : > "$T/stop"; wait $sl 2>/dev/null
-    TIMED=false; [ -f "$T/to" ] && TIMED=true
+    bounded_run --cd "$D" "$TO" "$LABEL" "$@" > "$LOGF" 2>&1 < /dev/null; RC=$?
+    TIMED=false; [ "$BOUNDED_TIMED" = 1 ] && TIMED=true
     jq -nc --arg label "$LABEL" --arg dir "$D" --argjson exit "$RC" --argjson seconds "$(( $(date +%s) - START ))" --argjson timedOut "$TIMED" --arg log "$LOGF" \
       --argjson backLinks "$([ -s "$D/.git/$MARK.back" ] && echo true || echo false)" \
       '{label: $label, dir: $dir, exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log, backLinks: $backLinks}'

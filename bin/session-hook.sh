@@ -28,7 +28,7 @@ slog() {
 ho() {
   local rem=$((DEADLINE - $(date +%s)))
   [ "$rem" -ge 1 ] || { EXPIRED=1; return 124; }
-  run_limited "$rem" session-hook command orca "$@" 2>/dev/null
+  bounded_run "$rem" session-hook command orca "$@" 2>/dev/null
 }
 record() { printf '%s\n' "$ORCA_TERMINAL_HANDLE" > "$DIR/$SID.tmp.$$" && mv "$DIR/$SID.tmp.$$" "$DIR/$SID"; }
 # at most once a day: records older than 30 days go

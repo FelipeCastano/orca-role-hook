@@ -116,7 +116,7 @@ if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
 unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
 export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
-export ORCA_ROLES_PACE=0.05 ORCA_ROLES_TICK=0.01   # the kit's fixed retry and poll waits, and the stop tick of bounded(), shortened; a check that needs the real value sets it itself
+export ORCA_ROLES_PACE=0.05   # the kit's fixed retry and poll waits, shortened; a check that needs the real value sets it itself
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
@@ -154,9 +154,9 @@ fast_poll() { local n=0; until "$@" 2>/dev/null || [ "$n" -ge 250 ]; do sleep 0.
 pgone() { ! kill -0 "${1:-0}" 2>/dev/null; }
 dir_empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
 nonempty() { [ -s "$1" ]; }
-# bt_run <script> <iterations> <unique|same> <timeout>: runs the bounded() of that script <iterations> times on instant probes (own temp dir, ids p<i> or always x)
-bt_run() { ( set +e; T="$(mktemp -d "$TMP/bt.XXXXXX")"; TO="$4"; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$1")"; i=0; while [ "$i" -lt "$2" ]; do id=x; [ "$3" = unique ] && id="p$i"; bounded "$id" true; i=$((i+1)); done; rm -rf "$T" ); }
-# bt_guard <cap seconds> <bt_run args...>: bt_run in the background, at most <cap> s; prints done, or stalled (and kills it) when bounded() waited for its timer instead of stopping it
+# bt_run <iterations> <limit>: bounded_run <iterations> times on an instant command
+bt_run() { ( set +e; i=0; while [ "$i" -lt "$1" ]; do bounded_run "$2" x true; i=$((i+1)); done ); }
+# bt_guard <cap seconds> <bt_run args...>: bt_run in the background, at most <cap> s; prints done, or stalled (and kills it) when bounded_run waited for its timer instead of stopping it
 bt_guard() { local cap="$1" n=0 p; shift; bt_run "$@" & p=$!; while kill -0 "$p" 2>/dev/null && [ "$n" -lt $((cap * 5)) ]; do sleep 0.2; n=$((n+1)); done; if kill -0 "$p" 2>/dev/null; then kill_tree "$p"; echo stalled; else echo "done"; fi; wait "$p" 2>/dev/null || true; }
 # bt_left <timeout>: how many 'sleep <timeout>' are alive after a bounded wait (a timer that sleeps its whole timeout and is signalled leaks them); they are killed so a failure leaves nothing behind. The pattern is built here so no command line of this script carries it
 bt_left() { local pat="sleep $1"; poll bt_none "$pat"; pgrep -f "$pat" | wc -l | tr -d ' '; pkill -f "$pat" 2>/dev/null || true; }
@@ -1868,48 +1868,70 @@ mv "$IDE/a/orca-ide" "$IDE/a/orca-ide.off"; S7="$(ORCA_WSL_CLI_DIR="$IDE/b" PATH
 BEFS="$(cksum < "$SHF")"; mkdir -p "$TMP/realorca"; printf '#!/bin/sh\n' > "$TMP/realorca/orca"; chmod +x "$TMP/realorca/orca"; S9="$(sh1 orca-ide "$TMP/realorca:$IDE/b"):$(cksum < "$SHF" | cut -d' ' -f1 | grep -qx "${BEFS%% *}" && echo same || echo changed)"
 rm -rf "$KIT/shim"
 check "shim: the exact script with a printf %q target (a path with a space works), one PATH entry after two sourcings, not rewritten while unchanged, rewritten when the target changes, run-time fallbacks to ORCA_WSL_CLI_DIR and to orca-ide on the PATH, untouched and not put on the PATH when a real 'orca' exists" "$S1|$S2|$S3|$S4|$S5|$S6|$S7|$S8|$S9" "1|#!/usr/bin/env bash~[ -x \"\$t\" ] || t=\"\${ORCA_WSL_CLI_DIR:+\$ORCA_WSL_CLI_DIR/orca-ide}\"~[ -n \"\$t\" ] && [ -x \"\$t\" ] || t=orca-ide~exec \"\$t\" \"\$@\"~|$IDE/c d/orca-ide|ide-c d:x y|kept|$IDE/a/orca-ide|ide-b:z|ide-c d:w|0:same"
-# run_limited: past the limit the process tree is killed, the label goes to stderr and the status is 124; nothing is left behind
+# bounded_run: past the limit the process tree is killed, the label goes to stderr and the status is 124; nothing is left behind
 RLT="$TMP/rltmp"; mkdir -p "$RLT"; : > "$TMP/rl.pid"
-rl() { TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; run_limited "$@"' x "$@" 2>&1; }
+rl() { TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; bounded_run "$@"' x "$@" 2>&1; }
+# rlb: like rl, then one last line with the status and BOUNDED_TIMED as the caller sees them
+rlb() { TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; bounded_run "$@"; r=$?; echo "rc=$r T=$BOUNDED_TIMED"' x "$@" 2>&1; }
 T0=$SECONDS; try rl 1 lbl sh -c "sleep 41 & echo \$! > '$TMP/rl.pid'; wait" ; R1="$RC:$OUT:$((SECONDS - T0 < 10 ? 1 : 0))"
 RLP="$(cat "$TMP/rl.pid")"; poll pgone "$RLP"
-check "run_limited: a command past its limit is stopped with its whole process tree, '<label>: no answer in <secs> s; stopped.' and status 124, no temp folder left" "$R1:$(pgone "$RLP" && echo gone || echo alive):$(ls -A "$RLT" | wc -l | tr -d ' ')" "124:lbl: no answer in 1 s; stopped.:1:gone:0"
-[ -n "$RLP" ] && kill "$RLP" 2>/dev/null || true
-# run_limited: status, stdin and output pass through; no watchdog is left; without a temp folder the command runs unlimited
+RQ1="$(rlb 1 lbl sh -c "sleep 42 & echo \$! > '$TMP/rl.pid'; wait" | tr '\n' '~')"; RLQ="$(cat "$TMP/rl.pid")"; poll pgone "$RLQ"
+RQ2="$(rlb --quiet 1 lbl sh -c "sleep 43 & echo \$! > '$TMP/rlq.pid'; wait" | tr '\n' '~')"; RLQ2="$(cat "$TMP/rlq.pid")"; poll pgone "$RLQ2"
+check "bounded_run: a command past its limit is stopped with its whole process tree, '<label>: no answer in <secs> s; stopped.' and status 124 with BOUNDED_TIMED 1, no temp folder left; --quiet drops only the sentence" "$R1:$(pgone "$RLP" && echo gone || echo alive):$(ls -A "$RLT" | wc -l | tr -d ' ')|$RQ1|$RQ2:$(pgone "$RLQ2" && echo gone || echo alive)" "124:lbl: no answer in 1 s; stopped.:1:gone:0|lbl: no answer in 1 s; stopped.~rc=124 T=1~|rc=124 T=1~:gone"
+[ -n "$RLP" ] && kill "$RLP" "$RLQ" "$RLQ2" 2>/dev/null || true
+# bounded_run: status, stdin and output pass through; no watchdog is left; without a temp folder the command runs unlimited
 try rl $((UT + 5)) lbl sh -c 'cat; echo err >&2; exit 7' <<<"in" ; P1="$RC:$OUT"
 poll bt_none "sleep $((UT + 5))"; P2="$(pgrep -f "sleep $((UT + 5))" | wc -l | tr -d ' '):$(ls -A "$RLT" | wc -l | tr -d ' ')"
-try env TMPDIR="$TMP/no/such/dir" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; run_limited 1 lbl sh -c "sleep 2; echo done; exit 3"'; P3="$RC:$OUT"
-check "run_limited: the command's status, stdin, stdout and stderr pass through; the watchdog is gone and the temp folder removed; if mktemp fails the command runs without a limit" "$P1|$P2|$P3" "7:in
-err|0:0|3:done"
+try env TMPDIR="$TMP/no/such/dir" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; bounded_run 1 lbl sh -c "sleep 2; echo done; exit 3"'; P3="$RC:$OUT"
+RLT24="$(rlb 2 lbl sh -c 'exit 124' | tr '\n' '~')"; RLT127="$(rlb 2 lbl no-such-command-xyz | grep '^rc=')"; RLT7="$(rlb 2 lbl sh -c 'exit 7')"
+check "bounded_run: the command's status (also its own 124, with BOUNDED_TIMED 0 and no sentence, and 127 for a missing command), stdin, stdout and stderr pass through; the watchdog is gone and the temp folder removed; if mktemp fails the command runs without a limit" "$P1|$P2|$P3|$RLT7|$RLT24|$RLT127" "7:in
+err|0:0|3:done|rc=7 T=0|rc=124 T=0~|rc=127 T=0"
+# bounded_run limits: positive numbers run, anything else is refused with status 2 and nothing is run
+rm -f "$TMP/lim.ran"; LG=""; LB=""; LX=""
+for x in 2 0.2 .5; do LG="$LG$(rlb "$x" lbl sh -c "echo ran >> '$TMP/lim.ran'" | tr '\n' '~')|"; done
+LRAN="$(wc -l < "$TMP/lim.ran" | tr -d ' ')"; rm -f "$TMP/lim.ran"
+for x in abc "" 1.2.3 . 0 0.0 -1 1e3; do LB="$LB$(rlb "$x" lbl sh -c "echo ran >> '$TMP/lim.ran'" | tr '\n' '~')|"; LX="${LX}bounded_run: bad limit '$x' for lbl~rc=2 T=0~|"; done
+check "bounded_run: limits 2, 0.2 and .5 run; abc, empty, 1.2.3, ., 0, 0.0, -1 and 1e3 print 'bounded_run: bad limit' with the label, return 2 and run nothing" "$LG$LRAN|$LB$([ -e "$TMP/lim.ran" ] && echo ran || echo none)" "rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|3|${LX}none"
+# bounded_run options: --cd, shell functions, $(...)
+CDD="$TMP/cd dir"; mkdir -p "$CDD"
+O1="$(rlb --cd "$CDD" 5 lbl sh -c 'echo "${PWD##*/}"' | tr '\n' '~')"; O2="$(rlb --cd "$CDD" 5 lbl sh -c 'exit 7')"
+O3="$(rlb --cd "$CDD" 1 lbl sh -c "sleep 44 & echo \$! > '$TMP/cd.pid'; wait" | tr '\n' '~')"; CDP="$(cat "$TMP/cd.pid")"; poll pgone "$CDP"; O3="$O3:$(pgone "$CDP" && echo gone || echo alive)"
+O4="$(rlb --cd "$TMP/no such dir" 5 lbl true | sed "s/^.*No such file or directory\$/CDMSG/" | tr "\n" "~")"
+T0=$SECONDS; O5="$(TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; fn() { echo hi; }; bounded_run --cd "$1" 5 lbl fn 2>/dev/null; echo "rc=$? T=$BOUNDED_TIMED"' x "$CDD")"; O5="$O5:$((SECONDS - T0 < 4 ? 1 : 0))"
+O6="$(TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; fn() { echo "hi $1"; }; bounded_run 5 lbl fn there; echo "rc=$? T=$BOUNDED_TIMED"' x | tr '\n' '~')"
+T0=$SECONDS; O7="$(TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; o=$(bounded_run 1 lbl sh -c "echo a; sleep 45 & echo \$! > \"$1\"; wait" 2>/dev/null); echo "rc=$? out=$o"' x "$TMP/sub.pid")"; O7="$O7:$((SECONDS - T0 < 6 ? 1 : 0))"; SUBP="$(cat "$TMP/sub.pid")"; poll pgone "$SUBP"; O7="$O7:$(pgone "$SUBP" && echo gone || echo alive)"
+check "bounded_run options: --cd runs in a folder with a space and passes the status; a timeout under --cd kills the tree and sets BOUNDED_TIMED; a missing folder is 1 with cd's message, no sentence and BOUNDED_TIMED 0; a shell function with --cd is 127 without hanging; a function works without --cd; a call in \$(...) returns at its limit and leaves nothing running" "$O1|$O2|$O3|$O4|$O5|$O6|$O7" "cd dir~rc=0 T=0~|rc=7 T=0|lbl: no answer in 1 s; stopped.~rc=124 T=1~:gone|CDMSG~rc=1 T=0~|rc=127 T=0:1|hi there~rc=0 T=0~|rc=124 out=a:1:gone"
+# bounded_run under set -euo pipefail: a successful call never ends the script; a timed-out one does (124) unless guarded
+SEF="$TMP/sef.sh"; printf '#!/bin/bash\nset -euo pipefail\n. "$KIT/bin/lib.sh"\nbounded_run 2 x true\nbounded_run 2 x sh -c "exit 0"\nbounded_run --quiet 2 x true\necho END\n' > "$SEF"
+SE1=0; for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(TMPDIR="$RLT" KIT="$KIT" bash "$SEF" 2>&1)" = END ] && SE1=$((SE1+1)); done
+printf '#!/bin/bash\nset -euo pipefail\n. "$KIT/bin/lib.sh"\nbounded_run --quiet 1 x sleep 46\necho END\n' > "$TMP/sef2.sh"; printf '#!/bin/bash\nset -euo pipefail\n. "$KIT/bin/lib.sh"\nbounded_run --quiet 1 x sleep 47 || true\necho END\n' > "$TMP/sef3.sh"
+try env TMPDIR="$RLT" KIT="$KIT" bash "$TMP/sef2.sh"; SE2="$RC:$OUT"; try env TMPDIR="$RLT" KIT="$KIT" bash "$TMP/sef3.sh"; SE3="$RC:$OUT"
+check "bounded_run under set -euo pipefail: 10 of 10 scripts with successful calls reach their last line; a timed-out call without '|| true' ends the script with 124, with '|| true' it goes on" "$SE1|$SE2|$SE3" "10|124:|0:END"
 # the orca function: limit 60 s, ORCA_ROLES_CLI_TIMEOUT, or --timeout-ms rounded up to seconds + 60; label from the first two arguments; runs the real command with its status
-ol() { env -u ORCA_ROLES_CLI_TIMEOUT ${OLT:+ORCA_ROLES_CLI_TIMEOUT=$OLT} PATH="$TMP/realorca:/usr/bin:/bin" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; run_limited() { echo "$1|$2"; }; orca "$@"' x "$@"; }
+ol() { env -u ORCA_ROLES_CLI_TIMEOUT ${OLT:+ORCA_ROLES_CLI_TIMEOUT=$OLT} PATH="$TMP/realorca:/usr/bin:/bin" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; bounded_run() { echo "$1|$2"; }; orca "$@"' x "$@"; }
 O1="$(ol terminal list)"; O2="$(OLT=5 ol a)"; O3="$(ol ask --timeout-ms 600000 --json)"; O4="$(ol ask --timeout-ms 1500)"; O5="$(ol ask --timeout-ms abc)"; O6="$(ol ask --timeout-ms)"
 printf '#!/bin/sh\necho "real:$*"; exit 3\n' > "$TMP/realorca/orca"; try env ORCA_ROLES_CLI_TIMEOUT=60 PATH="$TMP/realorca:/usr/bin:/bin" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; orca terminal list --json'; O7="$RC:$OUT"; O8="$(OLT=0 ol ask --timeout-ms 1500 | tr '\n' ' ' || true)"; rm -f "$TMP/realorca/orca"
 check "orca function: default 60 s, ORCA_ROLES_CLI_TIMEOUT (0 = no limit even with --timeout-ms: the real command runs directly), --timeout-ms N rounded up + 60 (a non-numeric or missing N keeps the default), label from the first two arguments; the real command's status and output pass through" "$O1|$O2|$O3|$O4|$O5|$O6|$O7|$O8" "60|orca terminal list (no answer from Orca)|5|orca a  (no answer from Orca)|660|orca ask --timeout-ms (no answer from Orca)|62|orca ask --timeout-ms (no answer from Orca)|60|orca ask --timeout-ms (no answer from Orca)|60|orca ask --timeout-ms (no answer from Orca)|3:real:terminal list --json|real:ask --timeout-ms 1500 "
-# run_limited from two forked subshells at once: each call has its own marker, both are stopped, no marker is left
-rl2() { TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; ( run_limited 1 a sleep "$1"; echo "a:$?" ) 2>/dev/null & ( run_limited 1 b sleep "$2"; echo "b:$?" ) 2>/dev/null & wait' x $((UT + 7)) $((UT + 8)) | sort | tr '\n' ' '; }
-check "run_limited: two calls running at once from forked subshells are both stopped at their limit (own marker each) and no marker file is left" "$(rl2):$(ls -A "$RLT" | wc -l | tr -d ' ')" "a:124 b:124 :0"
-# run_limited: a caller that dies does not leave the command running past its limit, and the watchdog removes the marker
-rlk_up() { ls "$RLT"/orca-roles-limit.* >/dev/null 2>&1; }
-TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; run_limited 2 c sleep "$1"' x $((UT + 9)) 2>/dev/null & RLC=$!
-fast_poll rlk_up; kill -9 "$RLC" 2>/dev/null; wait "$RLC" 2>/dev/null || true
+# bounded_run from two forked subshells at once: each call has its own marker, both are stopped, no marker is left
+rl2() { TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; ( bounded_run 1 a sleep "$1"; echo "a:$?" ) 2>/dev/null & ( bounded_run 1 b sleep "$2"; echo "b:$?" ) 2>/dev/null & wait' x $((UT + 7)) $((UT + 8)) | sort | tr '\n' ' '; }
+check "bounded_run: two calls running at once from forked subshells are both stopped at their limit (own marker each) and no marker file is left" "$(rl2):$(ls -A "$RLT" | wc -l | tr -d ' ')" "a:124 b:124 :0"
+# bounded_run: a caller that dies does not leave the command running past its limit, and the watchdog removes the marker
+rlk_up() { ls "$RLT"/orca-roles-limit."$1".* >/dev/null 2>&1; }
+TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; bounded_run 2 c sleep "$1"' x $((UT + 9)) 2>/dev/null & RLC=$!
+TMPDIR="$RLT" KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; bounded_run 2 d sleep 1' 2>/dev/null & RLD=$!
+fast_poll rlk_up "$RLC"; kill -9 "$RLC" 2>/dev/null; wait "$RLC" 2>/dev/null || true
+fast_poll rlk_up "$RLD"; kill -9 "$RLD" 2>/dev/null; wait "$RLD" 2>/dev/null || true
 poll bt_none "^sleep $((UT + 9))$"; poll dir_empty "$RLT"
-check "run_limited: the caller was killed: the command is stopped at the limit by the watchdog and the marker is removed" "$(pgrep -f "^sleep $((UT + 9))$" | wc -l | tr -d ' '):$(ls -A "$RLT" | wc -l | tr -d ' ')" "0:0"
+check "bounded_run: the caller was killed: the command is stopped at the limit by the watchdog and no marker file is left, whether the command was still running at the limit or had ended before it" "$(pgrep -f "^sleep $((UT + 9))$" | wc -l | tr -d ' '):$(ls -A "$RLT" | wc -l | tr -d ' ')" "0:0"
 pkill -f "^sleep $((UT + 9))$" 2>/dev/null || true
 # pace: ORCA_ROLES_PACE replaces the wait; unset or empty keeps the caller's value
 T0=$SECONDS; ORCA_ROLES_PACE=0 KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; pace 30'; PF=$((SECONDS - T0 < 5 ? 1 : 0))
 T0=$SECONDS; ORCA_ROLES_PACE='' KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; pace 2'; PS=$((SECONDS - T0 >= 1 ? 1 : 0))
 check "pace: ORCA_ROLES_PACE replaces the wait, an empty one keeps the given seconds" "$PF:$PS" "1:1"
-# bounded(): a shorter ORCA_ROLES_TICK does not shorten the timeout in seconds
-bsrun() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO="$1"; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; bounded x sleep "$2"; echo "$TIMED:$RC"; rm -rf "$T" ); }
-check "bounded: with ORCA_ROLES_TICK=0.01 a 1 s probe still finishes inside a 2 s timeout, and one that outlasts a 1 s timeout is stopped" "$(ORCA_ROLES_TICK=0.01 bsrun 2 1)|$(ORCA_ROLES_TICK=0.01 bsrun 1 $((UT + 10)))" "0:0|1:137"
-SLW="$TMP/slowsleep"; mkdir -p "$SLW"; REALSLEEP="$(command -v sleep)"
-printf '#!/bin/sh\n%s "$(awk -v t="$1" '"'"'BEGIN { print t + 0.2 }'"'"')"\n' "$REALSLEEP" > "$SLW/sleep"; chmod +x "$SLW/sleep"
-bslow() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=1; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; PATH="$SLW:$PATH"; T0=$SECONDS; bounded x "$REALSLEEP" $((UT + 11)); echo "$TIMED:$RC:$((SECONDS - T0 < 5 ? 1 : 0))"; rm -rf "$T" ); }
-check "bounded: the timeout is kept on the clock when each tick costs more than the tick (slow CI machines)" "$(ORCA_ROLES_TICK=0.01 bslow)" "1:137:1"
-bsal() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=3; export TO; eval "$(sed -n '/^bounded() {/,/^}/p' "$KIT/bin/models.sh")"; s=$SECONDS; while [ "$SECONDS" -eq "$s" ]; do :; done; bounded x "$REALSLEEP" 3.5; echo "$TIMED:$RC"; rm -rf "$T" ); }
-check "bounded: a probe that ends inside the timeout is not stopped early, whatever the fraction of the second when it started" "$(ORCA_ROLES_TICK=0.01 bsal)" "0:0"
-pkill -f "^$REALSLEEP $((UT + 11))$" 2>/dev/null || true
+# bounded(): the limit holds in seconds, and RC is 124 past it
+bsrun() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO="$1"; bounded x sleep "$2"; B=$?; echo "$TIMED:$RC:$B"; rm -rf "$T" ); }
+bsin() { ( set +e; T="$(mktemp -d "$TMP/bs.XXXXXX")"; TO=2; bounded x cat; wc -c < "$T/x.out" | tr -d " "; rm -rf "$T" ); }
+check "bounded: a 1 s probe finishes inside a 2 s timeout, and one that outlasts a 1 s timeout is stopped (RC 124), and bounded itself returns 0 in both, with stdin closed" "$(bsrun 2 1)|$(bsrun 1 $((UT + 10)))|$(printf zzz | bsin)" "0:0:0|1:124:0|0"
 }
 
 sec_roles_yaml() {
@@ -3108,6 +3130,10 @@ check "telemetry: only the boolean true turns it on" "$(agent_otel "$MOT.x" "")"
 printf '#!/bin/sh\n[ "$1" = --version ] && sleep 30\necho started\n' > "$MB/claude"
 S1="$(date +%s)"; agent_run "$MP" dev; S2="$(date +%s)"
 check "provenance: a claude that hangs on --version does not hang agent.sh, version null" "$([ $((S2 - S1)) -lt 20 ] && echo fast):$(tail -1 "$PF" | jq -r .cliVersion)" "fast:null"
+printf '#!/bin/sh\nif [ "$1" = --version ]; then echo "7.7.7 (hang)"; trap "" TERM; sleep 4244 & sleep 4245; fi\necho ran > "%s"\n' "$TMP/mtran" > "$MB/claude"
+rm -f "$TMP/mtran"; S1="$(date +%s)"; agent_run "$MP" dev; S2="$(date +%s)"
+check "provenance: a --version that prints a line, ignores TERM and has a grandchild is cut off in time: the line kept, the agent ran, nothing alive" "$([ $((S2 - S1)) -lt 8 ] && echo fast):$(tail -1 "$PF" | jq -r .cliVersion):$(cat "$TMP/mtran" 2>/dev/null):$(pgrep -f 'sleep 424[45]' | wc -l | tr -d ' ')" "fast:7.7.7 (hang):ran:0"
+pkill -9 -f 'sleep 424[45]' || true
 rm -f "$MB/claude"
 agent_run "$TMP/mtnogit" dev
 check "provenance: outside a git repository nothing is written" "$(find "$TMP/mtnogit" -name 'orca-roles*' | wc -l | tr -d ' ')" "0"
@@ -3169,10 +3195,11 @@ try mx; check "metrics: no opencode line when no role runs opencode" "$(printf '
 jq '.roles.oc = {agent: "opencode"}' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
 try mx; check "metrics: agent opencode counts too" "$(printf '%s\n' "$OUT" | grep -c opencode)" "1"
 printf '#!/bin/sh\necho oops >&2; exit 1\n' > "$MB/opencode"
-try mx; check "metrics: a failing opencode gives a warning on stderr and no line, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(grep -c 'warning' "$TMP/mt.err")" "0:0:1"
-printf '#!/bin/sh\nsleep 30\n' > "$MB/opencode"
-S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>/dev/null' _ "$MP" "$TMP/home" "$MPATH" "$CC" "$MCFG"; S2="$(date +%s)"
-check "metrics: a hanging opencode is cut off" "$RC:$([ $((S2 - S1)) -lt 20 ] && echo fast):$(printf '%s\n' "$OUT" | grep -c opencode)" "0:fast:0"
+try mx; check "metrics: a failing opencode gives a warning on stderr and no line, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(cat "$TMP/mt.err")" "0:0:metrics.sh: warning: 'opencode stats' failed; no OpenCode line."
+printf '#!/bin/sh\ntrap "" TERM\nsleep 4242 &\nsleep 4243\n' > "$MB/opencode"
+S1="$(date +%s)"; try env ORCA_ROLES_METRICS_TIMEOUT=1 bash -c 'cd "$1" && HOME="$2" PATH="$3" CLAUDE_CONFIG_DIR="$4" ORCA_ROLES_CONFIG="$5" "$2/.orca-roles/bin/metrics.sh" 2>"$6"' _ "$MP" "$TMP/home" "$MPATH" "$CC" "$MCFG" "$TMP/mt.err"; S2="$(date +%s)"
+check "metrics: a hanging opencode that ignores TERM and has a grandchild is cut off: exit 0, no line, the warning, nothing alive" "$RC:$([ $((S2 - S1)) -lt 8 ] && echo fast):$(printf '%s\n' "$OUT" | grep -c opencode):$(cat "$TMP/mt.err"):$(pgrep -f 'sleep 424[23]' | wc -l | tr -d ' ')" "0:fast:0:metrics.sh: warning: opencode stats: no answer in 1 s; stopped. No OpenCode line.:0"
+pkill -9 -f 'sleep 424[23]' || true
 rm -f "$MB/opencode"
 try mx; check "metrics: the stub removed, no opencode line and no error" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(wc -c < "$TMP/mt.err" | tr -d ' ')" "0:0:0"
 check "metrics: outside a git repository it fails with a message" "$(cd "$TMP/mtnogit" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/metrics.sh" 2>&1 >/dev/null | head -1 | cut -c1-30)" "metrics.sh: run it from the wo"
@@ -4726,9 +4753,9 @@ WW1="$(ww)"
 WW2="$(ww WSLENV=FOO/p:BAR)|$(ww WSLENV=A:ELECTRON_RUN_AS_NODE/u:B)|$(ww WSLENV=ELECTRON_RUN_AS_NODE)|$(ww WSLENV=ELECTRON_RUN_AS_NODE_X)|$(ww WSLENV=XELECTRON_RUN_AS_NODE/u)"
 WW3="$(ww WFAKE_RC=3)"
 WW4="$(wwk wake_tab "$WS/ver-linux")|$(wwk wake_tab "$WS/ver-caps" | cut -c1-2)"
-RL_STUB='run_limited() { echo "LIM:$1:$2" >&2; return 124; }'
+RL_STUB='bounded_run() { echo "LIM:$1:$2" >&2; return 124; }'
 WW5="$( (unset WSLENV; export PATH="$WS/bin:/usr/bin:/bin" WS_ROOT="$WS/root" ORCA_ROLES_PROC_VERSION="$WS/ver" ORCA_CLI_COMMAND="" ORCA_WSL_CLI_DIR="$WS/ide"; eval "$RL_STUB"; r=0; o="$(wake_tab a b c)" || r=$?; echo "$r:$o"; PATH="$A/rel:$PATH"; r=0; o="$(wake_tab a b c)" || r=$?; echo "$r:$o") | tr '\n' ' ')"
-check "wake_tab on WSL: Orca.exe runs from its own folder with ELECTRON_RUN_AS_NODE=1, WSLENV carrying the name (appended to what is there, kept when already listed with or without a /flag, not fooled by a longer or prefixed name), the wake-tab.cjs path and the runtime client as Windows paths and the three ids; stdout dropped, status 0; a failure is 1 with the first stderr line; a kernel without 'microsoft' is 2 with nothing run, 'Microsoft' works; both the WSL and the macOS call go through run_limited 30 labelled wake-tab (a 124 is 1 with its message)" \
+check "wake_tab on WSL: Orca.exe runs from its own folder with ELECTRON_RUN_AS_NODE=1, WSLENV carrying the name (appended to what is there, kept when already listed with or without a /flag, not fooled by a longer or prefixed name), the wake-tab.cjs path and the runtime client as Windows paths and the three ids; stdout dropped, status 0; a failure is 1 with the first stderr line; a kernel without 'microsoft' is 2 with nothing run, 'Microsoft' works; both the WSL and the macOS call go through bounded_run 30 labelled wake-tab (a 124 is 1 with its message)" \
   "$WW1|$WW2|$WW3|$WW4|$WW5" \
   "0::$WXL|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=FOO/p:BAR:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=A:ELECTRON_RUN_AS_NODE/u:B}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE_X:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=XELECTRON_RUN_AS_NODE/u:ELECTRON_RUN_AS_NODE}|1:first line:${WXL}|2:|0:|1:LIM:30:wake-tab 1:LIM:30:wake-tab "
 # 3. launch.sh against the fake orca and the fake wake hook (it appends the woken tab to the terminal list, as Orca does)
@@ -5590,7 +5617,7 @@ check "opencode close-role: the session file is gone and the role's line left th
 oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
 check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
 oc_close_setup; OCDELMODE=hang; OCTO=1; T0=$(date +%s); try ocrun close-role.sh dev; T1=$(date +%s); OCDELMODE=""; OCTO=""
-check "opencode close-role: a hanging delete is cut after the timeout; the tab is still closed and the file removed" "$RC:$(grep -c 'timed out after 1 s' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file):$([ $((T1 - T0)) -lt 15 ] && echo fast)" "0:1:1::fast"
+check "opencode close-role: a hanging delete is cut after the timeout; the tab is still closed and the file removed" "$RC:$(grep -c 'opencode: no answer in 1 s; stopped\.' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file):$([ $((T1 - T0)) -lt 15 ] && echo fast)" "0:1:1::fast"
 check "opencode close-role: the hung opencode process was killed" "$(kill -0 "$(cat "$OCLOG.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
 oc_close_setup; try ocrun close-role.sh cl
 check "opencode close-role: a claude role calls no opencode and leaves the file alone" "$RC:$(grep -c '^delete' "$OCLOG" || true):$(cat "$SF")" "0:0:ses_saved_1"
@@ -6388,7 +6415,8 @@ check "crosscheck run: one JSON line with the command's exit code, its label and
 check "crosscheck run: the command ran inside the copy and its output (stdout and stderr) is in <dir>.<label>.log" "$(printf '%s' "$XOUT" | jq -r .log):$(cat "$XB.t1.log" | tr '\n' ' ')" "$XB.t1.log:v1 err "
 xrun run "$XD/base" --label ok -- true; check "crosscheck run: a passing command reports exit 0" "$(printf '%s' "$XOUT" | jq -r .exit)" "0"
 xrun run "$XD/base" --label slow --timeout 1 -- sleep 9.137
-check "crosscheck run: a run over --timeout is cut and reported as timedOut" "$XRC:$(printf '%s' "$XOUT" | jq -r '"\(.timedOut) \(.exit != 0) \(.seconds < 5)"')" "0:true true true"
+XSLOWL="$(printf '%s' "$XOUT" | jq -r .log)"; XSLOWO="$XOUT"; xrun run "$XD/base" --label own -- sh -c 'exit 124'
+check "crosscheck run: a run over --timeout is cut (timedOut, exit 124, the sentence ends its log); a command exiting 124 by itself is exit 124, not timedOut, with no sentence" "$XRC:$(printf '%s' "$XSLOWO" | jq -r '"\(.timedOut) \(.exit) \(.seconds < 5)"'):$(tail -n 1 "$XSLOWL"):$(printf '%s' "$XOUT" | jq -r '"\(.timedOut) \(.exit)"'):$(grep -c 'no answer in' "$XB.own.log" || true)" "0:true 124 true:slow: no answer in 1 s; stopped.:false 124:0"
 check "crosscheck run: the cut run left no process behind" "$(pgrep -f 'sleep 9.137' | wc -l | tr -d ' ')" "0"
 for bad in "$XW --label x -- true" "$XD/full --label x -- true" "$XD/nodir --label x -- true" "$XD/base -- true" "$XD/base --label a/b -- true" "$XD/base --label .x -- true" "$XD/base --label x --timeout 0 -- true" "$XD/base --label x --timeout 1.5 -- true" "$XD/base --label x" "$XD/base --label x --"; do
   eval "xrun run $bad"
@@ -6939,22 +6967,20 @@ rm -f "$MM/codex.layA"; touch "$MM/codex.layB"; mt cx --check; check "models: co
 rm -f "$MM/codex.layB"; touch "$MM/codex.dmjson1"; mt cx; check "models: codex debug models exiting 1 with valid JSON -> note and the role's model only" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models failed: dm: boom"
 rm -f "$MM/codex.dmjson1"
 rm -f "$MM/codex.401"
-touch "$MM/codex.hangdm"; ORCA_ROLES_PROBE_TIMEOUT=4 mt cx; check "models: a hung codex debug models ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models timed out after 4 s"
+touch "$MM/codex.hangdm"; ORCA_ROLES_PROBE_TIMEOUT=4 mt cx; check "models: a hung codex debug models ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:gpt-b:codex debug models: no answer in 4 s; stopped."
 rm -f "$MM/codex.hangdm"
-ORCA_ROLES_PROBE_TIMEOUT=4 mt hl; check "models: a hung models.list ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:m3:models.list timed out after 4 s"
+ORCA_ROLES_PROBE_TIMEOUT=4 mt hl; check "models: a hung models.list ends with a note and the role's model" "$RC:$(tabs):$(cat "$MM/err")" "0:m3:models.list: no answer in 4 s; stopped."
 rm -rf "$MM/conc" "$MM/conc.log"; mt conc --check
 check "models: 10 probes all answered" "$(tabs | tr ';' '\n' | grep -c '|ok|-')" "10"
 check "models: never more than 6 probes run at once, and they did overlap" "$(sort -n "$MM/conc.log" | tail -1):$(wc -l < "$MM/conc.log" | tr -d ' ')" "6:10"
 ORCA_ROLES_PROBE_TIMEOUT=$((UT + 6)) mt fast --check
 for _ in $(seq 25); do pgrep -f "sleep $((UT + 6))" >/dev/null || break; sleep 0.2; done
 check "models: 40 instant probes answered and left no timer sleep behind" "$(tabs | tr ';' '\n' | grep -c '|ok|-'):$(pgrep -f "sleep $((UT + 6))" | wc -l | tr -d ' ')" "40:0"
-# the timer of bounded() is stopped whatever the moment: many instant probes in a row, in parallel, and again under the same id (a stale marker of the previous call)
-t0=$SECONDS; G="$(bt_guard 120 "$KIT/bin/models.sh" 100 unique $((UT)))"
-check "models: 100 instant bounded() calls in a row finish (none waits for its timer), leave no timer sleep behind and cost no more than the stop tick" "$G:$(bt_left $((UT))):$(( SECONDS - t0 < 60 ? 1 : 0 ))" "done:0:1"
-G="$(for k in 1 2 3 4 5 6 7 8; do bt_guard 120 "$KIT/bin/models.sh" 20 unique $((UT + 1)) & done; wait)"
-check "models: 8 x 20 instant bounded() calls in parallel all finish and leave no timer sleep behind" "$(printf '%s\n' "$G" | grep -c '^done$' || true):$(bt_left $((UT + 1)))" "8:0"
-G="$(bt_guard 120 "$KIT/bin/models.sh" 100 same $((UT + 2)))"
-check "models: 100 instant bounded() calls under the same id finish (no stale marker) and leave no timer sleep behind" "$G:$(bt_left $((UT + 2)))" "done:0"
+# the timer of bounded_run is stopped whatever the moment: many instant calls in a row and in parallel
+t0=$SECONDS; G="$(bt_guard 120 100 $((UT)))"
+check "models: 100 instant bounded_run calls in a row finish (none waits for its timer), leave no timer sleep behind and cost no more than the stop tick" "$G:$(bt_left $((UT))):$(( SECONDS - t0 < 60 ? 1 : 0 ))" "done:0:1"
+G="$(for k in 1 2 3 4 5 6 7 8; do bt_guard 120 20 $((UT + 1)) & done; wait)"
+check "models: 8 x 20 instant bounded_run calls in parallel all finish and leave no timer sleep behind" "$(printf '%s\n' "$G" | grep -c '^done$' || true):$(bt_left $((UT + 1)))" "8:0"
 # the timeout must be a whole number of seconds not starting with 0: anything else says so on stderr and the default is used
 for v in 1.5 2m 0 08 00 -3; do ORCA_ROLES_PROBE_TIMEOUT=$v mt lines
   check "models: ORCA_ROLES_PROBE_TIMEOUT=$v -> one note, default 90, the probe result is unchanged" "$RC:$(cat "$MM/err"):$(tabs)" "0:models.sh: ORCA_ROLES_PROBE_TIMEOUT must be a whole number of seconds; using 90:alpha;beta"; done
@@ -7132,11 +7158,11 @@ ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ"; I6=""
 for id in a@mk1 b@mk1 off@mk1 nothere@x superpowers@superpowers-marketplace i@nowhere j@npmm noat; do ppr install "$id" "$PPD/proj"; I6="$I6$RC:[$OUT]:[$ERR]:$(pcalls 'marketplace add\|plugin install')|"; done
 check "project-plugins install refuses what status does not call missing: installed -> 'installed <id>' 0, disabled -> 3 with the enable hint, a false, unknown or kit-skipped id -> 'not declared' 2, unknown marketplace, unsupported source and invalid id -> their line 2; no add and no install call in any of them" "$I6" "0:[installed a@mk1]:[]:0|3:[]:[disabled b@mk1: enable it with claude plugin enable b@mk1]:0|2:[]:[not declared by this project: off@mk1]:0|2:[]:[not declared by this project: nothere@x]:0|2:[]:[not declared by this project: superpowers@superpowers-marketplace]:0|2:[]:[plugin~i@nowhere~unknown-marketplace]:0|2:[]:[plugin~j@npmm~unsupported-source~npm]:0|2:[]:[plugin~noat~invalid-id]:0|"
 # 7. a hanging claude is cut by the timer (list, marketplace add, install), with no process left; the timeout setting is validated
-ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ"; touch "$PPD/c/list-hang"; T0=$SECONDS; PPTO=1 ppr status "$PPD/proj"; H7="$RC:$(printf '%s\n' "$OUT" | grep -c '^error claude timed out$'):$((SECONDS - T0 < 8 ? 1 : 0)):$(pphung)"
+ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ"; touch "$PPD/c/list-hang"; T0=$SECONDS; PPTO=1 ppr status "$PPD/proj"; H7="$RC:$(printf '%s\n' "$OUT" | grep -c '^error claude: no answer in 1 s; stopped\.$'):$((SECONDS - T0 < 8 ? 1 : 0)):$(pphung)"
 rm -f "$PPD/c/list-hang"; touch "$PPD/c/add-hang"; PPTO=1 ppr install c@gh "$PPD/proj"; H7="$H7|$RC:$ERR:$(pphung)"
 rm -f "$PPD/c/add-hang"; touch "$PPD/c/inst-hang"; PPTO=1 ppr install h@inst "$PPD/proj"; H7="$H7|$RC:$ERR:$(pphung)"; rm -f "$PPD/c/inst-hang"
 H7="$H7|$(for tv in abc 0 5x ''; do PPTO="$tv" ppr status "$PPD/proj"; printf '%s,' "$(printf '%s\\n' "$ERR" | grep -c 'must be a whole number of seconds; using 60')"; done)"
-check "project-plugins timeout: a hanging claude is cut after ORCA_ROLES_PLUGINS_TIMEOUT seconds (status: error claude timed out; install: the same on stderr), exit 1, quickly, and no process is left; a bad timeout value warns and uses 60" "$H7" "1:1:1:0|1:error claude timed out:0|1:error claude timed out:0|1,1,1,0,"
+check "project-plugins timeout: a hanging claude is cut after ORCA_ROLES_PLUGINS_TIMEOUT seconds (status: error claude: no answer in 1 s; stopped.; install: the same on stderr), exit 1, quickly, and no process is left; a bad timeout value warns and uses 60" "$H7" "1:1:1:0|1:error claude: no answer in 1 s; stopped.:0|1:error claude: no answer in 1 s; stopped.:0|1,1,1,0,"
 # 8. nothing is written in the folder or the working folder, status calls claude only to list, usage errors exit 1
 ppc "$LJ" '[{"name":"inst"}]'; ppf "$IJ" "$IJ" "{\"mcpServers\":{\"g\":{\"command\":\"nonexistent-two\"}}}"; mkdir -p "$PPD/proj/sub"
 SUMF() { (cd "$PPD" && find proj "$PPD/tmpd" -print0 | sort -z | xargs -0 shasum 2>/dev/null; if stat -c %Y / >/dev/null 2>&1; then find proj -type f -print0 | sort -z | xargs -0 stat -c '%Y %n' 2>/dev/null; else find proj -type f -print0 | sort -z | xargs -0 stat -f '%m %N' 2>/dev/null; fi || true) | shasum; }
@@ -7298,19 +7324,17 @@ for mode in list mkt; do
   rs_state missing; if [ "$mode" = mkt ]; then echo hang > "$RS/mkt.mode"; else echo hang > "$RS/list.mode"; fi
   T0=$SECONDS; if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 env KIT="$KIT" "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
   HP="$(cat "$RS/hang.pid" 2>/dev/null || true)"; poll pgone "$HP"
-  check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 20 ] && echo quick)" "1:error claude timed out:gone:quick"
+  check "review-skill: a hung claude ($mode) is cut after the bound: exit 1, message, process gone, quick" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone):$([ $((SECONDS - T0)) -lt 20 ] && echo quick)" "1:error claude: no answer in 4 s; stopped.:gone:quick"
 done
 rs_state missing; echo hang > "$RS/inst.mode"; rm -f "$RS/hang.pid"
 if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 env KIT="$KIT" "$KIT/bin/review-skill.sh" install 2>"$RS/err")"; then RC=0; else RC=$?; fi
 HP="$(cat "$RS/hang.pid" 2>/dev/null || true)"; poll pgone "$HP"
-check "review-skill: a hung plugin install is cut after the bound: exit 1, message, process gone" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
+check "review-skill: a hung plugin install is cut after the bound: exit 1, message, process gone" "$RC:$(cat "$RS/err"):$([ -n "$HP" ] && kill -0 "$HP" 2>/dev/null && echo alive || echo gone)" "1:error claude: no answer in 4 s; stopped.:gone"
 rs_state installed; echo tree > "$RS/list.mode"; rm -f "$RS/child.pid"
 if OUT="$(cd "$RS/wt" && env PATH="$RS/bin:$PATH" TMPDIR="$RS/tmp" ORCA_ROLES_CONFIG="$RSC" ORCA_ROLES_SKILL_TIMEOUT=4 env KIT="$KIT" "$KIT/bin/review-skill.sh" status 2>"$RS/err")"; then RC=0; else RC=$?; fi
 CP="$(cat "$RS/child.pid" 2>/dev/null || true)"; poll pgone "$CP"
-check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude timed out:gone"
-# the timer of bounded() is stopped whatever the moment: instant calls under the same id ('bounded list' runs twice in an install) and a real install
-G="$(bt_guard 120 "$KIT/bin/review-skill.sh" 100 same $((UT + 3)))"
-check "review-skill: 100 instant bounded() calls under the same id finish and leave no timer sleep behind" "$G:$(bt_left $((UT + 3)))" "done:0"
+check "review-skill: a hung claude's child process is killed with it" "$RC:$(cat "$RS/err"):$([ -n "$CP" ] && kill -0 "$CP" 2>/dev/null && echo alive || echo gone)" "1:error claude: no answer in 4 s; stopped.:gone"
+# a real install: two 'bounded list' calls, none waits for its timer
 rs_state missing; t0=$SECONDS; ORCA_ROLES_SKILL_TIMEOUT=$((UT + 4)) rs_try install
 check "review-skill: an install (two 'bounded list' calls) succeeds, does not wait for its timers and leaves no timer sleep behind" "$RC:$(( SECONDS - t0 < 20 ? 1 : 0 )):$(bt_left $((UT + 4)))" "0:1:0"
 for v in 1.5 2m 0 08 00 -3; do rs_state installed; ORCA_ROLES_SKILL_TIMEOUT=$v rs_try status
