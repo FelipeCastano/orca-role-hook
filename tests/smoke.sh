@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -8597,6 +8597,61 @@ check "local coordinator prompts: the assign line and the silent-worker bullet a
 SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/local-coordinator.md | tr '\n' ' ')"
 check "local coordinator prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the three modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/local-coordinator.md:1 %s/prompts/pr-reviewer/local-coordinator.md:1 ' "$ROOT" "$ROOT" "$ROOT")"
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
+}
+
+sec_test_run() {
+# test-run.sh: runs a command, passes stdio and exit code through, appends one JSON line to the test log (temp logs only)
+TR="$TMP/trun"; rm -rf "$TR"; mkdir -p "$TR/plain"; TRS="$ROOT/bin/test-run.sh"; TRL="$TR/log.jsonl"
+trc() { [ "$2" = "$3" ] || TRF="$TRF [${1#test-run: }: got $2]"; }
+tr_run() { ORCA_ROLES_TEST_LOG="$TRL" "$TRS" "$@"; }
+TRF=""
+try tr_run -- sh -c 'echo out; echo err >&2; exit 3' 2> "$TR/e1"
+trc "test-run: the command's exit code and stdout pass through, stderr gets the wall line" "$RC:$OUT:$(grep -c '^err$' "$TR/e1"):$(grep -c 'test-run: exit 3 in ' "$TR/e1")" "3:out:1:1"
+try tr_run -- true 2>/dev/null; trc "test-run: true gives 0" "$RC" "0"
+try tr_run -- /nonexistent/cmd 2>/dev/null; trc "test-run: a missing command gives 127" "$RC" "127"
+: > "$TR/noexec"; try tr_run -- "$TR/noexec" 2>/dev/null; trc "test-run: a file without the execute bit gives 126" "$RC" "126"
+trc "test-run: stdin reaches the command" "$(echo hi | tr_run -- cat 2>/dev/null)" "hi"
+: > "$TRL"; ORCA_ROLES_TEST_LOG="$TRL" "$TRS" -- sleep 2 2>/dev/null & TRP=$!
+poll eval 'pgrep -P "$TRP" sleep >/dev/null'; kill -TERM "$TRP"; TRRC=0; wait "$TRP" 2>/dev/null || TRRC=$?
+trc "test-run: TERM gives 143 and an aborted record" "$TRRC:$(tail -1 "$TRL" | jq -r '"\(.exit) \(.result)"')" "143:143 aborted"
+check "test-run: passthrough" "$TRF" ""
+TRF=""
+: > "$TRL"; tr_run --role tester --label "a b" -- sh -c 'sleep 1' 2>/dev/null
+TRTOP="$(git -C "$ROOT" rev-parse --show-toplevel)"
+trc "test-run: one record with the fields" "$(wc -l < "$TRL" | tr -d ' '):$(jq -r --arg w "$TRTOP" '[.kind,.role,.label,.exit,.result,(.wall_s>=1),(.cmd|startswith("sh -c sleep 1")),(.ts|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$")),(.worktree==$w),(.head|length),(.dirty|type),(.ncpu|type)]|join(" ")' "$TRL")" "1:run tester a b 0 ok true true true true 12 number number"
+: > "$TRL"; tr_run -- false 2>/dev/null || true; trc "test-run: a failing command is result fail, no role is an empty role" "$(jq -r '"\(.result) [\(.role)] \(.exit)"' "$TRL")" "fail [] 1"
+: > "$TRL"; (cd "$TR/plain" && tr_run -- true 2>/dev/null); trc "test-run: outside git head is empty, dirty 0, worktree is the folder" "$(jq -r '"[\(.head)] \(.dirty) \(.worktree)"' "$TRL")" "[] 0 $(cd "$TR/plain" && pwd)"
+: > "$TRL"; tr_run -- true "$(printf '%0400d' 0)" 2>/dev/null; trc "test-run: cmd keeps its first 300 characters" "$(jq -r '.cmd|length' "$TRL")" "300"
+if [ ! -r /proc/loadavg ]; then
+  mkdir -p "$TR/stub"; printf '#!/bin/sh\necho "{ 1,83 2,00 1,98 }"\n' > "$TR/stub/sysctl"; chmod +x "$TR/stub/sysctl"
+  : > "$TRL"; PATH="$TR/stub:$PATH" tr_run -- true 2>/dev/null; trc "test-run: the macOS load is the 1-minute figure" "$(jq -r '.load_start' "$TRL")" "1.83"
+  printf '#!/bin/sh\necho "{ abc 2,00 1,98 }"\n' > "$TR/stub/sysctl"
+  : > "$TRL"; PATH="$TR/stub:$PATH" tr_run -- true 2>/dev/null; trc "test-run: an unreadable load is null and the record is still written" "$(wc -l < "$TRL" | tr -d ' '):$(jq -r '.load_start' "$TRL")" "1:null"
+fi
+check "test-run: record" "$TRF" ""
+TRF=""
+: > "$TRL"; TRBAD=0
+for TRA in "" "--" "--bogus x --" "--role --" "--role a --role b -- true" "-- X=1 touch $TR/marker"; do
+  # shellcheck disable=SC2086
+  try tr_run $TRA 2> "$TR/eu"; [ "$RC" = 2 ] || TRBAD=1
+done
+trc "test-run: usage errors exit 2, log nothing and run nothing" "$TRBAD:$(wc -c < "$TRL" | tr -d ' '):$([ -e "$TR/marker" ] && echo marker):$(grep -c 'put environment assignments before test-run.sh' "$TR/eu")" "0:0::1"
+trc "test-run: an assignment before the wrapper reaches the command" "$(X=1 tr_run -- sh -c 'echo "$X"' 2>/dev/null)" "1"
+check "test-run: usage" "$TRF" ""
+TRF=""
+TRC="$TR/c"; unset TRX; TRX="$(env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" --path)"; env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" -- true 2>/dev/null
+trc "test-run: the default path follows XDG_CACHE_HOME and a run writes there" "$TRX:$(wc -l < "$TRC/orca-roles/test-runs.jsonl" | tr -d ' ')" "$TRC/orca-roles/test-runs.jsonl:1"
+TRO="$(ORCA_ROLES_TEST_LOG=off "$TRS" --path)"; ORCA_ROLES_TEST_LOG=off XDG_CACHE_HOME="$TR/offc" "$TRS" -- true 2> "$TR/eo"
+trc "test-run: off prints an empty path and writes nothing" "[$TRO]:$(grep -c ', log off' "$TR/eo"):$([ -e "$TR/offc" ] && echo 1 || echo 0)" "[]:1:0"
+: > "$TR/reg"; try env ORCA_ROLES_TEST_LOG="$TR/reg/x.jsonl" "$TRS" -- sh -c 'echo o; exit 4' 2> "$TR/en"
+trc "test-run: an unwritable log keeps the output and the exit code" "$RC:$OUT:$(grep -c ', log not written' "$TR/en")" "4:o:1"
+head -c 5242881 /dev/zero > "$TRL"; tr_run -- true 2>/dev/null
+trc "test-run: a log over 5 MB moves to .1" "$(wc -l < "$TRL" | tr -d ' '):$(wc -c < "$TRL.1" | tr -d ' ')" "1:5242881"
+try env -u HOME -u XDG_CACHE_HOME -u ORCA_ROLES_TEST_LOG "$TRS" -- sh -c 'exit 5' 2> "$TR/eh"
+trc "test-run: with no HOME the command still runs and the log is not written" "$RC:$(grep -c ', log not written' "$TR/eh")" "5:1"
+TT="$ROOT/prompts/programmer/tester.md"; TCR="$ROOT/prompts/programmer/code-reviewer.md"
+trc "test-run: the Tester and Code-Reviewer prompts name the wrapper" "$(grep -c 'test-run.sh --role tester --' "$TT" | sed 's/^[1-9][0-9]*$/y/'):$(grep -c 'test-run.sh --role code-reviewer --' "$TCR" | sed 's/^[1-9][0-9]*$/y/'):$(grep -c 'Environment assignments go before it' "$TT" "$TCR" | tr '\n' ' '):$(grep -c -e '--role tester --label base-check --' "$TT"):$(grep -c -e '--role tester --label cross-check --' "$TT")" "y:y:$(printf '%s:1 %s:1 ' "$TT" "$TCR"):1:1"
+check "test-run: log file" "$TRF" ""
 }
 
 sec_cli() {

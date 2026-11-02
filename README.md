@@ -1045,6 +1045,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── new-role.sh              # wizard to create roles (the new-role command)
 │   ├── auditor.sh               # opens the on-demand Auditor (the auditor command): audits the roles and their metrics, changes nothing
 │   ├── team-status.sh           # what each role is doing, from what Orca tracks (the team-status command)
+│   ├── test-run.sh              # runs a test command, passes its result through and adds it to the test log
 │   ├── dispatch.sh              # assigns a task to a worker and checks in the background that it started (re-sends Enter once, else tells the local coordinator)
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
@@ -1136,12 +1137,15 @@ SMOKE_CLI_TIMEOUT=60 tests/smoke.sh              # with the 60 s limit on orca c
 SMOKE_TIMING_LOG=off tests/smoke.sh               # no timing log (default: one per run in ~/.cache/orca-roles/smoke-timings/, the 50 newest kept)
 SMOKE_SLOW_CHECK=0 tests/smoke.sh                 # log every check's time (default: the checks that took 5 s or more)
 tests/timing-compare.sh main.tsv branch.tsv       # per-section seconds of two timing logs and their difference
+SMOKE_JOBS=1 bin/test-run.sh --role tester -- tests/smoke.sh rules   # any test command, timed and added to the test log (what the Tester and the Code-Reviewer use)
 shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
 Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in `tests/smoke.sh`, with the reason for each) hold elapsed-time checks and run alone, after the others. The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
 
 Every run writes a timing log (tab-separated: a header with the date, commit, jobs, bash and system; one line per section with its seconds and result; the checks that took `SMOKE_SLOW_CHECK` seconds or more; a `held` line with the seconds new sections waited for the load, when that wait applied; the total) and prints its path on stderr; CI uploads it as the `smoke-timings-<os>` artifact. The times are only reported: no duration fails or limits a run. In a parallel run a section's time includes the load of the other sections. A check's time runs from the previous result of the same process, so a result printed without `check` adds its time to the next one.
+
+`bin/test-run.sh` keeps one more log, one JSON line per wrapped command, with the role, the commit, the load before and after and the seconds, in `~/.cache/orca-roles/test-runs.jsonl` (`ORCA_ROLES_TEST_LOG`: another path, or `off`; `bin/test-run.sh --path` prints it). A wrapped `tests/smoke.sh` also writes its own timing log.
 
 ## Troubleshooting
 
