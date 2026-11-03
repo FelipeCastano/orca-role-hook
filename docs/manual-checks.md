@@ -56,7 +56,7 @@ Do not click the throwaway worktree's tabs. Open one terminal of another worktre
 | R1 | `orca terminal list --worktree <throwaway worktree> --json` | which role tabs are listed | Usually only the shell and the worktree's active tab: the other role tabs are asleep (in the tab bar, not listed) |
 | R1 | `cd` into the throwaway worktree and run `roles`; time it | its output | macOS: "Orca kept the tab of <Role> asleep after a restart; woke it." for each asleep role, then "reopening it with its conversation" for every role, no "no longer exists". WSL: the same messages; every role woken and reopened with its conversation, no "Cannot wake tabs" |
 | R1 | Look at the tab bar; `orca terminal list` again; in each worker's tab, scroll up | duplicates; each worker's history | One tab per role, no stray "Claude Code" tab; each worker shows its earlier conversation; every handle in `orca-roles.env` answers `orca terminal show` |
-| R1 | Before the restart: `orca orchestration run-create --from <local coordinator's handle> --objective "live checks R1: Run binding after a restart (throwaway)" --json`. After the restart and `roles`: `orca orchestration run-list --json` | that Run's `coordinator_handle` | The local coordinator's handle in `orca-roles.env` now, not the one before the restart |
+| R1 | Before the restart: `orca orchestration run-create --from <local coordinator's handle> --objective "live checks R1: Run binding after a restart (throwaway)" --json`. After the restart and `roles`: `orca orchestration run-list --json --full` | that Run's `coordinator_handle` | The local coordinator's handle in `orca-roles.env` now, not the one before the restart |
 | R2 | T3 again | the ptyIds | Identical |
 
 On WSL also:

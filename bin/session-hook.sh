@@ -45,7 +45,7 @@ if ! printf '%s' "$TL" | jq -e '.result.terminals | type == "array"' >/dev/null 
 # a list that is cut short, or leaves a paired host out, cannot show that the old handle is dead
 if printf '%s' "$TL" | jq -e '.result.truncated == true or ((.result.hostScope.omittedHostIds // []) | length) > 0' >/dev/null 2>&1; then slog "terminal list incomplete"; exit 0; fi
 if printf '%s' "$TL" | jq -e --arg h "$PREV" 'any(.result.terminals[]?; .handle == $h)' >/dev/null 2>&1; then record; exit 0; fi
-RL="$(ho orchestration run-list --json)" || { slog "run-list failed"; exit 0; }
+RL="$(ho orchestration run-list --json --full)" || { slog "run-list failed"; exit 0; }
 RUNS="$(printf '%s' "$RL" | jq -r --arg h "$PREV" '(.result.runs // .result // []) | if type == "array" then .[] else empty end | select(.coordinator_handle == $h) | .id' 2>/dev/null)" \
   || { slog "run-list gave no list"; exit 0; }
 BOUND=""; N=0; FAILED=0

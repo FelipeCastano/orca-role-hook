@@ -381,7 +381,7 @@ c_restart_prepare() {  # before the restart: what each role had
     st_set r1run ""; st_set r1why "$why"; echo "R1.run: could not create the Run: $why"; return 0
   fi
   out="$( unset ORCA_PANE_KEY; orca orchestration run-create --from "$lc" --objective "live checks R1: Run binding after a restart (throwaway)" --json 2>&1 )"; rc=$?
-  rid=""; [ "$rc" -eq 0 ] && rid="$(printf '%s' "$out" | jfield result.run.id)"
+  rid=""; [ "$rc" -eq 0 ] && rid="$(printf '%s' "$out" | jfield result.run.id)"; [ "$rc" -eq 0 ] && [ -z "$rid" ] && rid="$(printf '%s' "$out" | jfield result.runId)"
   if [ -n "$rid" ]; then st_set r1run "$rid"; st_set r1lc "$lc"; return 0; fi
   code="$(printf '%s' "$out" | jfield error.code)"
   if [ -n "$code" ]; then
@@ -422,8 +422,8 @@ c_restart_run() {  # R1.run: the Run made before the restart is bound to the loc
   while :; do
     got=""; cursor=""; i=0
     while [ "$i" -lt 50 ]; do
-      if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --cursor "$cursor" 2>/dev/null)" || break
-      else js="$(orca orchestration run-list --json 2>/dev/null)" || break; fi
+      if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --full --cursor "$cursor" 2>/dev/null)" || break
+      else js="$(orca orchestration run-list --json --full 2>/dev/null)" || break; fi
       hs="$(printf '%s' "$js" | jq -r --arg id "$rid" '(.result.runs // [])[] | select(.id == $id) | .coordinator_handle' 2>/dev/null | head -n 1)"
       [ -n "$hs" ] && { got="$hs"; break; }
       cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)"
