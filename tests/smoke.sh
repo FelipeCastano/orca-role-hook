@@ -9122,14 +9122,14 @@ GN=16; i=0
 for c in "${GC[@]}"; do i=$((i + 1)); pb "$F12" "$(printf '2026-10-27T10:%02d:00.000Z' "$i")" "g$i" "$c"; pr "$F12" "$(printf '2026-10-27T10:%02d:30.000Z' "$i")" "g$i" false " 1 file changed, 2 insertions(+)"; done
 umpass; GC1="$(usf gc '.commits | [.count, .insertions, .deletions] | join("|")')"
 check "usage parse: commits count only a real git command whose first non-option word is commit (also after a pipe, &&, ;, a newline, parentheses, VAR=x, a path to git, -C/-c/--git-dir/--work-tree with their argument, an unbalanced quote after ;); git commit-tree, echo git commit, rg/quoted/commented text, a folder named commit after -C, other git subcommands, gitk and unbalanced echo text do not" "$GC1" "$GN|$((GN * 2))|0"
-# live push: a fake local server (OTLP endpoint and Prometheus API in one, on a free port, started and stopped here) and fixture sessions with timestamps relative to now
+# live push: a fake local server (OTLP endpoint and Prometheus API in one, on a free port; started once and reset with freset between blocks, since every later start cost about 30 s on GitHub's macOS runner) and fixture sessions with timestamps relative to now
 cat > "$UM/fake.py" <<'PYE'
 import json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 D, PORTF = sys.argv[1], sys.argv[2]
 os.makedirs(D + "/posts", exist_ok=True)
-n = [0]
+lk = threading.Lock()
 def cfg():
     try:
         with open(D + "/cfg.json") as f:
@@ -9147,9 +9147,9 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        n[0] += 1
-        with open(D + "/posts/%03d.json" % n[0], "wb") as f:
-            f.write(body)
+        with lk:  # numbered by the files present, so a freset that empties posts/ starts again at 001
+            with open(D + "/posts/%03d.json" % (len(os.listdir(D + "/posts")) + 1), "wb") as f:
+                f.write(body)
         log("POST %s %s" % (self.path, self.headers.get("Content-Type")))
         c = cfg()
         if c.get("post_delay"):
@@ -9187,7 +9187,7 @@ class H(BaseHTTPRequestHandler):
 s = ThreadingHTTPServer(("127.0.0.1", 0), H)
 with open(PORTF, "w") as f:
     f.write(str(s.server_address[1]))
-threading.Timer(240, lambda: os._exit(0)).start()
+threading.Timer(1200, lambda: os._exit(0)).start()  # a backstop only: one server now serves the whole section, up to about 700 s on a slow macOS runner
 pp = os.getppid()
 def watch():
     while os.getppid() == pp:
@@ -9198,6 +9198,7 @@ s.serve_forever()
 PYE
 fstart() { rm -rf "$UM/fs" "$UM/fake.port"; rm -f "$UM/fake.err"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>"$UM/fake.err" & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 600 ]; do sleep 0.2; n=$((n+1)); done; if [ -s "$UM/fake.port" ]; then FP="$(cat "$UM/fake.port")"; else FP=""; echo "FAIL usage-metrics: the fake server wrote no port after 120s: $(head -c 400 "$UM/fake.err" 2>/dev/null | tr '\n' ' ')"; FAIL=1; fi; }
 fstop() { kill "$FPID" 2>/dev/null || true; wait "$FPID" 2>/dev/null || true; }
+freset() { rm -rf "$UM/fs/posts" "$UM/fs/req.log"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; }   # the running server's state as fstart leaves it: no posts, no requests logged, an empty config
 fcfg() { printf '%s' "$1" > "$UM/fs/cfg.json"; }
 fposts() { find "$UM/fs/posts" -name '*.json' | wc -l | tr -d ' '; }
 fgets() { grep -c "$1" "$UM/fs/req.log" 2>/dev/null || true; }
@@ -9244,16 +9245,16 @@ check "usage push payload: one ResourceMetrics per session with the resource att
 R8="$(pall '[.resourceMetrics[0].scopeMetrics[0].metrics[] | "\(.name):\(.unit):\(if has("sum") then "sum" else "gauge" end)"] | sort | join(",")')"
 R9="$(pbody 1 '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "orca_roles.cost.by_type" or .name == "orca_roles.lines" or .name == "orca_roles.commit.lines" or .name == "orca_roles.verdicts" or .name == "orca_roles.tool.calls" or .name == "orca_roles.task.duration") | "\(.name)[\([.sum.dataPoints[] | [.attributes[] | .value.stringValue] | join("/")] | sort | join(" "))]"' | sort | tr '\n' ',')"
 check "usage push instruments: exactly the instruments of the header table with their units and kinds (sum or gauge), and the data point attributes of by-type cost (input output cacheRead cacheWrite webSearch), lines (added removed), commit lines (insertions deletions), verdicts and task duration by verdict, tool metrics by tool name" "$R8|$R9" "claude_code.cost.usage:USD:sum,claude_code.session.count::sum,claude_code.token.usage:tokens:sum,orca_roles.api.errors::sum,orca_roles.cache.savings:USD:gauge,orca_roles.commit.lines::sum,orca_roles.commits::sum,orca_roles.compactions::sum,orca_roles.context.max:tokens:gauge,orca_roles.cost.by_type:USD:sum,orca_roles.lines::sum,orca_roles.model.changes::sum,orca_roles.task.duration:s:sum,orca_roles.thinking:tokens:sum,orca_roles.tool.calls::sum,orca_roles.tool.duration:s:sum,orca_roles.tool.errors::sum,orca_roles.turns::sum,orca_roles.user.messages::sum,orca_roles.verdicts::sum,|orca_roles.commit.lines[deletions insertions],orca_roles.cost.by_type[cacheRead/claude-haiku-4-5 cacheWrite/claude-haiku-4-5 input/claude-haiku-4-5 output/claude-haiku-4-5 webSearch/claude-haiku-4-5],orca_roles.lines[added removed],orca_roles.task.duration[ACCEPTED],orca_roles.tool.calls[Bash],orca_roles.verdicts[ACCEPTED],"
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 CONST='[{"__name__":"claude_code_cost_usage_USD_total","job":"claude-code","instance":"i1","session_id":"zzz","model":"m","effort":"low","project":"p","user_id":"u-1","user_email":"a@b.c","user_account_uuid":"acc","organization_id":"org-1","host_arch":"arm64","os_type":"darwin","os_version":"25.1","terminal_type":"tmux","service_name":"claude-code","service_version":"9.9.9"}]'
 cattrs() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key | test("^(user_|organization_id$|host_arch$|os_|terminal_type$|job$|instance$|project$|effort$|model$|session_id$|service_name$)")) | "\(.key)=\(.value.stringValue)"] | sort | join(",")'; }
 fcfg "{\"constants\":$CONST}"; ps1 c1 100 100; umpass; K1="$(cattrs 1):$(fgets '__name__=~')"
 ps1 c2 100 100; umpass; K2="$(fposts):$(fgets '__name__=~')"
-umpk; fstop; fstart; umcfg; fcfg "{\"constants\":$CONST,\"const_status\":500}"; ps1 c3 100 100; umpass; K3="$(fposts):$(cattrs 1)"
-umpk; fstop; fstart; umcfg; fcfg '{"constants":[]}'; ps1 c4 100 100; umpass; ps1 c5 100 100; umpass; K4="$(fposts):$(cattrs 1):$(fgets '__name__=~')"
+umpk; freset; umcfg; fcfg "{\"constants\":$CONST,\"const_status\":500}"; ps1 c3 100 100; umpass; K3="$(fposts):$(cattrs 1)"
+umpk; freset; umcfg; fcfg '{"constants":[]}'; ps1 c4 100 100; umpass; ps1 c5 100 100; umpass; K4="$(fposts):$(cattrs 1):$(fgets '__name__=~')"
 check "usage push constant labels: user_*, organization_id, host_arch, os_*, terminal_type are copied onto the resource from the newest claude_code_* series of Prometheus (never job, instance, project, effort, model, session_id or service_name), looked up once a day (a second session the same day does not query again), omitted when Prometheus cannot answer or has no such series (then 1d, 7d and 90d windows were tried, once)" "$K1|$K2|$K3|$K4" "host_arch=arm64,organization_id=org-1,os_type=darwin,os_version=25.1,terminal_type=tmux,user_account_uuid=acc,user_email=a@b.c,user_id=u-1:1|2:1|1:|2::3"
 # continuation of the series a session already has in Prometheus
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 TL="$(( $(date +%s) - 60 ))"
 OLD='"job":"claude-code","instance":"i","session_id":"sc","user_id":"old-u","service_version":"2.3.1","task":"old-task","orca_roles_role":"old-role"'
 TK='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","effort":"high","query_source":"main"'
@@ -9267,7 +9268,7 @@ M3="$(rmof 1 sc '[.resource.attributes[] | select(.key | test("^(user_|task$|orc
 Q0="$(fgets 'session_id')"; ps_more sc 3 50; umpass; M4="$(mval "$(fposts)" sc claude_code.token.usage input | tr '\n' ' '):$([ "$(fgets 'session_id')" = "$Q0" ] && echo cached)"
 check "usage push continuation: a session whose series already exist in Prometheus is pushed as the old value plus what the transcript added since the anchor (old 1000 above the transcript's 400 at that time + 300 = 1300; an old value equal to the transcript's at that point is the anchor itself: 100; cost anchored with its tokens; the session count continues), keeps the old labels (effort high, start_type, user_id, service.version, task, role) instead of the constants, a session with no old series starts at its transcript totals with the constants, and the offsets are cached (the next push queries nothing)" "$M1|$M2|$M3|$M4" "input/claude-haiku-4-5/high/main=1300000000 output/claude-haiku-4-5/high/main=100000000 claude-haiku-4-5/high/main=5000300 resume=1000000 |input/claude-haiku-4-5/medium/main=700000000 claude-haiku-4-5/medium/main=1200 fresh=1000000 |orca_roles_role=old-role,service.version=2.3.1,task=old-task,user_id=old-u|orca_roles.role=dev,service.version=2.1.311,task=devgd-292,user_id=new-u|input/claude-haiku-4-5/high/main=1350000000 :cached"
 # a session whose old counters reset is never pushed (logged once); Prometheus down at the first push postpones it
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 TL="$(( $(date +%s) - 60 ))"
 OLDS='"job":"claude-code","instance":"i","session_id":"SID"'
 TKS='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","effort":"high","query_source":"main","type":"input"'
@@ -9279,7 +9280,7 @@ ps_more sr 3 10; umpass; ps_more sr 4 10; umpass; Z3="$(fposts):$(grep -c 'sr no
 check "usage push: Prometheus unreachable at a session's first push postpones it (nothing sent, nothing logged) until it answers, then it is pushed with its continuation (old 1000 + 300 = 1300); a session whose old counters reset (resets > 0) is never pushed, even when it gets new lines, and is logged once" "$Z1|$Z2|$Z3" "0:0|1:sp:1300:1|1:1:1"
 # the loopback rule (0.0.0.0 is a remote host to the rule and still reaches the fake server), a collector that is down or slow, enabled false, batches of 25 sessions
 umlogn() { local n; n="$(grep -c "$1" "$PM/usage-metrics.log" 2>/dev/null || true)"; echo "${n:-0}"; }
-umpk; fstop; fstart; umcfg 0.0.0.0 127.0.0.1 false
+umpk; freset; umcfg 0.0.0.0 127.0.0.1 false
 ps1 r1 100 100; umpass; T1="$(fposts):$(umlogn 'otlpEndpoint')"
 ps_more r1 3 5; umpass; T2="$(fposts):$(umlogn 'otlpEndpoint')"
 jq '.warned.otlpEndpoint = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; ps_more r1 4 5; umpass; T3="$(fposts):$(umlogn 'otlpEndpoint')"
@@ -9287,14 +9288,14 @@ umcfg 127.0.0.1 0.0.0.0 false; ps_more r1 5 5; umpass; umpass; T4="$(fposts):$(u
 umcfg 0.0.0.0 0.0.0.0 true; ps_more r1 6 5; umpass; T5="$(fposts):$(umlogn 'is not on this machine')"
 umcfg localhost localhost false; ps_more r1 7 5; umpass; T6="$(fposts)"
 check "usage push remote rule: an endpoint that is not on this machine without allowRemote sends nothing and warns once per UTC day (the warning comes back the next day), the same for prometheusUrl (the first push waits), with allowRemote true both are used, and localhost counts as this machine" "$T1|$T2|$T3|$T4|$T5|$T6" "0:1|0:1|0:2|0:1|1:3|2"
-umpk; fstop; fstart; umcfg; DP="$FP"; fstop; ps1 d1 100 100; umcfg
+umpk; freset; ps1 d1 100 100; FPL="$FP"; FP=1; umcfg; FP="$FPL"   # port 1 refuses the connection, as in the hermetic config, while the server keeps running
 T0=$SECONDS; umpass; D1="$UPRC:$((SECONDS - T0 < 3 ? 1 : 0)):$(wc -c < "$UM/pass.out" | tr -d ' '):$(wc -c < "$UM/pass.err" | tr -d ' '):$(umlogn 'push')"
-fstart; umcfg; umpass; D2="$(fposts)"
+umcfg; umpass; D2="$(fposts)"
 fcfg '{"post_delay":3}'; ps_more d1 3 5; T0=$SECONDS; ORCA_ROLES_METRICS_HTTP_TIMEOUT=1 umpass; D3="$UPRC:$((SECONDS - T0 < 3 ? 1 : 0)):$(wc -c < "$UM/pass.out" | tr -d ' '):$(wc -c < "$UM/pass.err" | tr -d ' ')"
 fcfg '{}'; umpass; D4="$(fposts)"
 G0="$(fgets GET)"; jq '.settings.metrics.enabled = false' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"; ps_more d1 4 5; umpass; D5="$(fposts):$([ "$(fgets GET)" = "$G0" ] && echo nogets)"
 check "usage push collector down: a refused connection or a slow collector (timeout) makes the pass finish at once with exit 0 and no output, nothing logged, the session stays pending and is pushed by the next pass that finds the collector; enabled false sends nothing" "$D1|$D2|$D3|$D4|$D5" "0:1:0:0:0|1|0:1:0:0|3|3:nogets"
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 cu() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key == "user_id") | .value.stringValue] | join(",")'; }
 fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-1"}]}'; ps1 n1 100 100; umpass
 jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
@@ -9303,7 +9304,7 @@ jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM
 fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-3"}],"const_status":500}'; ps1 n3 100 100; umpass
 N1="$(cu 1):$(cu 2):$(cu 3):$(fgets '__name__=~')"
 # round 2: the pushed values live outside the session object, so a session recomputed from a rewritten transcript never pushes a lower counter
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 gv() { pbody "$1" ".resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == \"$2\") | (.sum // .gauge).dataPoints[] | select(\"$3\" == \"\" or any(.attributes[]; .value.stringValue == \"$3\")) | .asDouble"; }
 ps1 g1 400 300; umpass; ps_more g1 3 5000; umpass
 head -3 "$PD/g1.jsonl" > "$PD/g1.new" && mv "$PD/g1.new" "$PD/g1.jsonl"; umpass; ps_more g1 4 20; umpass
@@ -9313,7 +9314,6 @@ GXC="$(for n in 1 2 3 4; do gv "$n" orca_roles.context.max ''; done | tr '\n' ' 
 GM="$(jq -s '[.[].resourceMetrics[].scopeMetrics[].metrics[] | select(has("sum")) | .name as $n | .sum.dataPoints[] | {k: ($n + (.attributes | tostring)), v: .asDouble}] | group_by(.k) | map([.[].v] | . == sort) | all' "$UM"/fs/posts/*.json 2>/dev/null || true)"
 GS="$(usf g1 '[.tokens.input, .turns, .maxContext] | join("|")')"
 check "usage push floor: after a push, a transcript rewritten shorter makes the session recompute (the store shows the recomputed totals 420 input, 2 turns) but no pushed counter goes down (input 700, 5700, 5700, 5700; turns 2, 3, 3, 3; every sum series of every request non-decreasing), while the gauge of the context maximum follows the transcript (400, 5000, 400, 400)" "$GI|$GT|$GXC|$GM|$GS" "700 5700 5700 5700 |2 3 3 3 |400 5000 400 400 |true|420|2|400"
-fstop
 # the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
 SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
 for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
@@ -9397,7 +9397,7 @@ bfs() {  # bfs <sid> <cwd> <prompt> <offset:input>...: a session whose responses
   for o in "$@"; do w="${o%%:*}"; [ -n "$first" ] || { first=1; pu "$f" "$(umts "$((w - 60))")" "$c" "$pr"; }; t="${o##*:}"; pa "$f" "$(umts "$w")" "$c" "$1-$w" claude-haiku-4-5 "{\"input_tokens\":$t}" '[{"type":"text","text":"x"}]'; done
 }
 set +e   # the backfill checks compare what happened; a command that fails must not end the section
-umpk; fstop; fstart; fdreset
+umpk; freset; fdreset
 bfs p1 /w/a/devgd-300/src "$RDEV" -9000:100 -8000:200 -7400:50 -5400:10 -3600:10
 bfs p2 /w/a/other "plain" -9000:100 -2400:20 -2000:30 -1200:40
 bfs p3 /w/a/devgd-300/x "plain" -6000:70
@@ -9459,7 +9459,7 @@ DV="$(jq -r '[.templating.list[] | "\(.name):\(.type):\(.multi // false):\(.incl
 DT="$(jq -r '[.. | objects | select(has("expr"))] | length as $n | [.. | objects | select(has("expr") and has("datasource") and (.datasource.uid != "${datasource}"))] | length as $bad | "\($n > 20):\($bad)"' "$DB" 2>/dev/null)"
 DE="$(printf '%s\n' "$DN" | grep -cE '^orca_roles_(kit_events|dispatch_outcomes)_total$' || true):$(jq -r '[.. | objects | select(has("expr")) | select(.expr | test("orca_roles_(kit_events|dispatch_outcomes)_total")) | select(.expr | test("orca_roles_role|session_id")) ] | length' "$DB" 2>/dev/null)"
 check "usage dashboard: grafana/orca-roles-usage.json is valid JSON with the datasource, task and orca_roles_role variables (the last two multi-select with All), every query uses the \${datasource} variable, every metric name in its queries is in the header table of usage_metrics.py (none unknown), and the two event panels use the event metrics without a session or role filter (they carry no such label)" "$DX|$DV|$DT|$DE" "|datasource:datasource:false:false,task:query:true:true,orca_roles_role:query:true:true|true:0|2:0"
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 ev() { jq -nc --arg w "$1" --arg e "$2" --arg r "$3" '{ts: "2026-10-27T10:00:00Z", worktree: $w, event: $e, role: $r}' >> "$PM/events.jsonl"; }
 ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 reopened dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 started dev; ev /w/a/devgd-300 not-started dev; ev /w/a/other no-check oc; ev /unmapped launch ""; ev /w/a/devgd-300 bogus dev
 echo '{"event":"launch","worktree":5}' >> "$PM/events.jsonl"; printf '{"ts":"x","worktree":"/w/a/devgd-300","event":"launch","role":""' >> "$PM/events.jsonl"
@@ -9467,7 +9467,7 @@ epts() { pbody "$1" '.resourceMetrics[0].scopeMetrics[0].metrics[] | .name as $n
 umpass; V1="$(fposts):$(epts 1)"
 V2="$(pbody 1 '[(.resourceMetrics | length), ([.resourceMetrics[0].resource.attributes[] | "\(.key)=\(.value.stringValue)"] | join(",")), ([.. | objects | select(has("sum")) | .sum | [.isMonotonic, .aggregationTemporality]] | unique | tostring)] | join("|")')"
 check "usage kit events push: the first pass pushes one resource (service.name=claude-code only, no session.id) with orca_roles.dispatch.outcomes (outcome, role, task, project) and orca_roles.kit.events (event, role, task, project) as cumulative monotonic sums; counts per event and role, task and project from worktrees.jsonl by the longest path (an unmapped worktree has no task or project label); an unknown event, a line whose worktree is not a string and a half-written last line are not counted" "$V1|$V2" "1:orca_roles.dispatch.outcomes|outcome=dispatch,project=svc,role=dev,task=devgd-292|2 orca_roles.dispatch.outcomes|outcome=no-check,project=svc,role=oc,task=outer|1 orca_roles.dispatch.outcomes|outcome=not-started,project=svc,role=dev,task=devgd-292|1 orca_roles.dispatch.outcomes|outcome=started,project=svc,role=dev,task=devgd-292|1 orca_roles.kit.events|event=launch,project=svc,task=devgd-292|1 orca_roles.kit.events|event=launch|1 orca_roles.kit.events|event=reopened,project=svc,role=dev,task=devgd-292|1 |1|service.name=claude-code|[[true,2]]"
-umpk; fstop; fstart; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
+umpk; freset; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
 head -1 "$PM/events.jsonl" > "$PM/events.tmp" && mv "$PM/events.tmp" "$PM/events.jsonl"; umpass; ev /w/a/devgd-300 launch ""; umpass; S2="$(fposts)"
 ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 launch ""; umpass; S3="$(fposts):$(epts 2 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
 check "usage kit events push floor: when events.jsonl is rewritten shorter its counts are read again but nothing lower than what was pushed is sent (3 pushed, 1 and 2 counted: no push), and a count above the floor is pushed (4)" "$S1|$S2|$S3" "1|1|2:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|4"
