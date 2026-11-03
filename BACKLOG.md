@@ -7,18 +7,11 @@ Known pending work for the kit. Each entry says what to do and why; remove it wh
 - **Run one check or one group of checks of a smoke section.** A section is one function whose checks depend on fixtures, fakes and result strings defined earlier in it, and a check has no name to select; it needs a name per group, each group's fixture prefix and an explicit reset at its start. Today the unit is the section (`tests/smoke.sh <section>`).
 
 - **T5 and the Run coordinator keeping an old Planner handle.** Planned for the next PR ("handles").
-- **`upgrade_config` with a config that has no `roles` key** (X2 of the live checks).
-- **arXiv search with several words** in `scholar.sh`.
-- **CI check of the `plugin.json` version** against the kit's version.
 - **An extra agent tab after a mode switch typed in the Planner's tab** (T6/T7 of the live checks). The checks now attach the worktree's terminals when it happens; find the cause from that output.
 - **Tabs Orca resumes by itself lack the kit's shim in their PATH** until `roles` reopens them.
 - **Windows-side processes of an `orca` call the kit killed at its time limit** (WSL). Whether any stays running is not verified.
-- **One time-limited runner.** `oc_bounded` and `run_limited`/`orca()` in bin/lib.sh, `bounded` in models.sh, review-skill.sh and project-plugins.sh, the sleeper in crosscheck.sh `run`, `limited` in metrics.sh and the poll in agent.sh `record_provenance` each run a command with a time limit and differ in killing descendants, reporting the timeout and counting ticks against the clock; one `bounded_run` in lib.sh would serve all.
 - **Cost figures from Orca's cost state** are 12-22 % above the sums of the transcripts, and unknown after `--resume`; find out which is right before relying on them.
-- **The oracle does not follow `npm ci` install hooks** (`preinstall`, `install`, `postinstall`, `prepare`) and does not match a runner `.sh` whose path has a space or a character outside `[A-Za-z0-9_./-]` (the path patterns stop there; git also quotes non-ASCII paths in its diff output); both are cheat routes it does not report.
-- **The oracle's integrity check misses two routes.** A tracked test file replaced by a symlink (git status T) is neither deleted nor modified for the check; a new `conftest.py` hidden by `.git/info/exclude` or another ignore file is not listed (only untracked, not ignored, files are seen). A package script running its `.sh` as `bash -o pipefail x.sh` (an option with an argument), `bash --norc x.sh` (a long option) or `CI=1 x.sh` (an environment prefix) is only listed, not a cheat.
 - **The oracle's spec file is writable by workers.** The Planner saves each Dev spec under its scratch folder in `~/.orca-roles/tmp/`, which workers may write (only the kit's own files are protected, and Edit-only for Claude); a Dev could change the acceptance command before the oracle reads it. Keep the spec outside workers' reach or check its hash against the dispatched task's spec.
-- **bin/oracle/__pycache__ left in the worktree** by the smoke's oracle sections; set `PYTHONDONTWRITEBYTECODE=1` for the oracle's python (oracle.sh or the suite).
 
 ## Pending verification
 

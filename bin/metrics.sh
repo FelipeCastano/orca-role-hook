@@ -28,15 +28,6 @@ WT="$(cd "$TOP" && pwd -P)"
 GITDIR="$(git rev-parse --git-dir)"; GITDIR="$(cd "$GITDIR" && pwd)"
 OUTF="$(mktemp "${TMPDIR:-/tmp}/orca-roles-metrics.XXXXXX")"; trap 'rm -f "$OUTF" "$OUTF.o" "$OUTF.cfg"' EXIT
 
-# Runs a command with a time limit (seconds), stdin closed, stdout in $OUTF.o.  limited <seconds> <command...>
-limited() {
-  local t="$1" pid; shift
-  "$@" > "$OUTF.o" 2>/dev/null < /dev/null & pid=$!
-  for _ in $(seq 1 $((t * 10))); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-  if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 124; fi
-  wait "$pid"
-}
-
 # --- Claude Code sessions
 PROJECTS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 SDIR="$PROJECTS/$(printf '%s' "$WT" | tr '/.' '--')"
@@ -99,10 +90,13 @@ uses_opencode() {
   return 1
 }
 if command -v opencode >/dev/null 2>&1 && uses_opencode; then
-  if limited "${ORCA_ROLES_METRICS_TIMEOUT:-30}" opencode stats --json --cost --project . && jq -e . "$OUTF.o" >/dev/null 2>&1; then
+  MLIM="${ORCA_ROLES_METRICS_TIMEOUT:-30}"
+  if bounded_run --quiet "$MLIM" "opencode stats" opencode stats --json --cost --project . > "$OUTF.o" 2>/dev/null < /dev/null && jq -e . "$OUTF.o" >/dev/null 2>&1; then
     jq -nc --slurpfile raw "$OUTF.o" '{agent: "opencode", role: null, raw: $raw[0]}' >> "$OUTF"
+  elif [ "$BOUNDED_TIMED" = 1 ]; then
+    echo "metrics.sh: warning: $(bounded_msg "opencode stats" "$MLIM") No OpenCode line." >&2
   else
-    echo "metrics.sh: warning: 'opencode stats' failed or timed out; no OpenCode line." >&2
+    echo "metrics.sh: warning: 'opencode stats' failed; no OpenCode line." >&2
   fi
 fi
 

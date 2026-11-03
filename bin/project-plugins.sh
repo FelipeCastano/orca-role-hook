@@ -38,18 +38,6 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/orca-project-plugins.XXXXXX")"; trap cleanup EXI
 TO="${ORCA_ROLES_PLUGINS_TIMEOUT:-60}"
 case "$TO" in ''|*[!0-9]*|0*) echo "project-plugins.sh: ORCA_ROLES_PLUGINS_TIMEOUT must be a whole number of seconds; using 60" >&2; TO=60;; esac
 first_line() { head -1 | tr '\t\r' '  '; }
-# <name> <command...>: runs it in the background with stdout/err in $T/<name>.out/.err, kills it after $TO seconds. Sets RC and TIMED.
-bounded() {
-  local i="$1" pid sl MAXN=$((TO * 10)); shift
-  [ -z "${ORCA_ROLES_TICK:-}" ] || MAXN="$(awk -v t="$TO" -v k="$ORCA_ROLES_TICK" 'BEGIN { printf "%d", t / k + 0.5 }')"
-  rm -f "$T/$i.stop" "$T/$i.to"
-  "$@" > "$T/$i.out" 2> "$T/$i.err" < /dev/null & pid=$!
-  ( n=0; s0=$SECONDS; while [ ! -e "$T/$i.stop" ] && [ "$n" -lt "$MAXN" ] && [ $((SECONDS - s0)) -le "$TO" ]; do sleep "${ORCA_ROLES_TICK:-0.1}"; n=$((n + 1)); done; [ -e "$T/$i.stop" ] || { : > "$T/$i.to"; kill_tree $pid; } ) > /dev/null 2>&1 & sl=$!
-  wait $pid 2>/dev/null; RC=$?
-  : > "$T/$i.stop"; wait $sl 2>/dev/null
-  TIMED=0; [ -f "$T/$i.to" ] && TIMED=1
-  return 0
-}
 # Control characters (except the tab and newline that separate fields and lines) never reach the terminal: they become "?"
 clean() { LC_ALL=C tr '\000-\010\013-\037\177' '?'; }
 err() { printf '%s\n' "$*" | clean >&2; }
@@ -78,7 +66,7 @@ compute_plugins() {
   n="$(jq -r -s '((.[0].enabledPlugins // {}) * (.[1].enabledPlugins // {})) | to_entries | map(select(.value == true)) | length' "$T/p.json" "$T/l.json")"
   [ "$n" != 0 ] || return 0
   bounded list claude plugin list --json
-  if [ "$TIMED" = 1 ]; then add_error "error claude timed out"; PLUGINS_OK=0; return 0; fi
+  if [ "$TIMED" = 1 ]; then add_error "error $(bounded_msg claude "$TO")"; PLUGINS_OK=0; return 0; fi
   if [ "$RC" != 0 ]; then
     row="$(first_line < "$T/list.err")"; [ -n "$row" ] || row="$(first_line < "$T/list.out")"; [ -n "$row" ] || row="claude plugin list exited $RC"
     add_error "error $row"; PLUGINS_OK=0; return 0
@@ -90,7 +78,7 @@ compute_plugins() {
     [ -n "$pp" ] && [ -d "$pp" ] && [ "$(cd "$pp" && pwd -P)" = "$PF" ] && MATCH="$(jq -c --arg p "$pp" '. + [$p]' <<<"$MATCH")"
   done < <(jq -r '[.[] | objects | .projectPath | strings] | unique[]' "$T/list.out")
   bounded mk claude plugin marketplace list --json
-  if [ "$TIMED" = 1 ]; then add_error "error claude timed out"; PLUGINS_OK=0; return 0; fi
+  if [ "$TIMED" = 1 ]; then add_error "error $(bounded_msg claude "$TO")"; PLUGINS_OK=0; return 0; fi
   if [ "$RC" != 0 ]; then
     row="$(first_line < "$T/mk.err")"; [ -n "$row" ] || row="$(first_line < "$T/mk.out")"; [ -n "$row" ] || row="claude plugin marketplace list exited $RC"
     add_error "error $row"; PLUGINS_OK=0; return 0
@@ -205,14 +193,14 @@ install)
     # --sparse takes a list: it goes last, after the source, or it would swallow the source
     SPARSE=(); if [ "$sparse" != "-" ]; then read -r -a SPA <<<"$sparse"; SPARSE=(--sparse "${SPA[@]}"); fi   # paths are validated: no spaces inside one
     bounded market claude plugin marketplace add --scope user "$cli" ${SPARSE[@]+"${SPARSE[@]}"}
-    if [ "$TIMED" = 1 ]; then err "error claude timed out"; exit 1; fi
+    if [ "$TIMED" = 1 ]; then err "error $(bounded_msg claude "$TO")"; exit 1; fi
     if [ "$RC" != 0 ] && ! grep -qi 'already exists' "$T/market.out" "$T/market.err"; then
       row="$(first_line < "$T/market.err")"; [ -n "$row" ] || row="$(first_line < "$T/market.out")"; [ -n "$row" ] || row="claude plugin marketplace add exited $RC"
       err "error $row"; exit 1
     fi
   fi
   bounded install claude plugin install --scope user "$ID"
-  if [ "$TIMED" = 1 ]; then err "error claude timed out"; exit 1; fi
+  if [ "$TIMED" = 1 ]; then err "error $(bounded_msg claude "$TO")"; exit 1; fi
   if [ "$RC" != 0 ]; then
     row="$(first_line < "$T/install.err")"; [ -n "$row" ] || row="$(first_line < "$T/install.out")"; [ -n "$row" ] || row="claude plugin install exited $RC"
     err "error $row"; exit 1
