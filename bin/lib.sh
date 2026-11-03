@@ -334,12 +334,36 @@ launchable_roles() {
     echo "$id"
   done
 }
-# When a role's tab opens: start (with the team), first-use (before its first task, then it stays) or per-task (before each task, closed after
-# its report). Missing or any other value = start; the front role always starts.  open_of <config> <role>
+# The agents a role can run hidden on: each needs a headless branch in agent.sh and an adapter in hidden-role.sh. Only claude has been measured.
+HIDDEN_AGENTS="claude"
+hidden_capable() { case " $HIDDEN_AGENTS " in *" ${1:-claude} "*) return 0;; esac; return 1; }
+# When a role's tab opens: start (with the team), first-use (before its first task, then it stays), per-task (before each task, closed after
+# its report) or hidden (never a tab: the local coordinator runs it with hidden-role.sh). A role without its own value takes defaults.open (the
+# kit ships first-use); none at all, or any other value, = start; the front role and the Planner always start. A hidden value on a role whose
+# agent cannot run hidden gives first-use (an explicit one is a config error, see check_config).  open_of <config> <role>
 open_of() {
   local v; [ "$2" = "$(front_role "$(mode_of --saved "$1" 2>/dev/null || echo programmer)")" ] && { printf start; return 0; }
   v="$(rstr "$1" "$2" open)"
-  case "$v" in first-use|per-task) printf '%s' "$v";; *) printf start;; esac
+  case "$v" in
+    first-use|per-task) printf '%s' "$v";;
+    hidden) if [ "$2" = planner ]; then printf start; elif hidden_capable "$(rstr "$1" "$2" agent)"; then printf hidden; else printf first-use; fi;;
+    *) printf start;;
+  esac
+}
+# A process's start time as one word (ps lstart, spaces as _), or nothing when it is gone: with the pid it names one process, so a reused pid is not taken for it. LC_ALL=C: the supervisor and --status must print it alike
+proc_start() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' | tr -s ' ' '_'; }
+proc_is() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$2" != - ] && kill -0 "$1" 2>/dev/null && [ "$(proc_start "$1")" = "$2" ]; }   # proc_is <pid> <start>
+# Whether a hidden role has a run in flight: <git dir>/orca-roles-hidden/<role>.pid holds "<agent pid> <agent start> <supervisor pid> <supervisor start> <tag>"
+# (while a run starts: "starting - - - <tag>"). Live when either pair names its process (the supervisor counts: the moment between the agent's end and
+# its message is not a loss), or when the file is under a minute old (a start in progress, or a write not yet filled).  hidden_live <git dir> <role>
+hidden_live() {
+  local f="$1/orca-roles-hidden/$2.pid" ap as sp ss
+  [ -f "$f" ] || return 1
+  read -r ap as sp ss _ < "$f" 2>/dev/null
+  proc_is "${ap:-}" "${as:--}" && return 0
+  proc_is "${sp:-}" "${ss:--}" && return 0
+  [ -n "$(find "$f" -mmin -1 2>/dev/null)" ] && return 0
+  return 1
 }
 # The role id a name (id or title, any case) refers to in a configuration; nothing if there is none.  resolve_role <config> <name>
 resolve_role() { jq -r --arg x "$2" '.roles | to_entries[] | select(.key == $x or ((.value.title // .key) | ascii_downcase) == ($x | ascii_downcase)) | .key' "$1" 2>/dev/null | head -1; }
@@ -420,11 +444,13 @@ REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
 # {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} was the default of the atlassian MCP server before Atlassian's /v2/mcp endpoint: a user still on exactly it moves to the new default.
+# "first-use" was every kit role's own open value before defaults.open: a role still on it moves to the default, so that a defaults.open of the user's reaches it. Only a config with no defaults.open (one from before it) is moved: once the config has one, a kit role's "first-use" is the user's own.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | del(.roles.auditor)
+    | .roles |= with_entries(.key as $k | if (($u.defaults.open? // null) == null) and ($d.roles | has($k)) and (($d.roles[$k] | has("open")) | not) and ((.value | type) == "object") and (.value.open == "first-use") then .value |= del(.open) else . end)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
     | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
@@ -525,10 +551,14 @@ check_config() {
   out="$(jq -r '.roles | to_entries[] | select(.value | has("disallowedTools")) | select(.value.disallowedTools | type != "array" or any(.[]; type != "string"))
     | "ERROR: role \(.key): disallowedTools must be a list of tool names"' "$1" 2>/dev/null)" || true
   [ -z "$out" ] || printf '%s\n' "$out"
-  out="$(jq -r '(.roles | to_entries[] | select(.value | type == "object" and has("open")) | select(.value.open | IN("start", "first-use", "per-task") | not)
-      | "ERROR: role \(.key): open must be \"start\", \"first-use\" or \"per-task\" (got \(.value.open | tojson))"),
-    (.defaults? | objects | select(has("open")) | select(.open | IN("start", "first-use", "per-task") | not)
-      | "ERROR: defaults.open must be \"start\", \"first-use\" or \"per-task\" (got \(.open | tojson))")' "$1" 2>/dev/null)" || true
+  out="$(jq -r --arg ha "$HIDDEN_AGENTS" '(.roles | to_entries[] | select(.value | type == "object" and has("open")) | select(.value.open | IN("start", "first-use", "per-task", "hidden") | not)
+      | "ERROR: role \(.key): open must be \"start\", \"first-use\", \"per-task\" or \"hidden\" (got \(.value.open | tojson))"),
+    (.defaults? | objects | select(has("open")) | select(.open | IN("start", "first-use", "per-task", "hidden") | not)
+      | "ERROR: defaults.open must be \"start\", \"first-use\", \"per-task\" or \"hidden\" (got \(.open | tojson))"),
+    (($ha | split(" ") | map(select(. != ""))) as $hl | .defaults as $d | .roles | to_entries[] | select(.value | type == "object" and .open == "hidden")
+      | if .key == "planner" or .key == "local-coordinator" then "ERROR: role \(.key): open \"hidden\" is not allowed: this role needs a tab"
+        else (.value.agent // $d.agent // "claude") as $ag | select($hl | index($ag) | not)
+          | "ERROR: role \(.key): open \"hidden\" needs agent \"\($hl | join(", "))\" (got \"\($ag)\")" end)' "$1" 2>/dev/null)" || true
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
     | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
@@ -795,7 +825,7 @@ coordinator_run() {
 # The front role's startup message: the local coordinator's in every mode (the Planner, where the mode has one, is a worker
 # and is one of its handles).  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front lfirst ltask team
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front lfirst ltask lhid team
   front="$(front_role "$(mode_of --saved "$cfg")")"
   # shellcheck source=/dev/null
   . "$state"
@@ -804,12 +834,13 @@ planner_msg() {
     v="$(var_of "$id")"; t="$(title_of "$cfg" "$id")"
     handles="$handles $t=${!v},"; active="$active $t"
   done
-  lfirst=""; ltask=""; team="$roles"
+  lfirst=""; ltask=""; lhid=""; team="$roles"
   for id in $(launchable_roles "$cfg" 2>/dev/null); do
     [ "$id" = "$front" ] && continue
     case "$(open_of "$cfg" "$id")" in
       first-use) case " $roles " in *" $id "*) ;; *) lfirst="$lfirst, $(title_of "$cfg" "$id") ($id)"; team="$team $id";; esac;;
       per-task) ltask="$ltask, $(title_of "$cfg" "$id") ($id)"; case " $roles " in *" $id "*) ;; *) team="$team $id";; esac;;
+      hidden) case " $roles " in *" $id "*) ;; *) lhid="$lhid, $(title_of "$cfg" "$id") ($id)"; team="$team $id";; esac;;
     esac
   done
   extra="$(jq -r --arg f "$front" --argjson act "$(printf '%s\n' $team | grep . | jq -R . | jq -s .)" \
@@ -820,6 +851,7 @@ planner_msg() {
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   [ -n "$lfirst" ] && msg="$msg Roles opened on first use, not open yet (see \"The team\" in your prompt): ${lfirst#, }."
   [ -n "$ltask" ] && msg="$msg Roles opened per task (see \"The team\" in your prompt): ${ltask#, }."
+  [ -n "$lhid" ] && msg="$msg Hidden roles, with no tab, run with hidden-role.sh (see \"The team\" in your prompt): ${lhid#, }."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."
   [ -n "$params" ] && msg="$msg Configuration parameters: $params."

@@ -134,10 +134,12 @@ if [ ! -f "$CONF" ]; then
 else
   # Adds new roles or keys from the installed version without overwriting what you already have (or the order of your roles)
   TMPC="$(mktemp)"
+  NEWLY_LAZY="$(jq -r 'if (.defaults.open? // null) != null then "" else [(.roles? // {}) | to_entries[] | select((.value | type) == "object" and (.value | has("open") | not) and (.value.enabled != false) and (.key | IN("local-coordinator", "planner", "auditor") | not)) | .key] | join(", ") end' "$CONF" 2>/dev/null)" || NEWLY_LAZY=""
   HAD_AUDITOR=0; jq -e '(.roles? // {}) | has("auditor")' "$CONF" >/dev/null 2>&1 && HAD_AUDITOR=1
   upgrade_config "$KIT/config.default.json" "$CONF" "$KIT" > "$TMPC"
   mv "$TMPC" "$CONF"
   [ "$HAD_AUDITOR" = 0 ] || printf '%s\n' "orca-roles was updated: the team's Auditor role no longer exists. In programmer mode the Plan-Reviewer (plan audits) and the Code-Reviewer (set audits) do its work, and in pr-reviewer mode the Verifier does. Its entry roles.auditor was removed from your config.json, and values you had changed there were not carried over: set them on the new roles if you want them. Teams open in Orca still run the old version: close all of a team's tabs and run roles in its worktree to restart it."
+  [ -z "$NEWLY_LAZY" ] || printf '%s\n' "orca-roles was updated: roles without an \"open\" value now open on first use instead of with the team: $NEWLY_LAZY. To keep one opening with the team, set roles.<id>.open to \"start\" in config.json; defaults.open does it for every role without its own value."
 fi
 jq empty "$CONF" || { echo "ERROR: $CONF is not valid JSON" >&2; exit 1; }
 

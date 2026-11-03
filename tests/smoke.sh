@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -75,6 +75,9 @@ SMOKE_SERIAL=(
   scholar         # the arXiv and Crossref pacing checks assert the seconds waited
 )
 smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
+# SMOKE_FIRST: the longest sections, longest first (median seconds of GitHub's macOS runs, Nov 2026); in a parallel run they start before the others, so none of them starts last. A stale order costs time, never a result
+SMOKE_FIRST=(launch usage-metrics modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
+smoke_first() { local k; for k in "${SMOKE_FIRST[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running sections and waits up to 5 s for them, so their 'section … aborted' lines come before the total
   local k t
   for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done
@@ -87,10 +90,13 @@ smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running section
 }
 smoke_parallel() {
   local d n i k printed=0 running=0 bad=0 last
-  local -a SP_PID SP_RC SP_ST
+  local -a SP_PID SP_RC SP_ST SP_ORD
   SMK_PAR=1
   d="$(mktemp -d)"; n=${#ARGS[@]}
   for ((i = 0; i < n; i++)); do SP_ST[i]=0; done
+  # start order: the requested sections that are in SMOKE_FIRST, in that list's order, then the others in the requested order
+  for k in "${SMOKE_FIRST[@]}"; do for ((i = 0; i < n; i++)); do [ "${ARGS[i]}" != "$k" ] || SP_ORD+=("$i"); done; done
+  for ((i = 0; i < n; i++)); do smoke_first "${ARGS[i]}" || SP_ORD+=("$i"); done
   trap 'smk_reap; rm -rf "$d"; smk_finish interrupted; exit 130' INT TERM
   while [ "$printed" -lt "$n" ]; do
     for ((i = 0; i < n; i++)); do
@@ -98,7 +104,7 @@ smoke_parallel() {
       if wait "${SP_PID[i]}" 2>/dev/null; then SP_RC[i]=0; else SP_RC[i]=$?; fi
       SP_ST[i]=2; running=$((running - 1))
     done
-    for ((i = 0; i < n; i++)); do
+    for i in "${SP_ORD[@]}"; do
       [ "$running" -lt "$JOBS" ] || break
       [ "${SP_ST[i]}" = 0 ] && ! smoke_serial "${ARGS[i]}" || continue
       if smk_hold "$running"; then break; fi
@@ -986,6 +992,8 @@ check "check_config: null, absent and every valid value of those keys give no ER
 OP=""; for v in '"start"' '"first-use"' '"per-task"' '"later"' 1 '""'; do jq -c --argjson v "$v" '.roles.dev.open = $v' "$ROOT/config.default.json" > "$TMP/op.json"; OP="$OP$(check_config "$TMP/op.json" | grep -c '^ERROR: role dev: open must be' || true)"; done
 jq -c '.defaults.open = "later"' "$ROOT/config.default.json" > "$TMP/op.json"
 check "check_config: roles.<r>.open accepts start, first-use and per-task only, the error names the role, defaults.open is checked too" "$OP:$(check_config "$TMP/op.json" | grep -c '^ERROR: defaults.open must be' || true)" "000111:1"
+ODC="$TMP/od.json"; odo() { jq "$1"' | .settings.mode = "programmer"' "$ROOT/config.default.json" > "$ODC"; printf '%s:%s' "$(open_of "$ODC" dev)" "$(open_of "$ODC" "${2:-planner}")"; }
+check "open_of: a role without its own open takes defaults.open (the kit ships first-use), the planner keeps start, an own value beats the default, no default at all or an other value is start, the front role starts whatever its own value" "$(odo .):$(odo '.defaults.open = "per-task"'):$(odo '.defaults.open = "start"' dev):$(odo '.defaults.open = "start" | .roles.dev.open = "per-task"' dev):$(odo 'del(.defaults.open)' dev):$(odo '.defaults.open = "start" | .roles["local-coordinator"].open = "first-use"' local-coordinator)" "first-use:start:per-task:start:start:start:per-task:per-task:start:start:start:start"
 jq '.roles.auditor = {"title":"Auditor"}' "$ROOT/config.default.json" > "$TMP/cv-aud.json"; printf '%s' '{"set":[{"path":["roles","auditor","model"],"value":"y"}]}' > "$TMP/cv-aud-ovr.json"
 CA1="$(check_config "$TMP/cv-aud.json")"; CA2="$(check_config "$ROOT/config.default.json" "$TMP/cv-aud-ovr.json")"
 check "check_config: roles.auditor in the config, or a saved set path roles.auditor.*, gives exactly the removed-role line" "$(printf '%s\n' "$CA1" | wc -l | tr -d ' '):$(printf '%s\n' "$CA2" | wc -l | tr -d ' '):$(printf '%s\n%s\n' "$CA1" "$CA2" | grep -c '^ERROR: the role auditor no longer exists in this version of orca-roles')" "1:1:2"
@@ -3017,6 +3025,15 @@ try lol; A3="$RC:$(lokeys):$(locnt Dev):$(lolines)"
 S0="$(losum)"; try lol --open nosuch; R1="$RC"; try lol --open dev --set roles.dev.model=x; R2="$RC:$(printf '%s\n' "$OUT" | grep -c -- '--open takes no other option')"; R3="$([ "$(losum)" = "$S0" ] && echo same)"
 loreset; try lol --only dev; A4="$RC:$(lokeys)"
 check "launch --open: the local coordinator opens at start even with open first-use; a plain launch opens the start roles and lists the lazy ones, --open dev adds Dev (not saved), a later plain launch keeps it, an unknown role or another option refuses with nothing changed, --only opens a lazy role" "$A1|$A2|$A3|$R1:$R2:$R3|$A4" "0:LOCAL_COORDINATOR PLANNER TESTER :1/1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :0|0:LOCAL_COORDINATOR PLANNER DEV TESTER :1:0/1|1:1:1:same|0:LOCAL_COORDINATOR PLANNER DEV "
+cp "$KIT/config.json" "$LO/cfg-d1.keep"; jq 'del(.roles[].open) | .defaults.open = "first-use" | .roles["local-coordinator"].open = "start" | .roles.planner.open = "start"' "$LO/cfg-d1.keep" > "$KIT/config.json"
+loreset; try lol; D1="$RC:$(lokeys):$(printf '%s\n' "$OUT" | grep -cE "^Opened on first use \(.*\): Dev \(dev\)" || true)"
+loreset; try lol --set defaults.open=start; D2="$RC:$(lokeys)"
+loreset; echo '{"defaults":{"open":"start"}}' > "$LO/proj/.orca-roles.json"; try lol; D3="$RC:$(lokeys)"; rm -f "$LO/proj/.orca-roles.json"
+printf '# Late\n' > "$LO/late.md"; jq --arg f "$LO/late.md" '.roles.late = {"title": "Late", "prompt": $f}' "$KIT/config.json" > "$LO/cfg-late.json" && cp "$LO/cfg-late.json" "$KIT/config.json"
+loreset; try lol; D4="$RC:$(lokeys)"; try lol --open late; D5="$RC:$(lokeys)"
+check "launch: defaults.open decides the roles without their own value: a plain launch opens the local coordinator and the Planner and lists Dev as first use; --set defaults.open=start or a project defaults.open start opens Dev too; a role added to the config after the launch, with no open, is not opened by a plain launch and is by --open" "$D1|$D2|$D3|$D4|$D5" "0:LOCAL_COORDINATOR PLANNER :1|0:LOCAL_COORDINATOR PLANNER DEV TESTER DEPLOYER |0:LOCAL_COORDINATOR PLANNER DEV TESTER DEPLOYER |0:LOCAL_COORDINATOR PLANNER |0:LOCAL_COORDINATOR PLANNER LATE "
+cp "$LO/cfg-d1.keep" "$KIT/config.json"
+check "launch: the pr-reviewer local coordinator prompt reopens the lens roles with launch.sh --open and no longer with roles; new-role.sh says a role opens on first use in both closing messages" "$(grep -c 'launch.sh --open <id>,<id>' "$ROOT/prompts/pr-reviewer/local-coordinator.md"):$(grep -c 'open them with `roles`' "$ROOT/prompts/pr-reviewer/local-coordinator.md" || true):$(grep -c 'opens on first use' "$ROOT/bin/new-role.sh")" "1:0:2"
 loreset; try lol; : > "$LO/dead-h-Tester"; B0="$(lotester)"; try lol --open dev; B1="$RC:$(lokeys):$([ "$(lotester)" = "$B0" ] && echo same):$(locnt Tester):$(locnt Dev)"
 loreset; try lol; : > "$LO/stale-h-Tester"; B0="$(lotester)"; try lol --open dev; B2="$RC:$(lokeys):$([ "$(lotester)" = "$B0" ] && echo same):$(printf '%s' "$B0" | tr '|' '\n' | grep -c . || true)"
 check "launch --open: a role it does not name is left as it is: a dead Tester agent is not replaced, and a stale Tester handle keeps its env, pty and tabs lines byte for byte" "$B1|$B2" "0:LOCAL_COORDINATOR PLANNER DEV TESTER :same:1:1|0:LOCAL_COORDINATOR PLANNER DEV TESTER :same:3"
@@ -3535,11 +3552,11 @@ sec_research_defaults() {
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester plan-reviewer code-reviewer verifier e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
-check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,open,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,open,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,open,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,open,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,open,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,open,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,open,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
-check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"first-use","modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","mcp":["context7"]}'
+check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
+check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
-check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"first-use","modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"first-use","modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
-awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '"\(.roles[$r].model // "-"),\(.roles[$r].open // "-")"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
+check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"modes":["programmer","academic-research"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
+awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '"\(.roles[$r].model // "-"),\(.roles[$r].open // .defaults.open // "-")"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
 check "research-defaults: the programmer and pr-reviewer teams (roles, order, models, when each opens) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier; pr-reviewer opens the local coordinator, no Planner)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5,start programmer/planner=claude-opus-5-5,start programmer/researcher=claude-sonnet-5-5,first-use programmer/dev=claude-sonnet-5-5,first-use programmer/tester=claude-sonnet-5-5,first-use programmer/plan-reviewer=claude-opus-5-5,first-use programmer/code-reviewer=claude-opus-5-5,first-use programmer/e2e-tester=claude-opus-5-5,first-use programmer/deployer=claude-sonnet-5-5,first-use pr-reviewer/local-coordinator=claude-sonnet-5-5,start pr-reviewer/verifier=claude-opus-5-5,first-use "
 check "research-defaults: the programmer team is the local coordinator and the eight old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "9:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/plan-reviewer programmer/code-reviewer programmer/e2e-tester programmer/deployer "
 pk_setup
@@ -3591,7 +3608,9 @@ try nrj "$TMP/nj.json"; check "modes from-json: one mode (string)" "$RC:$(jq -c 
 check "modes from-json: file in roles/<mode>/, none for programmer" "$(head -1 "$PK/roles/pr-reviewer/rv.md"):$([ -e "$PK/roles/programmer/rv.md" ] && echo left):$([ -e "$PK/roles/rv.md" ] && echo flat)" "# x::"
 check "modes from-json: launched in pr-reviewer, not in programmer" "$(KIT="$PK" launchable_roles "$(nr_mode_cfg pr-reviewer)" 2>&1 | tr '\n' ' ')|$(KIT="$PK" launchable_roles "$(nr_mode_cfg programmer)" 2>&1 | tr '\n' ' ')" "planner rv |planner dev "
 printf '%s' '{"id":"rv-list","description":"d","modes":["pr-reviewer"],"prompt":"'"$RP"'"}' > "$TMP/nj.json"
-try nrj "$TMP/nj.json"; check "modes from-json: one-element list" "$RC:$(jq -c '.roles["rv-list"].modes' "$NRC")" '0:["pr-reviewer"]'
+printf '%s' '{"id":"op1","description":"d","open":"per-task","prompt":"'"$RP"'"}' > "$TMP/nj-o1.json"; printf '%s' '{"id":"op2","description":"d","open":"later","prompt":"'"$RP"'"}' > "$TMP/nj-o2.json"; printf '%s' '{"id":"op3","description":"d","prompt":"'"$RP"'"}' > "$TMP/nj-o3.json"
+try nrj "$TMP/nj-o1.json"; NO1="$RC:$(jq -r '.roles.op1.open' "$NRC")"; NS="$(snap)"; try nrj "$TMP/nj-o2.json"; NO2="$RC:$(printf '%s' "$OUT" | grep -c 'open must be'):$([ "$(snap)" = "$NS" ] && echo same)"; try nrj "$TMP/nj-o3.json"; jq '.defaults.open = "first-use"' "$NRC" > "$TMP/nj-o3c.json"; NO3="$RC:$(jq -r '.roles.op3 | has("open")' "$NRC"):$(open_of "$TMP/nj-o3c.json" op3)"
+try nrj "$TMP/nj.json"; check "modes from-json: one-element list, and open (a valid value is kept, an invalid one is refused with nothing written, a missing one stays absent and the role is lazy through defaults.open)" "$RC:$NO1|$NO2|$NO3:$(jq -c '.roles["rv-list"].modes' "$NRC")" '0:0:per-task|1:1:same|0:false:first-use:["pr-reviewer"]'
 printf '%s' '{"id":"al","description":"d","modes":"all","prompt":{"programmer":"# p\n## Report\n","pr-reviewer":"# r\n## Report\n","academic-research":"# a\n## Report\n"}}' > "$TMP/nj.json"
 try nrj "$TMP/nj.json"; check "modes from-json: all with an object" "$RC:$(jq -c '.roles.al | [.modes, (.prompt | keys)]' "$NRC")" '0:["all",["academic-research","pr-reviewer","programmer"]]'
 check "modes from-json: all writes three files" "$(for m in programmer pr-reviewer academic-research; do head -n1 "$PK/roles/$m/al.md"; done | tr '\n' ' ')" "# p # r # a "
@@ -5714,7 +5733,7 @@ if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json";
 sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
 pk_setup
-check "prompts: every default prompt file in prompts/programmer/, none flat but the mode-independent coordinator.md" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md | wc -l | tr -d ' '):$([ -f "$PK/prompts/coordinator.md" ] && echo coordinator)" "$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):0:coordinator"
+check "prompts: every default prompt file in prompts/programmer/, none flat but the mode-independent coordinator.md, auditor.md and hidden-worker.md" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md ! -name hidden-worker.md | wc -l | tr -d ' '):$([ -f "$PK/prompts/coordinator.md" ] && echo coordinator)" "$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):0:coordinator"
 NROLES="$(jq -r '.roles | length' "$PKC")"
 [ "$NROLES" -ge 7 ] || { echo "FAIL default config has only $NROLES roles"; FAIL=1; }
 # prints "<paths found>:<missing>:<outside programmer/>" for a message
@@ -5786,7 +5805,7 @@ sec_install_flat() {
 IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
-check "install.sh: no flat prompt left but the mode-independent coordinator.md and auditor.md, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$([ -f "$IH/.orca-roles/prompts/coordinator.md" ] && echo coordinator)$([ -f "$IH/.orca-roles/prompts/auditor.md" ] && echo " auditor"):$(cmp -s "$IH/.orca-roles/prompts/auditor.md" "$ROOT/prompts/auditor.md" && echo same)" "0:$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):coordinator auditor:same"
+check "install.sh: no flat prompt left but the mode-independent coordinator.md, auditor.md and hidden-worker.md, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md ! -name hidden-worker.md | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$([ -f "$IH/.orca-roles/prompts/coordinator.md" ] && echo coordinator)$([ -f "$IH/.orca-roles/prompts/auditor.md" ] && echo " auditor"):$(cmp -s "$IH/.orca-roles/prompts/auditor.md" "$ROOT/prompts/auditor.md" && echo same)" "0:$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):coordinator auditor:same"
 # the "Enabled" line names the mode of the installed configuration
 ic() { jq "$1" "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; }
 irun() { if IOUT="$(cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null 2>"$IH/err.txt")"; then IRC=0; else IRC=$?; fi; IENA="$(printf '%s\n' "$IOUT" | grep '^Enabled')"; }
@@ -5875,6 +5894,16 @@ check "install: a config that still says academic-writer keeps it (exit 0, the r
 printf '%s' '{"roles":{"auditor":{"model":"x"}}}' > "$MK/config.json"
 if MOUT2="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC2=0; else MRC2=$?; fi
 check "install: an update from a config with roles.auditor prints the removed-Auditor notice once and drops the key" "$MRC2:$(printf '%s\n' "$MOUT2" | grep -c '^orca-roles was updated: the team.s Auditor role no longer exists'):$(jq -r '.roles | has("auditor")' "$MK/config.json")" "0:1:false"
+mgi() { if MOUT3="$(cd "$TMP" && HOME="$MH" bash "$ROOT/install.sh" </dev/null 2>&1)"; then MRC3=0; else MRC3=$?; fi; }
+mgn() { printf '%s\n' "$MOUT3" | grep -c '^orca-roles was updated: roles without an "open" value' || true; }
+printf '%s' '{"roles":{"dev":{"open":"first-use"},"tester":{"open":"per-task"},"researcher":{"open":"start"},"mine":{"title":"Mine"},"mine2":{"open":"first-use"},"off":{"enabled":false},"auditor":{"model":"x"}}}' > "$MK/config.json"
+mgi; M1="$MRC3:$(mgn):$(printf '%s\n' "$MOUT3" | grep '^orca-roles was updated: roles without an "open" value' | sed 's/.*with the team: \([^.]*\)\..*/\1/')"; MS1="$(cksum < "$MK/config.json")"
+M2="$(jq -r '[.roles.dev, .roles.tester, .roles.researcher, .roles.mine, .roles.mine2 | .open // "none"] | join(",")' "$MK/config.json"):$(jq -r '.defaults.open + "," + .roles.planner.open' "$MK/config.json")"
+mgi; M3="$MRC3:$(mgn):$([ "$(cksum < "$MK/config.json")" = "$MS1" ] && echo same)"
+printf '%s' '{"defaults":{"open":"start"},"roles":{"dev":{"open":"first-use"},"mine":{}}}' > "$MK/config.json"
+mgi; M4="$MRC3:$(mgn):$(jq -r '.defaults.open + "," + (.roles.dev.open // "none")' "$MK/config.json")"
+printf '%s' '{"roles":{"dev":{"open":"start"}}}' > "$MK/config.json"; mgi; mgi
+check "install: an update moves a kit role on first-use to defaults.open and keeps start, per-task and a user role's first-use, prints the notice once naming only the enabled roles that had no open, and a second install prints none and changes nothing; with the user's defaults.open nothing is printed and a kit role's first-use is kept; a user's start on Dev survives two installs" "$M1|$M2|$M3|$M4|$(jq -r .roles.dev.open "$MK/config.json")" "0:1:mine|none,per-task,start,none,first-use:first-use,start|0:0:same|0:0:start,first-use|start"
 }
 
 sec_install() {
@@ -8653,6 +8682,195 @@ check "local coordinator prompts: the status-first sentence (answer from team-st
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
 }
 
+sec_hidden() {
+gc() { grep -c "$@" || true; }
+nf() { { ls "$@" 2>/dev/null || true; } | wc -l | tr -d ' '; }
+# hidden roles: config, launch, planner_msg, a run end to end with a fake claude and a fake orca, outcomes, locks, status, stop, and the other scripts
+HD="$TMP/hid"; rm -rf "$HD"; mkdir -p "$HD/bin" "$HD/proj" "$HD/nogit"; git -C "$HD/proj" init -q -b main; HDP="$HD/proj"; HG="$HDP/.git"; HH="$HG/orca-roles-hidden"
+cat > "$HD/bin/claude" <<EOS
+#!/bin/sh
+printf '%s\n' "\$@" > "$HD/argv"; env > "$HD/env"; cat > "$HD/stdin"
+[ -e "$HD/ign" ] && trap '' TERM
+[ -e "$HD/sleep" ] && { echo started > "$HD/started"; sleep 30; }
+[ -e "$HD/out" ] && cat "$HD/out"
+[ -e "$HD/exit" ] && exit "\$(cat "$HD/exit")"
+exit 0
+EOS
+cat > "$HD/bin/orca" <<EOS
+#!/bin/sh
+if [ "\$1 \$2" = "orchestration send" ]; then
+  n=\$(( \$(cat "$HD/cnt" 2>/dev/null || echo 0) + 1 )); echo \$n > "$HD/cnt"; shift 2
+  while [ \$# -gt 0 ]; do case "\$1" in --subject) printf '%s' "\$2" > "$HD/send.\$n.subject";; --body) printf '%s' "\$2" > "$HD/send.\$n.body";; --to) printf '%s' "\$2" > "$HD/send.\$n.to";; esac; shift; done
+  { ls "$HH"/*.pid >/dev/null 2>&1 && echo pid-present || echo pid-gone; ls "$HH"/*.undelivered 2>/dev/null | wc -l | tr -d ' '; } > "$HD/send.\$n.state"
+  [ -e "$HD/sendfail" ] && exit 1
+fi
+[ "\$1 \$2" = "worktree ps" ] && echo '{"ok":true,"result":{"worktrees":[{"path":"$HDP","agents":[]}]}}'
+exit 0
+EOS
+chmod +x "$HD/bin/claude" "$HD/bin/orca"
+HK="$TMP/home/.orca-roles"; HCFG="$HG/orca-roles.config.json"
+hcfg() { jq "$1" "$ROOT/config.default.json" > "$HCFG"; }   # hcfg <jq filter>: this worktree's saved configuration
+hcfg '.roles.dev.open = "hidden" | .roles.deployer.enabled = false | .roles.deployer.open = "hidden"'
+printf 'a brief\nsecond line\n' > "$HD/brief.md"
+hq() { rm -f "$HD"/send.* "$HD/cnt" "$HD/argv" "$HD/env" "$HD/stdin" "$HD/out" "$HD/exit" "$HD/sleep" "$HD/started" "$HD/sendfail"; }
+hreset() { rm -rf "$HH" "$HG/orca-roles.env"; hq; }
+hh() { local hv=(ORCA_TERMINAL_HANDLE=h-lc); [ -z "${HNOH:-}" ] || hv=(-u ORCA_TERMINAL_HANDLE); (cd "${HDIR:-$HDP}" && env "${hv[@]}" HOME="$TMP/home" PATH="$HD/bin:$PATH" ORCA_PANE_KEY=pk ORCA_AGENT_HOOK_PORT=1 ORCA_AGENT_HOOK_TOKEN=tk OTEL_RESOURCE_ATTRIBUTES="orca_roles.role=local-coordinator,keep=1" ORCA_ROLES_PACE=0 "$HK/bin/hidden-role.sh" "$@" 2>&1); }
+hsent() { nf "$HD"/send.*.subject; }
+hgot() { [ "$(hsent)" -ge "$1" ]; }
+hgone() { ! pgrep -f -- "--supervise dev .* $1 " >/dev/null 2>&1; }
+hwait() {  # hwait <tag> <messages expected>: until the supervisor is gone and that many messages were tried
+  poll hgot "$2"; poll hgone "$1"; sleep 0.2
+}
+hbody() { cat "$HD/send.${1:-1}.body"; }
+hhead() { head -n 1 "$HD/send.${1:-1}.body"; }
+hjson() { printf '{"type":"result","subtype":"success","is_error":false,"result":%s,"session_id":"sess-1"}' "$(printf '%s' "$1" | jq -Rs .)" > "$HD/out"; }
+hdecoy() {  # hdecoy: a sleep in its own session, stdio on /dev/null; its pid in DPID
+  if command -v setsid >/dev/null 2>&1; then setsid sleep 600 </dev/null >/dev/null 2>&1 & DPID=$!
+  else /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sleep 600 </dev/null >/dev/null 2>&1 & DPID=$!; fi
+  sleep 0.2
+}
+hold() { touch -t "$(date -v-2M +%Y%m%d%H%M 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M)" "$1"; }
+
+# 1: config
+hc() { jq "$1" "$ROOT/config.default.json" > "$HD/c.json"; }
+hc '.roles.dev.open = "hidden"'; T1="$(check_config "$HD/c.json" | wc -l | tr -d ' ')"
+hc '.defaults.open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | wc -l | tr -d ' ')"
+hc '.roles["dev-opencode"].open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role dev-opencode: open "hidden" needs agent "claude" (got "opencode")$' || true)"
+hc '.roles.planner.open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role planner: open "hidden" is not allowed: this role needs a tab$' || true)"
+hc '.roles["local-coordinator"].open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role local-coordinator: open "hidden" is not allowed: this role needs a tab$' || true)"
+hc '.defaults.open = "hidden" | del(.roles.planner.open)'; T1="$T1:$(open_of "$HD/c.json" dev-opencode)/$(open_of "$HD/c.json" dev)/$(open_of "$HD/c.json" planner)/$(open_of "$HD/c.json" local-coordinator)"
+
+# 2: launch
+HL="$TMP/hl"; rm -rf "$HL"; mkdir -p "$HL/bin" "$HL/proj"; git -C "$HL/proj" init -q; HLG="$HL/proj/.git"
+printf '#!/bin/sh\nexit 0\n' > "$HL/bin/kickoff"; printf '#!/bin/sh\necho 4242\n' > "$HL/bin/agentpid"; chmod +x "$HL/bin/kickoff" "$HL/bin/agentpid"
+cat > "$HL/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$HL/orca.log"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\${t% (*}\"}";;
+  "terminal list") echo '{"terminals":[]}';;
+  "terminal show") echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\",\"tabId\":\"tab-\$4\",\"leafId\":\"leaf-\$4\"}}}";;
+  "worktree ps") echo '{"ok":true,"result":{"worktrees":[{"path":"$HL/proj","agents":[]}]}}';;
+esac
+exit 0
+EOS
+chmod +x "$HL/bin/orca"
+hlx() { local c="$1"; shift; (cd "$HL/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$HL/bin:$PATH" ORCA_ROLES_KICKOFF="$HL/bin/kickoff" ORCA_ROLES_AGENT_PID="$HL/bin/agentpid" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$HK/bin/$c" "$@" 2>&1); }
+hlreset() { rm -rf "$HLG"/orca-roles.*; : > "$HL/orca.log"; }
+hlkeys() { cut -d= -f1 "$HLG/orca-roles.env" | tr '\n' ' '; }
+hlsum() { cat "$HLG/orca-roles.env" "$HLG/orca-roles.pty" "$HLG/orca-roles.tabs" "$HLG/orca-roles.overrides.json" "$HLG/orca-roles.config.json" 2>/dev/null | cksum || true; }
+hlcfg() { write_launch_config; jq "$1" "$KIT/config.json" > "$HL/cfg.json" && cp "$HL/cfg.json" "$KIT/config.json"; }
+hlcfg '.roles.dev.open = "hidden" | .roles.deployer.enabled = false'
+HLINE='Hidden (no tab; the local coordinator runs each with hidden-role.sh): Dev (dev).'
+hlreset; try hlx launch.sh; T2="$RC:$(hlkeys):$(printf '%s\n' "$OUT" | gc -xF "$HLINE" || true):$(printf '%s\n' "$OUT" | gc '^Opened')"
+try hlx launch.sh --status; T2="$T2:$(printf '%s\n' "$OUT" | gc 'not opened (hidden)' || true)"
+S0="$(hlsum)"; try hlx launch.sh --open dev; T2="$T2:$RC:$(printf '%s\n' "$OUT" | gc "ERROR: --open: 'dev' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed.")$([ "$(hlsum)" = "$S0" ] && echo :same)"
+hlreset; try hlx launch.sh --only dev; T2="$T2|$RC:$(hlkeys)"
+hlreset; try hlx launch.sh --enable dev; T2="$T2|$RC:$(hlkeys)"
+check "hidden launch: no tab for a hidden Dev on a plain launch (with the 'Hidden (no tab' line and no 'Opened' line), with --only dev or --enable dev; --status says 'not opened (hidden)'; --open dev refuses with nothing changed" "$T2" "0:LOCAL_COORDINATOR PLANNER :1:0:1:1:1:same|0:LOCAL_COORDINATOR PLANNER |0:LOCAL_COORDINATOR PLANNER "
+
+# 3: planner_msg
+printf 'PLANNER=t1\nDEV=t2\n' > "$HD/state.env"
+hc '.roles.dev.open = "hidden"'; HS='Hidden roles, with no tab, run with hidden-role.sh (see "The team" in your prompt): Dev (dev).'
+M1="$(planner_msg "$HD/c.json" "planner" "$HD/state.env" "" "" 0 2>/dev/null)"; M2="$(planner_msg "$HD/c.json" "planner dev" "$HD/state.env" "" "" 0 2>/dev/null)"
+hc '.roles.dev.open = "first-use"'; M3="$(planner_msg "$HD/c.json" "planner" "$HD/state.env" "" "" 0 2>/dev/null)"
+check "hidden config: accepted on a role and in defaults (also with the kit's opencode roles), refused on an opencode role's own open, on the planner and on the local coordinator; open_of gives first-use for an opencode role that inherits it, hidden for dev, start for the planner and the front role; hidden planner_msg: the hidden sentence names the role, a hidden role with a saved tab is a normal role (no sentence, in the handles), and without a hidden role the message has no hidden sentence" "$T1|$(printf '%s' "$M1" | gc -F -- " $HS"):$(printf '%s' "$M2" | gc 'Hidden roles'):$(printf '%s' "$M2" | gc -F ' Dev=t2'):$(printf '%s' "$M3" | gc 'Hidden roles')" "0:0:1:1:1:first-use/hidden/start/start|1:0:1:0"
+
+# 4: a run end to end
+hreset; hjson "Done. all good"
+try hh dev --brief "$HD/brief.md" --tag t1; R1="$RC:$(printf '%s' "$OUT" | gc "^Started Dev hidden (t1); log: $HH/t1.log$")"
+hwait t1 1
+AV="$(tr '\n' ' ' < "$HD/argv")"
+A4="$(printf '%s' "$AV" | gc -F -- '-p --output-format json'):$(gc -xF 'Bash(orca:*)' "$HD/argv"):$(gc '^Edit(//.*/prompts/\*\*)$' "$HD/argv"):$(gc 'adopt that role' "$HD/argv" || true)"
+E4="$(for v in ORCA_TERMINAL_HANDLE ORCA_PANE_KEY ORCA_AGENT_HOOK_PORT ORCA_ROLES_HEADLESS_PROMPT; do gc "^$v=" "$HD/env" || true; done | tr '\n' ,)$(gc 'orca_roles.role=local-coordinator' "$HD/env" || true),$(gc '^ORCA_ROLES_CONFIG=' "$HD/env"),$(gc 'keep=1' "$HD/env")"
+SI="ok"; while IFS= read -r l; do [ -z "$l" ] || grep -qF -- "$l" "$HD/stdin" || SI=missing; done < "$ROOT/prompts/hidden-worker.md"
+S4="$(head -n 1 "$HD/stdin" | cut -d' ' -f1):$(gc 'adopt that role' "$HD/stdin"):$SI:$(tail -n 1 "$HD/stdin")"
+RP="$(hhead | sed -n 's/.* report=//p')"
+M4="$(cat "$HD/send.1.subject"):$(hhead | sed 's/ wall=[0-9]* report=.*//'):$(cat "$HD/send.1.to"):$(cat "$HD/send.1.state" | tr '\n' ,):$(nf "$HH"/*.undelivered):$(nf "$HH"/*.pid):$(hsent):$(cat "$RP" 2>/dev/null)"
+check "hidden run: a headless claude with the kit's denies and Bash(orca:*), no ORCA_* but ORCA_ROLES_*, no coordinator role attribute, the prompt on stdin (role message, hidden-worker.md, the closing line last) and not in argv; one 'Hidden role done' message with the outcome, marker, session and the report file; the pid file gone and .undelivered written before the send, deleted after" "$R1|$A4|$E4|$S4|$M4" "0:1|1:1:1:0|0,0,0,0,0,1,1|Read:1:ok:When you have finished, your last message is your report, and its first word is \`Done\`.|Hidden role done:role=dev tag=t1 outcome=done marker=ok session=sess-1:h-lc:pid-gone,1,:0:0:1:Done. all good"
+
+# 5: outcomes
+hscen() {  # hscen <tag> [messages expected] [brief]: one run with what the fake claude is set to print, and its message
+  rm -f "$HD"/send.* "$HD/cnt"; try hh dev --brief "${3:-$HD/brief.md}" --tag "$1"; hwait "$1" "${2:-1}"
+  printf '%s|%s|%s' "$(hsent)" "$(cat "$HD/send.1.subject" 2>/dev/null)" "$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=[0-9]* report=.*//')"
+}
+hq; hjson $'thinking\nQUESTION: which one?'; O1="$(hscen q1)"
+hq; hjson $'Done, but\nFAILED: no access'; O2="$(hscen f1)"
+hq; echo 'not json' > "$HD/out"; O3="$(hscen j1)"
+hq; O4="$(hscen e1)"
+hq; hjson 'Done. x'; echo 3 > "$HD/exit"; O5="$(hscen x1)"
+hq; printf '{"is_error":true,"result":"Done. but an error","session_id":"sess-e"}' > "$HD/out"; O6="$(hscen i1)"; O6="$O6:$(sed -n 2p "$HD/send.1.body")"
+hq; printf '{"is_error":true,"session_id":"sess-9"}' > "$HD/out"; O7="$(hscen n1)"
+hq; hjson 'Done. x'; O8="$(hscen d1 1 "$HD")"; O8="$O8:$(sed -n 2p "$HD/send.1.body" | gc 'could not be read')"
+hq; hjson 'all good, no marker'; O9="$(hscen m1)"
+hq; hjson 'Done. y'; touch "$HD/sendfail"; try hh dev --brief "$HD/brief.md" --tag u1; hwait u1 3
+SF="$(hsent):$(cat "$HD/cnt"):$(nf "$HH"/u1.undelivered):$(hh --status | gc '^undelivered u1 .*/hidden-u1\.md$' || true)"; try hh --ack u1; SF="$SF:$RC:$(nf "$HH"/*.undelivered)"
+check "hidden outcomes: QUESTION: -> 'Hidden role question'; FAILED:, non-JSON, empty output, a non-zero exit, is_error, a result-less object (keeps its session) and an unreadable brief -> failed; a report without Done -> marker=missing; each with one message; a failing orca gets 3 tries, one .undelivered listed by --status with the report, no second message, removed by --ack" "$O1|$O2|$O3|$O4|$O5|$O6|$O7|$O8|$O9|$SF" "1|Hidden role question|role=dev outcome=question marker=missing session=sess-1|1|Hidden role done|role=dev outcome=failed marker=ok session=sess-1|1|Hidden role done|role=dev outcome=failed marker=missing session=-|1|Hidden role done|role=dev outcome=failed marker=missing session=-|1|Hidden role done|role=dev outcome=failed marker=ok session=sess-1|1|Hidden role done|role=dev outcome=failed marker=ok session=sess-e:Done. but an error|1|Hidden role done|role=dev outcome=failed marker=missing session=sess-9|1|Hidden role done|role=dev outcome=failed marker=missing session=-:1|1|Hidden role done|role=dev outcome=done marker=missing session=sess-1|3:3:1:1:0:0"
+
+# 6: usage, locks, status, resume and stop
+hreset; mkdir -p "$HH"; : > "$HH/used.log"
+uc() {  # uc <message pattern> <hh args>: the exit status and whether the one stderr line is the expected one
+  try hh "${@:2}"; printf '%s:%s ' "$RC" "$(printf '%s\n' "$OUT" | gc -- "$1" || true)"
+}
+B="--brief $HD/brief.md"
+U6="$(HDIR="$HD/nogit" uc 'no team in this folder' dev $B --tag x)$(uc 'unknown role' nosuch $B --tag x)$(uc 'tester does not open hidden' tester $B --tag x)$(uc 'deployer is not in this team' deployer $B --tag x)"
+printf 'DEV=h-x\n' > "$HG/orca-roles.env"; U6="$U6$(uc 'dev has a tab: dispatch to it' dev $B --tag x)"; rm -f "$HG/orca-roles.env"
+U6="$U6$(uc 'cannot read the brief' dev --brief /nonexistent --tag x)$(uc '--tag must be' dev $B --tag '')$(uc '--tag must be' dev $B --tag 'a b')$(uc 'tag used was already used' dev $B --tag used)$(HNOH=1 uc "run this from the local coordinator's tab" dev $B --tag x)"
+U6="$U6|$(ls "$HH" | tr '\n' ' ')"
+
+# 6b: locks and status
+hreset; hjson 'Done. z'; mkdir -p "$HH"
+hdecoy; DS1="$(proc_start "$DPID")"; L6=""
+printf '%s %s - - t-live\n' "$DPID" "$DS1" > "$HH/dev.pid"; try hh dev $B --tag n0; L6="$RC:$(printf '%s' "$OUT" | gc 'dev is already running hidden')"
+printf 'starting - - - t-st\n' > "$HH/dev.pid"; try hh dev $B --tag n0; L6="$L6 $RC"
+printf '99999 - %s %s t-sup\n' "$DPID" "$DS1" > "$HH/dev.pid"; hold "$HH/dev.pid"; try hh dev $B --tag n0; L6="$L6 $RC:$(hh --status | gc '^running dev t-sup$')"
+kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null || true
+printf '99999 Thu_Jan_1_00:00:00_1970 99998 Thu_Jan_1_00:00:00_1970 t-dead\n' > "$HH/dev.pid"; hold "$HH/dev.pid"
+try hh dev $B --tag n1; L6="$L6|$RC"; hwait n1 1
+printf 'starting - - - t-old\n' > "$HH/dev.pid"; hold "$HH/dev.pid"; hq; hjson 'Done. z'
+try hh dev $B --tag n2; L6="$L6 $RC"; hwait n2 1
+printf 'junk\n' > "$HH/dev.pid"; hold "$HH/dev.pid"; hq; hjson 'Done. z'
+try hh dev $B --tag n3; L6="$L6 $RC"; hwait n3 1
+ST6="$(hh --status | sed "s#$HH#H#" | tr '\n' ';')"
+try hh --ack t-dead; A1="$RC"; try hh --ack t-old; A2="$RC"; try hh --ack unknown-dev; A3="$RC"; try hh --ack t-dead; A4="$RC:$OUT"
+check "hidden usage: each exit 2 of the usage block (no team, unknown role, not hidden, not in the team, a tab, brief, tag, tag used, no handle) with its one line, and nothing started; hidden locks: a live agent, a fresh starting file and a dead agent with a live supervisor refuse (exit 1); a dead pid, an old starting file and a file with no tag do not, and show in --status as lost (also after a new run took the lock, the unknown one with no log) until --ack; --ack of a handled tag exits 1" "$U6|$L6|$ST6|$A1$A2$A3|$A4" "2:1 2:1 2:1 2:1 2:1 2:1 2:1 2:1 2:1 2:1 |used.log |1:1 1 1:1|0 0 0|lost dev t-dead H/t-dead.log;lost dev t-old H/t-old.log;lost dev unknown-dev -;|000|1:nothing to acknowledge for t-dead"
+
+# 6c: a pid file whose pids name other processes, a leftover .stop, a resume and a stop
+hreset; mkdir -p "$HH"; hdecoy
+printf '%s Thu_Jan_1_00:00:00_1970 - - t-decoy\n' "$DPID" > "$HH/dev.pid"
+try hh --stop dev; W1="$RC:$OUT"; hold "$HH/dev.pid"; try hh --stop dev; W2="$RC:$OUT"; ST="$(hh --status | gc '^lost dev t-decoy ')"
+W3="$(kill -0 "$DPID" 2>/dev/null && echo alive || true)"; kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null || true
+hreset; touch "$HH.x" 2>/dev/null; mkdir -p "$HH"; touch "$HH/dev.stop"; hjson 'Done. s'; try hh dev $B --tag s1; hwait s1 1; L7="$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=.*//')"
+hq; try hh dev --brief "$HD/brief.md" --tag r1 --resume sess-prev; hwait r1 1
+R7="$(tr '\n' ' ' < "$HD/argv" | gc -- '--resume sess-prev ' || true):$(gc 'a brief' "$HD/stdin"):$(gc 'adopt that role' "$HD/stdin" || true):$(tail -n 1 "$HD/stdin" | cut -c1-20):$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=.*//')"
+hq; touch "$HD/sleep"; try hh dev $B --tag p1; poll nonempty "$HD/started"; try hh --stop dev; P7="$RC:$OUT"; hwait p1 1
+P7="$P7:$(hsent):$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=.*//'):$(sed -n 2p "$HD/send.1.body"):$(nf "$HH"/*.pid "$HH"/*.stop)"
+hq; try hh --stop dev; N7="$RC:$OUT"
+hq; touch "$HD/sleep" "$HD/ign"; try hh dev $B --tag k1; poll nonempty "$HD/started"; KP="$(cut -d' ' -f1 "$HH/dev.pid")"; try hh --stop dev; K7="$RC:$(kill -0 -- "-$KP" 2>/dev/null && echo group-alive || echo group-gone)"; kill -KILL -- "-$KP" 2>/dev/null || true; hwait k1 1
+check "hidden --stop: a pid file whose pids name other processes (another start time) signals nothing: 'has ended' while the file is fresh, 'is not running' once it is old and then lost in --status; the process is still alive; hidden run: a leftover .stop does not fail the next run; --resume passes the session and sends only the brief and the closing line, and reports the given session even with an empty output; --stop ends a run that sleeps and prints nothing with one message (failed, stopped, session=-); --stop with no run exits 1; --stop leaves no member of a group that ignores TERM" "$W1|$W2|$ST|$W3|$L7|$R7|$P7|$N7|$K7" "1:dev has ended|1:dev is not running|1|alive|role=dev outcome=done marker=ok session=sess-1|1:1:0:When you have finish:role=dev outcome=failed marker=missing session=sess-prev|0:Stopped dev:1:role=dev outcome=failed marker=missing session=-:stopped:0|1:dev is not running|0:group-gone"
+
+# 7: team-status, relaunch-role, close-role
+hlreset; hlx launch.sh >/dev/null; hreset; mkdir -p "$HLG/orca-roles-hidden"; HH="$HLG/orca-roles-hidden"
+hlts() { (cd "$HL/proj" && HOME="$TMP/home" PATH="$HL/bin:$PATH" "$HK/bin/team-status.sh" 2>&1); }
+S1="$(hlts | gc "^Dev$(printf '\t')not-opened")"
+hdecoy; printf '%s %s - - t-ts\n' "$DPID" "$(proc_start "$DPID")" > "$HH/dev.pid"; S2="$(hlts | gc "^Dev$(printf '\t')hidden-running")"; kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null || true; rm -f "$HH/dev.pid"
+try hlx relaunch-role.sh dev --model m2 --no-check; S3="$RC:$(printf '%s' "$OUT" | gc '^Dev is hidden: it has no tab; its next run uses the model in the configuration\.$')"
+hlreset; hlcfg '.roles.dev.open = "first-use" | .roles.deployer.enabled = false'; hlx launch.sh >/dev/null; hlx launch.sh --open dev >/dev/null
+hlcfg '.roles.dev.open = "hidden" | .roles.deployer.enabled = false'; : > "$HL/orca.log"
+try hlx relaunch-role.sh dev --model m2 --no-check
+S4="$RC:$(printf '%s' "$OUT" | gc '^Dev is hidden now: its tab is closed; its next run uses the model in the configuration\.$'):$(gc '^terminal close' "$HL/orca.log" || true):$(gc '^terminal create' "$HL/orca.log" || true):$(hlkeys)"
+hlreset; hlcfg '.roles.dev.open = "first-use" | .roles.deployer.enabled = false'; hlx launch.sh >/dev/null; hlx launch.sh --open dev >/dev/null
+jq '.roles.dev.open = "hidden"' "$HLG/orca-roles.config.json" > "$HL/c2.json" && cp "$HL/c2.json" "$HLG/orca-roles.config.json"
+try hlx close-role.sh dev; S5="$RC:$(printf '%s' "$OUT" | gc 'it has no tab from now on ("open": "hidden"); the local coordinator runs it with hidden-role.sh\.$')"
+check "hidden: team-status shows hidden-running for a live pid file (not-opened without it); relaunch-role refuses a hidden role with no tab, and for one with a tab closes it, opens nothing and exits 0; close-role prints the hidden line" "$S1:$S2|$S3|$S4|$S5" "1:1|1:1|0:1:1:0:LOCAL_COORDINATOR PLANNER |0:1"
+
+# 8: pins
+PN=""; for f in programmer pr-reviewer academic-research; do PN="$PN$({ grep -qF 'hidden-role.sh' "$ROOT/prompts/$f/local-coordinator-hidden.md" && grep -qF 'hidden-role.sh --status' "$ROOT/prompts/$f/local-coordinator-hidden.md" && grep -qF 'local-coordinator-hidden.md' "$ROOT/prompts/$f/local-coordinator.md" && cmp -s "$ROOT/prompts/$f/local-coordinator-hidden.md" "$ROOT/prompts/programmer/local-coordinator-hidden.md"; } && echo y || echo n)"; done
+HW="$ROOT/prompts/hidden-worker.md"; PN="$PN:$(gc -F 'QUESTION: ' "$HW" | sed 's/[1-9][0-9]*/y/'):$(gc -F 'Run no `orca` command' "$HW"):$(gc -F 'Do not reply that you are ready' "$HW")"
+PN="$PN:$(gc '^adapter_[a-z]*() ' "$ROOT/bin/hidden-role.sh"):$(printf '%s\n' $HIDDEN_AGENTS | wc -l | tr -d ' ')"
+check "hidden pins: the three local-coordinator-hidden.md are identical and hold hidden-role.sh and hidden-role.sh --status, and each local-coordinator.md names its file; hidden-worker.md holds QUESTION:, Run no orca command and Do not reply that you are ready; hidden-role.sh has one adapter_ function per word of HIDDEN_AGENTS" "$PN" "yyy:y:1:1:1:1"
+}
+
 sec_test_run() {
 # test-run.sh: runs a command, passes stdio and exit code through, appends one JSON line to the test log (temp logs only)
 TR="$TMP/trun"; rm -rf "$TR"; mkdir -p "$TR/plain"; TRS="$ROOT/bin/test-run.sh"; TRL="$TR/log.jsonl"
@@ -8750,10 +8968,12 @@ rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review
 rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer local-coordinator.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
 # the parallel runner (SMOKE_JOBS): output in the requested order, one process per section, the serial sections alone at the end, the same result as a sequential run
 CP="$TMP/cli-par"; rm -rf "$CP"; mkdir -p "$CP/tests"; ln -sfn "$ROOT/bin" "$CP/bin"; ln -sfn "$ROOT/prompts" "$CP/prompts"; ln -sfn "$ROOT/config.default.json" "$CP/config.default.json"
-sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\
+sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit hold filler first"/' -e 's/^SMOKE_FIRST=(.*/SMOKE_FIRST=(first)/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\
 sec_fast() { : > "$RUNDIR\/run.fast"; echo "marker fast $$"; rm -f "$RUNDIR\/run.fast"; }\
 sec_wake() { echo "marker wake-alone:$(ls "$RUNDIR" | grep -c "^run\\.")"; }\
 sec_bad() { check "marker bad" a b; }; sec_quit() { exit 0; }\
+sec_hold() { local n=0; until [ -e "$RUNDIR\/seen.first" ] || [ "$n" -ge 600 ]; do sleep 0.1; n=$((n+1)); done; [ -e "$RUNDIR\/seen.first" ] \&\& echo "marker hold found" || echo "marker hold none"; }\
+sec_filler() { [ -e "$RUNDIR\/seen.first" ] \&\& echo "marker filler after-first" || echo "marker filler before-first"; }; sec_first() { : > "$RUNDIR\/seen.first"; echo "marker first"; }\
 &/' "$ROOT/tests/smoke.sh" > "$CP/tests/smoke.sh"
 mkdir -p "$TMP/cprun"
 cp_run() { local j="$1"; shift; CRC=0; RUNDIR="$TMP/cprun" SMOKE_JOBS="$j" bash "$CP/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
@@ -8765,6 +8985,10 @@ cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[
 cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 cp_run 1 bad fast; Q3="$CRC:$(cp_marks):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK; also with SMOKE_JOBS=1" "$Q1|$Q2|$Q3" "1:marker fast,:1:1:0|1:marker fast,:1:1:0|1:marker fast,:1:0"
+# SMOKE_FIRST: with 2 slots, 'first' (named last) starts in the first batch, so 'filler' (which waits for a slot) finds it started; 'hold' waits for it, bounded
+rm -f "$TMP/cprun/seen.first"; cp_run 2 hold filler first; P3="$CRC:$(cp_marks):$(grep -c '^ALL OK$' "$TMP/cli.out")"
+P4="$(for k in "${SMOKE_FIRST[@]}"; do case " $SECTIONS " in (*" $k "*) if smoke_serial "$k"; then echo "$k"; fi;; (*) echo "$k";; esac; done | wc -l | tr -d ' ')"
+check "parallel runner: a SMOKE_FIRST section starts in the first batch although it is named last (SMOKE_JOBS=2: the section that waits for a slot finds it started), the output keeps the requested order; every SMOKE_FIRST name is a listed section and none is serial" "$P3|$P4" "0:marker hold found,marker filler after-first,marker first,:1|0"
 # the timing log (SMOKE_TIMING_LOG, SMOKE_SLOW_CHECK), driven through child suites with two more fake sections: t0 assigns T0 and d, nest starts a nested suite
 CT="$TMP/cli-tlog"; rm -rf "$CT"; mkdir -p "$CT/tests"; ln -sfn "$ROOT/bin" "$CT/bin"; ln -sfn "$ROOT/prompts" "$CT/prompts"; ln -sfn "$ROOT/config.default.json" "$CT/config.default.json"
 sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit t0 nest c1 c2 envs"/' -e 's/^sec_slow() /sec_c1() { : > "$RUNDIR\/c.1"; sleep 1; echo "marker c1 $(ls "$RUNDIR" | grep -c "^c\\.")"; sleep 0.5; rm -f "$RUNDIR\/c.1"; }\
@@ -9157,14 +9381,14 @@ GN=16; i=0
 for c in "${GC[@]}"; do i=$((i + 1)); pb "$F12" "$(printf '2026-10-27T10:%02d:00.000Z' "$i")" "g$i" "$c"; pr "$F12" "$(printf '2026-10-27T10:%02d:30.000Z' "$i")" "g$i" false " 1 file changed, 2 insertions(+)"; done
 umpass; GC1="$(usf gc '.commits | [.count, .insertions, .deletions] | join("|")')"
 check "usage parse: commits count only a real git command whose first non-option word is commit (also after a pipe, &&, ;, a newline, parentheses, VAR=x, a path to git, -C/-c/--git-dir/--work-tree with their argument, an unbalanced quote after ;); git commit-tree, echo git commit, rg/quoted/commented text, a folder named commit after -C, other git subcommands, gitk and unbalanced echo text do not" "$GC1" "$GN|$((GN * 2))|0"
-# live push: a fake local server (OTLP endpoint and Prometheus API in one, on a free port, started and stopped here) and fixture sessions with timestamps relative to now
+# live push: a fake local server (OTLP endpoint and Prometheus API in one, on a free port; started once and reset with freset between blocks, since every later start cost about 30 s on GitHub's macOS runner) and fixture sessions with timestamps relative to now
 cat > "$UM/fake.py" <<'PYE'
 import json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 D, PORTF = sys.argv[1], sys.argv[2]
 os.makedirs(D + "/posts", exist_ok=True)
-n = [0]
+lk = threading.Lock()
 def cfg():
     try:
         with open(D + "/cfg.json") as f:
@@ -9182,9 +9406,9 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        n[0] += 1
-        with open(D + "/posts/%03d.json" % n[0], "wb") as f:
-            f.write(body)
+        with lk:  # numbered by the files present, so a freset that empties posts/ starts again at 001
+            with open(D + "/posts/%03d.json" % (len(os.listdir(D + "/posts")) + 1), "wb") as f:
+                f.write(body)
         log("POST %s %s" % (self.path, self.headers.get("Content-Type")))
         c = cfg()
         if c.get("post_delay"):
@@ -9222,7 +9446,7 @@ class H(BaseHTTPRequestHandler):
 s = ThreadingHTTPServer(("127.0.0.1", 0), H)
 with open(PORTF, "w") as f:
     f.write(str(s.server_address[1]))
-threading.Timer(240, lambda: os._exit(0)).start()
+threading.Timer(1200, lambda: os._exit(0)).start()  # a backstop only: one server now serves the whole section, up to about 700 s on a slow macOS runner
 pp = os.getppid()
 def watch():
     while os.getppid() == pp:
@@ -9233,6 +9457,7 @@ s.serve_forever()
 PYE
 fstart() { rm -rf "$UM/fs" "$UM/fake.port"; rm -f "$UM/fake.err"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; python3 -I "$UM/fake.py" "$UM/fs" "$UM/fake.port" >/dev/null 2>"$UM/fake.err" & FPID=$!; local n=0; until [ -s "$UM/fake.port" ] || [ "$n" -ge 600 ]; do sleep 0.2; n=$((n+1)); done; if [ -s "$UM/fake.port" ]; then FP="$(cat "$UM/fake.port")"; else FP=""; echo "FAIL usage-metrics: the fake server wrote no port after 120s: $(head -c 400 "$UM/fake.err" 2>/dev/null | tr '\n' ' ')"; FAIL=1; fi; }
 fstop() { kill "$FPID" 2>/dev/null || true; wait "$FPID" 2>/dev/null || true; }
+freset() { rm -rf "$UM/fs/posts" "$UM/fs/req.log"; mkdir -p "$UM/fs/posts"; echo '{}' > "$UM/fs/cfg.json"; }   # the running server's state as fstart leaves it: no posts, no requests logged, an empty config
 fcfg() { printf '%s' "$1" > "$UM/fs/cfg.json"; }
 fposts() { find "$UM/fs/posts" -name '*.json' | wc -l | tr -d ' '; }
 fgets() { grep -c "$1" "$UM/fs/req.log" 2>/dev/null || true; }
@@ -9281,16 +9506,16 @@ check "usage push payload: one ResourceMetrics per session with the resource att
 R8="$(pall '[.resourceMetrics[0].scopeMetrics[0].metrics[] | "\(.name):\(.unit):\(if has("sum") then "sum" else "gauge" end)"] | sort | join(",")')"
 R9="$(pbody 1 '.resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == "orca_roles.cost.by_type" or .name == "orca_roles.lines" or .name == "orca_roles.commit.lines" or .name == "orca_roles.verdicts" or .name == "orca_roles.tool.calls" or .name == "orca_roles.task.duration") | "\(.name)[\([.sum.dataPoints[] | [.attributes[] | .value.stringValue] | join("/")] | sort | join(" "))]"' | sort | tr '\n' ',')"
 check "usage push instruments: exactly the instruments of the header table with their units and kinds (sum or gauge), and the data point attributes of by-type cost (input output cacheRead cacheWrite webSearch), lines (added removed), commit lines (insertions deletions), verdicts and task duration by verdict, tool metrics by tool name" "$R8|$R9" "claude_code.cost.usage:USD:sum,claude_code.session.count::sum,claude_code.token.usage:tokens:sum,orca_roles.api.errors::sum,orca_roles.cache.savings:USD:gauge,orca_roles.commit.lines::sum,orca_roles.commits::sum,orca_roles.compactions::sum,orca_roles.context.max:tokens:gauge,orca_roles.cost.by_type:USD:sum,orca_roles.lines::sum,orca_roles.model.changes::sum,orca_roles.task.duration:s:sum,orca_roles.thinking:tokens:sum,orca_roles.tool.calls::sum,orca_roles.tool.duration:s:sum,orca_roles.tool.errors::sum,orca_roles.turns::sum,orca_roles.user.messages::sum,orca_roles.verdicts::sum,|orca_roles.commit.lines[deletions insertions],orca_roles.cost.by_type[cacheRead/claude-haiku-4-5 cacheWrite/claude-haiku-4-5 input/claude-haiku-4-5 output/claude-haiku-4-5 webSearch/claude-haiku-4-5],orca_roles.lines[added removed],orca_roles.task.duration[ACCEPTED],orca_roles.tool.calls[Bash],orca_roles.verdicts[ACCEPTED],"
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 CONST='[{"__name__":"claude_code_cost_usage_USD_total","job":"claude-code","instance":"i1","session_id":"zzz","model":"m","effort":"low","project":"p","user_id":"u-1","user_email":"a@b.c","user_account_uuid":"acc","organization_id":"org-1","host_arch":"arm64","os_type":"darwin","os_version":"25.1","terminal_type":"tmux","service_name":"claude-code","service_version":"9.9.9"}]'
 cattrs() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key | test("^(user_|organization_id$|host_arch$|os_|terminal_type$|job$|instance$|project$|effort$|model$|session_id$|service_name$)")) | "\(.key)=\(.value.stringValue)"] | sort | join(",")'; }
 fcfg "{\"constants\":$CONST}"; ps1 c1 100 100; umpass; K1="$(cattrs 1):$(fgets '__name__=~')"
 ps1 c2 100 100; umpass; K2="$(fposts):$(fgets '__name__=~')"
-umpk; fstop; fstart; umcfg; fcfg "{\"constants\":$CONST,\"const_status\":500}"; ps1 c3 100 100; umpass; K3="$(fposts):$(cattrs 1)"
-umpk; fstop; fstart; umcfg; fcfg '{"constants":[]}'; ps1 c4 100 100; umpass; ps1 c5 100 100; umpass; K4="$(fposts):$(cattrs 1):$(fgets '__name__=~')"
+umpk; freset; umcfg; fcfg "{\"constants\":$CONST,\"const_status\":500}"; ps1 c3 100 100; umpass; K3="$(fposts):$(cattrs 1)"
+umpk; freset; umcfg; fcfg '{"constants":[]}'; ps1 c4 100 100; umpass; ps1 c5 100 100; umpass; K4="$(fposts):$(cattrs 1):$(fgets '__name__=~')"
 check "usage push constant labels: user_*, organization_id, host_arch, os_*, terminal_type are copied onto the resource from the newest claude_code_* series of Prometheus (never job, instance, project, effort, model, session_id or service_name), looked up once a day (a second session the same day does not query again), omitted when Prometheus cannot answer or has no such series (then 1d, 7d and 90d windows were tried, once)" "$K1|$K2|$K3|$K4" "host_arch=arm64,organization_id=org-1,os_type=darwin,os_version=25.1,terminal_type=tmux,user_account_uuid=acc,user_email=a@b.c,user_id=u-1:1|2:1|1:|2::3"
 # continuation of the series a session already has in Prometheus
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 TL="$(( $(date +%s) - 60 ))"
 OLD='"job":"claude-code","instance":"i","session_id":"sc","user_id":"old-u","service_version":"2.3.1","task":"old-task","orca_roles_role":"old-role"'
 TK='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","effort":"high","query_source":"main"'
@@ -9304,7 +9529,7 @@ M3="$(rmof 1 sc '[.resource.attributes[] | select(.key | test("^(user_|task$|orc
 Q0="$(fgets 'session_id')"; ps_more sc 3 50; umpass; M4="$(mval "$(fposts)" sc claude_code.token.usage input | tr '\n' ' '):$([ "$(fgets 'session_id')" = "$Q0" ] && echo cached)"
 check "usage push continuation: a session whose series already exist in Prometheus is pushed as the old value plus what the transcript added since the anchor (old 1000 above the transcript's 400 at that time + 300 = 1300; an old value equal to the transcript's at that point is the anchor itself: 100; cost anchored with its tokens; the session count continues), keeps the old labels (effort high, start_type, user_id, service.version, task, role) instead of the constants, a session with no old series starts at its transcript totals with the constants, and the offsets are cached (the next push queries nothing)" "$M1|$M2|$M3|$M4" "input/claude-haiku-4-5/high/main=1300000000 output/claude-haiku-4-5/high/main=100000000 claude-haiku-4-5/high/main=5000300 resume=1000000 |input/claude-haiku-4-5/medium/main=700000000 claude-haiku-4-5/medium/main=1200 fresh=1000000 |orca_roles_role=old-role,service.version=2.3.1,task=old-task,user_id=old-u|orca_roles.role=dev,service.version=2.1.311,task=devgd-292,user_id=new-u|input/claude-haiku-4-5/high/main=1350000000 :cached"
 # a session whose old counters reset is never pushed (logged once); Prometheus down at the first push postpones it
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 TL="$(( $(date +%s) - 60 ))"
 OLDS='"job":"claude-code","instance":"i","session_id":"SID"'
 TKS='"__name__":"claude_code_token_usage_tokens_total","model":"claude-haiku-4-5","effort":"high","query_source":"main","type":"input"'
@@ -9316,7 +9541,7 @@ ps_more sr 3 10; umpass; ps_more sr 4 10; umpass; Z3="$(fposts):$(grep -c 'sr no
 check "usage push: Prometheus unreachable at a session's first push postpones it (nothing sent, nothing logged) until it answers, then it is pushed with its continuation (old 1000 + 300 = 1300); a session whose old counters reset (resets > 0) is never pushed, even when it gets new lines, and is logged once" "$Z1|$Z2|$Z3" "0:0|1:sp:1300:1|1:1:1"
 # the loopback rule (0.0.0.0 is a remote host to the rule and still reaches the fake server), a collector that is down or slow, enabled false, batches of 25 sessions
 umlogn() { local n; n="$(grep -c "$1" "$PM/usage-metrics.log" 2>/dev/null || true)"; echo "${n:-0}"; }
-umpk; fstop; fstart; umcfg 0.0.0.0 127.0.0.1 false
+umpk; freset; umcfg 0.0.0.0 127.0.0.1 false
 ps1 r1 100 100; umpass; T1="$(fposts):$(umlogn 'otlpEndpoint')"
 ps_more r1 3 5; umpass; T2="$(fposts):$(umlogn 'otlpEndpoint')"
 jq '.warned.otlpEndpoint = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; ps_more r1 4 5; umpass; T3="$(fposts):$(umlogn 'otlpEndpoint')"
@@ -9324,14 +9549,14 @@ umcfg 127.0.0.1 0.0.0.0 false; ps_more r1 5 5; umpass; umpass; T4="$(fposts):$(u
 umcfg 0.0.0.0 0.0.0.0 true; ps_more r1 6 5; umpass; T5="$(fposts):$(umlogn 'is not on this machine')"
 umcfg localhost localhost false; ps_more r1 7 5; umpass; T6="$(fposts)"
 check "usage push remote rule: an endpoint that is not on this machine without allowRemote sends nothing and warns once per UTC day (the warning comes back the next day), the same for prometheusUrl (the first push waits), with allowRemote true both are used, and localhost counts as this machine" "$T1|$T2|$T3|$T4|$T5|$T6" "0:1|0:1|0:2|0:1|1:3|2"
-umpk; fstop; fstart; umcfg; DP="$FP"; fstop; ps1 d1 100 100; umcfg
+umpk; freset; ps1 d1 100 100; FPL="$FP"; FP=1; umcfg; FP="$FPL"   # port 1 refuses the connection, as in the hermetic config, while the server keeps running
 T0=$SECONDS; umpass; D1="$UPRC:$((SECONDS - T0 < 3 ? 1 : 0)):$(wc -c < "$UM/pass.out" | tr -d ' '):$(wc -c < "$UM/pass.err" | tr -d ' '):$(umlogn 'push')"
-fstart; umcfg; umpass; D2="$(fposts)"
+umcfg; umpass; D2="$(fposts)"
 fcfg '{"post_delay":3}'; ps_more d1 3 5; T0=$SECONDS; ORCA_ROLES_METRICS_HTTP_TIMEOUT=1 umpass; D3="$UPRC:$((SECONDS - T0 < 3 ? 1 : 0)):$(wc -c < "$UM/pass.out" | tr -d ' '):$(wc -c < "$UM/pass.err" | tr -d ' ')"
 fcfg '{}'; umpass; D4="$(fposts)"
 G0="$(fgets GET)"; jq '.settings.metrics.enabled = false' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"; ps_more d1 4 5; umpass; D5="$(fposts):$([ "$(fgets GET)" = "$G0" ] && echo nogets)"
 check "usage push collector down: a refused connection or a slow collector (timeout) makes the pass finish at once with exit 0 and no output, nothing logged, the session stays pending and is pushed by the next pass that finds the collector; enabled false sends nothing" "$D1|$D2|$D3|$D4|$D5" "0:1:0:0:0|1|0:1:0:0|3|3:nogets"
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 cu() { pbody "$1" '[.resourceMetrics[].resource.attributes[] | select(.key == "user_id") | .value.stringValue] | join(",")'; }
 fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-1"}]}'; ps1 n1 100 100; umpass
 jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
@@ -9340,7 +9565,7 @@ jq '.constants.day = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM
 fcfg '{"constants":[{"__name__":"claude_code_cost_usage_USD_total","user_id":"u-3"}],"const_status":500}'; ps1 n3 100 100; umpass
 N1="$(cu 1):$(cu 2):$(cu 3):$(fgets '__name__=~')"
 # round 2: the pushed values live outside the session object, so a session recomputed from a rewritten transcript never pushes a lower counter
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 gv() { pbody "$1" ".resourceMetrics[0].scopeMetrics[0].metrics[] | select(.name == \"$2\") | (.sum // .gauge).dataPoints[] | select(\"$3\" == \"\" or any(.attributes[]; .value.stringValue == \"$3\")) | .asDouble"; }
 ps1 g1 400 300; umpass; ps_more g1 3 5000; umpass
 head -3 "$PD/g1.jsonl" > "$PD/g1.new" && mv "$PD/g1.new" "$PD/g1.jsonl"; umpass; ps_more g1 4 20; umpass
@@ -9350,7 +9575,6 @@ GXC="$(for n in 1 2 3 4; do gv "$n" orca_roles.context.max ''; done | tr '\n' ' 
 GM="$(jq -s '[.[].resourceMetrics[].scopeMetrics[].metrics[] | select(has("sum")) | .name as $n | .sum.dataPoints[] | {k: ($n + (.attributes | tostring)), v: .asDouble}] | group_by(.k) | map([.[].v] | . == sort) | all' "$UM"/fs/posts/*.json 2>/dev/null || true)"
 GS="$(usf g1 '[.tokens.input, .turns, .maxContext] | join("|")')"
 check "usage push floor: after a push, a transcript rewritten shorter makes the session recompute (the store shows the recomputed totals 420 input, 2 turns) but no pushed counter goes down (input 700, 5700, 5700, 5700; turns 2, 3, 3, 3; every sum series of every request non-decreasing), while the gauge of the context maximum follows the transcript (400, 5000, 400, 400)" "$GI|$GT|$GXC|$GM|$GS" "700 5700 5700 5700 |2 3 3 3 |400 5000 400 400 |true|420|2|400"
-fstop
 # the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
 SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
 for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
@@ -9434,7 +9658,7 @@ bfs() {  # bfs <sid> <cwd> <prompt> <offset:input>...: a session whose responses
   for o in "$@"; do w="${o%%:*}"; [ -n "$first" ] || { first=1; pu "$f" "$(umts "$((w - 60))")" "$c" "$pr"; }; t="${o##*:}"; pa "$f" "$(umts "$w")" "$c" "$1-$w" claude-haiku-4-5 "{\"input_tokens\":$t}" '[{"type":"text","text":"x"}]'; done
 }
 set +e   # the backfill checks compare what happened; a command that fails must not end the section
-umpk; fstop; fstart; fdreset
+umpk; freset; fdreset
 bfs p1 /w/a/devgd-300/src "$RDEV" -9000:100 -8000:200 -7400:50 -5400:10 -3600:10
 bfs p2 /w/a/other "plain" -9000:100 -2400:20 -2000:30 -1200:40
 bfs p3 /w/a/devgd-300/x "plain" -6000:70
@@ -9497,7 +9721,7 @@ DV="$(jq -r '[.templating.list[] | "\(.name):\(.type):\(.multi // false):\(.incl
 DT="$(jq -r '[.. | objects | select(has("expr"))] | length as $n | [.. | objects | select(has("expr") and has("datasource") and (.datasource.uid != "${datasource}"))] | length as $bad | "\($n > 20):\($bad)"' "$DB" 2>/dev/null)"
 DE="$(printf '%s\n' "$DN" | grep -cE '^orca_roles_(kit_events|dispatch_outcomes)_total$' || true):$(jq -r '[.. | objects | select(has("expr")) | select(.expr | test("orca_roles_(kit_events|dispatch_outcomes)_total")) | select(.expr | test("orca_roles_role|session_id")) ] | length' "$DB" 2>/dev/null)"
 check "usage dashboard: grafana/orca-roles-usage.json is valid JSON with the datasource, task and orca_roles_role variables (the last two multi-select with All), every query uses the \${datasource} variable, every metric name in its queries is in the header table of usage_metrics.py (none unknown), and the two event panels use the event metrics without a session or role filter (they carry no such label)" "$DX|$DV|$DT|$DE" "|datasource:datasource:false:false,task:query:true:true,orca_roles_role:query:true:true|true:0|2:0"
-umpk; fstop; fstart; umcfg
+umpk; freset; umcfg
 ev() { jq -nc --arg w "$1" --arg e "$2" --arg r "$3" '{ts: "2026-10-27T10:00:00Z", worktree: $w, event: $e, role: $r}' >> "$PM/events.jsonl"; }
 ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 reopened dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 dispatch dev; ev /w/a/devgd-300 started dev; ev /w/a/devgd-300 not-started dev; ev /w/a/other no-check oc; ev /unmapped launch ""; ev /w/a/devgd-300 bogus dev
 echo '{"event":"launch","worktree":5}' >> "$PM/events.jsonl"; printf '{"ts":"x","worktree":"/w/a/devgd-300","event":"launch","role":""' >> "$PM/events.jsonl"
@@ -9505,7 +9729,7 @@ epts() { pbody "$1" '.resourceMetrics[0].scopeMetrics[0].metrics[] | .name as $n
 umpass; V1="$(fposts):$(epts 1)"
 V2="$(pbody 1 '[(.resourceMetrics | length), ([.resourceMetrics[0].resource.attributes[] | "\(.key)=\(.value.stringValue)"] | join(",")), ([.. | objects | select(has("sum")) | .sum | [.isMonotonic, .aggregationTemporality]] | unique | tostring)] | join("|")')"
 check "usage kit events push: the first pass pushes one resource (service.name=claude-code only, no session.id) with orca_roles.dispatch.outcomes (outcome, role, task, project) and orca_roles.kit.events (event, role, task, project) as cumulative monotonic sums; counts per event and role, task and project from worktrees.jsonl by the longest path (an unmapped worktree has no task or project label); an unknown event, a line whose worktree is not a string and a half-written last line are not counted" "$V1|$V2" "1:orca_roles.dispatch.outcomes|outcome=dispatch,project=svc,role=dev,task=devgd-292|2 orca_roles.dispatch.outcomes|outcome=no-check,project=svc,role=oc,task=outer|1 orca_roles.dispatch.outcomes|outcome=not-started,project=svc,role=dev,task=devgd-292|1 orca_roles.dispatch.outcomes|outcome=started,project=svc,role=dev,task=devgd-292|1 orca_roles.kit.events|event=launch,project=svc,task=devgd-292|1 orca_roles.kit.events|event=launch|1 orca_roles.kit.events|event=reopened,project=svc,role=dev,task=devgd-292|1 |1|service.name=claude-code|[[true,2]]"
-umpk; fstop; fstart; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
+umpk; freset; umcfg; for i in 1 2 3; do ev /w/a/devgd-300 launch ""; done; umpass; S1="$(fposts)"
 head -1 "$PM/events.jsonl" > "$PM/events.tmp" && mv "$PM/events.tmp" "$PM/events.jsonl"; umpass; ev /w/a/devgd-300 launch ""; umpass; S2="$(fposts)"
 ev /w/a/devgd-300 launch ""; ev /w/a/devgd-300 launch ""; umpass; S3="$(fposts):$(epts 2 | tr ' ' '\n' | grep 'event=launch,project=svc,task=devgd-292')"
 check "usage kit events push floor: when events.jsonl is rewritten shorter its counts are read again but nothing lower than what was pushed is sent (3 pushed, 1 and 2 counted: no push), and a count above the floor is pushed (4)" "$S1|$S2|$S3" "1|1|2:orca_roles.kit.events|event=launch,project=svc,task=devgd-292|4"

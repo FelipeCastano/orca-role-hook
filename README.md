@@ -512,7 +512,7 @@ A team that takes a scientific paper from the state of the art to the final text
 
 Plus the Planner (both phases) behind the local coordinator, which is the only role that talks to you. There is no Plan-Reviewer, Code-Reviewer or Verifier in this mode: its two reviews are mandatory, whatever a plan says: Methodology on `PLAN.md` at the start, and at the end the Review (Methodology and Tech-Verifier) and the writing Final pass (Evidence, Rigor and Style); the Planner rules on their findings. Dev and Tester are the same roles as in programmer, with one entry each in `config.json` (enabled, model and parameters apply in both modes); their `phases: ["experiment"]` keeps them out of the writing phase.
 
-**Updating.** Updating the kit (`install.sh`) moves a `dev` or `tester` whose `modes` is still exactly `["programmer"]` to `["programmer", "academic-research"]`, and a Writer still on `claude-opus-5-5` to `claude-sonnet-5-5`; values you chose yourself are kept. If your own `modes` for Dev or Tester leaves out academic-research, the mode has no one to write or test the experiment code: the local coordinator tells you how to add them. The same update moves a `local-coordinator` whose `modes` is still exactly `["programmer"]` to `"all"` and a `planner` whose `modes` is still `"all"` to `["programmer", "academic-research"]`; other values are kept. Updating from an earlier version: the workers of an existing team open on first use from the next 'roles' on (the update adds "open" to every default role); set "open": "start" for a role to keep the old behavior.
+**Updating.** Updating the kit (`install.sh`) moves a `dev` or `tester` whose `modes` is still exactly `["programmer"]` to `["programmer", "academic-research"]`, and a Writer still on `claude-opus-5-5` to `claude-sonnet-5-5`; values you chose yourself are kept. If your own `modes` for Dev or Tester leaves out academic-research, the mode has no one to write or test the experiment code: the local coordinator tells you how to add them. The same update moves a `local-coordinator` whose `modes` is still exactly `["programmer"]` to `"all"` and a `planner` whose `modes` is still `"all"` to `["programmer", "academic-research"]`; other values are kept. Updating from an earlier version: the workers of an existing team open on first use from the next 'roles' on; set "open": "start" for a role, or in `defaults`, to keep the old behavior. The update moves a kit role whose `open` is still `"first-use"` to `defaults.open` (only from a configuration with no `defaults.open` yet: once it has one, a role's `first-use` is yours and is kept), and a role with no `open`, which used to open with the team, then opens on first use: the update prints which ones; other values are kept.
 
 **Starting it.** `roles --mode academic-research` in a worktree of the paper's repository (git is required: the launch stops otherwise). Each launch creates the folders below where missing and adds the lines that keep large or copyrighted files out of git to `.gitignore`; it never overwrites anything.
 
@@ -583,7 +583,7 @@ Each role inherits from `defaults` whatever it does not define.
 | Field | What it does |
 |---|---|
 | `enabled` | Enables or disables the role (the `local-coordinator` must be enabled in every mode, and the `planner` in programmer and academic-research). |
-| `open` | When the role's tab opens: `"start"` (with the team), `"first-use"` (before its first task, then it stays open) or `"per-task"` (before each of its tasks, closed after its report, so each task starts without memory: for roles whose tasks are self-contained, such as the Researcher or the Deployer, not Dev or the Tester, whose fix rounds rely on what they remember). Missing = `"start"`. By default the local coordinator and the Planner open at start and every other role on first use; the local coordinator always opens at start. The local coordinator opens and closes these roles itself, without asking (`launch.sh --open <id>`, `close-role.sh <id>`). |
+| `open` | When the role's tab opens: `"start"` (with the team), `"first-use"` (before its first task, then it stays open), `"per-task"` (before each of its tasks, closed after its report, so each task starts without memory: for roles whose tasks are self-contained, such as the Researcher or the Deployer, not Dev or the Tester, whose fix rounds rely on what they remember) or `"hidden"` (never a tab: the local coordinator runs the role for one task, headless, with `hidden-role.sh`; each run starts without memory, it can ask nothing mid-task (it ends with a question and is resumed), it has no Orca task and no time limit (`hidden-role.sh --stop` ends it), and it runs under `claude -p`, where nothing raises a dialog: what a tab would ask about is decided by auto mode alone, and the role's deny lists are the only fixed stop. Its report may lack the `Done` marker: the coordinator is told, does not accept the run as it is, and recommends to the user running it again with its prompt sent afresh (a new run, not a resume). A `--verbose` in its `extraArgs` changes the output format, and every run then ends failed. Only `agent: "claude"` can be hidden; the Planner and the local coordinator cannot; a role on another agent that inherits it from `defaults.open` opens on first use). Missing = `defaults.open`, which the kit ships as `"first-use"`: so the local coordinator and the Planner, which have their own `"start"`, open at start and every other role, the ones you create included, on first use. Set it in `config.json` or `.orca-roles.json`, per role or in `defaults`, or on the setup script line (`--set roles.dev.open=per-task`, `--set defaults.open=start`); the local coordinator always opens at start. The local coordinator opens and closes these roles itself, without asking (`launch.sh --open <id>`, `close-role.sh <id>`). |
 | `title` | Name of the tab and of the role the local coordinator sees. |
 | `description` | What the role does and when to use it. The local coordinator receives it at startup; essential in roles you create. |
 | `prompt` | The role's instructions file (by default `prompts/<mode>/<role>.md`). A path (programmer only) or `{ "<mode>": "<path>" }`. Accepts `~`. See [Modes](#modes). |
@@ -1046,6 +1046,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── auditor.sh               # opens the on-demand Auditor (the auditor command): audits the roles and their metrics, changes nothing
 │   ├── team-status.sh           # what each role is doing, from what Orca tracks (the team-status command)
 │   ├── test-run.sh              # runs a test command, passes its result through and adds it to the test log
+│   ├── hidden-role.sh           # runs a role with "open": "hidden" (no tab) headless for one task, and sends its report as a message
 │   ├── dispatch.sh              # assigns a task to a worker and checks in the background that it started (re-sends Enter once, else tells the local coordinator)
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
@@ -1056,16 +1057,17 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
 ├── prompts/
 │   ├── auditor.md               # the on-demand Auditor (mode-independent)
+│   ├── hidden-worker.md         # what a hidden run is told about running with no tab (hidden-role.sh puts it in the prompt)
 │   ├── programmer/
 │   ├── pr-reviewer/
 │   └── academic-research/       # each mode's folder holds:
 │       ├── common-workers.md    # rules common to the mode's workers
 │       ├── reports.md           # written-report rules, read by a worker only when a task asks for a report
-│       ├── local-coordinator-*.md  # parts of the local coordinator's prompt read only when needed (resuming, reports, recovery, E2E...)
+│       ├── local-coordinator-*.md  # parts of the local coordinator's prompt read only when needed (resuming, reports, recovery, E2E, hidden roles...)
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── docs/
 │   ├── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
-│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand
+│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand, plus the hidden-role checks (no script)
 ├── tests/
 │   ├── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
 │   └── live/                    # live checks: mac.sh, wsl.sh, agents.sh (see docs/live-checks.md)
@@ -1141,7 +1143,7 @@ SMOKE_JOBS=1 bin/test-run.sh --role tester -- tests/smoke.sh rules   # any test 
 shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
-Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in `tests/smoke.sh`, with the reason for each) hold elapsed-time checks and run alone, after the others. The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
+Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in `tests/smoke.sh`, with the reason for each) hold elapsed-time checks and run alone, after the others. The longest ones, listed in `SMOKE_FIRST`, start first; the output keeps the requested order. The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
 
 Every run writes a timing log (tab-separated: a header with the date, commit, jobs, bash and system; one line per section with its seconds and result; the checks that took `SMOKE_SLOW_CHECK` seconds or more; a `held` line with the seconds new sections waited for the load, when that wait applied; the total) and prints its path on stderr; CI uploads it as the `smoke-timings-<os>` artifact. The times are only reported: no duration fails or limits a run. In a parallel run a section's time includes the load of the other sections. A check's time runs from the previous result of the same process, so a result printed without `check` adds its time to the next one.
 

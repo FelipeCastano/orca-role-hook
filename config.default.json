@@ -18,6 +18,7 @@
   },
   "defaults": {
     "agent": "claude",
+    "open": "first-use",
     "permissionMode": "auto",
     "mcp": [],
     "allowedTools": ["Bash(orca orchestration:*)", "Read"],
@@ -60,7 +61,6 @@
     "researcher": {
       "title": "Researcher",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer", "academic-research"],
       "phases": ["experiment", "writing"],
       "model": "claude-sonnet-5-5",
@@ -69,7 +69,6 @@
     "dev": {
       "title": "Dev",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer", "academic-research"],
       "phases": ["experiment"],
       "model": "claude-sonnet-5-5",
@@ -78,7 +77,6 @@
     "tester": {
       "title": "Tester",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer", "academic-research"],
       "phases": ["experiment"],
       "model": "claude-sonnet-5-5",
@@ -91,7 +89,6 @@
     "plan-reviewer": {
       "title": "Plan-Reviewer",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
       "params": { "rejectSeverity": "high" }
@@ -99,7 +96,6 @@
     "code-reviewer": {
       "title": "Code-Reviewer",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
       "nice": 10,
@@ -111,7 +107,6 @@
     "verifier": {
       "title": "Verifier",
       "enabled": true,
-      "open": "first-use",
       "modes": ["pr-reviewer"],
       "model": "claude-opus-5-5",
       "nice": 10,
@@ -123,7 +118,6 @@
     "e2e-tester": {
       "title": "E2E-Tester",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
       "mcp": ["playwright"],
@@ -132,14 +126,12 @@
     "deployer": {
       "title": "Deployer",
       "enabled": true,
-      "open": "first-use",
       "modes": ["programmer"],
       "model": "claude-sonnet-5-5"
     },
     "sota": {
       "title": "State-of-the-Art",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["experiment"],
       "model": "claude-haiku-5-5"
@@ -147,7 +139,6 @@
     "methodology": {
       "title": "Methodology",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["experiment"],
       "model": "claude-opus-5-5"
@@ -155,7 +146,6 @@
     "tech-verifier": {
       "title": "Tech-Verifier",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["experiment"],
       "model": "claude-opus-5-5"
@@ -163,7 +153,6 @@
     "writer": {
       "title": "Writer",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-sonnet-5-5"
@@ -171,7 +160,6 @@
     "evidence": {
       "title": "Evidence",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-sonnet-5-5"
@@ -179,7 +167,6 @@
     "rigor": {
       "title": "Rigor",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-opus-5-5"
@@ -187,7 +174,6 @@
     "style": {
       "title": "Style",
       "enabled": true,
-      "open": "first-use",
       "modes": ["academic-research"],
       "phases": ["writing"],
       "model": "claude-sonnet-5-5"
@@ -196,7 +182,6 @@
       "title": "Dev (OpenCode)",
       "description": "Dev's job (implements the step's code, writes no tests) run by an OpenCode model; give it Dev's tasks when the user asks for it",
       "enabled": false,
-      "open": "first-use",
       "modes": ["programmer"],
       "agent": "opencode",
       "model": "",
@@ -209,7 +194,6 @@
       "title": "Cross-Dev",
       "description": "Writes an independent patch and tests for a step from Dev's spec, without seeing Dev's work, so the Tester can cross-check tests and patches; give it tasks only when your startup message turns the cross-check on",
       "enabled": false,
-      "open": "first-use",
       "modes": ["programmer"],
       "agent": "opencode",
       "model": "",

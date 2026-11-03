@@ -31,6 +31,7 @@ ID="$(resolve_role "$CFG" "$ROLEARG")"
 [ -n "$ID" ] || { echo "Unknown role: $ROLEARG" >&2; exit 1; }
 [ "$ID" != local-coordinator ] || { echo "The local coordinator cannot be relaunched from inside the team." >&2; exit 1; }
 V="$(var_of "$ID")"; TITLE="$(title_of "$CFG" "$ID")"
+if [ "$(open_of "$CFG" "$ID")" = hidden ] && ! grep -q "^$V=." "$STATE"; then echo "$TITLE is hidden: it has no tab; its next run uses the model in the configuration."; exit 1; fi
 grep -q "^$V=." "$STATE" || { echo "$ID is not open in this worktree; run roles --open $ID." >&2; exit 1; }
 if [ "$CHECK" = 1 ] && [ "$DEFAULT" = 0 ]; then
   RES="$("$KIT/bin/models.sh" "$ID" --check --model "$MODEL" 2>/dev/null | head -1)"
@@ -46,6 +47,7 @@ if ! "$KIT/bin/launch.sh" --set "$LSET"; then
   echo "Its tab was closed but relaunching failed; run roles to reopen it." >&2; exit 1
 fi
 OM="$(open_of "$CFG" "$ID")"   # read after the launch: launch.sh has just saved the configuration in effect in $CFG
+if [ "$OM" = hidden ]; then echo "$TITLE is hidden now: its tab is closed; its next run uses the model in the configuration."; exit 0; fi
 if [ "$OM" != start ] && ! "$KIT/bin/launch.sh" --open "$ID"; then
   echo "Its tab was closed but relaunching failed; run roles --open $ID to reopen it." >&2; exit 1
 fi
