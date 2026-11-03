@@ -43,12 +43,12 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | T2 | Choosing the mode from a terminal of another worktree: the kit takes the folder's worktree and opens the programmer team | #45, this PR |
 | T3 | `orca-roles.pty` holds Orca's ptyId byte for byte (on WSL the ptyIds have backslashes) | this PR |
 | T4 | The Tester's agent runs at nice 10 with its thread caps | #8 |
-| T5 | A worker reopened while the local coordinator keeps its tab: kickoff's background shell sends "Role handles changed" | #29 |
+| T5 | A worker reopened while the local coordinator keeps its tab, with `roles` run with no Orca identity (as from a terminal outside Orca): kickoff sends "Role handles changed" | #29, this PR |
 | T6, T7 | A mode switch typed in the local coordinator's own tab, to pr-reviewer and back: old workers closed, Esc + clear while kickoff runs, the new role message, no leftover tab, how long it took | #45 |
 | T8, T9 | The same switch to `academic-research` and back to programmer | #58 |
 | T10 | A first-use role: `launch --open researcher` opens only it, the other tabs stay as they were, and it runs its configured model (the Researcher on Sonnet) | #58 |
 | T11 | `orca terminal create --worktree current` from a main checkout opens the terminal in that checkout | #58 |
-| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took | this PR, #8, #38, BACKLOG |
+| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took, and the local coordinator's Run is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
 | R2 | T3 again after the restart | this PR |
 
 ### wsl.sh only

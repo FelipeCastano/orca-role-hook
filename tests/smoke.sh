@@ -6595,21 +6595,25 @@ case "\$1 \$2" in
     else echo ready >> "$MF/hist.\$h"; fi;;
   "terminal read") v=1000000; [ -f "$MF/view" ] && v="\$(cat "$MF/view")"; jq -nc --arg s "\$(tail -n "\$v" "$MF/hist.\$h" 2>/dev/null)" '{text: \$s}';;
   "orchestration send")
-    to=""; sub=""; body=""; ty=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; --type) ty="\$2";; esac; shift; done
-    if [ "\$ty" = status ]; then echo "HND \$to|\$ty|\$sub|\$(printf '%s' "\$body" | tr '\\n' '/')" >> "\$L"; [ -f "$MF/failhnd" ] && exit 1; exit 0; fi
-    echo "ESC \$to|\$sub|\$body" >> "\$L"; [ -f "$MF/failsend" ] && exit 1;;
+    to=""; sub=""; body=""; ty=""; fr=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; --type) ty="\$2";; --from) fr="\$2";; esac; shift; done
+    if [ -f "$MF/nosender" ] && [ -z "\$fr" ] && [ -z "\${ORCA_TERMINAL_HANDLE:-}" ]; then echo '{"id":"local","ok":false,"error":{"code":"no_active_sender_terminal","message":"Could not determine the sender terminal for this orchestration command."}}'; exit 1; fi
+    case "\$sub" in
+      *" model unavailable") echo "ESC \$to|\$sub|\$body" >> "\$L"; f="$MF/failsend";;
+      *) echo "HND \$to|\$ty|\$sub|\$(printf '%s' "\$body" | tr '\\n' '/')" >> "\$L"; f="$MF/failhnd";;
+    esac
+    if [ -f "\$f" ]; then if [ -f "$MF/failout" ]; then cat "$MF/failout"; else echo '{"error":{"code":"boom","message":"fake failure"}}'; fi; exit 1; fi;;
 esac
 exit 0
 EOS
 chmod +x "$MF/bin/orca"
 CLERR="There's an issue with the selected model (x). It may not exist or you may not have access to it."
 echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
-mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE
+mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE NOSENDER FAILOUT
   printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/text.* "$MF/rl.n" "$MF/orch.log"; [ -n "${HIST:-}" ] || rm -f "$MF/gd/orca-roles.planner-handles"; [ -z "${HIST:-}" ] || printf '%b' "$HIST" > "$MF/gd/orca-roles.planner-handles"
-  rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
+  rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/nosender" "$MF/failout" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
-  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'LOCAL_COORDINATOR=hp\nPLANNER=hq\nDEV=hd\nTESTER=ht\nCODE_REVIEWER=ha\n' > "$MF/gd/orca-roles.env"
+  [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${NOSENDER:-}" ] || : > "$MF/nosender"; [ -z "${FAILOUT:-}" ] || { if [ "$FAILOUT" = - ]; then : > "$MF/failout"; else printf '%s' "$FAILOUT" > "$MF/failout"; fi; }; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'LOCAL_COORDINATOR=hp\nPLANNER=hq\nDEV=hd\nTESTER=ht\nCODE_REVIEWER=ha\n' > "$MF/gd/orca-roles.env"
   echo "$2" > "$MF/mode"
   (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" "${REUSED:-}" > "$MF/out.log" 2>&1)
 }
@@ -6708,7 +6712,7 @@ mf "$(mfc "$DEVOK")" bad "planner"; PF="$(models):$(nesc)"
 mf "$(mfc "$DEVOK" | jq -c '.roles["local-coordinator"].model = "claude-opus-5-5"')" bad "local-coordinator"
 check "model-check: the Planner (a worker in programmer) FAILED -> recorded and escalated to the local coordinator; the local coordinator's own FAILED -> recorded, no escalation" "$PF|$(models):$(nesc)" "PLANNER=FAILED:claude-opus-5-5 :1|LOCAL_COORDINATOR=FAILED:claude-opus-5-5 :0"
 RC=0; FAILSEND=1 mf "$(mfc "$DEVOK")" bad "dev" || RC=$?
-check "model-check: failed escalation send is ignored" "$RC:$(models):$(grep -c 'Could not tell the local coordinator: Dev model unavailable' "$MF/out.log")" "0:DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: failed escalation send is ignored" "$RC:$(models):$(grep -c 'Could not tell the local coordinator: Dev model unavailable (boom: fake failure)' "$MF/out.log")" "0:DEV=FAILED:claude-opus-5-5 :1"
 # parallel
 mf "$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')" bad "dev tester"
 check "model-check: two roles, both lines" "$(sort "$MF/gd/orca-roles.models" | tr '\n' ' ')" "DEV=FAILED:claude-opus-5-5 TESTER=FAILED:claude-opus-5-5 "
@@ -6768,13 +6772,24 @@ check "handles: the local coordinator keeps its restored tab because its convers
 ORCA_ROLES_PLANNER_BUSY=1 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: the local coordinator's restored tab was busy and not reopened: no send, the log says its role message will carry the handles" "$(hnds | wc -l | tr -d ' '):$(grep -c "^The local coordinator's restored tab was busy and was not reopened; run roles again when it is idle: its role message will carry the handles\\.\$" "$MF/out.log")" "0:1"
 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
-check "handles: another terminal ran it, the local coordinator is told" "$(hnds | wc -l | tr -d ' ')" "1"
+check "handles: another terminal ran it, the local coordinator is told" "$(hnds | wc -l | tr -d ' '):$(grep -c -- '--from' "$MF/orch.log" || true):$(grep -c 'orchestration send' "$MF/orch.log")" "1:0:1"
 REUSED=dev OTH=other mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: a reused role is kicked and recorded in orca-roles.kicked but does not trigger 'Role handles changed'" "$(hnds | wc -l | tr -d ' '):$(grep -c '^SEND ' "$MF/orca.log"):$(cat "$MF/gd/orca-roles.kicked" | tr '\n' ' ')" "0:1:DEV=hd "
 REUSED=dev OTH=other mf "$(mfc "$DEVOK")" clean "dev local-coordinator"
 check "handles: a reused role next to a reopened local coordinator: both kicked, both recorded" "$(hnds | wc -l | tr -d ' '):$(grep -c '^SEND ' "$MF/orca.log"):$(sort "$MF/gd/orca-roles.kicked" | tr '\n' ' ')" "0:2:DEV=hd LOCAL_COORDINATOR=hp "
 FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"
-check "handles: a failed send is reported with the cat hint" "$(grep -c "^Could not tell the local coordinator the new handles; tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log")" "1"
+check "handles: a failed send is reported with the cat hint" "$(grep -c "^Could not tell the local coordinator the new handles (boom: fake failure); tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log"):$(grep -c 'orchestration send' "$MF/orch.log")" "1:1"
+NSL="^No Orca terminal identity here (no_active_sender_terminal): sent as the local coordinator's own tab\\.\$"; NSC() { grep -c "$NSL" "$MF/out.log" || true; }; FRM() { grep -c -- '--from hp --to hp' "$MF/orch.log" || true; }
+NS1="$(NOSENDER=1 mf "$(mfc "$DEVOK")" clean "dev"; echo "$(hnds | wc -l | tr -d ' '):$(FRM):$(NSC):$(grep -c '^Told the local coordinator the new handles\.$' "$MF/out.log")")"
+NS2="$(NOSENDER=1 mf "$(mfc "$DEVOK")" bad "dev"; echo "$(nesc):$(grep -c -- '--type escalation' "$MF/orch.log" || true):$(FRM):$(NSC):$(grep -c '^Could not tell' "$MF/out.log" || true)")"
+NS3="$(NOSENDER=1 FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"; echo "$(hnds | wc -l | tr -d ' '):$(grep -c 'orchestration send' "$MF/orch.log"):$(NSC):$(grep -c "^Could not tell the local coordinator the new handles (boom: fake failure); tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log")")"
+check "sender: with no Orca identity each kickoff message is sent again as the local coordinator's own tab" "$NS1|$NS2|$NS3" "1:1:1:1|1:0:2:2:0|1:2:0:1"
+FE() { sed -n 's/^Could not tell the local coordinator the new handles (\(.*\)); tell it to run: cat .*$/\1/p' "$MF/out.log"; }
+FAILHND=1 FAILOUT=$'\n   plain failure  \nsecond line' mf "$(mfc "$DEVOK")" clean "dev"; FE1="$(FE | sed 's/^/(/; s/$/)/'):$(grep -c 'orchestration send' "$MF/orch.log")"
+FAILHND=1 FAILOUT=- mf "$(mfc "$DEVOK")" clean "dev"; FE1="$FE1|$(FE | sed 's/^/(/; s/$/)/'):$(grep -c 'orchestration send' "$MF/orch.log")"
+FAILHND=1 FAILOUT="$(jq -nc --arg m "$(head -c 300 /dev/zero | tr '\0' a)" '{error:{code:"boom",message:$m}}')" mf "$(mfc "$DEVOK")" clean "dev"; FE1="$FE1|$(FE | awk '{print length($0)}'):$(grep -c 'orchestration send' "$MF/orch.log")"
+FAILHND=1 FAILOUT="  $(head -c 300 /dev/zero | tr '\0' b)" mf "$(mfc "$DEVOK")" clean "dev"; FE1="$FE1|$(FE | awk '{print length($0)}'):$(grep -c 'orchestration send' "$MF/orch.log")"
+check "send errors: the line carries Orca's first line, or (no output), at most 200 characters" "$FE1" "(plain failure):1|(no output):1|200:1|200:1"
 # the front role's handle history: seeded from the kicked and env files, no duplicates, no empty lines, never reseeded, atomic
 HD="$TMP/hd"; rm -rf "$HD"; mkdir -p "$HD"; hh() { tr '\n' ' ' < "$HD/orca-roles.planner-handles"; }
 printf 'LOCAL_COORDINATOR=k1\nDEV=x\n' > "$HD/orca-roles.kicked"; printf 'DEV=y\nLOCAL_COORDINATOR=e1\nLOCAL_COORDINATOR=zz\n' > "$HD/orca-roles.env"
@@ -6830,7 +6845,7 @@ OTH=hp mf "$CFGT2" clean "dev tester"; R4="$(hnds | sed 's/^HND //')|$(grep -c '
 OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')|$(grep -c '^TESTER=' "$MF/gd/orca-roles.kicked" || true)"
 OTH=hp SENDFAIL="hd ht" mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"
 REUSED=dev OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"
-FAILHND=1 OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(grep -c '^Could not tell the local coordinator the roles were reopened\.$' "$MF/out.log"):$(grep -c '^Told the local coordinator' "$MF/out.log" || true)"
+FAILHND=1 OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(grep -c '^Could not tell the local coordinator the roles were reopened (boom: fake failure)\.$' "$MF/out.log"):$(grep -c '^Told the local coordinator' "$MF/out.log" || true)"
 check "roles reopened: one status to the local coordinator naming the roles whose role message was sent, 'Not reached' for those whose kick failed (also all of them), a reused role not listed, the handles; the failed send is logged" "$R4" "hp|status|Roles reopened|roles opened or reopened: Dev, Tester./$HU|1|hp|status|Roles reopened|roles opened or reopened: Dev. Not reached (no role message sent): Tester./$HU|0|hp|status|Roles reopened|roles opened or reopened: none. Not reached (no role message sent): Dev, Tester./$HU|hp|status|Roles reopened|roles opened or reopened: Tester./$HU|1:0"
 # check_config and docs
 cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }

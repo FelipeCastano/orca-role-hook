@@ -321,8 +321,10 @@ c_tester_nice() {  # the Tester runs at nice 10 with the thread caps (#8)
 c_handles_changed() {  # a worker reopened while the local coordinator keeps its tab: kickoff's background shell tells the local coordinator (#29)
   local id=$1 dev
   dev="$(env_of DEV)"; orca terminal close --terminal "$dev" --tab --json >/dev/null 2>&1; sleep 2
-  roles_run
-  grep -q 'Told the local coordinator the new handles' "$GD/orca-roles-kickoff.log" && ok "$id" "kickoff sent the local coordinator 'Role handles changed' (Told the local coordinator the new handles.)" || fail "$id" "the kickoff log has no 'Told the local coordinator the new handles'"
+  ( unset ORCA_TERMINAL_HANDLE ORCA_PANE_KEY; roles_run )
+  local why; why="$(grep -m1 'Could not tell the local coordinator the new handles' "$GD/orca-roles-kickoff.log" 2>/dev/null | cut -c1-300)"
+  grep -q 'Told the local coordinator the new handles' "$GD/orca-roles-kickoff.log" && ok "$id" "kickoff, run with no Orca identity, told the local coordinator the new handles" || fail "$id" "the kickoff log has no 'Told the local coordinator the new handles'${why:+: $why}"
+  info "$id.sender" "$(grep -m1 'No Orca terminal identity here' "$GD/orca-roles-kickoff.log" 2>/dev/null || echo 'the first attempt was accepted (Orca found a sender)')"
   attach "$id kickoff log" "$GD/orca-roles-kickoff.log"
 }
 c_switch_from_lc() {  # a mode switch typed in the local coordinator's own tab: workers closed quickly, Esc + clear while kickoff runs, role message (#45)
@@ -372,6 +374,22 @@ c_terminal_current() {  # orca terminal create --worktree current from a main ch
 }
 c_restart_prepare() {  # before the restart: what each role had
   cp "$GD/orca-roles.env" "$LIVE_DIR/env-before-restart"; wt_terms > "$LIVE_DIR/terms-before-restart"
+  local lc out rc rid code msg why
+  lc="$(env_of LOCAL_COORDINATOR)"
+  if [ -z "$lc" ]; then
+    why="no local coordinator handle in orca-roles.env before the restart"
+    st_set r1run ""; st_set r1why "$why"; echo "R1.run: could not create the Run: $why"; return 0
+  fi
+  out="$( unset ORCA_PANE_KEY; orca orchestration run-create --from "$lc" --objective "live checks R1: Run binding after a restart (throwaway)" --json 2>&1 )"; rc=$?
+  rid=""; [ "$rc" -eq 0 ] && rid="$(printf '%s' "$out" | jfield result.run.id)"
+  if [ -n "$rid" ]; then st_set r1run "$rid"; st_set r1lc "$lc"; return 0; fi
+  code="$(printf '%s' "$out" | jfield error.code)"
+  if [ -n "$code" ]; then
+    msg="$(printf '%s' "$out" | jfield error.message | head -n 1)"; why="$code${msg:+: $msg}"
+  elif [ "$rc" -eq 0 ]; then why="run-create gave no Run id"
+  else why="$(printf '%s\n' "$out" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -m1 .)"; fi
+  why="$(printf '%s' "${why:-no output}" | cut -c1-200)"
+  st_set r1run ""; st_set r1why "$why"; echo "R1.run: could not create the Run: $why"
 }
 c_restart_after() {  # after a real restart: asleep tabs are woken and reopened with their conversation, no duplicate (n13, #8, #38)
   local id=$1 asleep live t0 t1 r
@@ -395,6 +413,37 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
   check "$id.duplicates" "one tab per role and no stray agent tab" "$(wt_terms | awk -F'\t' '$4 != ""' | wc -l | tr -d ' ')" "$(grep -c . "$GD/orca-roles.env")"
   local bad=""; while IFS='=' read -r v h; do orca terminal show --terminal "$h" --json >/dev/null 2>&1 || bad="$bad $v"; done < "$GD/orca-roles.env"
   check "$id.handles" "every handle in orca-roles.env is live (WSL stale handles, BACKLOG)" "${bad:-none}" none
+  c_restart_run "$id"
+}
+c_restart_run() {  # R1.run: the Run made before the restart is bound to the local coordinator's new tab
+  local id=$1 rid lc got k=0 cursor js i hs lg via
+  rid="$(st_get r1run)"; lc="$(env_of LOCAL_COORDINATOR)"
+  [ -n "$rid" ] || { skip "$id.run" "no Run was created before the restart: $(st_get r1why)"; return 0; }
+  while :; do
+    got=""; cursor=""; i=0
+    while [ "$i" -lt 50 ]; do
+      if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --cursor "$cursor" 2>/dev/null)" || break
+      else js="$(orca orchestration run-list --json 2>/dev/null)" || break; fi
+      hs="$(printf '%s' "$js" | jq -r --arg id "$rid" '(.result.runs // [])[] | select(.id == $id) | .coordinator_handle' 2>/dev/null | head -n 1)"
+      [ -n "$hs" ] && { got="$hs"; break; }
+      cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)"
+      i=$((i + 1)); [ -n "$cursor" ] || break
+    done
+    [ "$got" = "$lc" ] && break
+    k=$((k + 3)); [ "$k" -le 60 ] || break
+    sleep 3
+  done
+  check "$id.run" "the local coordinator's Run is bound to its new tab after the restart (by the SessionStart hook, or by the agent's run-use after the kickoff's reminder)" "${got:-not listed}" "$lc"
+  lg="$GD/orca-roles-kickoff.log"; [ -e "$GD/orca-roles-relaunch.log" ] && lg="$lg $GD/orca-roles-relaunch.log"
+  # shellcheck disable=SC2086
+  if cat $lg 2>/dev/null | grep -q "Run $rid is bound to an old"; then via="kickoff found the Run still bound to the old tab and told the local coordinator to run run-use (the SessionStart hook had not re-bound it before kickoff looked)"
+  elif cat $lg 2>/dev/null | grep -q 'Could not list the Runs to check'; then via="kickoff could not list the Runs; the binding came from the SessionStart hook or from the agent itself"
+  else via="kickoff did not see the Run on an old tab (the SessionStart hook had re-bound it before kickoff looked, or kickoff had no previous handle to look for, or kickoff did not check (the local coordinator was not reopened))"; fi
+  info "$id.run.via" "$via"
+  if [ "$got" != "$lc" ]; then
+    [ -e "$KIT/state/session-hook.log" ] && attach "$id.run session hook log" "$KIT/state/session-hook.log"
+    attach "$id.run handle before the restart" "$(st_get r1lc)"
+  fi
 }
 restart_instructions() {
   if live_is_wsl; then
