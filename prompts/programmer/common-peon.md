@@ -9,7 +9,7 @@ You are a worker on a team coordinated by the **local coordinator** through Orca
 ## Communication
 - Blocked by a doubt: `orca orchestration ask --question "<doubt>" --timeout-ms 600000 --json`. For minor doubts, decide and note it in your report.
 - Finish with ONE `orca orchestration send --type worker_done ... --task-id <task_id> --dispatch-id <dispatch_id> --outcome succeeded|failed --json`, in your role's report format. Then end your turn.
-- If you read messages with `orca orchestration check`, acknowledge each batch once read with `--ack <delivery_id>` (it is not a heartbeat).
+- If you read messages with `orca orchestration check`, acknowledge each batch once read with `--ack <delivery_id>` only if it has one (an older Orca; it is not a heartbeat).
 - The dispatch preamble's 3-sentence `--body` limit and `--report-path` do not apply: your body is complete.
 - No heartbeats: do not send the cadence messages the preamble asks for. Only `worker_done`, `ask`, or an `escalation` when something fails.
 
