@@ -6,7 +6,6 @@ Known pending work for the kit. Each entry says what to do and why; remove it wh
 
 - **Run one check or one group of checks of a smoke section.** A section is one function whose checks depend on fixtures, fakes and result strings defined earlier in it, and a check has no name to select; it needs a name per group, each group's fixture prefix and an explicit reset at its start. Today the unit is the section (`tests/smoke.sh <section>`).
 
-- **T5 and the Run coordinator keeping an old Planner handle.** Planned for the next PR ("handles").
 - **An extra agent tab after a mode switch typed in the Planner's tab** (T6/T7 of the live checks). The checks now attach the worktree's terminals when it happens; find the cause from that output.
 - **Tabs Orca resumes by itself lack the kit's shim in their PATH** until `roles` reopens them.
 - **Windows-side processes of an `orca` call the kit killed at its time limit** (WSL). Whether any stays running is not verified.
