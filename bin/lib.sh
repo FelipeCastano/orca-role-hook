@@ -303,7 +303,7 @@ launchable_roles() {
   done
 }
 # When a role's tab opens: start (with the team), first-use (before its first task, then it stays) or per-task (before each task, closed after
-# its report). Missing or any other value = start; the front role always starts.  open_of <config> <role>
+# its report). A role without its own value takes defaults.open (the kit ships first-use); none at all, or any other value, = start; the front role always starts.  open_of <config> <role>
 open_of() {
   local v; [ "$2" = "$(front_role "$(mode_of --saved "$1" 2>/dev/null || echo programmer)")" ] && { printf start; return 0; }
   v="$(rstr "$1" "$2" open)"
@@ -388,11 +388,13 @@ REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
 # {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} was the default of the atlassian MCP server before Atlassian's /v2/mcp endpoint: a user still on exactly it moves to the new default.
+# "first-use" was every kit role's own open value before defaults.open: a role still on it moves to the default, so that a defaults.open of the user's reaches it. Only a config with no defaults.open (one from before it) is moved: once the config has one, a kit role's "first-use" is the user's own.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | del(.roles.auditor)
+    | .roles |= with_entries(.key as $k | if (($u.defaults.open? // null) == null) and ($d.roles | has($k)) and (($d.roles[$k] | has("open")) | not) and ((.value | type) == "object") and (.value.open == "first-use") then .value |= del(.open) else . end)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
     | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
