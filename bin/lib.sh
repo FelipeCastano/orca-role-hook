@@ -941,8 +941,8 @@ stale_run() {
   local hist="$1/orca-roles.planner-handles" cursor="" js runs="[]" i=0
   [ -f "$hist" ] || return 0
   while [ "$i" -lt 50 ]; do
-    if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --cursor "$cursor" 2>/dev/null)" || return 1
-    else js="$(orca orchestration run-list --json 2>/dev/null)" || return 1; fi
+    if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --full --cursor "$cursor" 2>/dev/null)" || return 1
+    else js="$(orca orchestration run-list --json --full 2>/dev/null)" || return 1; fi
     runs="$(printf '%s' "$js" | jq -c --argjson acc "$runs" '$acc + [(.result.runs // [])[]]' 2>/dev/null)" || return 1
     cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)" || return 1
     i=$((i + 1)); [ -n "$cursor" ] || break

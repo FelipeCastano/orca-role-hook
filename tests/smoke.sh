@@ -1207,7 +1207,7 @@ bash test.sh
   check "oracle pass: nothing written in the repo" "$(git -C "$P" status --porcelain)" ""
   check "oracle pass: config_sha is the sha1 of the config" "$(st .config_sha)" "$(shasum "$OCFG" | cut -d' ' -f1)"
   # the spec file against the sha256 the Planner put in the Orca task (a fake orca answers run-list and task-list): verified, tampered (nothing runs), unverified (no hash, orca failing or absent, unknown task: runs as given)
-  SPXN=0; SPX="$OR/spx"; rm -rf "$SPX"; mkdir -p "$SPX/bin"; printf '#!/bin/sh\n[ ! -e "%s/fail" ] || { echo garbage; exit 1; }\ncase "$2" in run-list) cat "%s/rl.json";; task-list) cat "%s/tl.json";; esac\n' "$SPX" "$SPX" "$SPX" > "$SPX/bin/orca"; chmod +x "$SPX/bin/orca"
+  SPXN=0; SPX="$OR/spx"; rm -rf "$SPX"; mkdir -p "$SPX/bin"; printf '#!/bin/sh\n[ ! -e "%s/fail" ] || { echo garbage; exit 1; }\ncase "$2" in run-list) cat "%s/rl.json";; task-list) case " $* " in *" --full "*) cat "%s/tl.json";; *) jq -c ".result.tasks |= map({id})" "%s/tl.json";; esac;; esac\n' "$SPX" "$SPX" "$SPX" "$SPX" > "$SPX/bin/orca"; chmod +x "$SPX/bin/orca"
   printf '{"result":{"runs":[{"id":"run_1"}]}}' > "$SPX/rl.json"
   spx_task() {  # spx_task <spec text or empty for a task with no hash>: the task "th" of the fake run
     jq -cn --arg s "$1" '{result: {tasks: [{id: "th", spec: $s}]}}' > "$SPX/tl.json"
@@ -1514,11 +1514,13 @@ cat > "$LP/bin/orca" <<'FAKE'
 #!/bin/bash
 # fake orca: read-only answers from $LP_FX; every call is logged
 echo "$*" >> "$LP_FX/calls.log"
+full=0; for a in "$@"; do [ "$a" = --full ] && full=1; done
+short() { if [ "$full" = 1 ]; then cat "$2"; else jq -c "$1" "$2"; fi; }   # short <jq filter> <file>: the concise view unless --full
 case "$1 $2" in
-  "orchestration run-list") cat "$LP_FX/run-list.json";;
-  "orchestration task-list") cat "$LP_FX/task-list.json";;
-  "orchestration worker-list") cat "$LP_FX/worker-list.json";;
-  "orchestration inbox") cat "$LP_FX/inbox.json";;
+  "orchestration run-list") short '.result.runs |= map({id, objective})' "$LP_FX/run-list.json";;
+  "orchestration task-list") short '.result.tasks |= map({id, status, title})' "$LP_FX/task-list.json";;
+  "orchestration worker-list") short '.result.workers |= map({dispatchId, taskId, terminalState, terminal: .agentTerminalHandle})' "$LP_FX/worker-list.json";;
+  "orchestration inbox") short '.result.messages |= map({id, type, subject, body, handled: (.read == 1)})' "$LP_FX/inbox.json";;
   "terminal show") cat "$LP_FX/terminal.json";;
   *) echo "fake orca: unexpected call: $*" >&2; exit 9;;
 esac
@@ -5979,7 +5981,7 @@ cat > "$SH/bin/orca" <<EOS
 echo "\$*" >> "$SH/orca.log"
 case "\$1 \$2" in
   "terminal list") [ ! -e "$SH/hang" ] || sleep $((UT + 3)); cat "$SH/tl.json";;
-  "orchestration run-list") cat "$SH/rl.json";;
+  "orchestration run-list") case " \$* " in *" --full "*) cat "$SH/rl.json";; *) jq -c '.result.runs |= map({id})' "$SH/rl.json";; esac;;
   "orchestration run-use") [ ! -e "$SH/fail.\$4" ] || exit 1; echo '{"ok":true}';;
   "orchestration check") echo '{"result":{"count":2}}';;
 esac
@@ -6580,7 +6582,7 @@ case "\$1 \$2" in
     [ -f "$MF/rl.junk" ] && { echo 'not json'; exit 0; }
     [ -f "$MF/rl.always" ] && { echo '{"result":{"runs":[],"nextCursor":"again"}}'; exit 0; }
     c=first; pv2=""; for x in "\$@"; do [ "\$pv2" = --cursor ] && c="\$x"; pv2="\$x"; done
-    if [ -f "$MF/rl.page.\$c" ]; then cat "$MF/rl.page.\$c"; else echo '{"result":{"runs":[]}}'; fi;;
+    if [ -f "$MF/rl.page.\$c" ]; then case " \$* " in *" --full "*) cat "$MF/rl.page.\$c";; *) jq -c '.result.runs |= map({id, objective})' "$MF/rl.page.\$c";; esac; else echo '{"result":{"runs":[]}}'; fi;;
   "terminal wait") echo "WAIT \$*" >> "$MF/waits.log"; [ -f "$MF/sent.\$h" ] && sleep "\$(cat "$MF/waitdelay")";;
   "terminal send")
     t=""; while [ \$# -gt 0 ]; do [ "\$1" = --text ] && t="\$2"; shift; done
@@ -8492,10 +8494,11 @@ TNOW=1000000000000; TSL="$TS/orca.log"; : > "$TSL"
 cat > "$TS/bin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$TSL"
+full=0; for a in "\$@"; do [ "\$a" = --full ] && full=1; done
 case "\$1 \$2" in
   "worktree ps") [ -e "$TS/psfail" ] && exit 1; cat "$TS/ps.json";;
-  "orchestration worker-list") cat "$TS/wl.json";;
-  "orchestration inbox") cat "$TS/inbox.json" 2>/dev/null || exit 1;;
+  "orchestration worker-list") if [ "\$full" = 1 ]; then cat "$TS/wl.json"; else jq -c '.result.workers |= map({dispatchId, taskId, state: "unsupervised", terminal: .agentTerminalHandle})' "$TS/wl.json"; fi;;
+  "orchestration inbox") [ -e "$TS/inbox.json" ] || exit 1; if [ "\$full" = 1 ]; then cat "$TS/inbox.json"; else jq -c '.result.messages |= map({id, type, from: .from_handle, subject, handled: true, body, payload: (.payload | if type == "string" then (fromjson? // null) else . end)})' "$TS/inbox.json"; fi;;
   "terminal show") h=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; shift; done; cat "$TS/show.\$h" 2>/dev/null || exit 1;;
 esac
 exit 0

@@ -51,7 +51,7 @@ def lint(spec):
 
 
 def _orca(*args):
-    r = subprocess.run(['orca', 'orchestration'] + list(args) + ['--json'], capture_output=True, text=True)
+    r = subprocess.run(['orca', 'orchestration'] + list(args) + ['--json', '--full'], capture_output=True, text=True)
     try:
         d = json.loads(r.stdout)
     except Exception:

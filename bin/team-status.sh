@@ -84,7 +84,7 @@ OUT="$(jq -n -c --argjson roles "$ROLES" --argjson agents "$AGENTS" --argjson no
         prompt: $pr})')"
 
 if [ -n "$RUN" ]; then
-  WL="$(orca orchestration worker-list --run "$RUN" --json 2>/dev/null)" || WL=""
+  WL="$(orca orchestration worker-list --run "$RUN" --json --full 2>/dev/null)" || WL=""
   if [ -n "$WL" ]; then
     n="$(printf '%s' "$OUT" | jq 'length')"; i=0
     while [ "$i" -lt "$n" ]; do
@@ -100,7 +100,7 @@ if [ -n "$RUN" ]; then
 fi
 
 if [ -n "$RUN" ]; then
-  INB="$(orca orchestration inbox --json --limit 200 2>/dev/null)"
+  INB="$(orca orchestration inbox --json --full --limit 200 2>/dev/null)"
   printf '%s' "$INB" | jq -e '.result.messages | type == "array"' >/dev/null 2>&1 || INB='{"result":{"messages":[]}}'
   OUT="$(printf '%s' "$OUT" | jq -c --argjson inb "$INB" --arg run "$RUN" --arg re "$REPORT_MARK_RE" '
     map(. as $r | ([$inb.result.messages[] | select(.type == "worker_done" and .run_id == $run and .from_handle == $r.handle)] | sort_by(.sequence) | last) as $d

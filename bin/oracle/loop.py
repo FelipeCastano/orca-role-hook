@@ -40,8 +40,8 @@ def run_orca(args):
 
 
 def orca(*a):
-    """result of `orca orchestration <a> --json`, or None if it failed."""
-    r = run_orca(['orchestration'] + list(a) + ['--json'])
+    """result of `orca orchestration <a> --json --full` (Orca's whole record, not its concise view), or None if it failed."""
+    r = run_orca(['orchestration'] + list(a) + ['--json', '--full'])
     if r is None:
         return None
     try:
