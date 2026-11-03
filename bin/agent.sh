@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Launches a role's agent according to the configuration.  Usage: agent.sh <role> [--resume <claude session id>]
 # --resume: reopen the role's previous Claude Code conversation (launch.sh uses it for a tab Orca restored after a restart).
+# ORCA_ROLES_HEADLESS_PROMPT=<file> (claude only; hidden-role.sh sets it): run headless, `claude -p` with that file on stdin and JSON output.
 set -euo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 ROLE="$1"; shift; RESUME=""
@@ -141,6 +142,11 @@ case "$AGENT" in
     # Claude Code keeps the kit's tab title (every role but the front one): its session-summary titles hide the agent's name, and Orca then refuses
     # dispatches to the tab (stablyai/orca#32090). A value set in defaults.env or roles.<id>.env (exported above) wins.
     if [ "$ROLE" != "$FRONT" ]; then export CLAUDE_CODE_DISABLE_TERMINAL_TITLE="${CLAUDE_CODE_DISABLE_TERMINAL_TITLE:-1}"; fi
+    HPROMPT="${ORCA_ROLES_HEADLESS_PROMPT:-}"; unset ORCA_ROLES_HEADLESS_PROMPT   # the role's own tools never see it
+    if [ -n "$HPROMPT" ] && [ -r "$HPROMPT" ]; then
+      ARGS+=(--disallowedTools "Bash(orca:*)" -p --output-format json)
+      exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}" < "$HPROMPT"
+    fi
     exec "${RUN[@]+"${RUN[@]}"}" claude "${ARGS[@]}"
     ;;
   codex)

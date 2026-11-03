@@ -583,7 +583,7 @@ Each role inherits from `defaults` whatever it does not define.
 | Field | What it does |
 |---|---|
 | `enabled` | Enables or disables the role (the `local-coordinator` must be enabled in every mode, and the `planner` in programmer and academic-research). |
-| `open` | When the role's tab opens: `"start"` (with the team), `"first-use"` (before its first task, then it stays open) or `"per-task"` (before each of its tasks, closed after its report, so each task starts without memory: for roles whose tasks are self-contained, such as the Researcher or the Deployer, not Dev or the Tester, whose fix rounds rely on what they remember). Missing = `defaults.open`, which the kit ships as `"first-use"`: so the local coordinator and the Planner, which have their own `"start"`, open at start and every other role, the ones you create included, on first use. Set it in `config.json` or `.orca-roles.json`, per role or in `defaults`, or on the setup script line (`--set roles.dev.open=per-task`, `--set defaults.open=start`); the local coordinator always opens at start. The local coordinator opens and closes these roles itself, without asking (`launch.sh --open <id>`, `close-role.sh <id>`). |
+| `open` | When the role's tab opens: `"start"` (with the team), `"first-use"` (before its first task, then it stays open), `"per-task"` (before each of its tasks, closed after its report, so each task starts without memory: for roles whose tasks are self-contained, such as the Researcher or the Deployer, not Dev or the Tester, whose fix rounds rely on what they remember) or `"hidden"` (never a tab: the local coordinator runs the role for one task, headless, with `hidden-role.sh`; each run starts without memory, it can ask nothing mid-task (it ends with a question and is resumed), it has no Orca task and no time limit (`hidden-role.sh --stop` ends it), and it runs under `claude -p`, where nothing raises a dialog: what a tab would ask about is decided by auto mode alone, and the role's deny lists are the only fixed stop. Its report may lack the `Done` marker: the coordinator is told, does not accept the run as it is, and recommends to the user running it again with its prompt sent afresh (a new run, not a resume). A `--verbose` in its `extraArgs` changes the output format, and every run then ends failed. Only `agent: "claude"` can be hidden; the Planner and the local coordinator cannot; a role on another agent that inherits it from `defaults.open` opens on first use). Missing = `defaults.open`, which the kit ships as `"first-use"`: so the local coordinator and the Planner, which have their own `"start"`, open at start and every other role, the ones you create included, on first use. Set it in `config.json` or `.orca-roles.json`, per role or in `defaults`, or on the setup script line (`--set roles.dev.open=per-task`, `--set defaults.open=start`); the local coordinator always opens at start. The local coordinator opens and closes these roles itself, without asking (`launch.sh --open <id>`, `close-role.sh <id>`). |
 | `title` | Name of the tab and of the role the local coordinator sees. |
 | `description` | What the role does and when to use it. The local coordinator receives it at startup; essential in roles you create. |
 | `prompt` | The role's instructions file (by default `prompts/<mode>/<role>.md`). A path (programmer only) or `{ "<mode>": "<path>" }`. Accepts `~`. See [Modes](#modes). |
@@ -1046,6 +1046,7 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   ├── auditor.sh               # opens the on-demand Auditor (the auditor command): audits the roles and their metrics, changes nothing
 │   ├── team-status.sh           # what each role is doing, from what Orca tracks (the team-status command)
 │   ├── test-run.sh              # runs a test command, passes its result through and adds it to the test log
+│   ├── hidden-role.sh           # runs a role with "open": "hidden" (no tab) headless for one task, and sends its report as a message
 │   ├── dispatch.sh              # assigns a task to a worker and checks in the background that it started (re-sends Enter once, else tells the local coordinator)
 │   ├── lib.sh                   # shared functions
 │   ├── orca-yaml.sh             # registers the kit in a project with a local orca.yaml (the roles-yaml command)
@@ -1056,16 +1057,17 @@ orca-role-hook/                  # this repo → installed into ~/.orca-roles/
 │   └── skills/team/SKILL.md     # guide to the kit: installation, configuration, exceptions, new agents
 ├── prompts/
 │   ├── auditor.md               # the on-demand Auditor (mode-independent)
+│   ├── hidden-worker.md         # what a hidden run is told about running with no tab (hidden-role.sh puts it in the prompt)
 │   ├── programmer/
 │   ├── pr-reviewer/
 │   └── academic-research/       # each mode's folder holds:
 │       ├── common-workers.md    # rules common to the mode's workers
 │       ├── reports.md           # written-report rules, read by a worker only when a task asks for a report
-│       ├── local-coordinator-*.md  # parts of the local coordinator's prompt read only when needed (resuming, reports, recovery, E2E...)
+│       ├── local-coordinator-*.md  # parts of the local coordinator's prompt read only when needed (resuming, reports, recovery, E2E, hidden roles...)
 │       └── <role>.md            # each role's instructions (with its review method, if it has one)
 ├── docs/
 │   ├── live-checks.md           # what the smoke tests cannot cover, and the scripts that check it live
-│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand
+│   └── manual-checks.md         # the same checks as a step-by-step guide to follow by hand, plus the hidden-role checks (no script)
 ├── tests/
 │   ├── smoke.sh                 # tests of configuration, inheritance, merge, update and the scripts
 │   └── live/                    # live checks: mac.sh, wsl.sh, agents.sh (see docs/live-checks.md)

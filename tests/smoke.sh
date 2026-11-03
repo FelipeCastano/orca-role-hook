@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -5694,7 +5694,7 @@ if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json";
 sec_prompt_paths() {
 # Every message and launch points to existing prompt files under prompts/programmer/ (loops over ALL default roles)
 pk_setup
-check "prompts: every default prompt file in prompts/programmer/, none flat but the mode-independent coordinator.md" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md | wc -l | tr -d ' '):$([ -f "$PK/prompts/coordinator.md" ] && echo coordinator)" "$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):0:coordinator"
+check "prompts: every default prompt file in prompts/programmer/, none flat but the mode-independent coordinator.md, auditor.md and hidden-worker.md" "$(find "$PK/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$(find "$PK/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md ! -name hidden-worker.md | wc -l | tr -d ' '):$([ -f "$PK/prompts/coordinator.md" ] && echo coordinator)" "$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):0:coordinator"
 NROLES="$(jq -r '.roles | length' "$PKC")"
 [ "$NROLES" -ge 7 ] || { echo "FAIL default config has only $NROLES roles"; FAIL=1; }
 # prints "<paths found>:<missing>:<outside programmer/>" for a message
@@ -5766,7 +5766,7 @@ sec_install_flat() {
 IH="$TMP/inst-home"; mkdir -p "$IH/.orca-roles/prompts"
 for f in auditor common-workers deployer dev e2e-tester planner researcher tester; do echo old > "$IH/.orca-roles/prompts/$f.md"; done
 (cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null >/dev/null 2>&1) || { echo "FAIL install.sh over old flat prompts"; FAIL=1; }
-check "install.sh: no flat prompt left but the mode-independent coordinator.md and auditor.md, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$([ -f "$IH/.orca-roles/prompts/coordinator.md" ] && echo coordinator)$([ -f "$IH/.orca-roles/prompts/auditor.md" ] && echo " auditor"):$(cmp -s "$IH/.orca-roles/prompts/auditor.md" "$ROOT/prompts/auditor.md" && echo same)" "0:$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):coordinator auditor:same"
+check "install.sh: no flat prompt left but the mode-independent coordinator.md, auditor.md and hidden-worker.md, every default prompt file in prompts/programmer/" "$(find "$IH/.orca-roles/prompts" -maxdepth 1 -name '*.md' ! -name coordinator.md ! -name auditor.md ! -name hidden-worker.md | wc -l | tr -d ' '):$(find "$IH/.orca-roles/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):$([ -f "$IH/.orca-roles/prompts/coordinator.md" ] && echo coordinator)$([ -f "$IH/.orca-roles/prompts/auditor.md" ] && echo " auditor"):$(cmp -s "$IH/.orca-roles/prompts/auditor.md" "$ROOT/prompts/auditor.md" && echo same)" "0:$(find "$ROOT/prompts/programmer" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '):coordinator auditor:same"
 # the "Enabled" line names the mode of the installed configuration
 ic() { jq "$1" "$IH/.orca-roles/config.json" > "$IH/c.tmp" && mv "$IH/c.tmp" "$IH/.orca-roles/config.json"; }
 irun() { if IOUT="$(cd "$TMP" && HOME="$IH" bash "$ROOT/install.sh" </dev/null 2>"$IH/err.txt")"; then IRC=0; else IRC=$?; fi; IENA="$(printf '%s\n' "$IOUT" | grep '^Enabled')"; }
@@ -8626,6 +8626,195 @@ check "local coordinator prompts: the assign line and the silent-worker bullet a
 SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer}/local-coordinator.md | tr '\n' ' ')"
 check "local coordinator prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the three modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/local-coordinator.md:1 %s/prompts/pr-reviewer/local-coordinator.md:1 ' "$ROOT" "$ROOT" "$ROOT")"
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md")" "1 1 1 1 1 1"
+}
+
+sec_hidden() {
+gc() { grep -c "$@" || true; }
+nf() { { ls "$@" 2>/dev/null || true; } | wc -l | tr -d ' '; }
+# hidden roles: config, launch, planner_msg, a run end to end with a fake claude and a fake orca, outcomes, locks, status, stop, and the other scripts
+HD="$TMP/hid"; rm -rf "$HD"; mkdir -p "$HD/bin" "$HD/proj" "$HD/nogit"; git -C "$HD/proj" init -q -b main; HDP="$HD/proj"; HG="$HDP/.git"; HH="$HG/orca-roles-hidden"
+cat > "$HD/bin/claude" <<EOS
+#!/bin/sh
+printf '%s\n' "\$@" > "$HD/argv"; env > "$HD/env"; cat > "$HD/stdin"
+[ -e "$HD/ign" ] && trap '' TERM
+[ -e "$HD/sleep" ] && { echo started > "$HD/started"; sleep 30; }
+[ -e "$HD/out" ] && cat "$HD/out"
+[ -e "$HD/exit" ] && exit "\$(cat "$HD/exit")"
+exit 0
+EOS
+cat > "$HD/bin/orca" <<EOS
+#!/bin/sh
+if [ "\$1 \$2" = "orchestration send" ]; then
+  n=\$(( \$(cat "$HD/cnt" 2>/dev/null || echo 0) + 1 )); echo \$n > "$HD/cnt"; shift 2
+  while [ \$# -gt 0 ]; do case "\$1" in --subject) printf '%s' "\$2" > "$HD/send.\$n.subject";; --body) printf '%s' "\$2" > "$HD/send.\$n.body";; --to) printf '%s' "\$2" > "$HD/send.\$n.to";; esac; shift; done
+  { ls "$HH"/*.pid >/dev/null 2>&1 && echo pid-present || echo pid-gone; ls "$HH"/*.undelivered 2>/dev/null | wc -l | tr -d ' '; } > "$HD/send.\$n.state"
+  [ -e "$HD/sendfail" ] && exit 1
+fi
+[ "\$1 \$2" = "worktree ps" ] && echo '{"ok":true,"result":{"worktrees":[{"path":"$HDP","agents":[]}]}}'
+exit 0
+EOS
+chmod +x "$HD/bin/claude" "$HD/bin/orca"
+HK="$TMP/home/.orca-roles"; HCFG="$HG/orca-roles.config.json"
+hcfg() { jq "$1" "$ROOT/config.default.json" > "$HCFG"; }   # hcfg <jq filter>: this worktree's saved configuration
+hcfg '.roles.dev.open = "hidden" | .roles.deployer.enabled = false | .roles.deployer.open = "hidden"'
+printf 'a brief\nsecond line\n' > "$HD/brief.md"
+hq() { rm -f "$HD"/send.* "$HD/cnt" "$HD/argv" "$HD/env" "$HD/stdin" "$HD/out" "$HD/exit" "$HD/sleep" "$HD/started" "$HD/sendfail"; }
+hreset() { rm -rf "$HH" "$HG/orca-roles.env"; hq; }
+hh() { local hv=(ORCA_TERMINAL_HANDLE=h-lc); [ -z "${HNOH:-}" ] || hv=(-u ORCA_TERMINAL_HANDLE); (cd "${HDIR:-$HDP}" && env "${hv[@]}" HOME="$TMP/home" PATH="$HD/bin:$PATH" ORCA_PANE_KEY=pk ORCA_AGENT_HOOK_PORT=1 ORCA_AGENT_HOOK_TOKEN=tk OTEL_RESOURCE_ATTRIBUTES="orca_roles.role=local-coordinator,keep=1" ORCA_ROLES_PACE=0 "$HK/bin/hidden-role.sh" "$@" 2>&1); }
+hsent() { nf "$HD"/send.*.subject; }
+hgot() { [ "$(hsent)" -ge "$1" ]; }
+hgone() { ! pgrep -f -- "--supervise dev .* $1 " >/dev/null 2>&1; }
+hwait() {  # hwait <tag> <messages expected>: until the supervisor is gone and that many messages were tried
+  poll hgot "$2"; poll hgone "$1"; sleep 0.2
+}
+hbody() { cat "$HD/send.${1:-1}.body"; }
+hhead() { head -n 1 "$HD/send.${1:-1}.body"; }
+hjson() { printf '{"type":"result","subtype":"success","is_error":false,"result":%s,"session_id":"sess-1"}' "$(printf '%s' "$1" | jq -Rs .)" > "$HD/out"; }
+hdecoy() {  # hdecoy: a sleep in its own session, stdio on /dev/null; its pid in DPID
+  if command -v setsid >/dev/null 2>&1; then setsid sleep 600 </dev/null >/dev/null 2>&1 & DPID=$!
+  else /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' sleep 600 </dev/null >/dev/null 2>&1 & DPID=$!; fi
+  sleep 0.2
+}
+hold() { touch -t "$(date -v-2M +%Y%m%d%H%M 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M)" "$1"; }
+
+# 1: config
+hc() { jq "$1" "$ROOT/config.default.json" > "$HD/c.json"; }
+hc '.roles.dev.open = "hidden"'; T1="$(check_config "$HD/c.json" | wc -l | tr -d ' ')"
+hc '.defaults.open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | wc -l | tr -d ' ')"
+hc '.roles["dev-opencode"].open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role dev-opencode: open "hidden" needs agent "claude" (got "opencode")$' || true)"
+hc '.roles.planner.open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role planner: open "hidden" is not allowed: this role needs a tab$' || true)"
+hc '.roles["local-coordinator"].open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role local-coordinator: open "hidden" is not allowed: this role needs a tab$' || true)"
+hc '.defaults.open = "hidden" | del(.roles.planner.open)'; T1="$T1:$(open_of "$HD/c.json" dev-opencode)/$(open_of "$HD/c.json" dev)/$(open_of "$HD/c.json" planner)/$(open_of "$HD/c.json" local-coordinator)"
+
+# 2: launch
+HL="$TMP/hl"; rm -rf "$HL"; mkdir -p "$HL/bin" "$HL/proj"; git -C "$HL/proj" init -q; HLG="$HL/proj/.git"
+printf '#!/bin/sh\nexit 0\n' > "$HL/bin/kickoff"; printf '#!/bin/sh\necho 4242\n' > "$HL/bin/agentpid"; chmod +x "$HL/bin/kickoff" "$HL/bin/agentpid"
+cat > "$HL/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$HL/orca.log"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; echo "{\"handle\":\"h-\${t% (*}\"}";;
+  "terminal list") echo '{"terminals":[]}';;
+  "terminal show") echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\",\"tabId\":\"tab-\$4\",\"leafId\":\"leaf-\$4\"}}}";;
+  "worktree ps") echo '{"ok":true,"result":{"worktrees":[{"path":"$HL/proj","agents":[]}]}}';;
+esac
+exit 0
+EOS
+chmod +x "$HL/bin/orca"
+hlx() { local c="$1"; shift; (cd "$HL/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$HL/bin:$PATH" ORCA_ROLES_KICKOFF="$HL/bin/kickoff" ORCA_ROLES_AGENT_PID="$HL/bin/agentpid" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$HK/bin/$c" "$@" 2>&1); }
+hlreset() { rm -rf "$HLG"/orca-roles.*; : > "$HL/orca.log"; }
+hlkeys() { cut -d= -f1 "$HLG/orca-roles.env" | tr '\n' ' '; }
+hlsum() { cat "$HLG/orca-roles.env" "$HLG/orca-roles.pty" "$HLG/orca-roles.tabs" "$HLG/orca-roles.overrides.json" "$HLG/orca-roles.config.json" 2>/dev/null | cksum || true; }
+hlcfg() { write_launch_config; jq "$1" "$KIT/config.json" > "$HL/cfg.json" && cp "$HL/cfg.json" "$KIT/config.json"; }
+hlcfg '.roles.dev.open = "hidden" | .roles.deployer.enabled = false'
+HLINE='Hidden (no tab; the local coordinator runs each with hidden-role.sh): Dev (dev).'
+hlreset; try hlx launch.sh; T2="$RC:$(hlkeys):$(printf '%s\n' "$OUT" | gc -xF "$HLINE" || true):$(printf '%s\n' "$OUT" | gc '^Opened')"
+try hlx launch.sh --status; T2="$T2:$(printf '%s\n' "$OUT" | gc 'not opened (hidden)' || true)"
+S0="$(hlsum)"; try hlx launch.sh --open dev; T2="$T2:$RC:$(printf '%s\n' "$OUT" | gc "ERROR: --open: 'dev' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed.")$([ "$(hlsum)" = "$S0" ] && echo :same)"
+hlreset; try hlx launch.sh --only dev; T2="$T2|$RC:$(hlkeys)"
+hlreset; try hlx launch.sh --enable dev; T2="$T2|$RC:$(hlkeys)"
+check "hidden launch: no tab for a hidden Dev on a plain launch (with the 'Hidden (no tab' line and no 'Opened' line), with --only dev or --enable dev; --status says 'not opened (hidden)'; --open dev refuses with nothing changed" "$T2" "0:LOCAL_COORDINATOR PLANNER :1:0:1:1:1:same|0:LOCAL_COORDINATOR PLANNER |0:LOCAL_COORDINATOR PLANNER "
+
+# 3: planner_msg
+printf 'PLANNER=t1\nDEV=t2\n' > "$HD/state.env"
+hc '.roles.dev.open = "hidden"'; HS='Hidden roles, with no tab, run with hidden-role.sh (see "The team" in your prompt): Dev (dev).'
+M1="$(planner_msg "$HD/c.json" "planner" "$HD/state.env" "" "" 0 2>/dev/null)"; M2="$(planner_msg "$HD/c.json" "planner dev" "$HD/state.env" "" "" 0 2>/dev/null)"
+hc '.roles.dev.open = "first-use"'; M3="$(planner_msg "$HD/c.json" "planner" "$HD/state.env" "" "" 0 2>/dev/null)"
+check "hidden config: accepted on a role and in defaults (also with the kit's opencode roles), refused on an opencode role's own open, on the planner and on the local coordinator; open_of gives first-use for an opencode role that inherits it, hidden for dev, start for the planner and the front role; hidden planner_msg: the hidden sentence names the role, a hidden role with a saved tab is a normal role (no sentence, in the handles), and without a hidden role the message has no hidden sentence" "$T1|$(printf '%s' "$M1" | gc -F -- " $HS"):$(printf '%s' "$M2" | gc 'Hidden roles'):$(printf '%s' "$M2" | gc -F ' Dev=t2'):$(printf '%s' "$M3" | gc 'Hidden roles')" "0:0:1:1:1:first-use/hidden/start/start|1:0:1:0"
+
+# 4: a run end to end
+hreset; hjson "Done. all good"
+try hh dev --brief "$HD/brief.md" --tag t1; R1="$RC:$(printf '%s' "$OUT" | gc "^Started Dev hidden (t1); log: $HH/t1.log$")"
+hwait t1 1
+AV="$(tr '\n' ' ' < "$HD/argv")"
+A4="$(printf '%s' "$AV" | gc -F -- '-p --output-format json'):$(gc -xF 'Bash(orca:*)' "$HD/argv"):$(gc '^Edit(//.*/prompts/\*\*)$' "$HD/argv"):$(gc 'adopt that role' "$HD/argv" || true)"
+E4="$(for v in ORCA_TERMINAL_HANDLE ORCA_PANE_KEY ORCA_AGENT_HOOK_PORT ORCA_ROLES_HEADLESS_PROMPT; do gc "^$v=" "$HD/env" || true; done | tr '\n' ,)$(gc 'orca_roles.role=local-coordinator' "$HD/env" || true),$(gc '^ORCA_ROLES_CONFIG=' "$HD/env"),$(gc 'keep=1' "$HD/env")"
+SI="ok"; while IFS= read -r l; do [ -z "$l" ] || grep -qF -- "$l" "$HD/stdin" || SI=missing; done < "$ROOT/prompts/hidden-worker.md"
+S4="$(head -n 1 "$HD/stdin" | cut -d' ' -f1):$(gc 'adopt that role' "$HD/stdin"):$SI:$(tail -n 1 "$HD/stdin")"
+RP="$(hhead | sed -n 's/.* report=//p')"
+M4="$(cat "$HD/send.1.subject"):$(hhead | sed 's/ wall=[0-9]* report=.*//'):$(cat "$HD/send.1.to"):$(cat "$HD/send.1.state" | tr '\n' ,):$(nf "$HH"/*.undelivered):$(nf "$HH"/*.pid):$(hsent):$(cat "$RP" 2>/dev/null)"
+check "hidden run: a headless claude with the kit's denies and Bash(orca:*), no ORCA_* but ORCA_ROLES_*, no coordinator role attribute, the prompt on stdin (role message, hidden-worker.md, the closing line last) and not in argv; one 'Hidden role done' message with the outcome, marker, session and the report file; the pid file gone and .undelivered written before the send, deleted after" "$R1|$A4|$E4|$S4|$M4" "0:1|1:1:1:0|0,0,0,0,0,1,1|Read:1:ok:When you have finished, your last message is your report, and its first word is \`Done\`.|Hidden role done:role=dev tag=t1 outcome=done marker=ok session=sess-1:h-lc:pid-gone,1,:0:0:1:Done. all good"
+
+# 5: outcomes
+hscen() {  # hscen <tag> [messages expected] [brief]: one run with what the fake claude is set to print, and its message
+  rm -f "$HD"/send.* "$HD/cnt"; try hh dev --brief "${3:-$HD/brief.md}" --tag "$1"; hwait "$1" "${2:-1}"
+  printf '%s|%s|%s' "$(hsent)" "$(cat "$HD/send.1.subject" 2>/dev/null)" "$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=[0-9]* report=.*//')"
+}
+hq; hjson $'thinking\nQUESTION: which one?'; O1="$(hscen q1)"
+hq; hjson $'Done, but\nFAILED: no access'; O2="$(hscen f1)"
+hq; echo 'not json' > "$HD/out"; O3="$(hscen j1)"
+hq; O4="$(hscen e1)"
+hq; hjson 'Done. x'; echo 3 > "$HD/exit"; O5="$(hscen x1)"
+hq; printf '{"is_error":true,"result":"Done. but an error","session_id":"sess-e"}' > "$HD/out"; O6="$(hscen i1)"; O6="$O6:$(sed -n 2p "$HD/send.1.body")"
+hq; printf '{"is_error":true,"session_id":"sess-9"}' > "$HD/out"; O7="$(hscen n1)"
+hq; hjson 'Done. x'; O8="$(hscen d1 1 "$HD")"; O8="$O8:$(sed -n 2p "$HD/send.1.body" | gc 'could not be read')"
+hq; hjson 'all good, no marker'; O9="$(hscen m1)"
+hq; hjson 'Done. y'; touch "$HD/sendfail"; try hh dev --brief "$HD/brief.md" --tag u1; hwait u1 3
+SF="$(hsent):$(cat "$HD/cnt"):$(nf "$HH"/u1.undelivered):$(hh --status | gc '^undelivered u1 .*/hidden-u1\.md$' || true)"; try hh --ack u1; SF="$SF:$RC:$(nf "$HH"/*.undelivered)"
+check "hidden outcomes: QUESTION: -> 'Hidden role question'; FAILED:, non-JSON, empty output, a non-zero exit, is_error, a result-less object (keeps its session) and an unreadable brief -> failed; a report without Done -> marker=missing; each with one message; a failing orca gets 3 tries, one .undelivered listed by --status with the report, no second message, removed by --ack" "$O1|$O2|$O3|$O4|$O5|$O6|$O7|$O8|$O9|$SF" "1|Hidden role question|role=dev outcome=question marker=missing session=sess-1|1|Hidden role done|role=dev outcome=failed marker=ok session=sess-1|1|Hidden role done|role=dev outcome=failed marker=missing session=-|1|Hidden role done|role=dev outcome=failed marker=missing session=-|1|Hidden role done|role=dev outcome=failed marker=ok session=sess-1|1|Hidden role done|role=dev outcome=failed marker=ok session=sess-e:Done. but an error|1|Hidden role done|role=dev outcome=failed marker=missing session=sess-9|1|Hidden role done|role=dev outcome=failed marker=missing session=-:1|1|Hidden role done|role=dev outcome=done marker=missing session=sess-1|3:3:1:1:0:0"
+
+# 6: usage, locks, status, resume and stop
+hreset; mkdir -p "$HH"; : > "$HH/used.log"
+uc() {  # uc <message pattern> <hh args>: the exit status and whether the one stderr line is the expected one
+  try hh "${@:2}"; printf '%s:%s ' "$RC" "$(printf '%s\n' "$OUT" | gc -- "$1" || true)"
+}
+B="--brief $HD/brief.md"
+U6="$(HDIR="$HD/nogit" uc 'no team in this folder' dev $B --tag x)$(uc 'unknown role' nosuch $B --tag x)$(uc 'tester does not open hidden' tester $B --tag x)$(uc 'deployer is not in this team' deployer $B --tag x)"
+printf 'DEV=h-x\n' > "$HG/orca-roles.env"; U6="$U6$(uc 'dev has a tab: dispatch to it' dev $B --tag x)"; rm -f "$HG/orca-roles.env"
+U6="$U6$(uc 'cannot read the brief' dev --brief /nonexistent --tag x)$(uc '--tag must be' dev $B --tag '')$(uc '--tag must be' dev $B --tag 'a b')$(uc 'tag used was already used' dev $B --tag used)$(HNOH=1 uc "run this from the local coordinator's tab" dev $B --tag x)"
+U6="$U6|$(ls "$HH" | tr '\n' ' ')"
+
+# 6b: locks and status
+hreset; hjson 'Done. z'; mkdir -p "$HH"
+hdecoy; DS1="$(proc_start "$DPID")"; L6=""
+printf '%s %s - - t-live\n' "$DPID" "$DS1" > "$HH/dev.pid"; try hh dev $B --tag n0; L6="$RC:$(printf '%s' "$OUT" | gc 'dev is already running hidden')"
+printf 'starting - - - t-st\n' > "$HH/dev.pid"; try hh dev $B --tag n0; L6="$L6 $RC"
+printf '99999 - %s %s t-sup\n' "$DPID" "$DS1" > "$HH/dev.pid"; hold "$HH/dev.pid"; try hh dev $B --tag n0; L6="$L6 $RC:$(hh --status | gc '^running dev t-sup$')"
+kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null || true
+printf '99999 Thu_Jan_1_00:00:00_1970 99998 Thu_Jan_1_00:00:00_1970 t-dead\n' > "$HH/dev.pid"; hold "$HH/dev.pid"
+try hh dev $B --tag n1; L6="$L6|$RC"; hwait n1 1
+printf 'starting - - - t-old\n' > "$HH/dev.pid"; hold "$HH/dev.pid"; hq; hjson 'Done. z'
+try hh dev $B --tag n2; L6="$L6 $RC"; hwait n2 1
+printf 'junk\n' > "$HH/dev.pid"; hold "$HH/dev.pid"; hq; hjson 'Done. z'
+try hh dev $B --tag n3; L6="$L6 $RC"; hwait n3 1
+ST6="$(hh --status | sed "s#$HH#H#" | tr '\n' ';')"
+try hh --ack t-dead; A1="$RC"; try hh --ack t-old; A2="$RC"; try hh --ack unknown-dev; A3="$RC"; try hh --ack t-dead; A4="$RC:$OUT"
+check "hidden usage: each exit 2 of the usage block (no team, unknown role, not hidden, not in the team, a tab, brief, tag, tag used, no handle) with its one line, and nothing started; hidden locks: a live agent, a fresh starting file and a dead agent with a live supervisor refuse (exit 1); a dead pid, an old starting file and a file with no tag do not, and show in --status as lost (also after a new run took the lock, the unknown one with no log) until --ack; --ack of a handled tag exits 1" "$U6|$L6|$ST6|$A1$A2$A3|$A4" "2:1 2:1 2:1 2:1 2:1 2:1 2:1 2:1 2:1 2:1 |used.log |1:1 1 1:1|0 0 0|lost dev t-dead H/t-dead.log;lost dev t-old H/t-old.log;lost dev unknown-dev -;|000|1:nothing to acknowledge for t-dead"
+
+# 6c: a pid file whose pids name other processes, a leftover .stop, a resume and a stop
+hreset; mkdir -p "$HH"; hdecoy
+printf '%s Thu_Jan_1_00:00:00_1970 - - t-decoy\n' "$DPID" > "$HH/dev.pid"
+try hh --stop dev; W1="$RC:$OUT"; hold "$HH/dev.pid"; try hh --stop dev; W2="$RC:$OUT"; ST="$(hh --status | gc '^lost dev t-decoy ')"
+W3="$(kill -0 "$DPID" 2>/dev/null && echo alive || true)"; kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null || true
+hreset; touch "$HH.x" 2>/dev/null; mkdir -p "$HH"; touch "$HH/dev.stop"; hjson 'Done. s'; try hh dev $B --tag s1; hwait s1 1; L7="$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=.*//')"
+hq; try hh dev --brief "$HD/brief.md" --tag r1 --resume sess-prev; hwait r1 1
+R7="$(tr '\n' ' ' < "$HD/argv" | gc -- '--resume sess-prev ' || true):$(gc 'a brief' "$HD/stdin"):$(gc 'adopt that role' "$HD/stdin" || true):$(tail -n 1 "$HD/stdin" | cut -c1-20):$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=.*//')"
+hq; touch "$HD/sleep"; try hh dev $B --tag p1; poll nonempty "$HD/started"; try hh --stop dev; P7="$RC:$OUT"; hwait p1 1
+P7="$P7:$(hsent):$(hhead | sed 's/ tag=[^ ]* / /; s/ wall=.*//'):$(sed -n 2p "$HD/send.1.body"):$(nf "$HH"/*.pid "$HH"/*.stop)"
+hq; try hh --stop dev; N7="$RC:$OUT"
+hq; touch "$HD/sleep" "$HD/ign"; try hh dev $B --tag k1; poll nonempty "$HD/started"; KP="$(cut -d' ' -f1 "$HH/dev.pid")"; try hh --stop dev; K7="$RC:$(kill -0 -- "-$KP" 2>/dev/null && echo group-alive || echo group-gone)"; kill -KILL -- "-$KP" 2>/dev/null || true; hwait k1 1
+check "hidden --stop: a pid file whose pids name other processes (another start time) signals nothing: 'has ended' while the file is fresh, 'is not running' once it is old and then lost in --status; the process is still alive; hidden run: a leftover .stop does not fail the next run; --resume passes the session and sends only the brief and the closing line, and reports the given session even with an empty output; --stop ends a run that sleeps and prints nothing with one message (failed, stopped, session=-); --stop with no run exits 1; --stop leaves no member of a group that ignores TERM" "$W1|$W2|$ST|$W3|$L7|$R7|$P7|$N7|$K7" "1:dev has ended|1:dev is not running|1|alive|role=dev outcome=done marker=ok session=sess-1|1:1:0:When you have finish:role=dev outcome=failed marker=missing session=sess-prev|0:Stopped dev:1:role=dev outcome=failed marker=missing session=-:stopped:0|1:dev is not running|0:group-gone"
+
+# 7: team-status, relaunch-role, close-role
+hlreset; hlx launch.sh >/dev/null; hreset; mkdir -p "$HLG/orca-roles-hidden"; HH="$HLG/orca-roles-hidden"
+hlts() { (cd "$HL/proj" && HOME="$TMP/home" PATH="$HL/bin:$PATH" "$HK/bin/team-status.sh" 2>&1); }
+S1="$(hlts | gc "^Dev$(printf '\t')not-opened")"
+hdecoy; printf '%s %s - - t-ts\n' "$DPID" "$(proc_start "$DPID")" > "$HH/dev.pid"; S2="$(hlts | gc "^Dev$(printf '\t')hidden-running")"; kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null || true; rm -f "$HH/dev.pid"
+try hlx relaunch-role.sh dev --model m2 --no-check; S3="$RC:$(printf '%s' "$OUT" | gc '^Dev is hidden: it has no tab; its next run uses the model in the configuration\.$')"
+hlreset; hlcfg '.roles.dev.open = "first-use" | .roles.deployer.enabled = false'; hlx launch.sh >/dev/null; hlx launch.sh --open dev >/dev/null
+hlcfg '.roles.dev.open = "hidden" | .roles.deployer.enabled = false'; : > "$HL/orca.log"
+try hlx relaunch-role.sh dev --model m2 --no-check
+S4="$RC:$(printf '%s' "$OUT" | gc '^Dev is hidden now: its tab is closed; its next run uses the model in the configuration\.$'):$(gc '^terminal close' "$HL/orca.log" || true):$(gc '^terminal create' "$HL/orca.log" || true):$(hlkeys)"
+hlreset; hlcfg '.roles.dev.open = "first-use" | .roles.deployer.enabled = false'; hlx launch.sh >/dev/null; hlx launch.sh --open dev >/dev/null
+jq '.roles.dev.open = "hidden"' "$HLG/orca-roles.config.json" > "$HL/c2.json" && cp "$HL/c2.json" "$HLG/orca-roles.config.json"
+try hlx close-role.sh dev; S5="$RC:$(printf '%s' "$OUT" | gc 'it has no tab from now on ("open": "hidden"); the local coordinator runs it with hidden-role.sh\.$')"
+check "hidden: team-status shows hidden-running for a live pid file (not-opened without it); relaunch-role refuses a hidden role with no tab, and for one with a tab closes it, opens nothing and exits 0; close-role prints the hidden line" "$S1:$S2|$S3|$S4|$S5" "1:1|1:1|0:1:1:0:LOCAL_COORDINATOR PLANNER |0:1"
+
+# 8: pins
+PN=""; for f in programmer pr-reviewer academic-research; do PN="$PN$({ grep -qF 'hidden-role.sh' "$ROOT/prompts/$f/local-coordinator-hidden.md" && grep -qF 'hidden-role.sh --status' "$ROOT/prompts/$f/local-coordinator-hidden.md" && grep -qF 'local-coordinator-hidden.md' "$ROOT/prompts/$f/local-coordinator.md" && cmp -s "$ROOT/prompts/$f/local-coordinator-hidden.md" "$ROOT/prompts/programmer/local-coordinator-hidden.md"; } && echo y || echo n)"; done
+HW="$ROOT/prompts/hidden-worker.md"; PN="$PN:$(gc -F 'QUESTION: ' "$HW" | sed 's/[1-9][0-9]*/y/'):$(gc -F 'Run no `orca` command' "$HW"):$(gc -F 'Do not reply that you are ready' "$HW")"
+PN="$PN:$(gc '^adapter_[a-z]*() ' "$ROOT/bin/hidden-role.sh"):$(printf '%s\n' $HIDDEN_AGENTS | wc -l | tr -d ' ')"
+check "hidden pins: the three local-coordinator-hidden.md are identical and hold hidden-role.sh and hidden-role.sh --status, and each local-coordinator.md names its file; hidden-worker.md holds QUESTION:, Run no orca command and Do not reply that you are ready; hidden-role.sh has one adapter_ function per word of HIDDEN_AGENTS" "$PN" "yyy:y:1:1:1:1"
 }
 
 sec_test_run() {

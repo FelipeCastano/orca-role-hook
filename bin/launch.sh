@@ -11,7 +11,7 @@
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
-#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use" or "per-task"; the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
+#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use" or "per-task" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -321,7 +321,7 @@ for i in $(seq 1 "$WAIT"); do
 done
 LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
 if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then LROLES="$FRONT"; fi
-OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""
+OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""; LAZY_HID=""
 if [ -n "$OPEN_REQ" ]; then
   [ "$FRESH" = 0 ] || fail "ERROR: --open needs an open team: run roles first. Nothing was changed."
   { [ "$ASK" = 0 ] && [ "$PENDING" = 0 ]; } || fail "ERROR: --open needs a chosen mode: choose the mode first. Nothing was changed."
@@ -332,6 +332,9 @@ if [ -n "$OPEN_REQ" ]; then
   for n in $(printf '%s' "$OPEN_REQ" | tr ',' ' '); do
     r="$(resolve_role "$NEWCFG" "$n")"
     case " $LROLES " in *" ${r:-?} "*) ;; *) fail "ERROR: --open: '$n' is not a role of this worktree's team (mode $NEWMODE: $(echo $LROLES)). Nothing was changed.";; esac
+    if [ "$(open_of "$NEWCFG" "$r")" = hidden ] && ! grep -q "^$(var_of "$r")=." "$STATE" 2>/dev/null; then
+      fail "ERROR: --open: '$n' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed."
+    fi
     OPEN_IDS="$OPEN_IDS $r"
   done
 fi
@@ -343,6 +346,7 @@ if [ "$ASK" = 0 ]; then
   for id in $LROLES; do
     om="$(open_of "$NEWCFG" "$id")"
     if [ "$om" = start ] || grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then KEEP="$KEEP $id"; continue; fi
+    if [ "$om" = hidden ]; then LAZY_HID="${LAZY_HID:+$LAZY_HID, }$(title_of "$NEWCFG" "$id") ($id)"; continue; fi
     case " $OPEN_IDS $NAMED_IDS " in *" $id "*) KEEP="$KEEP $id"; continue;; esac
     if [ "$om" = first-use ]; then LAZY_FIRST="${LAZY_FIRST:+$LAZY_FIRST, }$(title_of "$NEWCFG" "$id") ($id)"
     else LAZY_TASK="${LAZY_TASK:+$LAZY_TASK, }$(title_of "$NEWCFG" "$id") ($id)"; fi
@@ -600,6 +604,7 @@ else
 fi
 [ -z "$LAZY_FIRST" ] || echo "Opened on first use (not open yet; the local coordinator opens each with launch.sh --open <id> before its first task): $LAZY_FIRST."
 [ -z "$LAZY_TASK" ] || echo "Opened per task (not open yet; the local coordinator opens each before each of its tasks and closes it after its report): $LAZY_TASK."
+[ -z "$LAZY_HID" ] || echo "Hidden (no tab; the local coordinator runs each with hidden-role.sh): $LAZY_HID."
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
 # title (Claude Code renames it soon after). kickoff.sh uses this snapshot to recognize and close it.

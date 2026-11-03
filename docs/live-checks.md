@@ -76,6 +76,7 @@ For the person running the checks; each line says what to do and what to see.
 - **G. Restart note after an update.** Run `./install.sh` while a team is open, then `roles`: the note asks to restart the open tabs.
 - **H. On-demand Auditor on real data.** Run `auditor` in the global coordinator's folder and ask it to audit the roles of a real worktree: it reports problems and proposals and changes no file.
 - **I. The Researcher on Sonnet on a real task.** Give the Researcher a real research question through the local coordinator: its tab opens on first use, it answers within its brief, its report starts with `Done`.
+- **J. A hidden role.** Section 5 of [manual-checks.md](manual-checks.md) (HR0-HR6): a role with `"open": "hidden"` run by a real local coordinator, with its question, `--resume`, `--stop`, the `orca` deny, a killed supervisor and usage metrics.
 
 ## Not scriptable: observed in normal use
 

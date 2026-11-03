@@ -56,6 +56,7 @@ for x in "$@"; do
   [ "${ORCA_ROLES_PHASE_SWITCH:-}" = 1 ] && continue   # phase.sh closes roles that the other phase simply does not have: the hint would be wrong
   [ "${ORCA_ROLES_ROLE_RELAUNCH:-}" = 1 ] && continue   # relaunch-role.sh reopens the role itself and prints the outcome: the hint would be wrong
   om="$(open_of "$CFG" "$id")"
+  if [ "$om" = hidden ]; then echo "$t: it has no tab from now on (\"open\": \"hidden\"); the local coordinator runs it with hidden-role.sh."; continue; fi
   if [ "$om" != start ]; then echo "$t: it opens again before its next task (\"open\": \"$om\")."; continue; fi
   if merged_config . 2>/dev/null | jq -e --arg r "$id" '.roles[$r] and .roles[$r].enabled != false' >/dev/null 2>&1; then
     echo "$t: still enabled in the configuration, so 'roles' would open it again. Disable it (\"enabled\": false, or --disable $id in the setup script), or remove a role you created with: ~/.orca-roles/bin/new-role.sh --remove $id"

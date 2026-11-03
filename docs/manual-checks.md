@@ -78,6 +78,39 @@ Use a project whose `.orca-roles.json` puts the Planner and the Dev on `codex` (
 | A5 | The Codex Planner's arguments | superpowers | None (Claude only) |
 | A6 | With the Code-Reviewer and the Researcher on OpenCode with the same neutral prompt, send both: "Use your subagent tool to list this folder, and do not list it any other way. Show the file names it returns. If that tool is refused or missing, reply with the word SUBAGENT, a hyphen, then the word REFUSED, with no spaces." | each tab's screen | The Researcher (no deny) lists the folder (if its tab shows its tool calls, one of them is its subagent tool); the Code-Reviewer replies SUBAGENT-REFUSED and lists nothing |
 
+## 5. A hidden role (about 30 minutes)
+
+No script runs these yet. Run by hand on 2026-11-02: HR0, HR1 and HR2 (all as expected). HR3 to HR6 have not been run yet. They check a role with `"open": "hidden"` (`bin/hidden-role.sh`) under a real `claude -p` and a real local coordinator.
+
+Setup:
+- Create a new worktree of the throwaway project, as in T1, and do not answer the mode question until the `jq` below is done.
+- In its shell tab, make the Researcher hidden on the cheap model: `jq '.roles.researcher = {enabled: true, open: "hidden", model: "claude-haiku-5-5"}' .orca-roles.json > .orca-roles.json.new && mv .orca-roles.json.new .orca-roles.json`. Only the worktree's copy changes, and it goes with the worktree. The worktree already has a `.orca-roles.json`: edit it with this `jq` command, never write the file with `echo >`, which erases its other settings.
+- If the mode was already answered: run the `jq`, then `~/.orca-roles/bin/launch.sh --mode programmer` (it reports the hidden role but does not resend the coordinator's message), then in the coordinator's tab type `/clear` and ask it to run `~/.orca-roles/bin/clean.sh --msg local-coordinator` and follow what it prints.
+
+How to run them:
+- A hidden role has one run at a time, so wait for each message before the next task.
+- The local coordinator needs a Run bound before the first task: ask it to create one for the worktree and link it with run-use. Without one the `Hidden role done` message is stored under `run_unbound` and is never pushed to it: it only sees the result when you write to it.
+- A command shown as `!...` is typed in the local coordinator's tab, which runs it in the worktree. Type one `!` command per message; several `!` commands pasted together fail.
+- `<hd>` stands for `"$(git rev-parse --git-dir)/orca-roles-hidden"`, typed as it is.
+- Each report is `~/.orca-roles/tmp/<project>-<hash>/researcher/hidden-<tag>.md`, and each message names its own.
+
+| Id | Do | Look at | Expected |
+|---|---|---|---|
+| HR0 | In the worktree's shell, after the `jq` above: `~/.orca-roles/bin/launch.sh --mode programmer`, then `~/.orca-roles/bin/hidden-role.sh --status` | the output; the tabs; the local coordinator's role message | "Hidden (no tab; the local coordinator runs each with hidden-role.sh): Researcher (researcher)."; Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer open, no Researcher tab; the role message says "Hidden roles, with no tab, run with hidden-role.sh (see "The team" in your prompt): Researcher (researcher)."; `--status` prints nothing |
+| HR1 | Ask the local coordinator for three one-line Researcher tasks, one at a time: tag `h2-t1` (what README.md says), `h2-t2` (how many files git tracks), `h2-t3` (the current branch). While one runs: `!~/.orca-roles/bin/team-status.sh` | the coordinator's tab; each message; team-status | Before the first task it reads `local-coordinator-hidden.md`; it writes a brief, runs `~/.orca-roles/bin/hidden-role.sh researcher --brief <file> --tag <tag>` without asking you ("Started Researcher hidden (<tag>); log: ...") and ends its turn; team-status shows `hidden-running`; each run ends in one `Hidden role done` whose first line is `role=researcher tag=<tag> outcome=done marker=ok session=<id> wall=<seconds> report=<file>`; the coordinator reads the report and gives you the right answer |
+| HR1 | For each tag: `!head -n 3 ~/.orca-roles/tmp/*/researcher/hidden-<tag>.md`; `!jq '{session_id, is_error, models: (.modelUsage \| keys), permission_denials}' <hd>/<tag>.json`; `!H=<hd>; head -c 500 "$H/<tag>.prompt"; s="$(jq -r .session_id "$H/<tag>.json")"; grep -o '"file_path":"[^"]*\.md"' "$(find "$HOME/.claude/projects" -name "$s.jsonl" \| head -n 1)" \| sort -u` | the marker; the model; the role's files | The report's first word is `Done`; `is_error` false, models `["claude-haiku-5-5"]`; every file the prompt's "Read ... and adopt that role" names is in the list of files read. A `marker=missing` or an unread file is written down, not a failure: note whether the coordinator told you, did not accept the run as it was, recommended a fresh run (same brief, new tag, no `--resume`) and waited for your yes |
+| HR2 | Ask the coordinator for a Researcher task with tag `h2-q` that needs a colour nobody gave it, and must ask for it rather than choose one. When the question comes, give the coordinator the answer (green) with tag `h2-q2`. Then `!H=<hd>; jq -r .session_id "$H/h2-q.json" "$H/h2-q2.json"` and `!head -c 300 <hd>/h2-q2.prompt` | the messages; the two outputs | `Hidden role question` with `outcome=question`, and the report's last line starts with `QUESTION: `; the coordinator runs `hidden-role.sh researcher --brief <answer file> --tag h2-q2 --resume <session>`; then `Hidden role done`, `outcome=done`, the colour in the report; the two session ids are the same; the h2-q2 prompt is the answer and the closing line, with no "Read ... and adopt that role" |
+| HR3 | Ask the coordinator for a Researcher task with tag `h2-stop` that runs `sleep 240` in the foreground with a Bash timeout of 300000 ms. When `!~/.orca-roles/bin/hidden-role.sh --status; pgrep -fl 'sleep 240'` shows `running researcher h2-stop` and the sleep: `!~/.orca-roles/bin/hidden-role.sh --stop researcher`. Then `!~/.orca-roles/bin/hidden-role.sh --status; ls <hd>; pgrep -fl 'sleep 240'` | the output; the messages; the last three outputs | `Stopped researcher`; one message, `Hidden role done` with `outcome=failed`, `marker=missing` and the text `stopped` (`session=-`, or an id: note it); `--status` prints nothing; no `researcher.pid` or `researcher.stop` in `<hd>`; no `sleep 240` left. Note what the coordinator does with this `marker=missing` |
+| HR4 | Ask the coordinator for a Researcher task with tag `h2-orca` that runs `orca --version` and copies its output, or the refusal, into the report, trying no other way. Then `!jq '.permission_denials' <hd>/h2-orca.json` | the report; the output | One message (`outcome` done or failed); the report says the command was denied and shows no Orca version; `permission_denials` holds an entry with `"tool_name": "Bash"` whose command holds `orca --version`; the coordinator got no other message |
+| HR5 | Ask the coordinator for a Researcher task with tag `h2-kill`, the same as `h2-stop`. When `!cat <hd>/researcher.pid` shows five fields, the first a number: `!f=<hd>/researcher.pid; kill -9 "$(cut -d' ' -f3 "$f")"; kill -TERM -- "-$(cut -d' ' -f1 "$f")"`. Wait a full minute, then `!~/.orca-roles/bin/hidden-role.sh --status`. Then tell the coordinator "the result of h2-kill did not arrive", and run `--status` again after it acts | the messages; both `--status` outputs; the coordinator | No message arrives; `--status` prints `lost researcher h2-kill <hd>/h2-kill.log`; the coordinator runs `hidden-role.sh --status`, treats the run as a failed task, looks at what it left in the worktree and runs `hidden-role.sh --ack h2-kill`; the second `--status` prints nothing |
+| HR6 | `!~/.orca-roles/bin/usage-metrics.sh --once; echo rc=$?`, then for `h2-t1` and for `h2-q`: `!s="$(jq -r .session_id <hd>/<tag>.json)"; grep -h "\"session_id\":\"$s\"" ~/.orca-roles/metrics/sessions-*.jsonl \| tail -n 1 \| jq '{session_id, orca_roles_role, project, cost, models: (.models \| keys)}'` | the outputs | `rc=0`; for each session `orca_roles_role` is `researcher`, `project` is the throwaway project, `cost` is above 0, models `["claude-haiku-5-5"]`; h2-q and h2-q2 are one session. If a session prints nothing: `!grep -c "$(pwd -P)" ~/.orca-roles/metrics/worktrees.jsonl` |
+
+To finish:
+- `!~/.orca-roles/bin/hidden-role.sh --status` prints nothing. For any `undelivered` or `lost` line, run `!~/.orca-roles/bin/hidden-role.sh --ack <tag>`.
+- `!ps -axo pid,pgid,command | grep -E 'hidden-role.sh --supervise|output-format json|sleep 240' | grep -v grep` prints nothing.
+- Run `!rm -rf <hd> ~/.orca-roles/tmp/*/researcher/hidden-h2-*.md`.
+- Delete the worktree in Orca. `git -C ~/orca-live-checks/project worktree list` then lists only the main checkout.
+
 ## Results
 
 Copy this table and fill it; send it to the Planner with anything odd you saw.
@@ -107,3 +140,10 @@ Copy this table and fill it; send it to the Planner with anything odd you saw.
 | W0 | | |
 | W1 | | |
 | A1-A6 | | |
+| HR0 | | |
+| HR1 | | |
+| HR2 | | |
+| HR3 | | |
+| HR4 | | |
+| HR5 | | |
+| HR6 | | |
