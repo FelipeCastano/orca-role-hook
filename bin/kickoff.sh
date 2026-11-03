@@ -20,6 +20,33 @@ trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
 press_enter() { orca terminal send --terminal "$1" --enter --json >/dev/null 2>&1 || orca terminal send --terminal "$1" --text "" --enter --json >/dev/null 2>&1; }
+front_err_code() {  # $1 output of a failed orca call: its .error.code, or nothing
+  printf '%s' "$1" | jq -r '.error.code // empty' 2>/dev/null | head -n 1 || true
+}
+front_err_text() {  # $1 output of a failed orca call, $2 its error code: one line saying why, at most 200 characters
+  local msg
+  if [ -n "$2" ]; then
+    msg="$(printf '%s' "$1" | jq -r '.error.message // empty' 2>/dev/null | head -n 1 || true)"
+    printf '%s\n' "${2}${msg:+: $msg}" | cut -c1-200
+  else
+    msg="$(printf '%s\n' "$1" | grep -m1 '[^[:space:]]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | cut -c1-200 || true)"
+    printf '%s\n' "${msg:-no output}"
+  fi
+}
+# front_send <subject> <body>: one status message to the front role, sent once more as its own tab when Orca finds no sender identity; 1 on failure with FRONT_ERR set.
+front_send() {
+  local out code
+  FRONT_ERR=""
+  out="$(orca orchestration send --to "${!FRONTV}" --type status --subject "$1" --body "$2" --json 2>&1)" && return 0
+  code="$(front_err_code "$out")"
+  if [ "$code" = no_active_sender_terminal ]; then
+    out="$(orca orchestration send --from "${!FRONTV}" --to "${!FRONTV}" --type status --subject "$1" --body "$2" --json 2>&1)" && {
+      echo "No Orca terminal identity here ($code): sent as $FL's own tab."; return 0; }
+    code="$(front_err_code "$out")"
+  fi
+  FRONT_ERR="$(front_err_text "$out" "$code")"
+  return 1
+}
 
 MODELS="$(dirname "$STATE")/orca-roles.models"; MODELS_D="$MODELS.d"
 # Model errors on the screen (wrapped lines joined, so one error counts once).  err_count <handle> <ERE>
@@ -39,7 +66,7 @@ merge_models() {
 }
 tell_planner() {  # $1 subject, $2 body: to the front role
   [ -n "${!FRONTV:-}" ] || return 0
-  orca orchestration send --to "${!FRONTV}" --type escalation --subject "$1" --body "$2" --json >/dev/null 2>&1 || echo "Could not tell $FL: $1"
+  front_send "$1" "$2" || echo "Could not tell $FL: $1 ($FRONT_ERR)"
 }
 # A role whose model does not exist answers its first message with an error (see model_error_regex): the kit only detects it and tells the front role.
 model_failed() {  # $1 role, $2 model, $3 what showed it (the error text, or why the model is not available)
@@ -261,18 +288,18 @@ if ! is_new "$FRONT" && [ -n "$OPENED_WORKERS" ] && [ -n "${!FRONTV:-}" ]; then
     REOPENED_BODY="roles opened or reopened: ${OK_TITLES:-none}.${FAIL_TITLES:+ Not reached (no role message sent): $FAIL_TITLES.}
 Use these handles from now on:
 $(cat "$STATE")"
-    if orca orchestration send --to "${!FRONTV}" --type status --subject "Roles reopened" --body "$REOPENED_BODY" --json >/dev/null 2>&1; then
+    if front_send "Roles reopened" "$REOPENED_BODY"; then
       echo "Told $FL the roles were reopened."
     else
-      echo "Could not tell $FL the roles were reopened."
+      echo "Could not tell $FL the roles were reopened ($FRONT_ERR)."
     fi
   else
     HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
 $(cat "$STATE")"
-    if orca orchestration send --to "${!FRONTV}" --type status --subject "Role handles changed" --body "$HANDLES_BODY" --json >/dev/null 2>&1; then
+    if front_send "Role handles changed" "$HANDLES_BODY"; then
       echo "Told $FL the new handles."
     else
-      echo "Could not tell $FL the new handles; tell it to run: cat $STATE"
+      echo "Could not tell $FL the new handles ($FRONT_ERR); tell it to run: cat $STATE"
     fi
   fi
 fi
