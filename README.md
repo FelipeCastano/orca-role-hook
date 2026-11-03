@@ -1141,7 +1141,7 @@ SMOKE_JOBS=1 bin/test-run.sh --role tester -- tests/smoke.sh rules   # any test 
 shellcheck -S warning install.sh bin/*.sh tests/*.sh tests/live/*.sh
 ```
 
-Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in `tests/smoke.sh`, with the reason for each) hold elapsed-time checks and run alone, after the others. The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
+Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in `tests/smoke.sh`, with the reason for each) hold elapsed-time checks and run alone, after the others. The longest ones, listed in `SMOKE_FIRST`, start first; the output keeps the requested order. The GitHub Actions workflow runs the same on every push to main and every pull request. What needs a real Orca, real agents, the network or a person is checked with the live scripts: see [docs/live-checks.md](docs/live-checks.md).
 
 Every run writes a timing log (tab-separated: a header with the date, commit, jobs, bash and system; one line per section with its seconds and result; the checks that took `SMOKE_SLOW_CHECK` seconds or more; a `held` line with the seconds new sections waited for the load, when that wait applied; the total) and prints its path on stderr; CI uploads it as the `smoke-timings-<os>` artifact. The times are only reported: no duration fails or limits a run. In a parallel run a section's time includes the load of the other sections. A check's time runs from the previous result of the same process, so a result printed without `check` adds its time to the next one.
 

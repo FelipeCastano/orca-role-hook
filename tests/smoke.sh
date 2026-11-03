@@ -75,6 +75,9 @@ SMOKE_SERIAL=(
   scholar         # the arXiv and Crossref pacing checks assert the seconds waited
 )
 smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
+# SMOKE_FIRST: the longest sections, longest first (median seconds of GitHub's macOS runs, Nov 2026); in a parallel run they start before the others, so none of them starts last. A stale order costs time, never a result
+SMOKE_FIRST=(launch usage-metrics modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
+smoke_first() { local k; for k in "${SMOKE_FIRST[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running sections and waits up to 5 s for them, so their 'section … aborted' lines come before the total
   local k t
   for k in "${SP_PID[@]:-}"; do [ -z "$k" ] || kill "$k" 2>/dev/null; done
@@ -87,10 +90,13 @@ smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running section
 }
 smoke_parallel() {
   local d n i k printed=0 running=0 bad=0 last
-  local -a SP_PID SP_RC SP_ST
+  local -a SP_PID SP_RC SP_ST SP_ORD
   SMK_PAR=1
   d="$(mktemp -d)"; n=${#ARGS[@]}
   for ((i = 0; i < n; i++)); do SP_ST[i]=0; done
+  # start order: the requested sections that are in SMOKE_FIRST, in that list's order, then the others in the requested order
+  for k in "${SMOKE_FIRST[@]}"; do for ((i = 0; i < n; i++)); do [ "${ARGS[i]}" != "$k" ] || SP_ORD+=("$i"); done; done
+  for ((i = 0; i < n; i++)); do smoke_first "${ARGS[i]}" || SP_ORD+=("$i"); done
   trap 'smk_reap; rm -rf "$d"; smk_finish interrupted; exit 130' INT TERM
   while [ "$printed" -lt "$n" ]; do
     for ((i = 0; i < n; i++)); do
@@ -98,7 +104,7 @@ smoke_parallel() {
       if wait "${SP_PID[i]}" 2>/dev/null; then SP_RC[i]=0; else SP_RC[i]=$?; fi
       SP_ST[i]=2; running=$((running - 1))
     done
-    for ((i = 0; i < n; i++)); do
+    for i in "${SP_ORD[@]}"; do
       [ "$running" -lt "$JOBS" ] || break
       [ "${SP_ST[i]}" = 0 ] && ! smoke_serial "${ARGS[i]}" || continue
       if smk_hold "$running"; then break; fi
@@ -8719,10 +8725,12 @@ rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review
 rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer local-coordinator.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
 # the parallel runner (SMOKE_JOBS): output in the requested order, one process per section, the serial sections alone at the end, the same result as a sequential run
 CP="$TMP/cli-par"; rm -rf "$CP"; mkdir -p "$CP/tests"; ln -sfn "$ROOT/bin" "$CP/bin"; ln -sfn "$ROOT/prompts" "$CP/prompts"; ln -sfn "$ROOT/config.default.json" "$CP/config.default.json"
-sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit"/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\
+sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit hold filler first"/' -e 's/^SMOKE_FIRST=(.*/SMOKE_FIRST=(first)/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\
 sec_fast() { : > "$RUNDIR\/run.fast"; echo "marker fast $$"; rm -f "$RUNDIR\/run.fast"; }\
 sec_wake() { echo "marker wake-alone:$(ls "$RUNDIR" | grep -c "^run\\.")"; }\
 sec_bad() { check "marker bad" a b; }; sec_quit() { exit 0; }\
+sec_hold() { local n=0; until [ -e "$RUNDIR\/seen.first" ] || [ "$n" -ge 600 ]; do sleep 0.1; n=$((n+1)); done; [ -e "$RUNDIR\/seen.first" ] \&\& echo "marker hold found" || echo "marker hold none"; }\
+sec_filler() { [ -e "$RUNDIR\/seen.first" ] \&\& echo "marker filler after-first" || echo "marker filler before-first"; }; sec_first() { : > "$RUNDIR\/seen.first"; echo "marker first"; }\
 &/' "$ROOT/tests/smoke.sh" > "$CP/tests/smoke.sh"
 mkdir -p "$TMP/cprun"
 cp_run() { local j="$1"; shift; CRC=0; RUNDIR="$TMP/cprun" SMOKE_JOBS="$j" bash "$CP/tests/smoke.sh" "$@" > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
@@ -8734,6 +8742,10 @@ cp_run 3 bad fast; Q1="$CRC:$(cp_marks):$(grep -n '^FAIL marker bad: expected \[
 cp_run 3 quit fast; Q2="$CRC:$(cp_marks):$(grep -c '^smoke.sh: ended before its summary$' "$TMP/cli.err"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 cp_run 1 bad fast; Q3="$CRC:$(cp_marks):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out" || true)"
 check "parallel runner: a section with a failing check, or one that exits 0 early, gives FAILURES and exit 1 and the other sections' output is still printed, in order; no ALL OK; also with SMOKE_JOBS=1" "$Q1|$Q2|$Q3" "1:marker fast,:1:1:0|1:marker fast,:1:1:0|1:marker fast,:1:0"
+# SMOKE_FIRST: with 2 slots, 'first' (named last) starts in the first batch, so 'filler' (which waits for a slot) finds it started; 'hold' waits for it, bounded
+rm -f "$TMP/cprun/seen.first"; cp_run 2 hold filler first; P3="$CRC:$(cp_marks):$(grep -c '^ALL OK$' "$TMP/cli.out")"
+P4="$(for k in "${SMOKE_FIRST[@]}"; do case " $SECTIONS " in (*" $k "*) if smoke_serial "$k"; then echo "$k"; fi;; (*) echo "$k";; esac; done | wc -l | tr -d ' ')"
+check "parallel runner: a SMOKE_FIRST section starts in the first batch although it is named last (SMOKE_JOBS=2: the section that waits for a slot finds it started), the output keeps the requested order; every SMOKE_FIRST name is a listed section and none is serial" "$P3|$P4" "0:marker hold found,marker filler after-first,marker first,:1|0"
 # the timing log (SMOKE_TIMING_LOG, SMOKE_SLOW_CHECK), driven through child suites with two more fake sections: t0 assigns T0 and d, nest starts a nested suite
 CT="$TMP/cli-tlog"; rm -rf "$CT"; mkdir -p "$CT/tests"; ln -sfn "$ROOT/bin" "$CT/bin"; ln -sfn "$ROOT/prompts" "$CT/prompts"; ln -sfn "$ROOT/config.default.json" "$CT/config.default.json"
 sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit t0 nest c1 c2 envs"/' -e 's/^sec_slow() /sec_c1() { : > "$RUNDIR\/c.1"; sleep 1; echo "marker c1 $(ls "$RUNDIR" | grep -c "^c\\.")"; sleep 0.5; rm -f "$RUNDIR\/c.1"; }\
