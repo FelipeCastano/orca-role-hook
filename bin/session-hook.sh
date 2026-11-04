@@ -3,7 +3,10 @@
 # Orca notifies a Run only at the terminal that created or last took it (run-create / run-use). When the front role's tab (the local coordinator) is reopened
 # (Orca restart, Orca's own `claude --resume`) its session is the same but its handle is new, so its Runs keep the dead handle and it is never
 # told that messages arrived. This hook remembers the handle of each session ($KIT/state/session-handles/<session_id>) and, when it changed and the
-# old handle is no longer live (it looks again twice, 2 s apart, when the old tab is still listed), takes the Runs bound to the old handle with `orca orchestration run-use` and prints one line for Claude.
+# old handle is no longer live (it looks again twice, 2 s apart, when the old tab is still listed), takes the Run bound to the old handle with `orca orchestration run-use` and prints one line for Claude.
+# Orca keeps one Run per tab (run-use releases every other Run bound to the tab), so when several are bound to the old handle it takes only the one
+# created or bound last (updated_at) and names the others in its line and its log: after a restart that run-use releases them (the restored tab keeps
+# the old tab's pane), and they stay on the old handle only when the new tab is another pane.
 # Registered in ~/.claude/settings.json (hooks.SessionStart) by install.sh, launch.sh and coordinator.sh (ensure_session_hook in lib.sh;
 # settings.sessionHook false turns it off). Nothing happens without ORCA_TERMINAL_HANDLE. Always exits 0; errors go to $KIT/state/session-hook.log.
 START="$(date +%s)"; DEADLINE=$((START + 10))
@@ -56,19 +59,16 @@ done
 # only a dead old handle gives up its Runs; a tab that still lives keeps its own
 if listed; then slog "the old tab $PREV is still listed (looked $((LOOKS + 1)) times): its Runs stay with it"; record; exit 0; fi
 RL="$(ho orchestration run-list --json --full)" || { slog "run-list failed"; exit 0; }
-RUNS="$(printf '%s' "$RL" | jq -r --arg h "$PREV" '(.result.runs // .result // []) | if type == "array" then .[] else empty end | select(.coordinator_handle == $h) | .id' 2>/dev/null)" \
+# newest first: updated_at changes only when a Run is created, bound or released
+RUNS="$(printf '%s' "$RL" | jq -r --arg h "$PREV" '[(.result.runs // .result // []) | if type == "array" then .[] else empty end | select(.coordinator_handle == $h)] | sort_by(.updated_at // "", .created_at // "", .id) | reverse | .[].id' 2>/dev/null)" \
   || { slog "run-list gave no list"; exit 0; }
-BOUND=""; N=0; FAILED=0
-for R in $RUNS; do
-  if ho orchestration run-use --id "$R" --json >/dev/null; then
-    BOUND="${BOUND:+$BOUND, }$R"
-    W="$(ho orchestration check --run "$R" --peek --json | jq -r '.result.count // (.result.messages | length) // 0' 2>/dev/null)" || W=0
-    case "$W" in ''|*[!0-9]*) W=0;; esac
-    N=$((N + W))
-  else
-    FAILED=1; slog "run-use $R failed"
-  fi
-done
-[ "$FAILED" = 0 ] && [ "$EXPIRED" = 0 ] && record
-[ -n "$BOUND" ] && printf 'orca-roles: this tab reopened with a new terminal handle; re-bound Run(s) %s to it. %s message(s) waiting: read them with orca orchestration check --run <id> --json (one per Run).\n' "$BOUND" "$N"
+R="$(printf '%s\n' "$RUNS" | head -n 1)"
+[ -n "$R" ] || { record; exit 0; }
+LEFT="$(printf '%s\n' "$RUNS" | sed 1d | tr '\n' ' ' | sed -e 's/ $//' -e 's/ /, /g')"
+ho orchestration run-use --id "$R" --json >/dev/null || { slog "run-use $R failed"; exit 0; }
+[ -z "$LEFT" ] || slog "took Run $R from $PREV; Run(s) $LEFT were also bound to it and were not taken (Orca keeps one Run per tab: this run-use may have released them)"
+N="$(ho orchestration check --run "$R" --peek --json | jq -r '.result.count // (.result.messages | length) // 0' 2>/dev/null)" || N=0
+case "$N" in ''|*[!0-9]*) N=0;; esac
+[ "$EXPIRED" = 0 ] && record
+printf 'orca-roles: this tab reopened with a new terminal handle; re-bound Run %s to it. %s message(s) waiting: read them with orca orchestration check --run %s --json.%s\n' "$R" "$N" "$R" "${LEFT:+ Orca keeps one Run per tab: Run(s) $LEFT were also bound to the old tab and were not taken; run-use of one of them would release $R.}"
 exit 0

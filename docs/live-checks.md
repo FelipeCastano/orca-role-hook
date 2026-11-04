@@ -48,7 +48,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | T8, T9 | The same switch to `academic-research` and back to programmer | #58 |
 | T10 | A first-use role: `launch --open researcher` opens only it, the other tabs stay as they were, and it runs its configured model (the Researcher on Sonnet) | #58 |
 | T11 | `orca terminal create --worktree current` from a main checkout opens the terminal in that checkout | #58 |
-| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took, and the local coordinator's Run is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
+| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took, and the local coordinator's Run (its own, or a throwaway one when it has none) is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
 | R2 | T3 again after the restart | this PR |
 
 ### wsl.sh only
