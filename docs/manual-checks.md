@@ -72,7 +72,7 @@ Use a project whose `.orca-roles.json` puts the Planner and the Dev on `codex` (
 
 | Id | Do | Look at | Expected |
 |---|---|---|---|
-| A1 | Open the team; wait a minute | each tab's title; `orca terminal show` agentIdentity | Titles stay "<Role> (codex)" / "(opencode)"; Orca recognizes the agent |
+| A1 | Open the team; wait a minute | each tab's title; `orca terminal show` agentIdentity | Orca recognizes the agent (agentIdentity codex / opencode); note whether the title stayed "<Role> (codex)" / "(opencode)" (OpenCode retitles it "OC \| <session>") |
 | A2 | `ps -o args= -p <Dev's codex pid>`; in the Dev's tab `/mcp` | the arguments; the list | `-c mcp_servers.live-echo...`; `/mcp` lists live-echo; `~/.codex/config.toml` unchanged |
 | A3 | In the Dev's tab `/new`, then ask "Which role do you have in this team?" | the answer | "Dev" |
 | A4 | `~/.orca-roles/bin/clean.sh tester` | the Tester's tab | `/new`, then its role message |

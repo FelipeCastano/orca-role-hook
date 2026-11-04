@@ -2,6 +2,7 @@
 # Live checks of the agents other than Claude Code (Codex, OpenCode): what the smoke tests cannot cover (see docs/live-checks.md).
 # For whoever has those agents installed and signed in; Claude Code runs the local coordinator; the other roles of the check run on those agents.
 # Usage (from any terminal, with Orca open and this checkout installed: ./install.sh):  tests/live/agents.sh
+# ORCA_LIVE_OPENCODE_MODEL=<provider/model> gives the OpenCode roles (Code-Reviewer, Researcher) that model; empty: OpenCode's default.
 # One run, no restart. Report: ~/orca-live-checks/report-agents.md. To start over: rm ~/orca-live-checks/state-agents
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -15,14 +16,14 @@ agents_project() {  # a throwaway project whose team runs on the other agents: P
     mkdir -p "$PROJ" && git -C "$PROJ" init -q -b main && echo "# agents live checks (throwaway)" > "$PROJ/README.md"
   fi
   printf '%s\n' 'You are a test role. Do what the message in your tab asks.' > "$LIVE_DIR/neutral-role.md"
-  jq -n --argjson cx "$HAS_CODEX" --argjson oc "$HAS_OC" --arg np "$LIVE_DIR/neutral-role.md" '
+  jq -n --argjson cx "$HAS_CODEX" --argjson oc "$HAS_OC" --arg ocm "${ORCA_LIVE_OPENCODE_MODEL:-}" --arg np "$LIVE_DIR/neutral-role.md" '
     {settings: {jiraHandoff: false, cleanWorkersAfterStep: false, enableAskModeOnStart: false, superpowers: true},
      mcpServers: {"live-echo": {type: "stdio", command: "cat", args: []}},
      roles: ({researcher: {enabled: false}, "plan-reviewer": {enabled: false}, "code-reviewer": {enabled: false}, "e2e-tester": {enabled: false}, deployer: {enabled: false}}
        + (if $cx == 1 then {planner: {agent: "codex", model: "", open: "start"}, dev: {agent: "codex", model: "", mcp: ["live-echo"], open: "start"}}
           else {dev: {enabled: false}} end)
        + (if $oc == 1 then {tester: {agent: "custom", command: "opencode", clearCommand: "/new", model: "", open: "start"},
-            "code-reviewer": {agent: "opencode", model: "", enabled: true, open: "start", prompt: $np}, researcher: {agent: "opencode", model: "", enabled: true, open: "start", prompt: $np}}
+            "code-reviewer": {agent: "opencode", model: $ocm, enabled: true, open: "start", prompt: $np}, researcher: {agent: "opencode", model: $ocm, enabled: true, open: "start", prompt: $np}}
           else {tester: {enabled: false}} end))}' > "$PROJ/.orca-roles.json.new"
   if [ -s "$PROJ/.orca-roles.json.new" ] && ! cmp -s "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; then mv "$PROJ/.orca-roles.json.new" "$PROJ/.orca-roles.json"; else rm -f "$PROJ/.orca-roles.json.new"; fi
   if [ -n "$(git -C "$PROJ" status --porcelain -- README.md .orca-roles.json)" ]; then
@@ -31,15 +32,20 @@ agents_project() {  # a throwaway project whose team runs on the other agents: P
   (cd "$PROJ" && "$KIT/bin/orca-yaml.sh" --mode programmer >/dev/null 2>&1) || true
   orca repo add --path "$PROJ" --json >/dev/null 2>&1 || true
 }
-a_titles() {  # Codex and OpenCode keep the kit's tab title and Orca recognizes the agent (#43, BACKLOG)
-  local id=$1 v h t a
+a_titles() {  # Orca recognizes Codex and OpenCode as agents (#43, BACKLOG); a title the agent changed is reported, not a failure
+  local id=$1 v h t a e
   sleep 60   # long enough for an agent that retitles its tab to have done it
   for v in PLANNER DEV TESTER; do
     h="$(env_of $v)"; [ -n "$h" ] || continue
     t="$(orca terminal show --terminal "$h" --json 2>/dev/null | jfield result.terminal.title)"
     a="$(orca terminal show --terminal "$h" --json 2>/dev/null | jfield result.terminal.agentIdentity)"
-    case "$t" in *"($(rstr_agent $v))") ok "$id.$v" "title kept: '$t'; Orca's agentIdentity: '${a:-none}'";;
-      *) fail "$id.$v" "title changed to '$t' (expected the kit's '<Role> ($(rstr_agent $v))'); agentIdentity '${a:-none}'";; esac
+    e="$(rstr_agent $v)"
+    if [ "$a" = "$e" ]; then
+      case "$t" in *"($e)") ok "$id.$v" "title kept: '$t'; Orca's agentIdentity: '$a'";;
+        *) ok "$id.$v" "Orca recognizes the agent (agentIdentity '$a'); the agent retitled its tab to '$t' (the kit's title was '<Role> ($e)')";; esac
+    else
+      fail "$id.$v" "Orca does not recognize the agent: agentIdentity '${a:-none}' (expected '$e'); title '$t'"
+    fi
   done
 }
 rstr_agent() { case "$1" in PLANNER|DEV) echo codex;; TESTER) echo opencode;; esac; }
@@ -83,7 +89,7 @@ a_opencode_deny() {  # the kit's subagent deny works at run time in OpenCode (F 
   text="Use your subagent tool to list this folder, and do not list it any other way. Show the file names it returns. If that tool is refused or missing, reply with the word SUBAGENT, a hyphen, then the word REFUSED, with no spaces."
   orca terminal wait --terminal "$c" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
   orca terminal send --terminal "$c" --text "$text" --enter --json >/dev/null 2>&1
-  wait_screen "$c" 'README\.md' 180 && ok "$id.control" "the role with no deny listed the folder (README.md on its screen; the screen does not show whether its subagent did it)" || { fail "$id.control" "the role with no deny listed nothing, so this run shows nothing about the deny"; attach "$id control's screen" "$(screen "$c" 30)"; return; }
+  wait_screen "$c" 'README\.md' 180 && ok "$id.control" "the role with no deny listed the folder (README.md on its screen; the screen does not show whether its subagent did it)" || { fail "$id.control" "the role with no deny listed nothing, so this run shows nothing about the deny (if OpenCode's default model does not answer here, set ORCA_LIVE_OPENCODE_MODEL=<provider/model> and run again)"; attach "$id control's screen" "$(screen "$c" 30)"; return; }
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
   orca terminal send --terminal "$h" --text "$text" --enter --json >/dev/null 2>&1
   if wait_screen "$h" 'SUBAGENT-REFUSED' 120; then
