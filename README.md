@@ -753,6 +753,8 @@ The roles receive their instructions the same way as with Claude (the kit types 
 
 For OpenCode use `agent: "opencode"` (see [OpenCode roles](#opencode-roles)), not a `custom` command: OpenCode 2.x's main interface takes no `--model` or `--agent`.
 
+Codex roles start with `-c check_for_update_on_startup=false`: Codex's startup update dialog would otherwise take the role message and the tasks typed into the tab. Your own Codex sessions keep checking; update Codex yourself.
+
 Each role's tab is titled with the role's title plus the agent's name: "Dev (claude)", "Researcher (codex)", and for `custom` the first word of its `command` that is not a `VAR=value` assignment, without its path or extension ("opencode", "gemini"). Orca only hands a task to a tab it recognizes as an agent, by its title or its process, and it does not recognize a native Claude Code by its process (named after its version; stablyai/orca#32090), so the name in the title is what lets the local coordinator dispatch to it. The kit sets that title again right before it starts the agent, since a shell profile can change it first (Ubuntu's `.bashrc` titles the tab "user@host: dir" at each prompt). For the same reason Claude workers start with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`, so Claude Code keeps that title instead of its session summary (the local coordinator keeps Claude's titles); set the variable in `defaults.env` or `roles.<id>.env` to override it. For a `custom` agent, Orca must know the command's name (for example `opencode`, `gemini`, `aider`); a wrapper script's name is not recognized, so give the role a title that already ends in the agent's name in parentheses, which the kit keeps as it is.
 
 With `agent: "custom"`:

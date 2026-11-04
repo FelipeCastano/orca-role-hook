@@ -1872,7 +1872,7 @@ cat > "$KIT/config.json" <<'J'
 { "defaults": {}, "mcpServers": {}, "roles": { "planner": { "title": "Planner" }, "cx": { "agent": "codex", "mcp": "all" } } }
 J
 printf '#!/bin/sh\necho "codex:$#"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/codex"
-check "agent.sh codex without options: only --add-dir <scratch>, the trust -c and the anchor -c" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:6"
+check "agent.sh codex without options: only --add-dir <scratch>, the trust -c, the anchor -c and the update-check -c" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/agent.sh" cx 2>&1)" "codex:8"
 printf 'LOCAL_COORDINATOR=t1\n' > "$TMP/state.env"
 check "clean.sh --all without workers" "$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="$KIT/config.json" "$KIT/bin/clean.sh" --all 2>&1)" "There are no workers to clean in this workspace."
 }
@@ -5402,7 +5402,7 @@ printf '#!/bin/sh\n[ "$1" = -lc ] && { echo "$2"; echo "ENV=$ORCA_ROLES_SCRATCH"
 cat > "$TMP/cfg2.json" <<'J'
 { "defaults": {}, "mcpServers": { "pw": { "command": "npx", "args": ["-y", "x"] } },
   "roles": {
-    "cxa": { "agent": "codex", "permissionMode": "auto", "mcp": ["pw"], "extraDirs": ["~/a b", "{kit}/z", "/c"] },
+    "cxa": { "agent": "codex", "permissionMode": "auto", "mcp": ["pw"], "extraDirs": ["~/a b", "{kit}/z", "/c"], "extraArgs": ["-c", "x=y"] },
     "cxn": { "agent": "codex", "permissionMode": "acceptEdits", "mcp": "all" },
     "cs": { "agent": "custom", "command": "run {scratch} --s", "mcp": "all", "addDirFlag": "--add-dir", "extraDirs": ["~/a b", "/c"] },
     "cp": { "agent": "custom", "command": "run {scratch}", "mcp": "all", "extraDirs": ["/c"] },
@@ -5419,11 +5419,13 @@ check "codex auto: --sandbox workspace-write --ask-for-approval on-request, no -
 check "codex auto: --add-dir scratch + each extraDir as one element, expanded" "$(case "$J" in (*"|--add-dir|$SD2|--add-dir|$TMP/home/a b|--add-dir|$TMP/home/.orca-roles/z|--add-dir|/c|"*) echo ok;; esac) $([ -d "$SD2" ] && echo exists)" "ok exists"
 NP=0; TV=""; for a in "${CA[@]}"; do case "$a" in projects=*) NP=$((NP+1)); TV="$a";; esac; done
 check "codex auto: exactly one projects override, with -c before it, key = physical worktree (spaces, dot, quote)" "$NP $(for i in "${!CA[@]}"; do [ "${CA[$i]}" = "$TV" ] && echo "${CA[$((i-1))]}"; done) $(tomlkey "$TV" | cmp -s - <(printf '%s\n' "$WT2P") && echo key-ok) $(case "$TV" in (*'{trust_level = "trusted"}}') echo trusted;; esac)" "1 -c key-ok trusted"
-check "codex auto: MCP -c overrides still present" "$(case "$J" in (*'|-c|mcp_servers.pw.command="npx"|-c|'*) echo ok;; esac)" "ok"
+UPD=0; UI=-1; XI=-1; for i in "${!CA[@]}"; do [ "$i" -gt 0 ] || continue; [ "${CA[$i]}" = check_for_update_on_startup=false ] && [ "${CA[$((i-1))]}" = -c ] && { UPD=$((UPD+1)); UI=$i; }; [ "${CA[$i]}" = x=y ] && XI=$i; done
+check "codex auto: MCP -c overrides still present; the update check is off once (-c check_for_update_on_startup=false), before the role's extraArgs" "$(case "$J" in (*'|-c|mcp_servers.pw.command="npx"|-c|'*) echo ok;; esac) $UPD $([ "$UI" -ge 0 ] && [ "$XI" -gt "$UI" ] && echo before)" "ok 1 before"
 # 15. (S1/S3) codex non-auto: no sandbox / approval / full-auto, still scratch + one trust override
 agent2 cxn >/dev/null; CN=(); while IFS= read -r -d '' a; do CN+=("$a"); done < "$FB2/argv"; J="|$(IFS='|'; echo "${CN[*]}")|"
 NP=0; for a in "${CN[@]}"; do case "$a" in projects=*) NP=$((NP+1));; esac; done
-check "codex non-auto: no --sandbox/--ask-for-approval/--full-auto; scratch and one trust" "$(case "$J" in (*--sandbox*|*--ask-for-approval*|*full-auto*) echo BAD;; (*) echo clean;; esac) $(case "$J" in (*"|--add-dir|$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cxn)|"*) echo scratch;; esac) $NP" "clean scratch 1"
+UPD=0; for i in "${!CN[@]}"; do [ "$i" -gt 0 ] || continue; [ "${CN[$i]}" = check_for_update_on_startup=false ] && [ "${CN[$((i-1))]}" = -c ] && UPD=$((UPD+1)); done
+check "codex non-auto: no --sandbox/--ask-for-approval/--full-auto; scratch and one trust, update check off once" "$(case "$J" in (*--sandbox*|*--ask-for-approval*|*full-auto*) echo BAD;; (*) echo clean;; esac) $(case "$J" in (*"|--add-dir|$(cd "$WT2" && KIT="$TMP/home/.orca-roles" scratch_dir cxn)|"*) echo scratch;; esac) $NP $UPD" "clean scratch 1 1"
 # The anchor that makes a role ask for its role again after its conversation is cleared: codex as developer_instructions (one
 # override that parses as TOML to the exact line), custom through {anchor} and $ORCA_ROLES_ANCHOR
 agent2 cxa >/dev/null; DI="$(tr '\0' '\n' < "$FB2/argv" | grep '^developer_instructions=')"; ANC="$(cd "$WT2" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$TMP/cfg2.json" cxa)"
