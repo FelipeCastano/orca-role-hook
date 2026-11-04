@@ -746,6 +746,7 @@ for id in $ROLES; do
         echo "$FLC's restored tab ($rh) is busy: not reopened now; run roles again when it is idle."
         continue
       fi
+      [ "$id" != "$FRONT" ] || planner_history_add "$GITDIR" "$rh"   # the restored tab joins the history: a Run Orca's own resume bound to it is an old one for kickoff
       orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "$rh" "$t" || true; }
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."

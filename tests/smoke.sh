@@ -4522,8 +4522,9 @@ BUSY="$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c
 HSB="$([ -e "$OG/orca-roles.planner-handles" ] && echo exists || echo none)"
 rm -f "$TMP/owaitfail"; ost $'LOCAL_COORDINATOR=old-pl\nDEV=old-dev\nTST=old-tst\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'
 OTH=other-tab ol
+HSI="$(tr '\n' ' ' < "$OG/orca-roles.planner-handles" 2>/dev/null || true)"
 check "busy and idle Planner: a busy restored tab is not closed or replaced, its saved state is kept, the user is told, it was asked with a 2 s idle wait; with the same state and idle it is closed and the Planner reopened with its conversation" "$BUSY|$RC:$(grep -c 'terminal close --terminal rs-pl' "$OLOG"):$(grep -c -- '--title Local coordinator' "$OLOG"):$(grep -c 'agent.sh. local-coordinator --resume 11111111-2222-3333-4444-555555555555' "$OLOG")" "0:0:0:same:1:1:0:1|0:1:1:1"
-check "planner history: the tab that ran the launch (self-relaunch) is added next to the seeded old handle, once; a busy tab that is not reopened adds nothing" "[$HS3][$HSB]" "[old-pl rs-pl ][none]"
+check "planner history: the tab that ran the launch (self-relaunch) is added next to the seeded old handle, once; a busy tab that is not reopened adds nothing; an idle restored tab that is closed and reopened is added, a worker's restored tab never" "[$HS3][$HSB][$HSI]" "[old-pl rs-pl ][none][old-pl rs-pl ]"
 # 4b. the relauncher needs a worktree id (ORCA_WORKTREE_ID): without one ('active' would be resolved later, maybe in another worktree) it is not started and the user is told; the saved state is kept either way
 ost $'LOCAL_COORDINATOR=old-pl\nDEV=old-dev\nTST=old-tst\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n'; PB="$(grep '^LOCAL_COORDINATOR=' "$OG/orca-roles.env" "$OG/orca-roles.pty" "$OG/orca-roles.kicked" | cksum)"
 OWT='' OTH=rs-pl ol; sleep 0.5
