@@ -382,7 +382,7 @@ c_restart_prepare() {  # before the restart: what each role had
   fi
   out="$( unset ORCA_PANE_KEY; orca orchestration run-create --from "$lc" --objective "live checks R1: Run binding after a restart (throwaway)" --json 2>&1 )"; rc=$?
   rid=""; [ "$rc" -eq 0 ] && rid="$(printf '%s' "$out" | jfield result.run.id)"; [ "$rc" -eq 0 ] && [ -z "$rid" ] && rid="$(printf '%s' "$out" | jfield result.runId)"
-  if [ -n "$rid" ]; then st_set r1run "$rid"; st_set r1lc "$lc"; return 0; fi
+  if [ -n "$rid" ]; then st_set r1run "$rid"; st_set r1lc "$lc"; st_set r1since "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; return 0; fi
   code="$(printf '%s' "$out" | jfield error.code)"
   if [ -n "$code" ]; then
     msg="$(printf '%s' "$out" | jfield error.message | head -n 1)"; why="$code${msg:+: $msg}"
@@ -416,7 +416,7 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
   c_restart_run "$id"
 }
 c_restart_run() {  # R1.run: the Run made before the restart is bound to the local coordinator's new tab
-  local id=$1 rid lc got k=0 cursor js i hs lg via
+  local id=$1 rid lc got k=0 cursor js i hs lg via since f
   rid="$(st_get r1run)"; lc="$(env_of LOCAL_COORDINATOR)"
   [ -n "$rid" ] || { skip "$id.run" "no Run was created before the restart: $(st_get r1why)"; return 0; }
   while :; do
@@ -441,7 +441,10 @@ c_restart_run() {  # R1.run: the Run made before the restart is bound to the loc
   else via="kickoff did not see the Run on an old tab (the SessionStart hook had re-bound it before kickoff looked, or kickoff had no previous handle to look for, or kickoff did not check (the local coordinator was not reopened))"; fi
   info "$id.run.via" "$via"
   if [ "$got" != "$lc" ]; then
-    [ -e "$KIT/state/session-hook.log" ] && attach "$id.run session hook log" "$KIT/state/session-hook.log"
+    since="$(st_get r1since)"
+    if [ -z "$since" ]; then [ -e "$KIT/state/session-hook.log" ] && attach "$id.run session hook log (whole file: no restart time was recorded)" "$KIT/state/session-hook.log"
+    else attach "$id.run session hook log since $since" "$(awk -v s="$since" '$1 >= s' "$KIT/state/session-hook.log" 2>/dev/null | grep . || echo "no line since $since")"; fi
+    attach "$id.run session records holding the old or the new handle" "$(for f in "$KIT"/state/session-handles/*; do [ -f "$f" ] && grep -qx -e "$(st_get r1lc)" -e "$lc" "$f" 2>/dev/null && printf '%s: %s\n' "${f##*/}" "$(head -n 1 "$f")"; done | grep . || echo "no session record holds $(st_get r1lc) or $lc")"
     attach "$id.run handle before the restart" "$(st_get r1lc)"
   fi
 }
