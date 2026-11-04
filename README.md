@@ -140,7 +140,7 @@ The installer takes no options: roles are enabled and disabled with `enabled` in
 **Pinning a version.** The download installs `main` unless you say otherwise. `ORCA_ROLES_REF` takes a branch, a tag or a commit sha (`ORCA_ROLES_BRANCH` still works and is used when `ORCA_ROLES_REF` is not set):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/v1.3.0/install.sh | ORCA_ROLES_REF=v1.3.0 bash
+curl -fsSL https://raw.githubusercontent.com/FelipeCastano/orca-role-hook/v1.4.0/install.sh | ORCA_ROLES_REF=v1.4.0 bash
 ```
 
 Use the same ref in the script URL and in the variable, so the installer and the files it installs match. The installer records what it installed in `~/.orca-roles/VERSION` (the kit's version) and `~/.orca-roles/.installed` (one line: `<source>@<ref>`, plus the commit when it is known without a network call: from a local clone, `local@<branch> <sha>` with `-dirty` appended if the clone has uncommitted changes, or when the ref is a full sha). `roles --status` prints both as its first line: `Kit: 1.3.0 (local@main f5f02a8...)`; `unknown` replaces a part that is missing.

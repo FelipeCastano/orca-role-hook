@@ -3821,7 +3821,7 @@ rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy 
 sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
-check "plugin.json: version 1.3.0 (the skill changed; /plugin update only picks up a new version)" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")" "1.3.0"
+check "plugin.json: version 1.4.0 (the skill changed; /plugin update only picks up a new version)" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")" "1.4.0"
 check "skill: name in the frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/team/SKILL.md")" "name: team"
 check "default config: the planner's plugins (the kit's skill and the pinned superpowers)" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin","{kit}/plugins/superpowers"]'
 cat > "$KIT/config.json" <<'J'
