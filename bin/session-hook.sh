@@ -3,7 +3,7 @@
 # Orca notifies a Run only at the terminal that created or last took it (run-create / run-use). When the front role's tab (the local coordinator) is reopened
 # (Orca restart, Orca's own `claude --resume`) its session is the same but its handle is new, so its Runs keep the dead handle and it is never
 # told that messages arrived. This hook remembers the handle of each session ($KIT/state/session-handles/<session_id>) and, when it changed and the
-# old handle is no longer live, takes the Runs bound to the old handle with `orca orchestration run-use` and prints one line for Claude.
+# old handle is no longer live (it looks again twice, 2 s apart, when the old tab is still listed), takes the Runs bound to the old handle with `orca orchestration run-use` and prints one line for Claude.
 # Registered in ~/.claude/settings.json (hooks.SessionStart) by install.sh, launch.sh and coordinator.sh (ensure_session_hook in lib.sh;
 # settings.sessionHook false turns it off). Nothing happens without ORCA_TERMINAL_HANDLE. Always exits 0; errors go to $KIT/state/session-hook.log.
 START="$(date +%s)"; DEADLINE=$((START + 10))
@@ -39,12 +39,22 @@ fi
 EXPIRED=0
 PREV=""; [ -f "$DIR/$SID" ] && PREV="$(head -n 1 "$DIR/$SID" 2>/dev/null)"
 if [ -z "$PREV" ] || [ "$PREV" = "$ORCA_TERMINAL_HANDLE" ]; then record; exit 0; fi
-# the handle changed: only a dead old handle gives up its Runs; a tab that still lives keeps its own
-TL="$(ho terminal list --json)" || { slog "terminal list failed: the Runs of $PREV were not looked at"; exit 0; }
-if ! printf '%s' "$TL" | jq -e '.result.terminals | type == "array"' >/dev/null 2>&1; then slog "terminal list gave no list"; exit 0; fi
-# a list that is cut short, or leaves a paired host out, cannot show that the old handle is dead
-if printf '%s' "$TL" | jq -e '.result.truncated == true or ((.result.hostScope.omittedHostIds // []) | length) > 0' >/dev/null 2>&1; then slog "terminal list incomplete"; exit 0; fi
-if printf '%s' "$TL" | jq -e --arg h "$PREV" 'any(.result.terminals[]?; .handle == $h)' >/dev/null 2>&1; then record; exit 0; fi
+# TL = one complete terminal list; otherwise log why and return 1. A list that is cut short, or leaves a paired host out, cannot show that the old handle is dead
+tl() {
+  TL="$(ho terminal list --json)" || { slog "terminal list failed: the Runs of $PREV were not looked at"; return 1; }
+  printf '%s' "$TL" | jq -e '.result.terminals | type == "array"' >/dev/null 2>&1 || { slog "terminal list gave no list"; return 1; }
+  if printf '%s' "$TL" | jq -e '.result.truncated == true or ((.result.hostScope.omittedHostIds // []) | length) > 0' >/dev/null 2>&1; then slog "terminal list incomplete"; return 1; fi
+}
+listed() { printf '%s' "$TL" | jq -e --arg h "$PREV" 'any(.result.terminals[]?; .handle == $h)' >/dev/null 2>&1; }
+tl || exit 0
+# the old tab can stay listed for a moment after it was closed (launch.sh closes the tab Orca restored, then opens this one with the same session):
+# look again at most twice, 2 s apart, only while 6 s of the 10 are left (more than 3 s stay for the re-look's own list, run-list, run-use and check)
+LOOKS=0
+while listed && [ "$LOOKS" -lt 2 ] && [ $((DEADLINE - $(date +%s))) -ge 6 ]; do
+  sleep 2; LOOKS=$((LOOKS + 1)); tl || exit 0
+done
+# only a dead old handle gives up its Runs; a tab that still lives keeps its own
+if listed; then slog "the old tab $PREV is still listed (looked $((LOOKS + 1)) times): its Runs stay with it"; record; exit 0; fi
 RL="$(ho orchestration run-list --json --full)" || { slog "run-list failed"; exit 0; }
 RUNS="$(printf '%s' "$RL" | jq -r --arg h "$PREV" '(.result.runs // .result // []) | if type == "array" then .[] else empty end | select(.coordinator_handle == $h) | .id' 2>/dev/null)" \
   || { slog "run-list gave no list"; exit 0; }
