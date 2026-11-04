@@ -159,6 +159,8 @@ case "$AGENT" in
     # It must be one inline table: the dotted form (projects."<path>".trust_level) is not read.
     # With settings.trust "never" it is left out and codex asks.
     [ "$(trust_of "$CFG")" = never ] || ARGS+=(-c "$(jq -nr --arg p "$(pwd -P)" '"projects={\($p | @json) = {trust_level = \"trusted\"}}"')")
+    # No startup update check: its "Update now" dialog would take the role message and the tasks typed into the tab (Enter runs the upgrade)
+    ARGS+=(-c check_for_update_on_startup=false)
     # MCP servers as configuration overrides (-c mcp_servers.<name>.<field>=...), without touching ~/.codex/config.toml
     if [ -n "$MCPFILE" ]; then while IFS= read -r o; do [ -n "$o" ] && ARGS+=(-c "$o"); done < <(codex_mcp_overrides "$MCPFILE"); fi
     # The same anchor as claude's, as developer instructions, which /new keeps (they replace those of ~/.codex/config.toml)

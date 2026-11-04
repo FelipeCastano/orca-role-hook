@@ -935,7 +935,8 @@ planner_history_add() {  # planner_history_add <git dir> <handle>
   } | awk 'NF && !seen[$0]++' > "$tmp" && mv "$tmp" "$f"
 }
 # The Run most recently updated that is still bound to a previous tab of the front role (a handle in the history other than the current one):
-# prints "<id><TAB><old handle><TAB><objective>" (objective on one line, up to 120 characters), nothing if there is none or no history;
+# prints "<id><TAB><old handle><TAB><objective>" (objective on one line, up to 120 characters), nothing if there is none or no history,
+# and nothing while a Run is bound to the current handle (Orca keeps one Run per tab: binding another would release it);
 # 1 if the Runs cannot be listed.  stale_run <git dir> <current front role handle>
 stale_run() {
   local hist="$1/orca-roles.planner-handles" cursor="" js runs="[]" i=0
@@ -948,7 +949,7 @@ stale_run() {
     i=$((i + 1)); [ -n "$cursor" ] || break
   done
   printf '%s' "$runs" | jq -r --argjson hs "$(jq -R . "$hist" | jq -s .)" --arg cur "$2" \
-    '[.[] | select(.coordinator_handle as $h | $h != $cur and ($hs | index($h)))] | max_by(.updated_at) // empty
+    'if any(.[]; .coordinator_handle == $cur) then empty else [.[] | select(.coordinator_handle as $h | $h != $cur and ($hs | index($h)))] | max_by(.updated_at) // empty end
      | "\(.id)\t\(.coordinator_handle)\t\((.objective // "") | gsub("[\t\n\r]"; " ") | .[0:120])"' 2>/dev/null || return 1
 }
 # The line each role gets outside its conversation, which clearing the conversation does not erase: claude in its system prompt

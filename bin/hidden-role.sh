@@ -236,4 +236,7 @@ if ! ( set -o noclobber; echo "starting - - - $TAG" > "$H/$ROLE.pid" ) 2>/dev/nu
 if ! detached_start "$H/$TAG.log" "$SELF" --supervise "$ROLE" "$BRIEF" "$TAG" "${RESUME:--}"; then
   rm -f "$H/$ROLE.pid"; echo "hidden-role.sh: could not start the run (no way to detach it)" >&2; exit 1
 fi
+# its message goes to the Run bound to this tab: the mail watcher of that Run notices it if Orca does not announce it
+MR="$(orca orchestration run-current --from "$ORCA_TERMINAL_HANDLE" --json 2>/dev/null | jq -r '.result.runId // empty' 2>/dev/null)"
+[ -z "$MR" ] || "$KIT/bin/dispatch.sh" --mail --run "$MR" >/dev/null 2>&1 || true
 echo "Started $TITLE hidden ($TAG); log: $H/$TAG.log"

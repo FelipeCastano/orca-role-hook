@@ -22,7 +22,7 @@ A check already done is not repeated when you run the script again. To start ove
 |---|---|---|
 | `tests/live/mac.sh` | macOS, Claude Code | Run it; at the end it asks for a real restart of Orca (Cmd+Q, then `pkill -f 'out/main/daem'` in macOS's Terminal app). Reopen Orca, open one terminal of this checkout (do not click the live-checks worktree's tabs) and run it again. |
 | `tests/live/wsl.sh` | Windows + WSL, Claude Code | The same; the restart is closing Orca and ending every Orca process (Task Manager, or a Windows reboot). |
-| `tests/live/agents.sh` | Anyone with Codex and/or OpenCode signed in | One run, no restart; Claude Code runs the local coordinator, the other roles of the check run on those agents. |
+| `tests/live/agents.sh` | Anyone with Codex and/or OpenCode signed in | One run, no restart; Claude Code runs the local coordinator, the other roles of the check run on those agents. Set `ORCA_LIVE_OPENCODE_MODEL=<provider/model>` when OpenCode's default model does not work on your machine (the OpenCode roles use it). |
 
 After the restart run `roles` in each of your own worktrees: the installed kit wakes their tabs too.
 
@@ -48,7 +48,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | T8, T9 | The same switch to `academic-research` and back to programmer | #58 |
 | T10 | A first-use role: `launch --open researcher` opens only it, the other tabs stay as they were, and it runs its configured model (the Researcher on Sonnet) | #58 |
 | T11 | `orca terminal create --worktree current` from a main checkout opens the terminal in that checkout | #58 |
-| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took, and the local coordinator's Run is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
+| R1 | After a real restart: which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation, no duplicate tab, every saved handle is live, how long it took, and the local coordinator's Run (its own, or a throwaway one when it has none) is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
 | R2 | T3 again after the restart | this PR |
 
 ### wsl.sh only
@@ -62,7 +62,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 
 | Id | What it proves | From |
 |---|---|---|
-| A1 | Codex and OpenCode keep the kit's tab title ("<Role> (codex)", "(opencode)") and Orca recognizes the agent | #43, BACKLOG |
+| A1 | Orca recognizes Codex and OpenCode as agents (`agentIdentity`); whether each kept the kit's tab title ("<Role> (codex)", "(opencode)") is reported, and a title the agent changes is not a failure | #43, BACKLOG |
 | A2 | Codex gets a role's MCP servers as `-c` overrides, `/mcp` lists them, `~/.codex/config.toml` is untouched | #1 |
 | A3 | After `/new` Codex keeps its developer instructions (it still names its role) | #14 |
 | A4 | OpenCode as a custom agent: `clean.sh` clears it and resends its role | #14 |
