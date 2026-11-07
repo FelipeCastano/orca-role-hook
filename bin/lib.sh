@@ -134,6 +134,49 @@ bounded() {
 # A fixed retry or poll wait of <secs> seconds; ORCA_ROLES_PACE replaces it (tests).
 pace() { sleep "${ORCA_ROLES_PACE:-$1}"; }
 
+# Waits until a Claude Code tab is at rest with an empty composer (read as dispatch.sh's coord_ready reads it), so the kit never types over what the
+# user is writing.  front_wait_ready <handle> <timeout ms> → 0 ready; 1 the tab never became idle; 2 it stayed idle with text in its composer
+front_wait_ready() {
+  local end left rc=1
+  end=$(( $(date +%s) + ($2 + 999) / 1000 ))
+  while :; do
+    left=$(( (end - $(date +%s)) * 1000 ))
+    [ "$left" -gt 0 ] || return "$rc"
+    orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$left" --json >/dev/null 2>&1 || return "$rc"
+    pace "${ORCA_ROLES_FRONT_MODEL_SETTLE:-2}"
+    if orca terminal show --terminal "$1" --json 2>/dev/null | jq -e '(.result.terminal.preview // "") as $p | ($p | contains("[Pasted text") | not) and ($p | split("\n") | any(sub("\\s+$"; "") == "❯"))' >/dev/null 2>&1; then return 0; fi
+    rc=2
+    pace "${ORCA_ROLES_FRONT_MODEL_RETRY:-2}"
+  done
+}
+
+# Switches the Claude Code session in a tab to another model with /model, and puts back the user's saved default model if Claude Code saved
+# the new one there (its /model may save it "as your default for new sessions" in the user settings).  front_set_model <handle> <model> <timeout ms>
+front_set_model() {
+  local rc=0 S before after
+  front_wait_ready "$1" "$3" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) echo "The tab $1 did not become idle; its model was not changed."; return 1;;
+    *) echo "The tab $1 was in use (text in its composer); its model was not changed."; return 1;;
+  esac
+  S="${ORCA_ROLES_CLAUDE_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
+  if [ -f "$S" ]; then before="$(jq -c 'if type == "object" and has("model") then {v: .model} else {} end' "$S" 2>/dev/null)"
+  else before=missing; fi
+  orca terminal send --terminal "$1" --text "/model $2" --enter --json >/dev/null 2>&1
+  orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$3" --json >/dev/null 2>&1 || true
+  if [ -f "$S" ]; then after="$(jq -c 'if type == "object" and has("model") then {v: .model} else {} end' "$S" 2>/dev/null)"
+  else after=missing; fi
+  if [ -n "$before" ] && [ "$after" != "$before" ]; then
+    rc=0
+    if [ "$before" = missing ] || [ "$before" = '{}' ]; then safe_json_edit "$S" 'del(.model)' "" "$S.lock" || rc=$?
+    else safe_json_edit "$S" '.model = ($dir | fromjson | .v)' "$before" "$S.lock" || rc=$?; fi
+    [ "$rc" != 0 ] || echo "Put back the default model in $S (Claude Code had saved $2 there)."
+  fi
+  echo "The tab $1 now runs $2."
+  return 0
+}
+
 # Every orca call of the kit's scripts has a time limit: $ORCA_ROLES_CLI_TIMEOUT s (60; 0 = none), or the call's --timeout-ms (rounded up to s) + 60.
 # `terminal close` has its own, $ORCA_ROLES_CLOSE_TIMEOUT s (15; 0 = none). A value that is not a whole number is ignored.
 orca() {

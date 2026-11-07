@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -447,6 +447,9 @@ rule R10 "$PD/local-coordinator.md" '**Compact the Planner once, right before it
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
 rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
 rule R10 "$PD/plan-reviewer.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
+rule R10 "$PD/local-coordinator.md" 'run `~/.orca-roles/bin/sync-base.sh` once from the worktree, never while a code task is in flight' '^1b\. \*\*Latest base\.\*\*'
+rule R10 "$PD/local-coordinator.md" 'without offering the merge' '^1b\. \*\*Latest base\.\*\*'
+rule R10 "$PD/local-coordinator.md" 'only when no set is open' '^1b\. \*\*Latest base\.\*\*'
 # R11 where each role works: in place with .orca-bak, one mutant at a time, verified close; experiments in scratchDir; temporaries only there
 t=$(awk '/^6\. \*\*Check your own tests with mutation/{f=1;print;next} /^[0-9]+\. /{f=0} /^## /{f=0} f' "$PD/tester.md")
 a27="$(grep '^2\. \*\*Baseline' "$PD/code-reviewer.md" || true)$(grep '^7\. \*\*Mutation, in place' "$PD/code-reviewer.md" || true)"
@@ -852,10 +855,10 @@ for m in programmer pr-reviewer academic-research; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 66500, academic-research 49000, pr-reviewer 33000 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 68500, academic-research 49500, pr-reviewer 33000 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer; do
-  case "$m" in programmer) lcap=66500;; academic-research) lcap=49000;; *) lcap=33000;; esac
+  case "$m" in programmer) lcap=68500;; academic-research) lcap=49500;; *) lcap=33000;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
@@ -6450,6 +6453,134 @@ check "upgrade_config keeps a user's own maxSelfMutants" "$(mm '{"roles":{"teste
 check "upgrade_config gives 3 to a config without the keys" "$(mm '{"roles":{}}')" "[3]"
 check "upgrade_config drops roles.auditor, copies none of its values to the new reviewers and keeps their defaults" "$(echo '{"roles":{"auditor":{"model":"x"}}}' > "$TMP/mm-user.json"; upgrade_config "$ROOT/config.default.json" "$TMP/mm-user.json" | jq -c --slurpfile d "$ROOT/config.default.json" '[(.roles | has("auditor")), (.roles["code-reviewer"].model == $d[0].roles["code-reviewer"].model), ([.roles["plan-reviewer"], .roles["code-reviewer"], .roles.verifier] | all(. != null))]')" "[false,true,true]"
 echo "ok   checkpoint defaults"
+}
+
+sec_sync_base() {
+# sync-base.sh: fetch + fast-forward only when safe; otherwise changes nothing (temp repos, a bare repo as origin, no network)
+SB="$TMP/sb"; rm -rf "$SB"; mkdir -p "$SB"
+sbg() { git -C "$1" "${@:2}"; }
+sbinit() { sbg "$1" config user.email t@example.com; sbg "$1" config user.name tester; }
+git init -q --bare -b main "$SB/origin.git"
+git clone -q "$SB/origin.git" "$SB/seed" 2>/dev/null; sbinit "$SB/seed"; sbg "$SB/seed" checkout -q -b main
+printf 'a\n' > "$SB/seed/f"; sbg "$SB/seed" add f; sbg "$SB/seed" commit -q -m c1; sbg "$SB/seed" push -q origin main
+sbwc() { rm -rf "${SB:?}/$1"; git clone -q "$SB/origin.git" "$SB/$1" 2>/dev/null; sbinit "$SB/$1"; }
+sbpush() { printf '%s\n' "$1" >> "$SB/seed/${2:-f}"; sbg "$SB/seed" add -A; sbg "$SB/seed" commit -q -m "$1"; sbg "$SB/seed" push -q origin main; }
+sbrun() { local d="$1"; shift; SBRC=0; SBOUT="$(cd "$d" && KIT="$KIT" bash "$ROOT/bin/sync-base.sh" "$@" 2>&1)" || SBRC=$?; }
+sbstate() { echo "$(sbg "$1" rev-parse HEAD) $(sbg "$1" symbolic-ref -q HEAD || echo detached) $(shasum < "$1/.git/index" | cut -d' ' -f1)"; }
+
+sbwc w1; H0="$(sbg "$SB/w1" rev-parse HEAD)"; sbrun "$SB/w1"
+check "sync-base: up to date -> exit 0, 'Up to date with origin/main (<sha>).', HEAD unchanged" "$SBRC:$(printf '%s' "$SBOUT" | grep -cE "^Up to date with origin/main \($(sbg "$SB/w1" rev-parse --short origin/main)\)\.$"):$([ "$(sbg "$SB/w1" rev-parse HEAD)" = "$H0" ] && echo same)" "0:1:same"
+
+sbpush c2; sbrun "$SB/w1"
+check "sync-base: behind only, clean, on a branch -> exit 0, 'Fast-forwarded', HEAD moved to origin/main" "$SBRC:$(printf '%s' "$SBOUT" | grep -c '^Fast-forwarded main from '):$([ "$(sbg "$SB/w1" rev-parse HEAD)" = "$(sbg "$SB/w1" rev-parse origin/main)" ] && [ "$(sbg "$SB/w1" rev-parse HEAD)" != "$H0" ] && echo moved)" "0:1:moved"
+
+sbwc w2; printf 'l\n' > "$SB/w2/local"; sbg "$SB/w2" add local; sbg "$SB/w2" commit -q -m local; sbpush c3; S0="$(sbstate "$SB/w2")"; sbrun "$SB/w2"
+check "sync-base: ahead and behind -> exit 4, '(1 local commits, tree clean)', HEAD, branch and index unchanged" "$SBRC:$(printf '%s' "$SBOUT" | grep -cF '(1 local commits, tree clean)'):$([ "$(sbstate "$SB/w2")" = "$S0" ] && echo same)" "4:1:same"
+
+sbwc w3; sbpush c4; printf 'dirty\n' >> "$SB/w3/f"; S0="$(sbstate "$SB/w3")"; sbrun "$SB/w3"
+check "sync-base: dirty tracked file -> exit 4, 'tree dirty', HEAD and index unchanged, the edit kept" "$SBRC:$(printf '%s' "$SBOUT" | grep -cF 'tree dirty'):$([ "$(sbstate "$SB/w3")" = "$S0" ] && echo same):$(tail -1 "$SB/w3/f")" "4:1:same:dirty"
+
+sbwc w4; sbpush c5; sbg "$SB/w4" checkout -q --detach; S0="$(sbstate "$SB/w4")"; sbrun "$SB/w4"
+check "sync-base: detached HEAD -> exit 4, 'tree detached', HEAD and index unchanged" "$SBRC:$(printf '%s' "$SBOUT" | grep -cF 'tree detached'):$([ "$(sbstate "$SB/w4")" = "$S0" ] && echo same)" "4:1:same"
+
+sbwc w5; sbpush c6 newf; printf 'mine\n' > "$SB/w5/newf"; S0="$(sbstate "$SB/w5")"; sbrun "$SB/w5"
+check "sync-base: untracked file the fast-forward would overwrite -> exit 4, 'Not changed.', HEAD and index unchanged, the file kept" "$SBRC:$(printf '%s' "$SBOUT" | grep -cF 'Not changed.'):$([ "$(sbstate "$SB/w5")" = "$S0" ] && echo same):$(cat "$SB/w5/newf")" "4:1:same:mine"
+
+rm -rf "$SB/noorig"; git init -q "$SB/noorig"; sbrun "$SB/noorig"; R7="$SBRC:$SBOUT"
+sbwc w6; sbg "$SB/w6" remote set-url origin "$SB/no/such/origin.git"; sbrun "$SB/w6"; R8="$SBRC:$(printf '%s' "$SBOUT" | grep -c '^WARNING: could not fetch origin/main')"
+check "sync-base: no origin -> exit 0 'No origin remote; nothing synced.'; unreachable origin -> exit 3 with the fetch WARNING" "$R7|$R8" "0:No origin remote; nothing synced.|3:1"
+
+sbwc w7; sbg "$SB/seed" checkout -q -b other; printf 'o\n' > "$SB/seed/o"; sbg "$SB/seed" add o; sbg "$SB/seed" commit -q -m other; sbg "$SB/seed" push -q origin other; sbg "$SB/seed" checkout -q main
+sbrun "$SB/w7" --base other
+check "sync-base: --base other follows origin/other" "$SBRC:$(printf '%s' "$SBOUT" | grep -cF '(origin/other, 1 commits)'):$([ "$(sbg "$SB/w7" rev-parse HEAD)" = "$(sbg "$SB/seed" rev-parse other)" ] && echo moved)" "0:1:moved"
+
+sbwc w8; sbg "$SB/w8" remote set-head origin -d >/dev/null 2>&1; sbrun "$SB/w8"; R10a="$SBRC:$(printf '%s' "$SBOUT" | grep -c 'origin/main')"
+sbrun "$SB/w8" --bogus; R10b="$SBRC"; sbrun "$SB/w8" --base ""; R10c="$SBRC"; sbrun "$SB"; R10d="$SBRC"
+check "sync-base: no origin/HEAD still picks main; --bogus, empty --base and a non-repo -> exit 2" "$R10a $R10b $R10c $R10d" "0:1 2 2 2"
+echo "ok   sync-base"
+}
+
+sec_front_model() {
+# front_set_model / front_wait_ready (lib.sh) and front-model.sh, with a fake orca on the PATH and a temp settings file
+FM="$TMP/fm"; rm -rf "$FM"; mkdir -p "$FM/bin" "$FM/home/.claude" "$FM/cfg" "$FM/wt/.git"
+cat > "$FM/bin/orca" <<'FAKE'
+#!/bin/sh
+FM="$(dirname "$0")/.."
+echo "$*" >> "$FM/calls.log"
+case "$1 $2" in
+  "terminal wait") exit "$(cat "$FM/wait.rc" 2>/dev/null || echo 0)";;
+  "terminal show")
+    n=$(( $(cat "$FM/show.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FM/show.n"
+    if [ -e "$FM/empty_after" ] && [ "$(date +%s)" -lt "$(cat "$FM/empty_after")" ]; then p="❯ some text"
+    elif [ -e "$FM/preview.$n" ]; then p="$(cat "$FM/preview.$n")"; else p="$(cat "$FM/preview" 2>/dev/null)"; fi
+    jq -n --arg p "$p" '{ok:true,result:{terminal:{preview:$p}}}';;
+  "terminal send") [ -e "$FM/send.sh" ] && sh "$FM/send.sh" "$*"; echo '{"ok":true}';;
+esac
+FAKE
+chmod +x "$FM/bin/orca"
+fmreset() { rm -f "$FM/calls.log" "$FM/wait.rc" "$FM/show.n" "$FM/send.sh" "$FM/empty_after" "$FM"/preview "$FM"/preview.* "$FM/wt/.git/orca-roles-front-model.log"; printf '❯ \n' > "$FM/preview"; : > "$FM/calls.log"; }
+fmset() { local rc=0; FMOUT="$(PATH="$FM/bin:$PATH" ORCA_ROLES_PACE=0 front_set_model "$@" 2>&1)" || rc=$?; FMRC=$rc; }
+nsent() { grep -c 'terminal send' "$FM/calls.log" || true; }
+export ORCA_ROLES_CLAUDE_SETTINGS="$FM/settings.json"
+
+fmreset; printf '{"model":"old","k":1}\n' > "$FM/settings.json"; fmset h1 m1 1000
+check "front_set_model: idle tab, empty composer -> wait, then show, then '/model m1' with Enter; settings untouched, no put-back line" "$FMRC:$(awk '{print $1" "$2}' "$FM/calls.log" | head -3 | tr '\n' ,):$(grep -c -- '--text /model m1 --enter' "$FM/calls.log"):$(jq -c . "$FM/settings.json"):$(printf '%s' "$FMOUT" | grep -c 'Put back')" '0:terminal wait,terminal show,terminal send,:1:{"model":"old","k":1}:0'
+
+fmreset; printf '{"model":"old","k":1,"n":{"a":[1,2]}}\n' > "$FM/settings.json"; printf '#!/bin/sh\njq ".model=\\"m1\\" | .theme=\\"dark\\"" "%s" > "%s.t" && mv "%s.t" "%s"\n' "$FM/settings.json" "$FM/settings.json" "$FM/settings.json" "$FM/settings.json" > "$FM/send.sh"
+fmset h1 m1 1000; RV1="$FMRC:$(jq -c . "$FM/settings.json"):$(printf '%s' "$FMOUT" | grep -c 'Put back the default model')"
+fmreset; printf '{"k":1}\n' > "$FM/settings.json"; printf '#!/bin/sh\njq ".model=\\"m1\\" | .theme=\\"dark\\"" "%s" > "%s.t" && mv "%s.t" "%s"\n' "$FM/settings.json" "$FM/settings.json" "$FM/settings.json" "$FM/settings.json" > "$FM/send.sh"
+fmset h1 m1 1000; RV2="$FMRC:$(jq -c . "$FM/settings.json")"
+fmreset; rm -f "$FM/settings.json"; printf '#!/bin/sh\nprintf "{\\"model\\":\\"m1\\",\\"x\\":1}\\n" > "%s"\n' "$FM/settings.json" > "$FM/send.sh"
+fmset h1 m1 1000; RV3="$FMRC:$(jq -c . "$FM/settings.json")"
+check "front_set_model: a changed model is put back (value before / key absent / file absent), other keys untouched" "$RV1|$RV2|$RV3" '0:{"model":"old","k":1,"n":{"a":[1,2]},"theme":"dark"}:1|0:{"k":1,"theme":"dark"}|0:{"x":1}'
+
+fmreset; unset ORCA_ROLES_CLAUDE_SETTINGS
+printf '{"model":"cfgold"}\n' > "$FM/cfg/settings.json"; printf '{"model":"homeold"}\n' > "$FM/home/.claude/settings.json"; HS="$(shasum < "$FM/home/.claude/settings.json")"
+printf '#!/bin/sh\necho "{\\"model\\":\\"m1\\"}" > "%s/cfg/settings.json"\necho "{\\"model\\":\\"m1\\"}" > "%s/home/.claude/settings.json"\n' "$FM" "$FM" > "$FM/send.sh"
+FMOUT="$(PATH="$FM/bin:$PATH" HOME="$FM/home" CLAUDE_CONFIG_DIR="$FM/cfg" ORCA_ROLES_PACE=0 front_set_model h1 m1 1000 2>&1)" || true
+check "front_set_model: without ORCA_ROLES_CLAUDE_SETTINGS the file put back is \$CLAUDE_CONFIG_DIR/settings.json; ~/.claude/settings.json is not restored" "$(jq -c . "$FM/cfg/settings.json"):$(jq -c . "$FM/home/.claude/settings.json"):$(printf '%s' "$FMOUT" | grep -cF "$FM/cfg/settings.json")" '{"model":"cfgold"}:{"model":"m1"}:1'
+export ORCA_ROLES_CLAUDE_SETTINGS="$FM/settings.json"
+
+fmreset; echo 1 > "$FM/wait.rc"; fmset h1 m1 1000; FW1="$FMRC:$(printf '%s' "$FMOUT" | grep -c 'did not become idle'):$(nsent)"
+fmreset; printf '❯ some text\n' > "$FM/preview"; fmset h1 m1 1000; FW2="$FMRC:$(printf '%s' "$FMOUT" | grep -c 'was in use'):$(nsent)"
+fmreset; printf '❯ \n[Pasted text #1 +5 lines]\n' > "$FM/preview"; fmset h1 m1 1000; FW3="$FMRC:$(printf '%s' "$FMOUT" | grep -c 'was in use'):$(nsent)"
+fmreset; printf 'no prompt line here\n' > "$FM/preview"; fmset h1 m1 1000; FW4="$FMRC:$(printf '%s' "$FMOUT" | grep -c 'was in use'):$(nsent)"
+check "front_set_model: a tab never idle, or a composer with text / a paste / no empty prompt line until the timeout -> return 1, its message, nothing typed" "$FW1 $FW2 $FW3 $FW4" "1:1:0 1:1:0 1:1:0 1:1:0"
+
+fmreset; printf '❯ typing\n' > "$FM/preview.1"; printf '❯ typing\n' > "$FM/preview.2"; fmset h1 m1 5000
+check "front_set_model: a composer that empties before the timeout -> the switch happens" "$FMRC:$(nsent):$(grep -c -- '--text /model m1 --enter' "$FM/calls.log"):$(printf '%s' "$FMOUT" | grep -c 'now runs m1')" "0:1:1:1"
+
+# front-model.sh
+WT="$FM/wt"; STATE_F="$WT/.git/orca-roles.env"; CFG_F="$WT/.git/orca-roles.config.json"; LOGF="$WT/.git/orca-roles-front-model.log"
+git -C "$WT" init -q 2>/dev/null
+printf 'LOCAL_COORDINATOR=hLC\n' > "$STATE_F"
+printf '{"settings":{"kickoffTimeoutSeconds":2},"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"},"planner":{"model":"plmodel"}}}\n' > "$CFG_F"
+fmcli() { local h="${H:-hLC}"; FCRC=0; FCOUT="$(cd "$WT" && PATH="$FM/bin:$PATH" ORCA_ROLES_PACE=0 ORCA_ROLES_FRONT_MODEL_SETTLE=0 ORCA_ROLES_FRONT_MODEL_RETRY=0 ORCA_TERMINAL_HANDLE="$h" KIT="$KIT" bash "$ROOT/bin/front-model.sh" "$@" 2>&1)" || FCRC=$?; }
+fmreset; X1=""
+H=other fmcli --escalate; X1="$X1 $FCRC"
+printf '{"roles":{"local-coordinator":{"agent":"codex","model":"lcmodel"}}}\n' > "$CFG_F"; fmcli --escalate; X1="$X1 $FCRC"
+printf '{"roles":{"local-coordinator":{"agent":"claude"}}}\n' > "$CFG_F"; fmcli --back; X1="$X1 $FCRC"
+fmcli; X1="$X1 $FCRC"; fmcli --escalate extra; X1="$X1 $FCRC"; fmcli --then; X1="$X1 $FCRC"; fmcli -x; X1="$X1 $FCRC"
+sleep 0.3
+check "front-model.sh: outside the local coordinator's tab, a non-claude local coordinator, --back with no model, and bad usage -> exit 2, nothing started" "$X1:$(wc -l < "$FM/calls.log" | tr -d ' '):$([ -e "$LOGF" ] && echo log)" " 2 2 2 2 2 2 2:0:"
+
+printf '{"settings":{"kickoffTimeoutSeconds":2},"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"},"planner":{"model":"plmodel"}}}\n' > "$CFG_F"
+fmreset; fmcli --escalate --then "go on"; Y1="$FCRC:$(printf '%s' "$FCOUT" | grep -cF "Your model switches to plmodel once this turn ends (log: $WT/.git/orca-roles-front-model.log). End your turn now.")"
+fast_poll grep -q 'Sent: go on' "$LOGF"
+Y1="$Y1:$(grep -o -- '--text .*' "$FM/calls.log" | sed 's/ --json//' | tr '\n' '|')"
+fmreset; fmcli --back; Y2="$FCRC:$(printf '%s' "$FCOUT" | grep -c 'switches to lcmodel')"; fast_poll grep -q 'now runs lcmodel' "$LOGF"
+printf '{"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"}}}\n' > "$CFG_F"
+fmreset; fmcli --escalate; Y3="$FCRC:$(printf '%s' "$FCOUT" | grep -c 'switches to claude-opus-5-5')"; fast_poll grep -q 'now runs claude-opus-5-5' "$LOGF"
+fmreset; fmcli m9; Y4="$FCRC:$(printf '%s' "$FCOUT" | grep -c 'switches to m9')"; fast_poll grep -q 'now runs m9' "$LOGF"
+check "front-model.sh: success line per target (--escalate -> planner model or claude-opus-5-5, --back, a model id); the detached run switches, then types the --then text" "$Y1 $Y2 $Y3 $Y4" "0:1:--text /model plmodel --enter|--text go on --enter| 0:1 0:1 0:1"
+
+printf '{"settings":{"kickoffTimeoutSeconds":1},"roles":{"local-coordinator":{"agent":"claude"}}}\n' > "$CFG_F"
+runh() { (cd "$WT" && PATH="$FM/bin:$PATH" ORCA_ROLES_PACE=0 ORCA_ROLES_FRONT_MODEL_SETTLE=0 ORCA_ROLES_FRONT_MODEL_RETRY=0 KIT="$KIT" bash "$ROOT/bin/front-model.sh" --run hLC m1 "the then line" >/dev/null 2>&1); }
+fmreset; printf '❯ draft\n' > "$FM/preview"; runh; Z1="$(nsent):$(grep -c 'the then line' "$FM/calls.log" || true)"
+fmreset; echo $(( $(date +%s) + 2 )) > "$FM/empty_after"; runh; sleep 2.2; Z2="$(nsent):$(grep -c 'the then line' "$FM/calls.log" || true):$(grep -c 'was in use' "$LOGF")"
+fmreset; printf '#!/bin/sh\nprintf "❯ typed meanwhile\\n" > "%s/preview"\n' "$FM" > "$FM/send.sh"; runh; Z3="$(grep -c -- '--text /model m1' "$FM/calls.log"):$(grep -c 'the then line' "$FM/calls.log" || true):$(grep -c 'this line was not sent' "$LOGF")"
+check "front-model.sh --run: the --then text is never sent while the composer has text, when the switch was given up on, or when the composer fills after it" "$Z1 $Z2 $Z3" "0:0 0:0:1 1:0:1"
+echo "ok   front-model"
 }
 
 sec_crosscheck() {
