@@ -5,7 +5,7 @@
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
-#   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-research); beats .orca-roles.json and settings.mode;
+#   --mode <mode>    the team's mode (programmer, pr-reviewer, academic-research, quick); beats .orca-roles.json and settings.mode;
 #                    saved, and kept when later options omit it
 #   (academic-research: the phase, settings.phase, is changed with phase.sh, not by hand)
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
@@ -80,6 +80,7 @@ KICKOFF="${ORCA_ROLES_KICKOFF:-$KIT/bin/kickoff.sh}"
 CFG="$GITDIR/orca-roles.config.json"     # copy of the effective config for this worktree
 LOG="$GITDIR/orca-roles-launch.log"
 MARKER="$GITDIR/orca-roles.mode-pending"  # exists while the worktree has no chosen mode yet (the local coordinator asks the user)
+FRONT_REOPEN_FILE="$GITDIR/orca-roles.front-reopen"   # exists while the local coordinator's live tab has another mode's model or skills and must be closed and opened again
 SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has closed the old workers but the front role has not had its new role message yet
 # Whether a role's tab is still working: 0 alive, 1 no tab (no handle, or Orca says the handle is stale), 2 the tab exists but its agent
 # is gone (e.g. after Ctrl+C), 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned"),
@@ -149,7 +150,7 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     var="${line%%=*}"; handle="${line#*=}"; role="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
-    title="$(title_of "$SCFG" "$role")"; cm="$(rstr "$SCFG" "$role" model)"
+    title="$(title_of "$SCFG" "$role")"; cm="$(role_model "$SCFG" "$role")"
     role_alive "$role" "$handle"; rc=$?
     case $rc in 0) st="alive";; 1) st="no tab";; 2) st="agent gone";; 4) st="unknown ($ROLE_ALIVE_CODE)";; *) st="orphaned";; esac
     used="$(grep "^$var=" "$GITDIR/orca-roles.models" 2>/dev/null | head -1 | cut -d= -f2-)"
@@ -161,7 +162,7 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
     for role in $(launchable_roles "$SCFG" 2>/dev/null); do
       grep -q "^$(var_of "$role")=" "$STATE" && continue
       om="$(open_of "$SCFG" "$role")"; [ "$om" != start ] || continue
-      cm="$(rstr "$SCFG" "$role" model)"
+      cm="$(role_model "$SCFG" "$role")"
       printf '%s\t-\tnot opened (%s)\t%s\t-\t-\t-\n' "$(title_of "$SCFG" "$role")" "${om/-/ }" "${cm:--}"
     done
   fi
@@ -483,6 +484,7 @@ if [ "$FRONT" = local-coordinator ] && [ -s "$STATE" ] && grep -q '^PLANNER=' "$
   echo "This worktree's earlier team has no open tabs: its saved state was removed and a new team starts."
   if [ "$REOPEN" = 1 ]; then echo "Nothing to reopen: run roles to start the team."; exit 0; fi
 fi
+FRONT_KEY_OLD=""; [ -f "$CFG" ] && [ -n "$PREV_MODE" ] && FRONT_KEY_OLD="$(front_launch_key "$CFG" "$PREV_MODE")"   # how the local coordinator's tab was started
 SWITCH_FROM=""
 # The mode cannot change under an open team: its tabs belong to the previous mode. Any tab of the saved team that still exists counts: its saved
 # handle, or, after a restart of Orca or the computer (new handles), the tab that has the role's saved ptyId.
@@ -521,7 +523,11 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
     for f in "$GITDIR/orca-roles.kickoff.d"/*; do
       [ -f "$f" ] && kill -0 "$(basename "$f")" 2>/dev/null && fail "ERROR: the previous launch's kickoff is still running (pid $(basename "$f")): try again in a moment. Nothing was changed."
     done
-    echo "Switching mode from $PREV_MODE to $NEWMODE: closing ${OPEN_WORKERS:-no workers}; $FL keeps its tab and gets its role message for $NEWMODE after its conversation is cleared."
+    if [ -n "$FRONT_KEY_OLD" ] && [ "$FRONT_KEY_OLD" != "$(front_launch_key "$NEWCFG" "$NEWMODE")" ]; then
+      echo "Switching mode from $PREV_MODE to $NEWMODE: closing ${OPEN_WORKERS:-no workers}; $FL's tab is closed once its turn ends and opened again with the model and skills of $NEWMODE, then gets its role message for $NEWMODE."
+    else
+      echo "Switching mode from $PREV_MODE to $NEWMODE: closing ${OPEN_WORKERS:-no workers}; $FL keeps its tab and gets its role message for $NEWMODE after its conversation is cleared."
+    fi
     while IFS='|' read -r svar srole sopen src shandle srh stitle; do
       [ -n "$svar" ] && [ "$srole" != "$FRONT" ] || continue
       if [ "$sopen" = 1 ]; then
@@ -581,6 +587,10 @@ mv "$NEWCFG" "$CFG"
 CHOSEN=0
 if [ "$ASK" = 1 ]; then : > "$MARKER"
 elif [ "$PENDING" = 1 ] && [ "$REOPEN" = 0 ]; then rm -f "$MARKER"; CHOSEN=1; echo "Mode chosen: $NEWMODE."; fi
+if { [ "$CHOSEN" = 1 ] || { [ -n "$SWITCH_FROM" ] && [ "$PREV_MODE" != "$NEWMODE" ]; }; } && [ -n "$FRONT_KEY_OLD" ] \
+   && [ "$FRONT_KEY_OLD" != "$(front_launch_key "$CFG" "$NEWMODE")" ]; then
+  : > "$FRONT_REOPEN_FILE"
+fi
 if [ "$RESET" = 1 ]; then rm -f "$OVR"; echo "This worktree's exceptions were forgotten."; fi
 [ "$OVRSRC" = "$NEWOVR" ] && mv "$NEWOVR" "$OVR"
 if [ -f "$OVR" ]; then
@@ -688,11 +698,22 @@ kickoff_of() {  # kickoff_of <role>: prints the pid of a live kickoff that will 
 oc_forget() { [ "$(rstr "$CFG" "$1" agent)" = opencode ] && oc_session_delete "$1" "$GITDIR"; return 0; }   # an OpenCode role replaced without memory: its saved session goes
 NEW=""; REUSED=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the front role recovers the state); REMEMBERED: reopened with their conversation
 SELF_RELAUNCH=0; SELF_HANDLE=""; PLANNER_KEEP_PTY=""; PLANNER_BUSY=0; SELF_NO_SESSION=0   # the front role's restored tab runs this launch: it is reopened later by its relauncher; its saved ptyId is kept
+FRONT_SELF_REOPEN=0   # this launch runs in the local coordinator's own tab, which must be reopened: it opens nothing; the relauncher runs the launch once this turn ends
+if [ -e "$FRONT_REOPEN_FILE" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "$ORCA_TERMINAL_HANDLE" = "${!FRONTV:-}" ]; then
+  FRONT_SELF_REOPEN=1; SELF_RELAUNCH=1; SELF_HANDLE="$ORCA_TERMINAL_HANDLE"
+fi
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"; sid=""
   sv="ST_$v"; st="${!sv}"
+  [ "$FRONT_SELF_REOPEN" = 0 ] || continue
   if [ "$REOPEN" = 1 ] && [ -z "${!v:-}" ]; then echo "$t has no saved tab (closed on purpose or never opened); leaving it closed."; continue; fi
   if [ -n "$OPEN_IDS" ]; then case " $OPEN_IDS " in *" $id "*) ;; *) continue;; esac; fi
+  if [ "$st" = 0 ] && [ "$id" = "$FRONT" ] && [ -e "$FRONT_REOPEN_FILE" ]; then   # its tab has the previous mode's model or skills: a new one is opened below, without its conversation (cleared on any mode switch)
+    echo "Closing $FL's tab (${!v}) to open it again with the model and skills of mode $NEWMODE."
+    planner_history_add "$GITDIR" "${!v}"   # a Run still bound to that tab is an old one for kickoff
+    orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "${!v}" "$t" || true; }
+    printf -v "$v" '%s' ""; st=reopen
+  fi
   if [ "$st" = 0 ] && [ "$id" = "$FRONT" ] && [ "$CHOSEN" = 1 ]; then
     NEW="$NEW $id"; REUSED="$REUSED $id"; echo "$FLC gets its role message for mode $NEWMODE after a context clear."; continue
   fi
@@ -785,6 +806,7 @@ for id in $ROLES; do
     [ -n "$hp" ] || echo "Could not read the ptyId of the tab of $t; after a restart it may open without memory."
   fi
   state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$hp"   # an interrupted launch still remembers the tabs it opened
+  [ "$id" != "$FRONT" ] || rm -f "$FRONT_REOPEN_FILE"   # any new tab of the local coordinator has the current mode's settings
   tl="$(tabs_of_handle "$h")"; [ -z "$tl" ] || state_set "$TABS" "$v" "$tl"
 done
 
@@ -829,17 +851,32 @@ detached_start() {  # detached_start <log> <command> [args...]
 }
 start_relauncher() {
   [ "$SELF_RELAUNCH" = 1 ] || return 0
+  local RL_FRESH=""; [ "$FRONT_SELF_REOPEN" = 1 ] && RL_FRESH=--fresh
   case "$WT" in id:*) ;; *)   # 'active' would be resolved by Orca when the relauncher runs, possibly in another worktree
+    if [ "$FRONT_SELF_REOPEN" = 1 ]; then
+      echo "Cannot start $FL's relauncher (this launch has no worktree id: ORCA_WORKTREE_ID is not set): mode $NEWMODE is saved but its team is not open yet; run roles from another terminal of this worktree to close $FL's tab and open the team."
+      return 0
+    fi
     echo "Cannot start $FL's relauncher: this launch has no worktree id (ORCA_WORKTREE_ID is not set); run roles from another terminal of this worktree to reopen ${FL#the } with the kit's settings and its conversation."
     return 0;;
   esac
-  if detached_start "$GITDIR/orca-roles-relaunch.log" "${ORCA_ROLES_RELAUNCHER:-$KIT/bin/relaunch-planner.sh}" "$WT" "$GITDIR" "$SELF_HANDLE" "$(git_here toplevel)"; then
+  if detached_start "$GITDIR/orca-roles-relaunch.log" "${ORCA_ROLES_RELAUNCHER:-$KIT/bin/relaunch-planner.sh}" "$WT" "$GITDIR" "$SELF_HANDLE" "$(git_here toplevel)" ${RL_FRESH:+"$RL_FRESH"}; then
     echo "$FLC's relauncher is waiting for its turn to end (log: $GITDIR/orca-roles-relaunch.log)."
   else
+    if [ "$FRONT_SELF_REOPEN" = 1 ]; then
+      echo "Cannot start $FL's relauncher (not on this system): mode $NEWMODE is saved but its team is not open yet; run roles from another terminal of this worktree to close $FL's tab and open the team."
+      return 0
+    fi
     echo "Cannot start $FL's relauncher on this system: $FL keeps working without the kit's settings; run roles from another terminal of this worktree to reopen it with them and its conversation."
   fi
 }
-if [ -z "$NEW" ]; then echo "All roles are already open."; start_relauncher; exit 0; fi
+if [ -z "$NEW" ]; then
+  if [ "$FRONT_SELF_REOPEN" = 1 ]; then
+    start_relauncher
+    echo "Mode $NEWMODE needs another model or other skills for $FL: once this turn ends, its tab is closed and opened again, and the mode's team opens. End your turn now."
+  else echo "All roles are already open."; start_relauncher; fi
+  exit 0
+fi
 [ -n "$REMEMBERED" ] && echo "Resuming workspace:$REMEMBERED keep their conversation from before the restart."
 [ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; $FL will recover the previous state and give you a summary."
 case " $NEW " in *" $FRONT "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${!FRONTV:-}" ] || echo "$FLC kept its tab: it is told the new handles by a message (\"Role handles changed\"); if it does not pick them up, ask it to read its messages.";; esac

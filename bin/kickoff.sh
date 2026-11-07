@@ -76,7 +76,7 @@ model_failed() {  # $1 role, $2 model, $3 what showed it (the error text, or why
 }
 check_model() {  # $1 handle, $2 role, $3 model errors on screen before the message was sent, $4 error regex
   local model now text
-  model="$(rstr "$CFG" "$2" model)"
+  model="$(role_model "$CFG" "$2")"
   sleep "$SETTLE"; orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
   now="$(err_count "$1" "$4")"
   if [ "$now" -le "$3" ]; then record_model "$2" "$model"; return 0; fi
@@ -152,7 +152,7 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
       fi
     else break; fi
   done
-  local before rx ocm="" model; model="$(rstr "$CFG" "$2" model)"; rx="$(model_error_regex "$CFG" "$2" "$model")"
+  local before rx ocm="" model; model="$(role_model "$CFG" "$2")"; rx="$(model_error_regex "$CFG" "$2" "$model")"
   if [ -n "$model" ] && [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then
     ocm="$(oc_model_state "$model")"
     [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
@@ -221,7 +221,7 @@ composer_watch & WATCH_PID=$!
 if is_new "$FRONT"; then
   RESUME=0; case " $RESUMED " in *" $FRONT "*) RESUME=1;; esac; remembers "$FRONT" && RESUME=2
   if { [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] || [ "${ORCA_ROLES_MODE_CHOSEN:-0}" = 1 ]; } && [ ! -e "$GITDIR/orca-roles.mode-pending" ]; then
-    cmd="$(clear_command "$CFG" "$FRONT")"
+    cmd=""; case " $REUSED $REMEMBERED " in *" $FRONT "*) cmd="$(clear_command "$CFG" "$FRONT")";; esac
     if [ -n "$cmd" ]; then
       orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
       orca terminal send --terminal "${!FRONTV}" --text $'\e' --json >/dev/null 2>&1
@@ -230,7 +230,10 @@ if is_new "$FRONT"; then
       orca terminal wait --terminal "${!FRONTV}" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
       echo "$FLC's conversation was cleared ($cmd) for the mode $([ -n "${ORCA_ROLES_SWITCH_FROM:-}" ] && echo switch || echo choice)."
     else
-      echo "$FLC's agent has no clear command: its role message for the new mode goes into the same conversation."
+      case " $REUSED $REMEMBERED " in
+        *" $FRONT "*) echo "$FLC's agent has no clear command: its role message for the new mode goes into the same conversation.";;
+        *) echo "$FLC has a new tab for this mode: nothing to clear.";;
+      esac
     fi
     if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ]; then PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
     else PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"; fi

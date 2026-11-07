@@ -26,7 +26,7 @@ CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 ROLE="$(resolve_role "$CFG" "$ROLEARG")"
 [ -n "$ROLE" ] || { echo "Unknown role: $ROLEARG" >&2; exit 1; }
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
-MODEL="$(rstr "$CFG" "$ROLE" model)"
+MODEL="$(role_model "$CFG" "$ROLE")"
 mopt() { jq -r --arg r "$ROLE" --arg k "$1" '(((.defaults.models // {}) * (.roles[$r].models // {}))[$k]) // empty' "$CFG" 2>/dev/null; }
 while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}=${kv#*=}"; done < <(role_env "$CFG" "$ROLE")
 first_line() { head -1 | tr '\t\r' '  '; }
