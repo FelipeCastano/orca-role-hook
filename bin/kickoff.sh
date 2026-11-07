@@ -15,7 +15,7 @@ FRONTV="$(var_of "$FRONT")"; FL="$(front_label "$FRONT")"; FLC="$(front_label "$
 ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 SETTLE="${ORCA_ROLES_KICK_SETTLE:-2}"
-CHECK_PIDS=""
+CHECK_PIDS=""; FRONT_MAIL=0
 trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
@@ -46,6 +46,41 @@ front_send() {
   fi
   FRONT_ERR="$(front_err_text "$out" "$code")"
   return 1
+}
+# role_status <role>: one "Roles reopened" status to the front role about that role, right after its kick, with the roles still to kick and the handles
+role_status() {
+  local v t rest="" r after=0 first body
+  v="$(var_of "$1")"; t="$(title_of "$CFG" "$1")"
+  for r in $OPENED_IDS; do
+    [ "$after" = 1 ] && rest="${rest:+$rest, }$(title_of "$CFG" "$r")"
+    [ "$r" = "$1" ] && after=1
+  done
+  if [ "$(grep "^$v=" "$GITDIR/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-)" = "${!v}" ]; then first="roles opened or reopened: $t."
+  else first="roles opened or reopened: none. Not reached (no role message sent): $t."; fi
+  [ -z "$rest" ] || first="$first Still starting: $rest."
+  body="$first
+Use these handles from now on:
+$(cat "$STATE")"
+  if front_send "Roles reopened" "$body"; then echo "Told $FL the roles were reopened: $t."; front_mail
+  else echo "Could not tell $FL the roles were reopened: $t ($FRONT_ERR)."; fi
+}
+# front_mail: once per kickoff, starts the kit's mail watcher (dispatch.sh --mail) on the front role's Run, so a status Orca leaves unannounced
+# still gets a notice when no task is in flight. kickoff runs in the worktree (launch.sh starts it there), so dispatch.sh finds the git dir.
+front_mail() {
+  local run="" cursor="" js runs="[]" i=0
+  [ "$FRONT_MAIL" = 1 ] && return 0
+  FRONT_MAIL=1
+  while [ "$i" -lt 50 ]; do   # every page of the Runs, as stale_run (lib.sh) reads them
+    if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --full --cursor "$cursor" 2>/dev/null)" || break
+    else js="$(orca orchestration run-list --json --full 2>/dev/null)" || break; fi
+    runs="$(printf '%s' "$js" | jq -c --argjson acc "$runs" '$acc + [(.result.runs // [])[]]' 2>/dev/null)" || { runs="[]"; break; }
+    cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)" || break
+    i=$((i + 1)); [ -n "$cursor" ] || break
+  done
+  run="$(printf '%s' "$runs" | jq -r --arg h "${!FRONTV}" '[.[] | select(.coordinator_handle == $h)] | max_by(.updated_at) | .id // empty' 2>/dev/null)"
+  if [ -z "$run" ]; then echo "No Run is bound to $FL's tab: no mail watcher for the status."; return 0; fi
+  "$KIT/bin/dispatch.sh" --mail --run "$run" >/dev/null 2>&1 || true
+  echo "Mail watcher started on Run $run for $FL."
 }
 
 MODELS="$(dirname "$STATE")/orca-roles.models"; MODELS_D="$MODELS.d"
@@ -264,12 +299,20 @@ if is_new "$FRONT"; then
   rm -f "$GITDIR/orca-roles.switch-from"
 fi
 OPENED_WORKERS=""; OPENED_IDS=""
+for id in $ROLES; do   # the roles this launch opens or reopens, in kick order (a reused role is kicked but not listed)
+  [ "$id" = "$FRONT" ] && continue
+  is_new "$id" || continue
+  case " $REUSED " in *" $id "*) ;; *) OPENED_WORKERS="${OPENED_WORKERS:+$OPENED_WORKERS, }$(title_of "$CFG" "$id")"; OPENED_IDS="$OPENED_IDS $id";; esac
+done
+PER_ROLE=0   # the front role ran this launch from its own tab: it is told about each role as soon as that role's kick ends
+if ! is_new "$FRONT" && [ -n "${!FRONTV:-}" ] && [ "${ORCA_ROLES_SELF_RELAUNCH:-}" != 1 ] && [ "${ORCA_ROLES_SELF_NO_SESSION:-}" != 1 ] \
+   && [ "${ORCA_ROLES_PLANNER_BUSY:-}" != 1 ] && [ "${ORCA_TERMINAL_HANDLE:-}" = "${!FRONTV}" ]; then PER_ROLE=1; fi
 for id in $ROLES; do
   [ "$id" = "$FRONT" ] && continue
   is_new "$id" || continue
   v=$(var_of "$id")
-  case " $REUSED " in *" $id "*) ;; *) OPENED_WORKERS="${OPENED_WORKERS:+$OPENED_WORKERS, }$(title_of "$CFG" "$id")"; OPENED_IDS="$OPENED_IDS $id";; esac
   if remembers "$id"; then kick "${!v}" "$id" "$(worker_back_msg "$CFG" "$id" "${!v}")"; else kick "${!v}" "$id" "$(worker_msg "$CFG" "$id")"; fi
+  case " $OPENED_IDS " in *" $id "*) [ "$PER_ROLE" = 1 ] && role_status "$id";; esac
 done
 
 # A live front role learns the new handles only from this message: its role message (with the handles) is sent only when it is (re)opened.
@@ -281,26 +324,13 @@ if ! is_new "$FRONT" && [ -n "$OPENED_WORKERS" ] && [ -n "${!FRONTV:-}" ]; then
   elif [ "${ORCA_ROLES_PLANNER_BUSY:-}" = 1 ]; then
     echo "$FLC's restored tab was busy and was not reopened; run roles again when it is idle: its role message will carry the handles."
   elif [ "${ORCA_TERMINAL_HANDLE:-}" = "${!FRONTV}" ]; then
-    # the front role ran this launch from its own tab: it learns the outcome from a status message, sent once every kick is done
-    OK_TITLES=""; FAIL_TITLES=""
-    for id in $OPENED_IDS; do
-      v=$(var_of "$id")
-      if [ "$(grep "^$v=" "$GITDIR/orca-roles.kicked" 2>/dev/null | head -1 | cut -d= -f2-)" = "${!v}" ]; then OK_TITLES="${OK_TITLES:+$OK_TITLES, }$(title_of "$CFG" "$id")"
-      else FAIL_TITLES="${FAIL_TITLES:+$FAIL_TITLES, }$(title_of "$CFG" "$id")"; fi
-    done
-    REOPENED_BODY="roles opened or reopened: ${OK_TITLES:-none}.${FAIL_TITLES:+ Not reached (no role message sent): $FAIL_TITLES.}
-Use these handles from now on:
-$(cat "$STATE")"
-    if front_send "Roles reopened" "$REOPENED_BODY"; then
-      echo "Told $FL the roles were reopened."
-    else
-      echo "Could not tell $FL the roles were reopened ($FRONT_ERR)."
-    fi
+    echo "$FLC was told about each role as its kick ended."
   else
     HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
 $(cat "$STATE")"
     if front_send "Role handles changed" "$HANDLES_BODY"; then
       echo "Told $FL the new handles."
+      front_mail
     else
       echo "Could not tell $FL the new handles ($FRONT_ERR); tell it to run: cat $STATE"
     fi

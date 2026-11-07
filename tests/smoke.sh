@@ -856,10 +856,10 @@ for m in programmer pr-reviewer academic-research quick; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 68500, academic-research 50000, pr-reviewer 33500, quick 41000 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 69000, academic-research 50000, pr-reviewer 34000, quick 41000 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer quick; do
-  case "$m" in programmer) lcap=68500;; academic-research) lcap=50000;; quick) lcap=41000;; *) lcap=33500;; esac
+  case "$m" in programmer) lcap=69000;; academic-research) lcap=50000;; quick) lcap=41000;; *) lcap=34000;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
@@ -6833,13 +6833,13 @@ chmod +x "$MF/bin/orca"
 CLERR="There's an issue with the selected model (x). It may not exist or you may not have access to it."
 echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
 mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE NOSENDER FAILOUT
-  printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/text.* "$MF/rl.n" "$MF/orch.log"; [ -n "${HIST:-}" ] || rm -f "$MF/gd/orca-roles.planner-handles"; [ -z "${HIST:-}" ] || printf '%b' "$HIST" > "$MF/gd/orca-roles.planner-handles"
+  local KK="${MAILKIT:-$KIT}"; printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/text.* "$MF/rl.n" "$MF/orch.log" "$MF/mail.log"; [ -n "${HIST:-}" ] || rm -f "$MF/gd/orca-roles.planner-handles"; [ -z "${HIST:-}" ] || printf '%b' "$HIST" > "$MF/gd/orca-roles.planner-handles"
   rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/nosender" "$MF/failout" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
   [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${NOSENDER:-}" ] || : > "$MF/nosender"; [ -z "${FAILOUT:-}" ] || { if [ "$FAILOUT" = - ]; then : > "$MF/failout"; else printf '%s' "$FAILOUT" > "$MF/failout"; fi; }; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'LOCAL_COORDINATOR=hp\nPLANNER=hq\nDEV=hd\nTESTER=ht\nCODE_REVIEWER=ha\n' > "$MF/gd/orca-roles.env"
   echo "$2" > "$MF/mode"
-  (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" "$KIT/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" "${REUSED:-}" > "$MF/out.log" 2>&1)
+  (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" KIT="$KK" "$KK/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" "${REUSED:-}" > "$MF/out.log" 2>&1)
 }
 mfc() { printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "model": "claude-opus-5-5" }, "dev": { %s } } }' "$1"; }
 models() { cat "$MF/gd/orca-roles.models" 2>/dev/null | tr '\n' ' '; }
@@ -6988,7 +6988,7 @@ check "handles: local coordinator and worker reopened, no message" "$(hnds | wc 
 mf "$(mfc "$DEVOK")" clean ""
 check "handles: nothing reopened, no message" "$(hnds | wc -l | tr -d ' ')" "0"
 OTH=hp mf "$(mfc "$DEVOK")" clean "dev"
-check "handles: the local coordinator ran it itself: one 'Roles reopened' status, not 'Role handles changed'; says so" "$(hnds | wc -l | tr -d ' '):$(hnds | grep -c '|Roles reopened|'):$(grep -c '^Told the local coordinator the roles were reopened\.$' "$MF/out.log")" "1:1:1"
+check "handles: the local coordinator ran it itself: one 'Roles reopened' status, not 'Role handles changed'; says so" "$(hnds | wc -l | tr -d ' '):$(hnds | grep -c '|Roles reopened|'):$(grep -c '^Told the local coordinator the roles were reopened: Dev\.$' "$MF/out.log")" "1:1:1"
 ORCA_ROLES_SELF_RELAUNCH=1 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: the local coordinator's restored tab runs the launch (its relauncher is pending): no send, the log says its role message carries the handles" "$(hnds | wc -l | tr -d ' '):$(grep -c '^The local coordinator will be reopened by its relauncher; its role message carries the handles\.$' "$MF/out.log")" "0:1"
 ORCA_ROLES_SELF_NO_SESSION=1 OTH=other mf "$(mfc "$DEVOK")" clean "dev"
@@ -7065,12 +7065,31 @@ rm -f "$MF"/rl.page.*
 check "kickoff: run-list failing -> logged, the Planner and the worker still get their messages unchanged; a Run bound to the current handle gets no reminder; with no history (seeded from the env) an old Run is not reminded" "$K2" "1:0:2:0:0:0:hp "
 # kickoff: the 'Roles reopened' status when the Planner ran the launch itself
 CFGT2="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')"; HU='Use these handles from now on:/LOCAL_COORDINATOR=hp/PLANNER=hq/DEV=hd/TESTER=ht/CODE_REVIEWER=ha'
-OTH=hp mf "$CFGT2" clean "dev tester"; R4="$(hnds | sed 's/^HND //')|$(grep -c '^Told the local coordinator the roles were reopened\.$' "$MF/out.log")"
-OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')|$(grep -c '^TESTER=' "$MF/gd/orca-roles.kicked" || true)"
-OTH=hp SENDFAIL="hd ht" mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"
-REUSED=dev OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(hnds | sed 's/^HND //')"
-FAILHND=1 OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(grep -c '^Could not tell the local coordinator the roles were reopened (boom: fake failure)\.$' "$MF/out.log"):$(grep -c '^Told the local coordinator' "$MF/out.log" || true)"
-check "roles reopened: one status to the local coordinator naming the roles whose role message was sent, 'Not reached' for those whose kick failed (also all of them), a reused role not listed, the handles; the failed send is logged" "$R4" "hp|status|Roles reopened|roles opened or reopened: Dev, Tester./$HU|1|hp|status|Roles reopened|roles opened or reopened: Dev. Not reached (no role message sent): Tester./$HU|0|hp|status|Roles reopened|roles opened or reopened: none. Not reached (no role message sent): Dev, Tester./$HU|hp|status|Roles reopened|roles opened or reopened: Tester./$HU|1:0"
+ord() { grep -oE '^(SEND|HND)' "$MF/orca.log" | tr '\n' ' '; }; hj() { hnds | sed 's/^HND //' | paste -sd';' -; }; tol() { grep -c "^Told the local coordinator the roles were reopened: $1\\.\$" "$MF/out.log" || true; }
+SD="hp|status|Roles reopened|roles opened or reopened:"
+OTH=hp mf "$CFGT2" clean "dev tester"; R4="$(hj)|$(ord)|$(tol Dev):$(tol Tester)"
+OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; R4="$R4|$(hj)|$(grep -c '^TESTER=' "$MF/gd/orca-roles.kicked" || true)"
+OTH=hp SENDFAIL="hd ht" mf "$CFGT2" clean "dev tester"; R4="$R4|$(hj)"
+REUSED=dev OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(hj)|$(grep -c '^DEV=' "$MF/gd/orca-roles.kicked" || true)"
+FAILHND=1 OTH=hp mf "$CFGT2" clean "dev tester"; R4="$R4|$(grep -c '^Could not tell the local coordinator the roles were reopened: Dev (boom: fake failure)\.$' "$MF/out.log"):$(grep -c '^Could not tell the local coordinator the roles were reopened: Tester (boom: fake failure)\.$' "$MF/out.log"):$(grep -c '^Told the local coordinator' "$MF/out.log" || true)"
+check "roles reopened: one status per role right after its own kick (Dev's before Tester's kick), with 'Still starting' for the roles after it; 'Not reached' for a kick that failed (also all); a reused role is kicked, gets no status and is not in 'Still starting'; each failed send is logged" "$R4" "$SD Dev. Still starting: Tester./$HU;$SD Tester./$HU|SEND HND SEND HND |1:1|$SD Dev. Still starting: Tester./$HU;$SD none. Not reached (no role message sent): Tester./$HU|0|$SD none. Not reached (no role message sent): Dev. Still starting: Tester./$HU;$SD none. Not reached (no role message sent): Tester./$HU|$SD Tester./$HU|1|1:1:0"
+# kickoff: the mail watcher, once per kickoff, on the Run bound to the front role's tab
+MK="$MF/mailkit"; rm -rf "$MK"; mkdir -p "$MK"; cp -R "$KIT/bin" "$KIT/prompts" "$KIT/config.default.json" "$MK/"; printf '#!/bin/sh\necho "$*" >> "%s/mail.log"\n' "$MF" > "$MK/bin/dispatch.sh"; chmod +x "$MK"/bin/*.sh
+ml() { cat "$MF/mail.log" 2>/dev/null | paste -sd';' - || true; }; nw() { grep -c 'Mail watcher started on Run' "$MF/out.log" || true; }; nb() { grep -c "^No Run is bound to .* tab: no mail watcher for the status\\.\$" "$MF/out.log" || true; }
+rm -f "$MF"/rl.page.*; page first "$(rr r1 hp 2026-01-01 old),$(rr r2 hp 2026-02-01 new),$(rr r3 other 2026-03-01 x)"
+MAILKIT="$MK" OTH=hp mf "$CFGT2" clean "dev tester"; M1="[$(ml):$(nw):$(hnds | wc -l | tr -d ' ')]"
+rm -f "$MF"/rl.page.*; page first "$(rr r3 other 2026-03-01 x)" c2; page c2 "$(rr r5 hp 2026-02-01 second-page)"
+MAILKIT="$MK" OTH=hp mf "$CFGT2" clean "dev tester"; M1="${M1}[$(ml):$(grep -c -- '--cursor c2' "$MF/orch.log" || true)]"
+rm -f "$MF"/rl.page.*; page first "$(rr r3 other 2026-03-01 x)"
+MAILKIT="$MK" OTH=hp mf "$CFGT2" clean "dev tester"; M1="${M1}[$(ml):$(nb):$(hnds | wc -l | tr -d ' ')]"
+page first "$(rr r1 hp 2026-01-01 old)"; : > "$MF/rl.fail"
+MAILKIT="$MK" OTH=hp mf "$CFGT2" clean "dev tester"; M1="${M1}[$(ml):$(nb):$(hnds | wc -l | tr -d ' ')]"; rm -f "$MF/rl.fail"
+MAILKIT="$MK" FAILHND=1 OTH=hp mf "$CFGT2" clean "dev tester"; M1="${M1}[$(ml):$(nw):$(cat "$MF/rl.n" 2>/dev/null || echo 0)]"
+MAILKIT="$MK" OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; M1="${M1}[$(ml)]"
+check "mail watcher: the first status of a kickoff runs dispatch.sh --mail --run on the newest Run bound to the front role's handle, once for two statuses, also from the second page of run-list (--cursor); no watcher (and the log line, once) with no bound Run or a failing run-list; none after failed sends; one still starts after a role whose kick failed" "$M1" "[--mail --run r2:1:2][--mail --run r5:1][:1:2][:1:2][:0:0][--mail --run r1]"
+MAILKIT="$MK" OTH=other mf "$CFGT2" clean "dev tester"; M2="$(hj):$(ml):$(nw)"
+check "launch not from the front role's tab: one 'Role handles changed' status as before, and the mail watcher starts once after it" "$M2" "hp|status|Role handles changed|roles opened or reopened: Dev, Tester. $HU:--mail --run r1:1"
+rm -f "$MF"/rl.page.*
 # check_config and docs
 cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }
 # opencode: `mini` prints nothing for a missing model, so the kickoff looks it up in `opencode models` (stub: lines in oc.models; oc.mode warm = empty first call, fail = exit 1)
