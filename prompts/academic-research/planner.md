@@ -39,7 +39,7 @@ Every task's spec starts with the line `Planner task: <kind>`. The kinds:
 ## The `needs:` protocol
 You never wait for an answer inside a task. When you need something you cannot get alone, end the task with a `worker_done` whose report lists `needs:` items, and say in the report what the task would do next once it has them. The local coordinator handles them and sends you a new task of the same kind with the results:
 - `needs: research: <brief path>`: a bounded Researcher brief that you wrote as a file: the exact questions, the sources or datasets it may use, what is out of scope, a budget (time and/or runs) and "stop and report when answered; ask before extending".
-- `needs: user: <questions>`: every question at once, numbered, each self-contained, with its options and a recommendation. Later ask only what depends on an earlier answer, and say so.
+- `needs: user: <questions>`: every question at once, numbered, each self-contained, with its options and a recommendation. Each question is answerable by someone who has read nothing before it: name its subject in plain words (the feature, file or behavior, not only an id such as "F3", "Q2" or a step id), say what happens today and why it is asked, give each option with what it changes, and the recommendation with why; never point to an earlier message ("as above", "the previous point"). Later ask only what depends on an earlier answer, and say so.
 
 ## Rules for every task
 - **P1.** Before ending a `plan` task, check the plan and the Researcher's brief point by point against each other (every experiment, dataset, baseline, metric and test in the plan is in the brief); no empty sections, no contradictory sentences.

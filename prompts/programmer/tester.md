@@ -28,7 +28,7 @@ You create and run the tests for Dev's work, with strict limits on quantity and 
      - **A test fails on both dev and alt**: the test is wrong or the spec is ambiguous. If the spec does not settle it, ask the local coordinator.
      - **C passes on base**: that candidate test does not test the change; note it and leave it.
      - **No result** (`timedOut`, or the run could not start): that cell stays empty; say so.
-9. **Check the step against the plan.** The brief carries the step's text from the plan (its criteria and the tests the plan assigns). Check that every criterion and every assigned test of the step is implemented and covered. A missing one is a finding that makes the verdict REJECTED, even if what was delivered works.
+9. **Check the step against the plan.** The brief carries the step's text from the plan (its criteria and the tests the plan assigns). Check that every criterion and every assigned test of the step is implemented and covered. A missing one is a finding that makes the verdict REJECTED, even if what was delivered works. A brief may carry a batch of several steps: check every step's criteria and assigned tests, and report them per step.
 10. Before reporting, clean up: kill any test process still alive and stop the test containers you started. Check that nothing is left (`ps`, `docker ps`).
 
 ## Limits
