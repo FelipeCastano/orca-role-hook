@@ -319,7 +319,7 @@ rule R2 "$PD/local-coordinator.md" "only on the user's explicit yes to that list
 rule R2 "$PD/local-coordinator.md" 'commit only on a clear yes to that list of commits' '\*\*Set audit\.\*\*'
 rule R2 "$PD/local-coordinator.md" 'the commits add up exactly to the reviewed tree' '\*\*Set audit\.\*\*'
 rule R2 "$PD/local-coordinator.md" 'is not approving the commit' '\*\*Set audit\.\*\*'
-rule R2 "$PD/local-coordinator.md" 'fixed with a normal commit on top, on the user'"'"'s yes' '\*\*Set audit\.\*\*'
+rule R2 "$PD/local-coordinator.md" 'fixed with a normal commit on top, on the user'"'"'s yes, after the same pipeline as a corrections round' '\*\*Set audit\.\*\*'
 rule R2 "$PD/local-coordinator.md" 'never a commit per step, per pipeline stage or per fix round' '^- The set is committed at its close'
 rule R2 "$PD/local-coordinator.md" 'Nothing is committed at step close' '\*\*No commit\.\*\*'
 # R3 no AI attribution in commits and PRs, and the check after every commit
@@ -434,6 +434,8 @@ rule R10 "$PD/local-coordinator.md" 'The set audit is never waived: any line in 
 rule R10 "$PD/local-coordinator.md" 'One plan, one round of questions, one adjustment, one audit, one correction; no cycles' '^One plan, one round of questions'
 rule R10 "$PD/planner.md" 'A change is **strong** when any of these holds' '^A change is \*\*strong\*\*'
 rule R10 "$PD/local-coordinator.md" 'Each question is answerable by someone who has read nothing before it' '^\*\*Ask the user every open question'
+rule R10 "$PD/local-coordinator.md" 'Never ask the user whether a change needs the Code-Reviewer, and never offer to commit without its review' '^- \*\*No commit without the Code-Reviewer\.\*\*'
+rule R10 "$PD/local-coordinator.md" 'clean the idle workers without asking (skip step 2 of "How")' '^- \*\*When closing a step\*\*'
 rule R10 "$PD/plan-reviewer.md" 'A **plan audit** has no code yet' '^3\. Work out which kind of task'
 # R10 the local coordinator and the Planner split: the Planner never writes outside its scratchDir or to Jira and GitHub, the local coordinator never lets it wait, resets it after each task and keeps the Tester exemption to text
 rule R10 "$PD/planner.md" 'you never write to Jira or GitHub' 'applies to you with the local coordinator'
@@ -568,7 +570,7 @@ r24() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *
 R24LED="$(grep -E -- '^   - \*\*Ledger\.\*\*' <<<"$R24P2" || true)"
 R24SET="$(grep -E -- '^   - \*\*Set audit\.\*\*' <<<"$R24P2" || true)"
 r24 "$R24LED" 'Every answer the user gives in the step (how a finding is routed, a Dev decision, whether a change is minor) is a line starting with `User decision:` in the ledger, and every decision the Planner takes in a `decide` task is a line starting with `Ruling (Planner):`: what it decided, why, and what it costs if it is wrong. You write no `Ruling:` line of your own.' end
-r24 "$R24SET" 'or left as notes if the user agrees). Anything the Planner returns as `needs: user` goes to the user as the protocol says. When the Planner'"'"'s decisions leave no open finding at or above medium, and before the commits, show the user "Rulings of the Planner": every `Ruling (Planner):` line from the set'"'"'s ledgers, grouped by step, each with what it costs if it is wrong. A ruling the user overturns becomes a fix (Dev, then the Tester; ask the user whether it needs the Code-Reviewer'"'"'s corrections review, with your recommendation, and record the answer in `changes-log.md`) before the commits. When the set audit (and its corrections review) has no open finding at or above medium, the set is committed' has
+r24 "$R24SET" 'or left as notes if the user agrees). Anything the Planner returns as `needs: user` goes to the user as the protocol says. When the Planner'"'"'s decisions leave no open finding at or above medium, and before the commits, show the user "Rulings of the Planner": every `Ruling (Planner):` line from the set'"'"'s ledgers, grouped by step, each with what it costs if it is wrong. A ruling the user overturns becomes a fix (Dev, then the Tester, then a Code-Reviewer corrections review of that fix; record it in `changes-log.md`) before the commits. When the set audit (and its corrections review) has no open finding at or above medium, the set is committed' has
 # R25 academic-research rulings: the Ledger bullet ends with the Ruling rule; the Commits section shows "Rulings I made" right after the stage sentence, before the commit proposal
 AP="$ROOT/prompts/academic-research/local-coordinator.md"
 r25() { local f="$1" frag="$2" mode="$3" ok=0; case "$mode" in end) [[ "$f" == *"$frag" ]] && ok=1;; has) [[ "$f" == *"$frag"* ]] && ok=1;; esac; [ "$ok" = 1 ] || { echo "FAIL rules R25: academic-research/local-coordinator.md lost '${frag:0:60}...' in its bullet or section"; FAIL=1; }; }
@@ -850,10 +852,10 @@ for m in programmer pr-reviewer academic-research; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 65000, academic-research 49000, pr-reviewer 33000 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 66500, academic-research 49000, pr-reviewer 33000 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer; do
-  case "$m" in programmer) lcap=65000;; academic-research) lcap=49000;; *) lcap=33000;; esac
+  case "$m" in programmer) lcap=66500;; academic-research) lcap=49000;; *) lcap=33000;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
@@ -1029,7 +1031,7 @@ case "$(planner_msg "$TMP/lang.json" "planner dev" "$TMP/state.env" "" "" 0)" in
 check "default config: language auto" "$(jq -r '.settings.language' "$ROOT/config.default.json")" "auto"
 jq '.settings.cleanWorkersAfterStep = false' "$KIT/config.json" > "$TMP/cw.json"; jq '.settings.cleanWorkersAfterStep = true' "$KIT/config.json" > "$TMP/cw1.json"
 CW0="$(planner_msg "$TMP/cw.json" "planner dev" "$TMP/state.env" "" "" 0)"; CW1="$(planner_msg "$TMP/cw1.json" "planner dev" "$TMP/state.env" "" "" 0)"
-check "planner_msg: cleanWorkersAfterStep false -> only if the user asks; true -> proposed at each step" "$(printf '%s' "$CW0" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW0" | grep -cF "propose to the user cleaning"):$(printf '%s' "$CW1" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW1" | grep -cF "propose to the user cleaning")" "1:0:0:1"
+check "planner_msg: cleanWorkersAfterStep false -> only if the user asks; true -> cleaned without asking at each step" "$(printf '%s' "$CW0" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW0" | grep -cF "clean the workers' context without asking the user"):$(printf '%s' "$CW1" | grep -cF "Clean the workers' context only if the user asks you to."):$(printf '%s' "$CW1" | grep -cF "clean the workers' context without asking the user")" "1:0:0:1"
 CE=""; for v in true false '"true"' 1 null '"x"' '{}'; do jq -c --argjson v "$v" '.settings.enableAskModeOnStart = $v' "$KIT/config.default.json" > "$TMP/ea.json"; CE="$CE$(check_config "$TMP/ea.json" | grep -cxF 'ERROR: invalid configuration: settings.enableAskModeOnStart must be true or false' || true)"; done
 jq -c 'del(.settings.enableAskModeOnStart)' "$KIT/config.default.json" > "$TMP/ea.json"
 check "settings.enableAskModeOnStart: true by default; true, false and an absent key pass; \"true\", 1, null, \"x\" and an object give the error" "$(jq -r '.settings.enableAskModeOnStart' "$ROOT/config.default.json"):$CE:$(check_config "$TMP/ea.json" | grep -c enableAskModeOnStart || true)" "true:0011111:0"
@@ -1737,7 +1739,7 @@ check "clean.sh --msg of a worker with common is its role message" "$(cd "$TMP" 
 rm -rf "$KIT/tmp"
 rm -f "$TMP/fakebin/orca"
 M3="$(planner_msg "$C" "planner dev" "$TMP/state.env" "" "" 0)"
-case "$M3" in *"propose to the user cleaning the workers' context"*) echo "ok   planner_msg: cleanup when closing a step";; *) echo "FAIL planner_msg cleanup: $M3"; FAIL=1;; esac
+case "$M3" in *"clean the workers' context without asking the user"*) echo "ok   planner_msg: cleanup when closing a step";; *) echo "FAIL planner_msg cleanup: $M3"; FAIL=1;; esac
 }
 
 sec_mcp() {

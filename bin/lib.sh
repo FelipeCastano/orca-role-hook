@@ -858,7 +858,7 @@ planner_msg() {
   art="$(jq -r '(.settings.artifacts | if type == "object" then . else {} end) | [("plans", "designs", "research", "deployment") as $k | select(has($k)) | "\($k)=\(.[$k])"] | join(", ")' "$cfg" 2>/dev/null)"
   [ -z "$art" ] || msg="$msg Artifact locations set for this worktree (they win over the project's conventions): $art."
   [ -n "$extra" ] && msg="$msg Additional roles (fit them into the flow according to their description): $extra."
-  if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, propose to the user cleaning the workers' context (see your section \"Cleaning the workers' context\")."
+  if [ "$(setting "$cfg" cleanWorkersAfterStep true)" = true ]; then msg="$msg When closing each step, clean the workers' context without asking the user (see your section \"Cleaning the workers' context\")."
   else msg="$msg Clean the workers' context only if the user asks you to."; fi
   cap=""; [ "$(mode_of --saved "$cfg")" = programmer ] && cap="$(flow_round_cap "$cfg")"   # settings.flow (see flow_round_cap); only programmer's flow has rounds
   [ -n "$cap" ] && msg="$msg Flow override: send the Planner a \`decide\` task when a step piles up $cap rejected Tester rounds (this replaces the 3 in your prompt)."
