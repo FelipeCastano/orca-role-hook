@@ -312,6 +312,8 @@ project_config() {
 # A role's value, inheriting from defaults:  rcfg <config> <role> <field>
 rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
+# A role's model in a mode (default: the configuration's saved mode): roles.<role>.modelByMode.<mode> when it is a non-empty string, else the role's model (or defaults.model).  role_model <config> <role> [<mode>]
+role_model() { local m="${3:-}"; [ -n "$m" ] || m="$(mode_of --saved "$1" 2>/dev/null)" || m=programmer; jq -r --arg r "$2" --arg m "$m" '(.roles[$r].modelByMode // null) as $b | if ($b | type) == "object" and ($b[$m] | type) == "string" and $b[$m] != "" then $b[$m] else ((.roles[$r].model) // (.defaults.model) // empty) end' "$1"; }
 # The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
 # claude: Claude Code's own texts; codex: the API error naming the model; custom and opencode: the role's modelError with {model} as the
 # escaped model id. For opencode the screen check only runs with the role's own modelError: `mini` prints nothing for a missing model,
@@ -328,9 +330,9 @@ model_error_regex() {
 # A setting's value as text, or the default when it is absent or null (false is a value: jq's // would drop it).
 setting() { jq -r --arg k "$2" --arg d "$3" '(if (.settings | type) == "object" and (.settings | has($k)) and .settings[$k] != null then .settings[$k] else $d end) | tostring' "$1"; }
 # The kit's modes: fixed, not configurable. A mode is available when its folder has a local coordinator prompt.
-MODE_IDS="programmer pr-reviewer academic-research"
-MODES_JSON='["programmer","pr-reviewer","academic-research"]'
-MODE_LIST="programmer, pr-reviewer, academic-research"
+MODE_IDS="programmer pr-reviewer academic-research quick"
+MODES_JSON='["programmer","pr-reviewer","academic-research","quick"]'
+MODE_LIST="programmer, pr-reviewer, academic-research, quick"
 # Why a mode id is unusable (empty output if it is fine): the match is exact against the list, so nothing like ../x or a path reaches a prompt path.
 mode_error() {  # <id>
   local m
@@ -488,6 +490,7 @@ REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
 # {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} was the default of the atlassian MCP server before Atlassian's /v2/mcp endpoint: a user still on exactly it moves to the new default.
 # "first-use" was every kit role's own open value before defaults.open: a role still on it moves to the default, so that a defaults.open of the user's reaches it. Only a config with no defaults.open (one from before it) is moved: once the config has one, a kit role's "first-use" is the user's own.
+# ["programmer", "academic-research"] was the default of researcher's, dev's and tester's modes before quick joined them: a user still on it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
@@ -498,9 +501,18 @@ upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
     | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
     | .roles.tester.modes |= (if . == ["programmer"] then $d.roles.tester.modes else . end)
+    | .roles.researcher.modes |= (if . == ["programmer", "academic-research"] then $d.roles.researcher.modes else . end)
+    | .roles.dev.modes |= (if . == ["programmer", "academic-research"] then $d.roles.dev.modes else . end)
+    | .roles.tester.modes |= (if . == ["programmer", "academic-research"] then $d.roles.tester.modes else . end)
     | .roles.writer.model |= (if . == "claude-opus-5-5" then $d.roles.writer.model else . end)
     | .roles.planner.pluginDirs |= (if . == ["{kit}/plugin"] then $d.roles.planner.pluginDirs else . end)
     | .roles["local-coordinator"].modes |= (if . == ["programmer"] then $d.roles["local-coordinator"].modes else . end)
+    | if (($u.roles["local-coordinator"].modelByMode.quick? // null) == null)
+         and ((($u.roles["local-coordinator"].agent? // $u.defaults.agent? // "claude") != "claude")
+              or ((($u.roles["local-coordinator"].model? // null) | . != null and . != $d.roles["local-coordinator"].model)))
+      then .roles["local-coordinator"].modelByMode |= (if type == "object" then del(.quick) else . end)
+           | if .roles["local-coordinator"].modelByMode == {} then del(.roles["local-coordinator"].modelByMode) else . end
+      else . end
     | .roles.planner.modes |= (if . == "all" then $d.roles.planner.modes else . end)
     | if ($u.mcpServers.atlassian? // null) == {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} then .mcpServers.atlassian = $d.mcpServers.atlassian else . end
     | if ($u.mcpServers.playwright? // null) == $old_pw then .mcpServers.playwright = $d.mcpServers.playwright else . end' "$1" "$2"
@@ -583,6 +595,10 @@ check_config() {
       (if ($v | has("phases")) then
         ($v.phases | if type == "array" and length > 0 and all(.[]; . == "experiment" or . == "writing") then empty
           else "ERROR: role \($r): phases must be a non-empty list of \"experiment\", \"writing\"" end)
+      else empty end),
+      (if ($v | has("modelByMode")) then
+        ($v.modelByMode | if type == "object" and all(to_entries[]; (.key as $k | $ms | index($k)) != null and (.value | type) == "string") then empty
+          else "ERROR: role \($r): modelByMode must map mode ids to model ids (modes: \($ml))" end)
       else empty end),
       (if ($v | has("prompt")) then
         ($v.prompt | if . == null or type == "string" then empty
@@ -795,7 +811,7 @@ flow_cross_check() {
   esac
   [ "$(mode_of --saved "$1")" = programmer ] || return 1
   case " $2 " in *" cross-dev "*) ;; *) echo "orca-roles: settings.flow.crossCheck needs the cross-dev role enabled in this worktree; ignoring it" >&2; return 1;; esac
-  if [ "$(rstr "$1" cross-dev agent)" = "$(rstr "$1" dev agent)" ] && [ "$(rstr "$1" cross-dev model)" = "$(rstr "$1" dev model)" ]; then
+  if [ "$(rstr "$1" cross-dev agent)" = "$(rstr "$1" dev agent)" ] && [ "$(role_model "$1" cross-dev)" = "$(role_model "$1" dev)" ]; then
     echo "orca-roles: cross-dev runs the same agent and model as dev, so their mistakes will tend to match; a different model family makes the cross-check stronger" >&2
   fi
   return 0
@@ -957,7 +973,7 @@ planner_ask_msg() {
   lang="$(setting "$cfg" language auto)"
   if [ "$lang" != auto ] && [ -n "$lang" ]; then msg="$msg Always reply to the user in $lang, whatever language they write in."
   else msg="$msg Reply to the user in the language they write in."; fi
-  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) which mode to start in, offering these three: programmer (plan and build code with a team: Planner, Researcher, Dev, Tester, Plan-Reviewer, Code-Reviewer, E2E-Tester, Deployer), academic-research (write a research paper with a team: Planner and the phase's roles), and pr-reviewer (review a pull request or a diff with the review lenses). Suggest $sug, the configured one. Then end your turn and wait for the user's typed answer."
+  msg="$msg Ask the user as plain text in your reply (never with the AskUserQuestion tool or any selection dialog: a stray Enter would pick an option) which mode to start in, offering these four: programmer (plan and build code with a team: Planner, Researcher, Dev, Tester, Plan-Reviewer, Code-Reviewer, E2E-Tester, Deployer), academic-research (write a research paper with a team: Planner and the phase's roles), pr-reviewer (review a pull request or a diff with the review lenses), and quick (simple changes with a small team: you plan with the user, Dev and the Tester build and test; no Planner and no audits). Suggest $sug, the configured one. Then end your turn and wait for the user's typed answer."
   msg="$msg When the user chooses, run \`~/.orca-roles/bin/launch.sh --mode <mode>\` from the worktree with the chosen mode and end your turn: the kit opens the team and sends you your role message for it."
   printf '%s' "$msg"
 }
@@ -1088,6 +1104,9 @@ local_coordinator_skill_deny() {
   printf '%s\n' 'Skill(superpowers:brainstorming)' 'Skill(superpowers:writing-plans)' 'Skill(superpowers:receiving-code-review)' \
     'Skill(superpowers:test-driven-development)' 'Skill(superpowers:systematic-debugging)'
 }
+# What the local coordinator's tab takes from a mode when agent.sh starts it: its model, and whether its planning skills are blocked (in every mode but quick).
+# A mode switch or choice that changes it closes that tab and opens a new one (launch.sh).  front_launch_key <config> <mode>
+front_launch_key() { printf '%s|%s\n' "$(role_model "$1" local-coordinator "$2")" "$([ "$2" = quick ] && echo open || echo blocked)"; }
 # The reviewers (Plan-Reviewer, Code-Reviewer, pr-reviewer's Verifier) verify plans, code and findings themselves and must never dispatch a gate's reviewer subagents or subagents of their own. The list lives in the kit so a
 # user's own disallowedTools (which replace a config default) cannot drop it.  reviewer_deny → one tool per line. The on-demand Auditor (auditor.sh), which is not a team role, uses the same list.
 reviewer_deny() { printf '%s\n' Agent Task; }

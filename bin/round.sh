@@ -35,7 +35,7 @@ ID="$(resolve_role "$CFG" "$ROLEARG")"
 COMMON="$(git rev-parse --git-common-dir 2>/dev/null || echo "$GITDIR")"; COMMON="$(cd "$COMMON" && pwd)"
 WTB="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 TITLE="$(title_of "$CFG" "$ID")"; LOG="$COMMON/orca-roles.rounds.jsonl"; ESC="$GITDIR/orca-roles.escalation"
-MODEL="$(rstr "$CFG" "$ID" model)"; AGENT="$(rstr "$CFG" "$ID" agent)"
+MODEL="$(role_model "$CFG" "$ID")"; AGENT="$(rstr "$CFG" "$ID" agent)"
 FILES="$(git status --porcelain 2>/dev/null | grep -c . || true)"
 NUM="$(git diff HEAD --numstat 2>/dev/null | awk '$1 != "-" {a += $1; r += $2} END {printf "%d %d", a, r}')" || NUM="0 0"
 jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg wt "$WTB" --arg step "$STEP" --argjson round "$ROUND" --arg role "$ID" --arg agent "${AGENT:-claude}" \

@@ -55,7 +55,7 @@ agent="$(rstr "$CFG" local-coordinator agent)"; agent="${agent:-claude}"
 
 case "$mode" in
   --escalate) target="$(rstr "$CFG" planner model)"; target="${target:-claude-opus-5-5}";;
-  --back) target="$(rstr "$CFG" local-coordinator model)"
+  --back) target="$(role_model "$CFG" local-coordinator)"
     [ -n "$target" ] || { echo "front-model.sh: the local coordinator has no model of its own in the configuration (it runs the agent's default); nothing to switch back to." >&2; exit 2; };;
   *) target="$mode";;
 esac

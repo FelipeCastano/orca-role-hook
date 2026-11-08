@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Reopens the front role (the local coordinator) of this worktree's team with the kit's settings and its conversation, once the turn that ran launch.sh from the tab
-# Orca restored has ended. Started detached by launch.sh (never by hand); its log is orca-roles-relaunch.log in the git dir.
-# Usage: relaunch-planner.sh <worktree> <git dir> <restored tab handle> <worktree folder>
-# It waits for that tab to be idle, lets it settle and runs 'launch.sh <worktree> --reopen' from the worktree folder without the
+# Reopens the front role (the local coordinator) of this worktree's team once the turn that ran launch.sh from its tab has ended: with the kit's settings and its conversation
+# (a tab Orca restored), or, with --fresh, in a new tab for a mode that needs other settings (orca-roles.front-reopen). Started detached by launch.sh (never by hand); log: orca-roles-relaunch.log.
+# Usage: relaunch-planner.sh <worktree> <git dir> <tab handle> <worktree folder> [--fresh]
+# It waits for that tab to be idle, lets it settle and runs 'launch.sh <worktree> --reopen' (with --fresh: 'launch.sh <worktree>') from the worktree folder without the
 # tab's handle, so launch.sh closes the restored tab and opens the front role again. If it was busy and was not reopened, it
 # tries once more; it never runs launch.sh more than twice, and changes nothing when the tab never becomes idle.
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n 2,7p "$0"; exit 0;; esac
 [ $# -ge 4 ] || { sed -n 2,4p "$0" >&2; exit 1; }
 WT="$1"; GITDIR="$2"; HANDLE="$3"; TOP="$4"
+FRESH=0; [ "${5:-}" = --fresh ] && FRESH=1
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 CFG="$GITDIR/orca-roles.config.json"; STATE="$GITDIR/orca-roles.env"
 FRONT="$(front_of "$CFG" "$GITDIR")"; FRONTV="$(var_of "$FRONT")"
@@ -23,8 +24,13 @@ reopen() {  # waits for the front role's tab to be idle, then runs the launch; 1
     return 1
   fi
   sleep "${ORCA_ROLES_RELAUNCH_SETTLE:-3}"
-  log "Running launch.sh --reopen in $TOP"
-  env -u ORCA_TERMINAL_HANDLE ORCA_ROLES_RELAUNCH=1 "$KIT/bin/launch.sh" "$WT" --reopen 2>&1
+  if [ "$FRESH" = 1 ]; then
+    log "Running launch.sh in $TOP (the front role's tab is opened again for the new mode)"
+    env -u ORCA_TERMINAL_HANDLE ORCA_ROLES_RELAUNCH=1 "$KIT/bin/launch.sh" "$WT" 2>&1
+  else
+    log "Running launch.sh --reopen in $TOP"
+    env -u ORCA_TERMINAL_HANDLE ORCA_ROLES_RELAUNCH=1 "$KIT/bin/launch.sh" "$WT" --reopen 2>&1
+  fi
   log "launch.sh exited with $?"
 }
 cd "$TOP" || { log "Cannot enter $TOP; nothing was changed."; exit 0; }

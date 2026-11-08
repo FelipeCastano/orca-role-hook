@@ -11,7 +11,7 @@ if [ -z "$CFG" ] || [ ! -f "$CFG" ]; then CFG="$(mktemp)"; merged_config . > "$C
 FRONT="$(front_of "$CFG")"   # the role that talks to the user in this worktree: the local coordinator
 
 AGENT="$(rstr "$CFG" "$ROLE" agent)"; AGENT="${AGENT:-claude}"
-MODEL="$(rstr "$CFG" "$ROLE" model)"
+MODEL="$(role_model "$CFG" "$ROLE")"
 NICE="$(rstr "$CFG" "$ROLE" nice)"   # CPU priority of the agent and everything it runs (nice -n): the Tester, the Code-Reviewer and the Verifier run lowered
 RUN=(); if [ -n "$NICE" ] && [ "$NICE" != 0 ] && command -v nice >/dev/null; then RUN=(nice -n "$NICE"); fi
 [ -n "$RESUME" ] && [ "$AGENT" != claude ] && [ "$AGENT" != opencode ] && echo "agent.sh: --resume only applies to claude; $ROLE ($AGENT) starts fresh." >&2
@@ -105,11 +105,11 @@ case "$AGENT" in
       DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(superpowers_deny)
       ARGS+=(--disallowedTools "${DENY[@]}")
     fi
-    # Planning and rulings are the Planner's, verification and the team skill the local coordinator's
+    # Planning and rulings are the Planner's, verification and the team skill the local coordinator's (in quick mode, which has no Planner, the local coordinator keeps the planning skills)
     if [ "$ROLE" = planner ]; then
       SDENY=(); while IFS= read -r t; do SDENY+=("$t"); done < <(planner_skill_deny)
       ARGS+=(--disallowedTools "${SDENY[@]}")
-    elif [ "$ROLE" = local-coordinator ]; then
+    elif [ "$ROLE" = local-coordinator ] && [ "$(mode_of --saved "$CFG" 2>/dev/null)" != quick ]; then
       SDENY=(); while IFS= read -r t; do SDENY+=("$t"); done < <(local_coordinator_skill_deny)
       ARGS+=(--disallowedTools "${SDENY[@]}")
     fi

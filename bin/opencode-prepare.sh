@@ -21,7 +21,7 @@ PROMPT="$(prompt_of "$CFG" "$ROLE")"
 [ -f "$PROMPT" ] || { echo "opencode-prepare.sh: the prompt of $ROLE does not exist ($PROMPT)" >&2; exit 1; }
 COMMON="$(common_of "$CFG" "$ROLE")"
 [ -f "$COMMON" ] || { echo "opencode-prepare.sh: the common file of $ROLE does not exist ($COMMON)" >&2; exit 1; }
-MODEL="$(rstr "$CFG" "$ROLE" model)"
+MODEL="$(role_model "$CFG" "$ROLE")"
 
 # steps: the role's own value, else the flow default; a role value that is not a positive integer is dropped with a warning
 STEPS="$(jq -r --arg r "$ROLE" '(.roles[$r].opencode? | objects | .steps?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$CFG" 2>/dev/null)"
