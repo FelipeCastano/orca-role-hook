@@ -4349,12 +4349,13 @@ cat > "$TMP/ttl.json" <<'J'
 J
 ttyag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/ttl.json" python3 -I "$TMP/pty.py" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1); }
 pipeag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/ttl.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | od -An -c | tr -d ' \n' | sed 's/\\n/;/g'); }
+ctlag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/ttl.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | LC_ALL=C tr -cd '\033\007' | wc -c | tr -d ' '); }   # ESC and BEL bytes in agent.sh's output in a pipe
 ttt() { local o; o="$(ttyag "$1")"; case "$o" in "b'\\x1b]0;$2\\x07"*|"b\"\\x1b]0;$2\\x07"*) ;; *) echo "bad:$o"; return;; esac; echo "$(printf '%s' "$o" | grep -o '\\x1b\]0;' | wc -l | tr -d ' ')"; }
 check "agent.sh on a terminal: one OSC 0 with the tab title first, for claude (a worker and the Planner), codex and custom" "$(ttt dev 'Dev (claude)'):$(ttt planner 'planner (claude)'):$(ttt cx 'Researcher (codex)'):$(ttt cu 'Gem (echo)')" "1:1:1:1"
 OUT="$(ttyag inj)"
 check "agent.sh on a terminal: control characters in the title are removed (no ESC or BEL but the OSC's own, no newline, DEL or SOH), printable and non-ASCII text stays" "${OUT%%--*}" "b'\\x1b]0;D\\xc3\\xa9v]0;evil\\xc3\\xbc (claude)\\x07"
-check "agent.sh in a pipe: no escape byte and no BEL, for a worker and the Planner" "$(pipeag dev | grep -c '033\|\\a'):$(pipeag planner | grep -c '033\|\\a')" "0:0"
-check "agent.sh in a pipe: a custom agent's output carries no escape byte and no BEL, and is not empty" "$(pipeag cu | grep -c '033\|\\a'):$(pipeag cu | grep -c 'CUSTOM')" "0:1"
+check "agent.sh in a pipe: no escape byte and no BEL, for a worker and the Planner" "$(ctlag dev):$(ctlag planner)" "0:0"
+check "agent.sh in a pipe: a custom agent's output carries no escape byte and no BEL, and is not empty" "$(ctlag cu):$(pipeag cu | grep -c 'CUSTOM')" "0:1"
 # agent.sh: --add-dir <scratch> only for claude agents (the fake claude and codex echo their arguments)
 SDT="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir tester)"; mkdir -p "$SDT/sub"; touch "$SDT/f" "$SDT/sub/g" "$SDT/.hidden"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester | tr '\n' ' ')"
