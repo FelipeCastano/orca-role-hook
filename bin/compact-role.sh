@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compacts the conversation of a Claude role (/compact) instead of clearing it; it sends no role message.
 # Usage (from the worktree):  compact-role.sh <role> [--instructions "<text>"]
-# The local coordinator runs it as `compact-role.sh planner` right before giving the Planner its next task.
+# The local coordinator runs it as `compact-role.sh planner --instructions "<what to keep>"` right after each Planner report.
 # It refuses the local coordinator, and is never run on a role with a task in flight (the caller ensures that). A role whose agent is not
 # claude is cleaned with clean.sh instead (its own waits), and the exit status is clean.sh's.
 set -uo pipefail

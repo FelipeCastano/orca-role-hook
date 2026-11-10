@@ -443,7 +443,9 @@ rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no co
 rule R10 "$ROOT/prompts/coordinator.md" 'Start it only when the user asks for an audit, never on your own or on a schedule'
 rule R10 "$ROOT/prompts/coordinator.md" "The one terminal you create yourself is the Auditor's tab"
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
-rule R10 "$PD/local-coordinator.md" '**Compact the Planner once, right before its next task.** Before you send the Planner any task other than its first one, run `~/.orca-roles/bin/compact-role.sh planner` once, then create and dispatch the task (for a Planner that does not run on claude, the same command cleans it instead). Never compact it when it finishes a task, never twice before the same task, and never when no Planner task follows.' '^\*\*Compact the Planner once'
+rule R10 "$PD/local-coordinator.md" '**Compact the Planner right after each report.** When you read a Planner `worker_done`, release its dispatch (`worker-release`), then run `~/.orca-roles/bin/compact-role.sh planner --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."` before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms' '^\*\*Compact the Planner right after each report'
+rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: do not compact after it, nor after a later Planner report that comes before the set'"'"'s commits; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
+rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'in the foreground with a Bash timeout of 600000 ms, and wait for it to finish (about 40 s): the Planner'"'"'s cache is still warm then (for a Planner that does not run on claude, the same command cleans it instead). Never dispatch to the Planner while it runs; never compact it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
 rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
 rule R10 "$PD/plan-reviewer.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
@@ -859,10 +861,10 @@ for m in programmer pr-reviewer academic-research quick; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 69000, academic-research 50000, pr-reviewer 34000, quick 41000 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 70000, academic-research 50500, pr-reviewer 34000, quick 41000 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer quick; do
-  case "$m" in programmer) lcap=69000;; academic-research) lcap=50000;; quick) lcap=41000;; *) lcap=34000;; esac
+  case "$m" in programmer) lcap=70000;; academic-research) lcap=50500;; quick) lcap=41000;; *) lcap=34000;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
