@@ -520,6 +520,7 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Never repeat a run that still stands'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Run it only when your verdict would otherwise be'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'never run it again: review only the change in front of you'
+    rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'If every failure is **unrelated** (proven red on the base), the verdict is `VERDICT: ACCEPTED` and the failures are listed under "Full suite" as pre-existing, with the base run that proves it; they are not findings. Any **flaky**, **related** or **unproven** failure makes it `VERDICT: REJECTED`' '^16\. \*\*Full suite, last'
   }
   [ "$m" != academic-research ] || {
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
@@ -543,6 +544,7 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'writes exactly one file, the stamped plan'
     rule R22 "$ROOT/prompts/$m/code-reviewer.md" 'You never dispatch subagents'
     rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'You never dispatch subagents'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'each question the brief marks as `open by design` (left open by the user on purpose, to be answered at a later step), with the step the brief says must answer it. Such a question is not a finding: never reject the plan for it alone.' '^  - \*\*Conditions\*\*'
     rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'rules violations under the Rules verification method always reject' '\*\*Reject only from the threshold\.\*\*'
     rule F1 "$ROOT/prompts/$m/code-reviewer.md" 'If you cannot apply the method' '^- If you cannot apply the method'
     rule F1 "$ROOT/prompts/$m/plan-reviewer.md" 'If you cannot apply the method' '^- If you cannot apply the method'
