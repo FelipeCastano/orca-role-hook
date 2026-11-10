@@ -714,7 +714,7 @@ The kit measures what its sessions spend on its own, without you running anythin
   | `orca_roles_context_max_tokens` | | largest context (gauge) |
   | `orca_roles_lines_total` | `type` (added, removed) | lines edited |
   | `orca_roles_verdicts_total` | `verdict` (ACCEPTED, REJECTED, none) | `worker_done` verdicts |
-  | `orca_roles_task_duration_seconds_total` | `verdict` | seconds from the task prompt to `worker_done` |
+  | `orca_roles_task_duration_seconds_total` | `verdict` | seconds from the task's dispatch preamble to `worker_done` |
   | `orca_roles_commits_total`, `orca_roles_commit_lines_total` | `type` (insertions, deletions) | commits and their lines |
   | `orca_roles_dispatch_outcomes_total` | `outcome` (dispatch, started, enter-resent, not-started, no-check), `role`, `task`, `project` | what `dispatch.sh` did, counted per task; one series set for the whole kit (no `session_id`) |
   | `orca_roles_kit_events_total` | `event` (launch, reopened, detached-kept, relaunch), `role`, `task`, `project` | what `launch.sh` did |

@@ -9588,11 +9588,15 @@ kses gc1 /Users/x/orca-exp-sandbox "$RC1"; kses gc2 /a/b/ "$RC1"; kses gc3 /w/a/
 kses gc5 /unmapped/lc "Read /k/prompts/programmer/local-coordinator.md and adopt that role."; kses gc6 /unmapped/pr "Read /k/prompts/programmer/plan-reviewer.md and adopt that role."; kses gc7 /unmapped/ts "$RM"; kses gc8 /unmapped/pl "hello"
 umpass
 check "usage parse: a session whose first message is auditor.sh's role message gets the role auditor; the global coordinator and the global Auditor in an unmapped cwd get the task global-coordinator or global-auditor and the cwd's last folder as project (a trailing slash too), a mapped cwd wins, and the tester, local-coordinator and plan-reviewer in an unmapped cwd stay empty and a plain session does not enter the store" "$(usf au1 .orca_roles_role)|$(for k in au1 gc1 gc2 gc3 gc4 gc5 gc6 gc7 gc8; do printf '%s ' "$(usf $k '[.task, .project] | join("/")')"; done)" "auditor|global-auditor/au global-coordinator/orca-exp-sandbox global-coordinator/b devgd-292/svc devgd-292/svc / / /  "
-# worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the prompt naming the task, and the commits of Bash tool calls
+# worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the dispatch preamble naming the task, and the commits of Bash tool calls
 umpk; W="/w/a/devgd-300/src"; F5="$PD/vd.jsonl"; WD='orca orchestration send --from term_x --type worker_done'
-pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Please do task_abcdef01 now"
+pu "$F5" 2026-10-27T09:59:00.000Z "$W" "Please do task_abcdef01 later"
+pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Your task ID is: task_abcdef01"
 pb "$F5" 2026-10-27T10:00:30.000Z v1 "$WD --subject \"VERDICT: ACCEPTED\" --body \"all good\" --task-id task_abcdef01 --dispatch-id d --outcome succeeded --json"
 pb "$F5" 2026-10-27T10:00:40.000Z v2 "$WD --subject \"VERDICT: REJECTED\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
+pu "$F5" 2026-10-27T10:00:41.000Z "$W" "Your task ID is: task_abcdef01"
+pu "$F5" 2026-10-27T10:00:45.000Z "$W" "Your task ID is: task_abcdef01"
+pu "$F5" 2026-10-27T10:00:47.000Z "$W" "Please do task_abcdef01 again"
 pb "$F5" 2026-10-27T10:00:50.000Z v3 "$WD --subject \"done\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
 pb "$F5" 2026-10-27T10:01:00.000Z v4 "$WD --subject done --body 'REJECTED: nope' --task-id task_abcdef01"
 pb "$F5" 2026-10-27T10:01:10.000Z v5 "$WD --subject 'ACCEPTED' --body 'REJECTED' --task-id task_abcdef01"
@@ -9610,7 +9614,7 @@ pb "$F5" 2026-10-27T10:02:50.000Z g5 "echo \"git commit\""; pr "$F5" 2026-10-27T
 pb "$F5" 2026-10-27T10:03:00.000Z g6 "git status"; pr "$F5" 2026-10-27T10:03:01.000Z g6 false " 7 files changed, 70 insertions(+)"
 umpass
 V1="$(usf vd '[.workerDone[] | "\(.verdict):\(.seconds)"] | join(",")')"; V2="$(usf vd '.commits | [.count, .insertions, .deletions] | join("|")')"; V3="$(usf vd '[.tools.Bash.calls, .tools.Bash.errors] | join("|")')"
-check "usage parse: worker_done verdict from --subject first, then a literal --body, never from a body built by \$( ) or backticks, only the words ACCEPTED/REJECTED (not UNACCEPTED, not lower case), also when the command has an unbalanced quote; seconds from the prompt that names the task id to the send (null when no prompt names it); commits from Bash git commit calls that succeeded, with insertions and deletions from the result (singular forms, missing parts 0; a failed commit, an echo and other git commands do not count)" "$V1|$V2|$V3" "ACCEPTED:30,REJECTED:40,:50,REJECTED:60,ACCEPTED:70,:80,:90,ACCEPTED:null,ACCEPTED:110|3|13|9|16|1"
+check "usage parse: worker_done verdict from --subject first, then a literal --body, never from a body built by \$( ) or backticks, only the words ACCEPTED/REJECTED (not UNACCEPTED, not lower case), also when the command has an unbalanced quote; seconds from the last dispatch preamble naming the task id to the send, never from a plain mention; a later preamble restarts it; a second send with no new preamble and an id no preamble names get null; commits from Bash git commit calls that succeeded, with insertions and deletions from the result (singular forms, missing parts 0; a failed commit, an echo and other git commands do not count)" "$V1|$V2|$V3" "ACCEPTED:30,REJECTED:null,:5,REJECTED:null,ACCEPTED:null,:null,:null,ACCEPTED:null,ACCEPTED:null|3|13|9|16|1"
 # a pass reads only the global config: disabled -> nothing read or written; a live lock -> no work; a dead one is taken over; rotation once per UTC day
 umpass() { if KIT="${UMKIT:-$PK}" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" "${@:---once}" > "$UM/pass.out" 2> "$UM/pass.err"; then UPRC=0; else UPRC=$?; fi; }
 umpk; kses g1 /unmapped/g "$RM"; PK2="$UM/pk2"; rm -rf "$PK2"; mkdir -p "$PK2"; chmod 000 "$PD/g1.jsonl"
