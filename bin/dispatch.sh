@@ -5,10 +5,10 @@
 # The first form runs `orca orchestration dispatch --task <t> --to <h> [--run <id>] --inject --json`, prints Orca's JSON unchanged and exits
 # with its status at once; when it succeeded, a checker is started detached. --check-only starts only the checker (for a task delivered
 # another way; the message goes to $ORCA_TERMINAL_HANDLE).
-# The checker (about 35 s at most, nothing printed in the caller's terminal, notes in <git dir>/orca-roles-dispatch.log): Orca's dispatch
+# The checker (about 95 s at most, nothing printed in the caller's terminal, notes in <git dir>/orca-roles-dispatch.log): Orca's dispatch
 # result cannot tell whether the turn began (the brief may stay typed but unsent in the composer), so it polls `orca worktree ps` for
-# a row of the worker's pane whose prompt names the task (none for a role whose agent is neither claude nor codex): every 3 s for 15 s. If it has not started it sends Enter once, only when the
-# preview of the tab shows "[Pasted text", and polls 15 s more. Still not started: one "Dispatch not started" status to the dispatcher.
+# a row of the worker's pane whose prompt names the task (none for a role whose agent is neither claude nor codex): every 3 s for 45 s. If it has not started it sends Enter once, only when the
+# preview of the tab shows "[Pasted text", and polls 45 s more. Still not started: one "Dispatch not started" status to the dispatcher.
 #         dispatch.sh --mail --run <run_id>
 # With --run (all three forms) a detached mail watcher of that Run also runs, one per Run (notes in orca-roles-mail.log next to the dispatch
 # log): Orca sometimes never types its "You have N orchestration message" notice. Every 15 s it reads the Run's mailbox; a message that is
@@ -20,7 +20,7 @@ KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 GITDIR="$(git rev-parse --git-dir 2>/dev/null)" && GITDIR="$(cd "$GITDIR" && pwd)" || GITDIR=""
 if [ -n "$GITDIR" ]; then LOG="$GITDIR/orca-roles-dispatch.log"; else mkdir -p "$KIT/tmp" 2>/dev/null; LOG="$KIT/tmp/orca-roles-dispatch.log"; fi   # outside a repository nothing is left in the current folder
-TICK="${ORCA_ROLES_DISPATCH_TICK:-3}"; POLLS="${ORCA_ROLES_DISPATCH_POLLS:-5}"   # seconds between polls, polls per wait (the tests shorten them)
+TICK="${ORCA_ROLES_DISPATCH_TICK:-3}"; POLLS="${ORCA_ROLES_DISPATCH_POLLS:-15}"   # seconds between polls, polls per wait (the tests shorten them)
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
 # Usage metrics (settings.metrics): one events.jsonl line per step of a dispatch. One config read: this worktree's saved copy, else the global one.
 MCFG="${GITDIR:+$GITDIR/orca-roles.config.json}"; [ -f "$MCFG" ] || { MCFG="$KIT/config.json"; [ -f "$MCFG" ] || MCFG="$KIT/config.default.json"; }
