@@ -516,6 +516,7 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'run the sections and tests the whole set touches'
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
     rule R21 "$ROOT/prompts/$m/tester.md" 'Never the full suite, not even when a brief asks for it'
+    rule R21 "$ROOT/prompts/$m/tester.md" 'and the tests that depend on the changed source files' '^- \*\*Execution scope\*\*'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Never repeat a run that still stands'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Run it only when your verdict would otherwise be'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'never run it again: review only the change in front of you'
