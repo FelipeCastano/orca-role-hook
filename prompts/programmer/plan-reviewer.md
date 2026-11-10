@@ -40,6 +40,7 @@ Report with `worker_done`, following the Output rules (the body stays complete):
   - **Claims verified true**, with how (command or file:line).
   - **Measurement versus reasoning**: what you checked by running and what is opinion.
   - **Questions for the user** (findings about the request itself, not the plan).
+  - **Conditions**: each question the brief marks as `open by design` (left open by the user on purpose, to be answered at a later step), with the step the brief says must answer it. Such a question is not a finding: never reject the plan for it alone.
   - **What the project defines that you did not follow or replaced**, with why.
   - **What you could not verify**, and why.
 - `--outcome succeeded` when the audit was completed, even if you reject

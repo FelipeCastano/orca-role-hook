@@ -26,7 +26,7 @@ one JSON line per kit session that changed in that pass, with all its cumulative
   turns, userMessages, compactions, maxContext, apiErrors, modelChanges
   lines              {added, removed, source}   source "cost-state" or "edits" (counted from Edit/Write/MultiEdit)
   workerDone         [{verdict, seconds}]   one per worker_done send; verdict ACCEPTED/REJECTED from --subject, then a literal --body, else "";
-                     seconds from the session's prompt that names the task to the send (null if none)
+                     seconds from the last dispatch preamble naming the task ("Your task ID is: <id>") to the send (null if none, or if an earlier send already used it)
   commits            {count, insertions, deletions}   Bash `git commit` calls that succeeded
   unpriced           models with no price
 
@@ -85,7 +85,7 @@ RECENT_IDS = 300
 TYPES = ("input", "output", "cacheRead", "cacheWrite")
 ROLE_RE = re.compile(r"Read (.*?) and adopt that role", re.S)
 MD_RE = re.compile(r"[^/\s]+\.md")
-TASK_RE = re.compile(r"task_[0-9a-f]{8,}")
+PREAMBLE_TASK_RE = re.compile(r"Your task ID is: (task_[0-9a-f]{8,})")
 GLOBAL_TASKS = {"coordinator": "global-coordinator", "auditor": "global-auditor"}
 VERDICT_RE = re.compile(r"\b(ACCEPTED|REJECTED)\b")
 INS_RE = re.compile(r"(\d+) insertions?\(\+\)")
@@ -434,7 +434,7 @@ def feed(S, o, is_sub, mapped_cwd):
                     S["role"] = clean_role_of(cmd)
                 wd = worker_done_of(cmd)
                 if wd is not None:
-                    t0 = S["taskPrompts"].get(wd[1])
+                    t0 = S["taskPrompts"].pop(wd[1], None)
                     t1 = parse_ts(ts)
                     S["workerDone"].append({"verdict": wd[0], "seconds": round(t1 - t0) if t0 is not None and t1 is not None else None})
                 elif git_commit_in(cmd) and bid:
@@ -478,8 +478,8 @@ def feed(S, o, is_sub, mapped_cwd):
                 if S["prompts"] < 3 and not S["role"]:
                     S["role"] = role_in(text)
                 S["prompts"] += 1
-                for tid in TASK_RE.findall(text):
-                    if tid not in S["taskPrompts"] and len(S["taskPrompts"]) < 300:
+                for tid in PREAMBLE_TASK_RE.findall(text):
+                    if tid in S["taskPrompts"] or len(S["taskPrompts"]) < 300:
                         S["taskPrompts"][tid] = parse_ts(ts)
                 if S["kit"] is None and S["prompts"] == 1:
                     S["kit"] = True if S["role"] else False

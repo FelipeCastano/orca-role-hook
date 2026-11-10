@@ -443,7 +443,10 @@ rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no co
 rule R10 "$ROOT/prompts/coordinator.md" 'Start it only when the user asks for an audit, never on your own or on a schedule'
 rule R10 "$ROOT/prompts/coordinator.md" "The one terminal you create yourself is the Auditor's tab"
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
-rule R10 "$PD/local-coordinator.md" '**Compact the Planner once, right before its next task.** Before you send the Planner any task other than its first one, run `~/.orca-roles/bin/compact-role.sh planner` once, then create and dispatch the task (for a Planner that does not run on claude, the same command cleans it instead). Never compact it when it finishes a task, never twice before the same task, and never when no Planner task follows.' '^\*\*Compact the Planner once'
+rule R10 "$PD/local-coordinator.md" '**Compact the Planner right after each report.** When you read a Planner `worker_done`, release its dispatch (`worker-release`), then run `~/.orca-roles/bin/compact-role.sh planner --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."` before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms' '^\*\*Compact the Planner right after each report'
+rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: do not compact after it, nor after a later Planner report that comes before the set'"'"'s commits; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
+rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'in the foreground with a Bash timeout of 600000 ms, and wait for it to finish (about 40 s): the Planner'"'"'s cache is still warm then (for a Planner that does not run on claude, the same command cleans it instead). Never dispatch to the Planner while it runs; never compact it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
+rule R10 "$ROOT/bin/dispatch.sh" 'POLLS="${ORCA_ROLES_DISPATCH_POLLS:-15}"'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
 rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
 rule R10 "$PD/plan-reviewer.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
@@ -516,9 +519,11 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'run the sections and tests the whole set touches'
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
     rule R21 "$ROOT/prompts/$m/tester.md" 'Never the full suite, not even when a brief asks for it'
+    rule R21 "$ROOT/prompts/$m/tester.md" 'and the tests that depend on the changed source files' '^- \*\*Execution scope\*\*'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Never repeat a run that still stands'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Run it only when your verdict would otherwise be'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'never run it again: review only the change in front of you'
+    rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'If every failure is **unrelated** (proven red on the base), the verdict is `VERDICT: ACCEPTED` and the failures are listed under "Full suite" as pre-existing, with the base run that proves it; they are not findings. Any **flaky**, **related** or **unproven** failure makes it `VERDICT: REJECTED`' '^16\. \*\*Full suite, last'
   }
   [ "$m" != academic-research ] || {
     rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
@@ -542,6 +547,7 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'writes exactly one file, the stamped plan'
     rule R22 "$ROOT/prompts/$m/code-reviewer.md" 'You never dispatch subagents'
     rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'You never dispatch subagents'
+    rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'each question the brief marks as `open by design` (left open by the user on purpose, to be answered at a later step), with the step the brief says must answer it. Such a question is not a finding: never reject the plan for it alone.' '^  - \*\*Conditions\*\*'
     rule R22 "$ROOT/prompts/$m/plan-reviewer.md" 'rules violations under the Rules verification method always reject' '\*\*Reject only from the threshold\.\*\*'
     rule F1 "$ROOT/prompts/$m/code-reviewer.md" 'If you cannot apply the method' '^- If you cannot apply the method'
     rule F1 "$ROOT/prompts/$m/plan-reviewer.md" 'If you cannot apply the method' '^- If you cannot apply the method'
@@ -856,10 +862,10 @@ for m in programmer pr-reviewer academic-research quick; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 69000, academic-research 50000, pr-reviewer 34000, quick 41000 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 70000, academic-research 50500, pr-reviewer 34000, quick 41000 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer quick; do
-  case "$m" in programmer) lcap=69000;; academic-research) lcap=50000;; quick) lcap=41000;; *) lcap=34000;; esac
+  case "$m" in programmer) lcap=70000;; academic-research) lcap=50500;; quick) lcap=41000;; *) lcap=34000;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
@@ -9582,11 +9588,15 @@ kses gc1 /Users/x/orca-exp-sandbox "$RC1"; kses gc2 /a/b/ "$RC1"; kses gc3 /w/a/
 kses gc5 /unmapped/lc "Read /k/prompts/programmer/local-coordinator.md and adopt that role."; kses gc6 /unmapped/pr "Read /k/prompts/programmer/plan-reviewer.md and adopt that role."; kses gc7 /unmapped/ts "$RM"; kses gc8 /unmapped/pl "hello"
 umpass
 check "usage parse: a session whose first message is auditor.sh's role message gets the role auditor; the global coordinator and the global Auditor in an unmapped cwd get the task global-coordinator or global-auditor and the cwd's last folder as project (a trailing slash too), a mapped cwd wins, and the tester, local-coordinator and plan-reviewer in an unmapped cwd stay empty and a plain session does not enter the store" "$(usf au1 .orca_roles_role)|$(for k in au1 gc1 gc2 gc3 gc4 gc5 gc6 gc7 gc8; do printf '%s ' "$(usf $k '[.task, .project] | join("/")')"; done)" "auditor|global-auditor/au global-coordinator/orca-exp-sandbox global-coordinator/b devgd-292/svc devgd-292/svc / / /  "
-# worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the prompt naming the task, and the commits of Bash tool calls
+# worker_done verdicts (subject first, then a literal body; a body built by a command is never read), the seconds from the dispatch preamble naming the task, and the commits of Bash tool calls
 umpk; W="/w/a/devgd-300/src"; F5="$PD/vd.jsonl"; WD='orca orchestration send --from term_x --type worker_done'
-pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Please do task_abcdef01 now"
+pu "$F5" 2026-10-27T09:59:00.000Z "$W" "Please do task_abcdef01 later"
+pu "$F5" 2026-10-27T10:00:00.000Z "$W" "Your task ID is: task_abcdef01"
 pb "$F5" 2026-10-27T10:00:30.000Z v1 "$WD --subject \"VERDICT: ACCEPTED\" --body \"all good\" --task-id task_abcdef01 --dispatch-id d --outcome succeeded --json"
 pb "$F5" 2026-10-27T10:00:40.000Z v2 "$WD --subject \"VERDICT: REJECTED\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
+pu "$F5" 2026-10-27T10:00:41.000Z "$W" "Your task ID is: task_abcdef01"
+pu "$F5" 2026-10-27T10:00:45.000Z "$W" "Your task ID is: task_abcdef01"
+pu "$F5" 2026-10-27T10:00:47.000Z "$W" "Please do task_abcdef01 again"
 pb "$F5" 2026-10-27T10:00:50.000Z v3 "$WD --subject \"done\" --body \"\$(cat /tmp/r.md)\" --task-id task_abcdef01"
 pb "$F5" 2026-10-27T10:01:00.000Z v4 "$WD --subject done --body 'REJECTED: nope' --task-id task_abcdef01"
 pb "$F5" 2026-10-27T10:01:10.000Z v5 "$WD --subject 'ACCEPTED' --body 'REJECTED' --task-id task_abcdef01"
@@ -9604,7 +9614,7 @@ pb "$F5" 2026-10-27T10:02:50.000Z g5 "echo \"git commit\""; pr "$F5" 2026-10-27T
 pb "$F5" 2026-10-27T10:03:00.000Z g6 "git status"; pr "$F5" 2026-10-27T10:03:01.000Z g6 false " 7 files changed, 70 insertions(+)"
 umpass
 V1="$(usf vd '[.workerDone[] | "\(.verdict):\(.seconds)"] | join(",")')"; V2="$(usf vd '.commits | [.count, .insertions, .deletions] | join("|")')"; V3="$(usf vd '[.tools.Bash.calls, .tools.Bash.errors] | join("|")')"
-check "usage parse: worker_done verdict from --subject first, then a literal --body, never from a body built by \$( ) or backticks, only the words ACCEPTED/REJECTED (not UNACCEPTED, not lower case), also when the command has an unbalanced quote; seconds from the prompt that names the task id to the send (null when no prompt names it); commits from Bash git commit calls that succeeded, with insertions and deletions from the result (singular forms, missing parts 0; a failed commit, an echo and other git commands do not count)" "$V1|$V2|$V3" "ACCEPTED:30,REJECTED:40,:50,REJECTED:60,ACCEPTED:70,:80,:90,ACCEPTED:null,ACCEPTED:110|3|13|9|16|1"
+check "usage parse: worker_done verdict from --subject first, then a literal --body, never from a body built by \$( ) or backticks, only the words ACCEPTED/REJECTED (not UNACCEPTED, not lower case), also when the command has an unbalanced quote; seconds from the last dispatch preamble naming the task id to the send, never from a plain mention; a later preamble restarts it; a second send with no new preamble and an id no preamble names get null; commits from Bash git commit calls that succeeded, with insertions and deletions from the result (singular forms, missing parts 0; a failed commit, an echo and other git commands do not count)" "$V1|$V2|$V3" "ACCEPTED:30,REJECTED:null,:5,REJECTED:null,ACCEPTED:null,:null,:null,ACCEPTED:null,ACCEPTED:null|3|13|9|16|1"
 # a pass reads only the global config: disabled -> nothing read or written; a live lock -> no work; a dead one is taken over; rotation once per UTC day
 umpass() { if KIT="${UMKIT:-$PK}" HOME="$TMP/home" ORCA_ROLES_CLAUDE_PROJECTS="$PC" bash "$ROOT/bin/usage-metrics.sh" "${@:---once}" > "$UM/pass.out" 2> "$UM/pass.err"; then UPRC=0; else UPRC=$?; fi; }
 umpk; kses g1 /unmapped/g "$RM"; PK2="$UM/pk2"; rm -rf "$PK2"; mkdir -p "$PK2"; chmod 000 "$PD/g1.jsonl"
