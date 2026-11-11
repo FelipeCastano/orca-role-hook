@@ -34,7 +34,7 @@ for x in "$@"; do
   if [ -n "$h" ] && [ "$src" -ne 0 ] && [ "$(printf '%s' "$js" | jq -r '.error.code // empty' 2>/dev/null)" != terminal_handle_stale ]; then
     echo "$t: Orca did not answer about its tab ($h); nothing was changed."; RC=1; continue
   fi
-  # An OpenCode role's session keeps running in OpenCode's service after its tab is gone: delete it first (this also stops its turn)
+  # An OpenCode role's session stays in OpenCode's store after its tab is gone: delete it first (closing the tab ends its turn)
   [ "$(rstr "$CFG" "$id" agent)" = opencode ] && oc_session_delete "$id" "$GITDIR"
   if [ "$src" -eq 0 ]; then
     if printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1; then
