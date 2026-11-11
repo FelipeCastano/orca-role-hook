@@ -810,6 +810,7 @@ rule A10 "$AD/researcher.md" 'Never change a result and never leave out runs tha
 rule R6 "$PD/local-coordinator.md" 'the only way to relaunch one with another model is `~/.orca-roles/bin/relaunch-role.sh`, all with the user'"'"'s confirmation' '^- Never create worktrees'
 rule R6 "$PD/local-coordinator.md" '(edit nothing in `~/.orca-roles` without it; do not use `roles --set` for this)' 'model unavailable'
 rule R6 "$PD/local-coordinator.md" 'Never dispatch tasks to a role that did not start' 'model unavailable'
+rule R18 "$PD/local-coordinator.md" 'Pair trees, without asking: create and remove them only with `~/.orca-roles/bin/pair-tree.sh`, and open their Dev and Tester only with `~/.orca-roles/bin/launch.sh --add <role> --tree <path>`' '^- Never create worktrees'
 # R5 E2E browser: the install only after the user's yes and never by the Planner, never with sudo; the E2E-Tester installs and logs in nothing; only the user saves sessions
 rule R5 "$PD/local-coordinator-e2e.md" 'You never run the install yourself' '^ +- Run `~/.orca-roles/bin/e2e-browser.sh check`'
 rule R5 "$PD/local-coordinator-e2e.md" 'do not ask the user for credentials' '^ +- Once the Deployer has started'
@@ -819,6 +820,9 @@ rule R5 "$PD/deployer.md" 'Never use `sudo`' '^1\. Run `~/.orca-roles/bin/e2e-br
 rule R5 "$PD/deployer.md" 'do not run it: report it for the user' '^2\. Report its output'
 rule R5 "$PD/e2e-tester.md" 'do not try to install anything or to authenticate' '^- If a browser tool fails'
 rule R5 "$PD/e2e-tester.md" '(and do not install anything)' '^- Do not sign in'
+rule R5 "$PD/local-coordinator-e2e.md" 'do not ask the Deployer to restart or stop it while any E2E-Tester has a task in flight'
+rule R5 "$PD/local-coordinator-e2e.md" 'any other flow runs alone'
+rule R5 "$PD/e2e-tester.md" 'Add a line starting `Data:`'
 # R5 E2E flows: the E2E-Tester writes only in the flows and evidence folders, never commits or installs there, and writes to shared services only with the user's typed authorization; the Planner asks for it and checks nothing of those folders is staged
 rule R5 "$PD/e2e-tester.md" 'never commit or stage them, and never `npm install` inside `<e2eDir>`' '^- You do not modify anything in the project'
 rule R5 "$PD/e2e-tester.md" "only after the user's authorization for that scope is in your conversation" '^4\. Writes to a shared service'
@@ -891,6 +895,11 @@ for m in programmer quick academic-research; do rule E6 "$ROOT/prompts/$m/local-
 for m in programmer academic-research; do rule E6 "$ROOT/prompts/$m/local-coordinator-team.md" 'such a role is closed, not cleaned, at'; done
 rule E6 "$PD/local-coordinator-team.md" 'none needs another'"'"'s answer, each names its own output files, and none measures time, load, memory or capacity'
 rule E6 "$PD/local-coordinator-team.md" 'Only while no code task is in flight'
+rule E6 "$PD/local-coordinator-parallel.md" 'Exactly one ready and no batch open: run it in the worktree'
+rule E6 "$PD/local-coordinator-parallel.md" 'while no code task and no E2E-Tester task is in flight in the worktree and no other integration is running'
+rule E6 "$PD/local-coordinator-parallel.md" 'never runs while a pair tree has a task in flight'
+rule E6 "$PD/local-coordinator-parallel.md" 'shows no tree `open` or `integrated`'
+rule E6 "$PD/tester.md" 'write no test, mutate nothing, skip the base check and the cross-check'
 rule E6 "$PD/local-coordinator-team.md" 'Do not retry at once; give the task to the first tab of that role that reports'
 rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh --add` in this mode'
 rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the Researcher'
