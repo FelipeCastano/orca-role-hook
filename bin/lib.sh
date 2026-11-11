@@ -254,10 +254,13 @@ oc_untrusted() {
 }
 # Runs `opencode <args>` in the current worktree (OpenCode scopes sessions to the directory), stdin closed, output in <file>, cut after
 # <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
+# Under settings.trust "never" (oc_untrusted) it runs with a private server and OPENCODE_DISABLE_PROJECT_CONFIG=1.
 oc_bounded() {
   local to="$1" out="$2" wt; shift 2
   wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
-  OC_RC=0; bounded_run --quiet --cd "$wt" "$to" opencode opencode "$@" > "$out" 2>&1 < /dev/null || OC_RC=$?
+  OC_RC=0
+  if oc_untrusted; then bounded_run --quiet --cd "$wt" "$to" opencode env OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode "$@" --standalone > "$out" 2>&1 < /dev/null || OC_RC=$?
+  else bounded_run --quiet --cd "$wt" "$to" opencode opencode "$@" > "$out" 2>&1 < /dev/null || OC_RC=$?; fi
   return 0
 }
 # Best-effort delete of one OpenCode session of this worktree (it interrupts a running turn).  oc_delete_id <id>

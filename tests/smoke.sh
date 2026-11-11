@@ -3509,9 +3509,11 @@ try mx --save; check "metrics: --save appends again" "$(wc -l < "$MG/orca-roles.
 try mx -h; check "metrics: -h prints the header" "$RC:$(printf '%s' "$OUT" | grep -c -e '^# Usage' -e '^#   --since' -e '^#   --save' -e '^#   --summary' -e '^# `stats` output')" "0:5"
 try mx --bogus; check "metrics: an unknown option fails" "$RC" "1"
 # OpenCode: only with the binary on the PATH and a role that runs it
-printf '#!/bin/sh\n[ "$1" = stats ] && { echo "{\\"sessions\\": 3, \\"args\\": \\"$*\\"}"; exit 0; }\nexit 1\n' > "$MB/opencode"; chmod +x "$MB/opencode"
+printf '#!/bin/sh\n[ "$1" = stats ] && { echo "{\\"sessions\\": 3, \\"args\\": \\"$*\\", \\"dpc\\": \\"${OPENCODE_DISABLE_PROJECT_CONFIG-unset}\\"}"; exit 0; }\nexit 1\n' > "$MB/opencode"; chmod +x "$MB/opencode"
 try mx
 check "metrics: one opencode line with its raw stats (not split per role)" "$(printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | [.role, .raw.sessions, .raw.args] | map(tostring) | join("|")'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "null|3|stats --json --cost --project .:4"
+MCFG0="$MCFG"; jq '.settings.trust = "never"' "$MCFG0" > "$MCFG0.never"; MCFG="$MCFG0.never"; try mx; MCFG="$MCFG0"
+check "metrics: under trust never the opencode stats call has --standalone and OPENCODE_DISABLE_PROJECT_CONFIG=1 (the default call has neither)" "$(printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | [.raw.args, .raw.dpc] | join("|")'):$(try mx; printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | .raw.dpc')" "stats --json --cost --project . --standalone|1:unset"
 try mx --summary; check "metrics: --summary leaves the opencode line out" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(printf '%s\n' "$OUT" | jq -r .role | tail -1)" "0:0:total"
 jq 'del(.roles.oc)' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
 try mx; check "metrics: no opencode line when no role runs opencode" "$(printf '%s\n' "$OUT" | grep -c opencode)" "0"
@@ -5821,11 +5823,15 @@ cat > "$OC/bin/opencode" <<'EOS'
 #!/bin/bash
 case "$1" in
   --version) echo "opencode 9.9.9"; exit 0;;
-  models) echo "p/m"; echo "p/other"; exit 0;;
+  models) echo "$* DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}" >> "$(dirname "$0")/models.log"; echo "p/m"; echo "p/other"; exit 0;;
+  run) echo "run $*" >> "${OC_DELLOG:-/dev/null}"   # models.sh --check's request: ok, or a failure, a reply without ok, a hang
+    case "${OC_RUNMODE:-}" in fail) echo "Error: forbidden (403)" >&2; exit 1;; noword) echo "I cannot help"; exit 0;; hang) exec sleep 30;; esac
+    echo ok; exit 0;;
 esac
 case "$1 $2" in   # OpenCode sessions: list prints the JSON in $OC_LIST; delete logs the id (and the directory it ran in) and can fail or hang
   "session list") cat "${OC_LIST:-/dev/null}" 2>/dev/null || echo '[]'; exit 0;;
-  "session delete") echo "delete $3 PWD=$PWD" >> "$OC_DELLOG"
+  "session delete") sa=n; case " $* " in *" --standalone "*) sa=y;; esac
+    echo "delete $3 PWD=$PWD SA=$sa DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}" >> "$OC_DELLOG"
     case "${OC_DELMODE:-}" in fail) exit 3;; hang) echo $$ > "$OC_DELLOG.pid"; exec sleep 30;; esac
     exit 0;;
 esac
@@ -5869,6 +5875,9 @@ PWD=$OCWP
 OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json
 DPC=unset"
 check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,5p "$OC/out" | tr '\n' ' ')" "mini --standalone --agent orca-tester --session "
+jq '.settings.trust = "never"' "$OC/cfg.json" > "$OC/cfg-never.json"; jq '.settings.trust = "bogus"' "$OC/cfg.json" > "$OC/cfg-bogus.json"; jq '.settings.trust = "worktree"' "$OC/cfg.json" > "$OC/cfg-wt.json"
+oc_flags() { OCCFG="$1" ocrun agent.sh dev >/dev/null; echo "$(grep -cx -e '--standalone' "$OC/out") $(grep '^DPC=' "$OC/out")"; }
+check "opencode trust: agent.sh sets OPENCODE_DISABLE_PROJECT_CONFIG=1 under never and under an invalid value (private server both times), leaves it alone under worktree and with no setting" "$(oc_flags "$OC/cfg-never.json"):$(oc_flags "$OC/cfg-bogus.json"):$(oc_flags "$OC/cfg-wt.json"):$(oc_flags "$OC/cfg.json")" "1 DPC=1:1 DPC=1:1 DPC=unset:1 DPC=unset"
 check "opencode: the configuration file is written in the git dir and the worktree has no .opencode" "$([ -f "$FILE" ] && echo yes):$([ -e "$OC/real/wt/.opencode" ] && echo yes || echo no)" "yes:no"
 FM="$(ocperms dev)"
 EXPECT_FM="{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
@@ -6007,7 +6016,7 @@ OCCFG=""
 OCSTATE="$OC/state.env"; OCLOG="$OC/seq.log"
 oc_close_setup() { printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_saved_1\n' > "$SF"; : > "$OCLOG"; rm -f "$OCLOG.pid"; }
 oc_close_setup; try ocrun close-role.sh dev
-check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT|orca terminal close --terminal h-dev --tab --json|"
+check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT SA=n DPC=unset|orca terminal close --terminal h-dev --tab --json|"
 check "opencode close-role: the session file is gone and the role's line left the state" "$([ -e "$SF" ] && echo file):$(cat "$OCSTATE")" ":CL=h-cl"
 oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
 check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
@@ -6018,6 +6027,12 @@ oc_close_setup; try ocrun close-role.sh cl
 check "opencode close-role: a claude role calls no opencode and leaves the file alone" "$RC:$(grep -c '^delete' "$OCLOG" || true):$(cat "$SF")" "0:0:ses_saved_1"
 oc_close_setup; rm -f "$SF"; try ocrun close-role.sh dev
 check "opencode close-role: no saved session (user-owned), no delete" "$RC:$(grep -c '^delete' "$OCLOG" || true)" "0:0"
+oc_del_line() { oc_close_setup; rm -f "$OC/gone"; "$@" >/dev/null 2>&1 || true; { grep '^delete ses_saved_1' "$OCLOG" || true; } | sed "s#PWD=$OCWP#PWD=WT#"; }
+oc_close_as() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$1" "$TMP/home/.orca-roles/bin/close-role.sh" dev); }
+oc_close_saved() { cp "$1" "$OCG/orca-roles.config.json"; oc_del_line oc_close_as "$2"; }
+D_NEVER="$(oc_del_line oc_close_as "$OC/cfg-never.json")"; D_SAVED="$(oc_close_saved "$OC/cfg-never.json" "")"
+D_WT="$(oc_close_saved "$OC/cfg-wt.json" "")"; rm -f "$OCG/orca-roles.config.json"
+check "opencode trust: close-role's delete under never ends SA=y DPC=1 with the trust from ORCA_ROLES_CONFIG, from the team's saved config (variable unset); worktree in the saved config gives SA=n DPC=unset" "$D_NEVER|$D_SAVED|$D_WT" "delete ses_saved_1 PWD=WT SA=y DPC=1|delete ses_saved_1 PWD=WT SA=y DPC=1|delete ses_saved_1 PWD=WT SA=n DPC=unset"
 # clean.sh: /new, then the newest session of THIS worktree created after /new becomes the role's session; the old one is deleted
 printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_old\n' > "$SF"; : > "$OCLOG"
 cat > "$OC/list.json" <<J

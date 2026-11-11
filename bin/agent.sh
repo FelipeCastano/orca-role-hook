@@ -191,6 +191,8 @@ case "$AGENT" in
       echo "agent.sh: $ROLE (opencode): OPENCODE_CONFIG ($OPENCODE_CONFIG) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." >&2
     fi
     export OPENCODE_CONFIG="$OCCFG"
+    # settings.trust "never": the project's opencode.json, .opencode/ and AGENTS.md stay off (honoured by the private server, --standalone)
+    if [ "$(trust_of "$CFG")" = never ]; then export OPENCODE_DISABLE_PROJECT_CONFIG=1; fi
     cd "$(pwd -P)"; PWD="$(pwd -P)"; export PWD
     ARGS+=(mini)
     if [ "$SA" = 1 ]; then ARGS+=(--standalone); fi

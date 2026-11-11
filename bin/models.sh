@@ -53,7 +53,7 @@ case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Unknown agent for $RO
   custom|opencode)
     emit "$MODEL"
     LIST="$(mopt list)"; PARSE="$(mopt parse)"; PARSE="${PARSE:-lines}"
-    [ -n "$LIST" ] || [ "$AGENT" != opencode ] || LIST="opencode models"   # one provider/model per line
+    [ -n "$LIST" ] || [ "$AGENT" != opencode ] || { LIST="opencode models"; [ "$(trust_of "$CFG")" != never ] || LIST="env OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode models --standalone"; }   # one provider/model per line
     if [ -z "$LIST" ]; then echo "$ROLE has no models.list in its configuration" >&2
     elif bounded list bash -c "$LIST"; [ "$TIMED" = 1 ]; then bounded_msg models.list "$TO" >&2
     elif [ "$RC" != 0 ]; then echo "models.list failed: $(first_line < "$T/list.err")" >&2
