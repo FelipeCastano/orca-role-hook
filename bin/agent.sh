@@ -201,6 +201,7 @@ case "$AGENT" in
     N0=${#ARGS[@]}; add_list extraArgs
     # Own session id, saved in the git dir, so close-role.sh/launch.sh/clean.sh can delete or continue the role's session. A session flag in
     # extraArgs means the user owns the sessions: nothing is added or saved. --resume <id> (from launch.sh) continues that session.
+    # Line 2 is the folder the agent runs in (a pair tree for an instance opened there), where clean.sh looks for its new session after /new.
     OWN_SESSION=0; i=$N0
     while [ "$i" -lt "${#ARGS[@]}" ]; do case "${ARGS[$i]}" in --session|--session=*|-s|--continue|-c|--fork|--fork=*) OWN_SESSION=1;; esac; i=$((i + 1)); done
     if [ "$OWN_SESSION" = 1 ]; then
@@ -208,7 +209,7 @@ case "$AGENT" in
     else
       OCID="$RESUME"; [ -n "$OCID" ] || OCID="ses_orca_$(printf '%s' "$ROLE" | tr -c 'A-Za-z0-9_-' _)_$(date +%s)$$$RANDOM"
       if OCF="$(oc_session_file "$ROLE")"; then
-        printf '%s\n' "$OCID" > "$OCF.tmp.$$" && mv "$OCF.tmp.$$" "$OCF" || echo "agent.sh: could not save the OpenCode session id of $ROLE" >&2
+        printf '%s\n%s\n' "$OCID" "$(pwd -P)" > "$OCF.tmp.$$" && mv "$OCF.tmp.$$" "$OCF" || echo "agent.sh: could not save the OpenCode session id of $ROLE" >&2
       fi
       ARGS+=(--session "$OCID")
     fi

@@ -229,8 +229,9 @@ git_here() {
   esac
 }
 
-# OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id in the worktree's git dir; the kit
-# deletes that session when the role is closed or replaced (a closed `mini` tab does not stop the turn: it runs in OpenCode's service).
+# OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id, and the folder it runs in, in the team's git
+# dir; the kit deletes that session when the role is closed or replaced (closing the tab ends a turn of the role's private server; the
+# session stays in OpenCode's store until it is deleted).
 # File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
 oc_session_file() {
   local gd="${2:-}"
@@ -276,14 +277,15 @@ oc_delete_id() {
   elif [ "$OC_RC" != 0 ]; then echo "Could not delete OpenCode session $1: opencode exited with $OC_RC."; fi
   rm -f "$tmp"; return 0
 }
-# After /new in an OpenCode tab: saves the newest session of this worktree created since <ms epoch> as the role's session and deletes the
+# After /new in an OpenCode tab: saves the newest session of the role's folder (line 2 of its session file, else this worktree) created since <ms epoch> as the role's session and deletes the
 # old one; with none found it says so and deletes the old one anyway.  oc_retrack <role> <since ms> [<git dir>]
 oc_retrack() {
-  local f old new tmp wt
+  local f old new tmp wt dir
   f="$(oc_session_file "$1" "${3:-}")" || return 0
   [ -f "$f" ] || return 0
-  old="$(head -1 "$f" 2>/dev/null)"; new=""
-  wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  old="$(head -1 "$f" 2>/dev/null)"; new=""; dir="$(sed -n 2p "$f" 2>/dev/null)"
+  if [ -n "$dir" ]; then wt="$dir"
+  else wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"; fi
   if command -v opencode >/dev/null 2>&1 && tmp="$(mktemp)"; then
     oc_bounded 20 "$tmp" session list --format json
     [ "$OC_RC" != 0 ] || new="$(jq -r --arg d "$wt" --argjson s "$2" '[.[]? | select(.directory == $d and (.created // 0) >= $s)] | sort_by(.created) | reverse | .[0].id // empty' "$tmp" 2>/dev/null)"
@@ -294,7 +296,7 @@ oc_retrack() {
     oc_session_delete "$1" "${3:-}"; return 0
   fi
   [ "$new" != "$old" ] || return 0
-  printf '%s\n' "$new" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+  { printf '%s\n' "$new"; [ -z "$dir" ] || printf '%s\n' "$dir"; } > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
   oc_delete_id "$old"; return 0
 }
 # Deletes the session saved for a role and forgets the file.  oc_session_delete <role> [<git dir>]
@@ -413,11 +415,11 @@ open_of() {
     *) printf start;;
   esac
 }
-# max_instances <config> <id>: the role's effective maxInstances (1 unless its open is per-task or per-batch and its agent claude or codex)
+# max_instances <config> <id>: the role's effective maxInstances (1 unless its open is per-task or per-batch and its agent claude, codex or opencode)
 max_instances() {
   jq -r --arg r "$2" '.roles[$r] as $x | if ($x | type) != "object" or ($x | has("instanceOf")) or (($x.maxInstances? // null) | type) != "number" or $x.maxInstances != ($x.maxInstances | floor) then 1
     else (($x.open // .defaults.open // "start") as $o | ($x.agent // .defaults.agent // "claude") as $a
-      | if ($o | IN("per-task", "per-batch")) and ($a | IN("claude", "codex")) then $x.maxInstances else 1 end) end' "$1" 2>/dev/null || echo 1
+      | if ($o | IN("per-task", "per-batch")) and ($a | IN("claude", "codex", "opencode")) then $x.maxInstances else 1 end) end' "$1" 2>/dev/null || echo 1
 }
 # The role an instance belongs to (nothing for a role).  instance_base <config> <id>
 instance_base() { jq -r --arg i "$2" '.roles[$i].instanceOf // empty' "$1" 2>/dev/null; }
@@ -1178,6 +1180,8 @@ link_ignored_entries() {
   local top="$1" dest="$2" p parent
   while IFS= read -r p; do
     p="${p%/}"; [ -n "$p" ] || continue
+    # .opencode (OpenCode's per-checkout agents, plugins and their dependencies, and an older kit's agent files) is never linked: OpenCode in the tree would load or write the worktree's
+    case "/$p/" in */.opencode/*) continue;; esac
     case "/$p" in */__pycache__|*/.pytest_cache|*/.mypy_cache|*/.ruff_cache|*/.DS_Store|*/dist|*/build|*/out|*/coverage|*/htmlcov|*/target|*/.tox|*/.nox|*/.nyc_output|*/.next|*/.nuxt|*/.svelte-kit|*/.turbo|*/.parcel-cache|*/.gradle|*/.eggs) continue;; esac
     parent="$(dirname "$p")"
     [ -d "$dest/$parent" ] && [ ! -e "$dest/$p" ] && [ ! -L "$dest/$p" ] || continue
