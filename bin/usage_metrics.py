@@ -297,13 +297,13 @@ def git_commit_in(cmd):
 
 
 def clean_role_of(cmd):
-    """-> the role id of a Bash `<path>/bin/clean.sh --msg <role>` command (how a /clear-ed session gets its role message), or ""."""
+    """-> the role id of a Bash `<path>/bin/clean.sh --msg <role>` command (how a /clear-ed session gets its role message), or "" (an instance's id counts as its role)."""
     if "clean.sh" not in cmd:
         return ""
     for c in simple_commands(cmd) or []:
         w = command_words(c)
         if len(w) >= 3 and w[0].endswith("/bin/clean.sh") and w[1] == "--msg" and re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", w[2]):
-            return w[2]
+            return re.sub(r"-[0-9]+$", "", w[2], count=1)
     return ""
 
 

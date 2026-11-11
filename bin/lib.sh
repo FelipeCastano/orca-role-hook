@@ -994,6 +994,7 @@ planner_msg() {
   lfirst=""; ltask=""; lhid=""; lbatch=""; linst=""; team="$roles"
   for id in $(launchable_roles "$cfg" 2>/dev/null); do
     [ "$id" = "$front" ] && continue
+    [ -z "$(instance_base "$cfg" "$id")" ] || continue
     case "$(open_of "$cfg" "$id")" in
       first-use) case " $roles " in *" $id "*) ;; *) lfirst="$lfirst, $(title_of "$cfg" "$id") ($id)"; team="$team $id";; esac;;
       per-task) ltask="$ltask, $(title_of "$cfg" "$id") ($id)"; case " $roles " in *" $id "*) ;; *) team="$team $id";; esac;;
@@ -1004,7 +1005,7 @@ planner_msg() {
     [ "$n" -gt 1 ] && linst="$linst, $(title_of "$cfg" "$id") ($id, up to $n)"
   done
   extra="$(jq -r --arg f "$front" --argjson act "$(printf '%s\n' $team | grep . | jq -R . | jq -s .)" \
-    '[.roles | to_entries[] | select(.key != $f and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
+    '[.roles | to_entries[] | select(.key != $f and (.value.instanceOf | not) and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
   params="$(jq -r --arg f "$front" '((.defaults.params // {}) * (.roles[$f].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$cfg")"
   msg="Read $(prompt_of "$cfg" "$front") and adopt that role from now on. Mode: $(mode_of --saved "$cfg")."
   [ "$(mode_of --saved "$cfg")" = academic-research ] && msg="$msg Phase: $(phase_of "$cfg")."

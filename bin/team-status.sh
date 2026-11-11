@@ -52,6 +52,7 @@ done < "$GITDIR/orca-roles.env"
 if [ "$CFG" != /dev/null ]; then   # roles that open on first use or per task and have no tab yet
   for id in $(launchable_roles "$CFG" 2>/dev/null); do
     grep -q "^$(var_of "$id")=" "$GITDIR/orca-roles.env" && continue
+    [ -z "$(instance_base "$CFG" "$id")" ] || continue
     [ "$(open_of "$CFG" "$id")" != start ] || continue
     HR=0; hidden_live "$GITDIR" "$id" && HR=1
     ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg hr "$HR" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" '. + [{role: $r, title: $t, handle: "", paneKey: "", notOpened: true}] | if $hr == "1" then (.[-1].hiddenRun = true) else . end')"

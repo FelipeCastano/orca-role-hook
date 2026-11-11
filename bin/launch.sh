@@ -174,6 +174,7 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
   if [ ! -e "$MARKER" ]; then
     for role in $(launchable_roles "$SCFG" 2>/dev/null); do
       grep -q "^$(var_of "$role")=" "$STATE" && continue
+      [ -z "$(instance_base "$SCFG" "$role")" ] || continue
       om="$(open_of "$SCFG" "$role")"; [ "$om" != start ] || continue
       cm="$(role_model "$SCFG" "$role")"
       printf '%s\t-\tnot opened (%s)\t%s\t-\t-\t-\n' "$(title_of "$SCFG" "$role")" "${om/-/ }" "${cm:--}"
@@ -890,8 +891,8 @@ if metrics_enabled "$CFG"; then   # what the metrics pass cannot read itself: th
   metrics_worktree "$MTOP" "$(project_name .)" "$(metrics_task "$CFG" "$MTOP")"
   metrics_event "$MPHYS" launch ""
   [ "${ORCA_ROLES_RELAUNCH:-}" != 1 ] || metrics_event "$MPHYS" relaunch "$FRONT"
-  for id in $REMEMBERED $RESUMED; do metrics_event "$MPHYS" reopened "$id"; done
-  for id in $KEPT_DETACHED; do metrics_event "$MPHYS" detached-kept "$id"; done
+  for id in $REMEMBERED $RESUMED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" reopened "${b:-$id}"; done
+  for id in $KEPT_DETACHED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" detached-kept "${b:-$id}"; done
 fi
 PREV_PTY="$(cat "$PTY" 2>/dev/null)"
 PREV_TABS="$(cat "$TABS" 2>/dev/null)"

@@ -29,6 +29,8 @@ STATE="${ORCA_ROLES_STATE:-$GITDIR/orca-roles.env}"; CFG="${ORCA_ROLES_CONFIG:-$
 [ -f "$STATE" ] && [ -f "$CFG" ] || { echo "$STATE or $CFG not found: run this from the worktree where the roles were opened." >&2; exit 1; }
 ID="$(resolve_role "$CFG" "$ROLEARG")"
 [ -n "$ID" ] || { echo "Unknown role: $ROLEARG" >&2; exit 1; }
+IB="$(instance_base "$CFG" "$ID")"
+[ -z "$IB" ] || { echo "relaunch-role.sh: $(title_of "$CFG" "$ID") is an instance of $(title_of "$CFG" "$IB"): close it with close-role.sh and open a new one with launch.sh --add $IB." >&2; exit 1; }
 [ "$ID" != local-coordinator ] || { echo "The local coordinator cannot be relaunched from inside the team." >&2; exit 1; }
 V="$(var_of "$ID")"; TITLE="$(title_of "$CFG" "$ID")"
 if [ "$(open_of "$CFG" "$ID")" = hidden ] && ! grep -q "^$V=." "$STATE"; then echo "$TITLE is hidden: it has no tab; its next run uses the model in the configuration."; exit 1; fi
