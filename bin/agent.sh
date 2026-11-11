@@ -27,13 +27,19 @@ while IFS=$'\t' read -r k v; do [ -n "$k" ] && export "$k=$v"; done < <(jq -r --
 TROLE="$(instance_base "$CFG" "$ROLE")"; TROLE="${TROLE:-$ROLE}"
 if telemetry_role_attribute "$CFG"; then export OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES:+$OTEL_RESOURCE_ATTRIBUTES,}orca_roles.role=$TROLE"; fi
 
+# The team's git dir: outside a pair tree spelled as the current folder's own git dir, inside one the worktree's.
+agent_git_dir() {
+  local gd own; gd="$(team_git_dir)" || return 1
+  own="$(git rev-parse --git-dir 2>/dev/null)" && own="$(cd "$own" && pwd)" && [ "$(cd "$own" && pwd -P)" = "$gd" ] && gd="$own"
+  printf '%s\n' "$gd"
+}
 # The role's MCP servers, in a file in mcpServers format. With mcp="all" none is generated: the agent uses its own configuration.
 MCPFILE=""
 if [ "$AGENT" != opencode ] && [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
   role_context "$CFG" "$ROLE" .          # placeholders {worktree}, {project}, {evidenceDir}, {browserState}...
   ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"
   # In the worktree's git dir, one per role, rewritten on every start (outside a repo, a temporary file)
-  if GD="$(git rev-parse --git-dir 2>/dev/null)"; then MCPFILE="$(cd "$GD" && pwd)/orca-roles-mcp-$ROLE.json"; else MCPFILE="$(mktemp)"; fi
+  if GD="$(agent_git_dir)"; then MCPFILE="$GD/orca-roles-mcp-$ROLE.json"; else MCPFILE="$(mktemp)"; fi
   mcp_file "$CFG" "$ROLE" > "$MCPFILE"
   export ORCA_ROLES_MCP="$MCPFILE"
 fi
@@ -42,7 +48,7 @@ fi
 # cliVersion is the first line of `<binary> --version` (claude/codex), killed after 3 s; null for a custom command.
 record_provenance() {  # $1 binary to ask for its version, "" for none
   local gd ver="" out sha_c sha_p kv ki
-  gd="$(git rev-parse --git-dir 2>/dev/null)" && gd="$(cd "$gd" && pwd)" || return 0
+  gd="$(agent_git_dir)" || return 0
   if [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
     out="$(mktemp)"; bounded_run --quiet 3 "$1 --version" "$1" --version > "$out" 2>/dev/null < /dev/null || true
     ver="$(head -1 "$out")"; rm -f "$out"

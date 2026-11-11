@@ -234,7 +234,7 @@ git_here() {
 # File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
 oc_session_file() {
   local gd="${2:-}"
-  [ -n "$gd" ] || gd="$(git_here git-dir)" || return 1
+  [ -n "$gd" ] || gd="$(team_git_dir)" || return 1
   gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
   printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
 }
@@ -521,7 +521,7 @@ front_var() { var_of "$(front_role "$@")"; }
 # The front role of a configuration's saved mode in this worktree (or in <git dir>).  front_of <config> [<git dir>]
 front_of() {
   local m gd="${2:-}"; m="$(mode_of --saved "$1" 2>/dev/null)" || m=programmer
-  [ -n "$gd" ] || gd="$(git_here git-dir 2>/dev/null)" || gd=""
+  [ -n "$gd" ] || gd="$(team_git_dir 2>/dev/null)" || gd=""
   [ -z "$gd" ] || gd="$(cd "$gd" 2>/dev/null && pwd)" || gd=""
   front_role "$m" "$gd"
 }
@@ -1127,15 +1127,27 @@ role_anchor() {
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
+# Marks a role's folder (a pair tree) as trusted the way launch.sh does for the worktree.  trust_role_in <dir> <config> <role>
+trust_role_in() {
+  ( cd "$1" || exit 0
+    case "$(rstr "$2" "$3" agent)" in claude|"") trust_folder;; esac
+    trust_custom_roles "$2" "$3" )
+}
 # A role's extra instructions for this worktree only (the Planner saves them with its skill): <git dir>/orca-roles.notes/<role>.md
-notes_file() { local gd; gd="$(git_here git-dir)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
+notes_file() { local gd; gd="$(team_git_dir)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
+# The git dir that holds the team's files: the current one, or, in a pair tree (pair-tree.sh), the worktree's, named by its marker.
+team_git_dir() {
+  local gd m; gd="$(git_here absolute-git-dir)" || return 1
+  if [ -s "$gd/orca-roles.pair" ]; then m="$(head -1 "$gd/orca-roles.pair")"; [ -n "$m" ] && [ -d "$m" ] && gd="$m"; fi
+  printf '%s\n' "$gd"
+}
 # A worker's scratch folder: fixed per worktree and role, OUTSIDE the worktree ($KIT/tmp/<project>-<hash of the git dir>/<role>).
 # The agents reuse it and never delete anything in it; the kit never empties it. It is outside the worktree because
 # jest, vitest and eslint collect copies of the project that live inside it and none honors .gitignore.  scratch_dir <role>
 scratch_dir() {
   local gd h proj role="${1:-}"
   [ -n "$role" ] || return 1
-  gd="$(git_here absolute-git-dir)" || gd="$(pwd -P)"
+  gd="$(team_git_dir)" || gd="$(pwd -P)"
   h="$(printf '%s' "$gd" | { shasum 2>/dev/null || sha1sum 2>/dev/null || cksum; } | cut -d' ' -f1 | cut -c1-10)"
   proj="$(project_name .)"
   case "$proj" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) proj="$(printf '%s\n' "$proj" | tr -c 'A-Za-z0-9._\n-' '_')";; esac

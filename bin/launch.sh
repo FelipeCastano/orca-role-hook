@@ -13,6 +13,7 @@
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
 #   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use", "per-task" or "per-batch" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
 #   --add <role>     opens one more tab of that role (id or title) now: its own tab when it has none, else the instance <id>-<n> with the lowest free n; refused (exit 3, a line starting REFUSED:) over its maxInstances, settings.scaling or the machine's load or memory. Not saved. Takes no other option.
+#   --tree <path>    with --add: the new tab's agent runs in that pair tree (pair-tree.sh create), not in the worktree; kept for every reopen of that tab
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -21,11 +22,11 @@
 # Only one launch runs per worktree at a time (orca-roles.lock in its git dir). If Orca cannot tell which tabs are open
 # ("Orca is not ready"), it stops before closing or opening anything.
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,22p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,23p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 type -P orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
-WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=(); OPEN_REQ=""; NAMED_REQ=""; ADD_REQ=""; ADD_SEEN=0
+WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=(); OPEN_REQ=""; NAMED_REQ=""; ADD_REQ=""; ADD_SEEN=0; TREE_REQ=""; TREE_SEEN=0; TREE_PATH=""; TREE_SLOT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
@@ -38,6 +39,11 @@ while [ $# -gt 0 ]; do
       [ "$ADD_SEEN" = 0 ] || { echo "ERROR: --add takes one role (got: $ADD_REQ, $av). Nothing was changed."; exit 1; }
       [ -n "$av" ] || { echo "ERROR: --add needs a role (an id or a title). Nothing was changed."; exit 1; }
       ADD_SEEN=1; ADD_REQ="$av";;
+    --tree|--tree=*)
+      if [ "$1" = --tree ]; then tv="${2:-}"; shift; else tv="${1#--tree=}"; fi
+      [ "$TREE_SEEN" = 0 ] || { echo "ERROR: --tree takes one folder. Nothing was changed."; exit 1; }
+      [ -n "$tv" ] || { echo "ERROR: --tree needs a folder (a pair tree). Nothing was changed."; exit 1; }
+      TREE_SEEN=1; TREE_REQ="$tv";;
     --only|--enable|--disable|--set|--mode)
       case "$1" in --only|--enable) NAMED_REQ="${NAMED_REQ:+$NAMED_REQ,}${2:-}";; esac
       FLAGS+=("$1" "${2:-}"); shift;;
@@ -66,6 +72,7 @@ if [ -n "$ADD_REQ" ]; then
   [ "$REOPEN" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reopen"
   [ -z "$OTHERS" ] || { echo "ERROR: --add takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
 fi
+[ -z "$TREE_REQ" ] || [ -n "$ADD_REQ" ] || { echo "ERROR: --tree goes with --add. Nothing was changed."; exit 1; }
 git_here_init
 # a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
 if [ -z "$WT" ] && [[ "${ORCA_WORKTREE_ID:-}" == *::* ]] && TOP="$(git_here toplevel)"; then
@@ -368,6 +375,18 @@ if [ -n "$ADD_REQ" ]; then
   if [ "$(open_of "$NEWCFG" "$r")" = hidden ] && ! grep -q "^$(var_of "$r")=." "$STATE" 2>/dev/null; then
     fail "ERROR: --add: '$ADD_REQ' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed."
   fi
+  TREE_PATH=""; TREE_SLOT=""
+  if [ -n "$TREE_REQ" ]; then
+    TP="$(cd "$TREE_REQ" 2>/dev/null && pwd -P)"; tok=0
+    if [ -n "$TP" ] && [ -f "$GITDIR/orca-roles.pairs" ]; then
+      while IFS=$'\t' read -r _pb _pk pp _ps _pg pst; do
+        [ "$pst" = open ] || continue
+        [ "$(cd "$pp" 2>/dev/null && pwd -P)" = "$TP" ] && { tok=1; break; }
+      done < "$GITDIR/orca-roles.pairs"
+    fi
+    [ "$tok" = 1 ] || fail "ERROR: --tree: $TREE_REQ is not an open pair tree of this worktree (see pair-tree.sh list). Nothing was changed."
+    TREE_PATH="$TP"
+  fi
   AT="$(title_of "$NEWCFG" "$r")"
   read -r k e <<< "$(instance_tabs "$NEWCFG" "$STATE" "$r")"
   max="$(max_instances "$NEWCFG" "$r")"
@@ -406,7 +425,7 @@ if [ -n "$ADD_REQ" ]; then
     instance_entry "$NEWCFG" "$r" "${slot##*-}" || fail "ERROR: --add: could not write the instance in the configuration. Nothing was changed."
     LROLES="$LROLES $slot"
   fi
-  OPEN_IDS=" $slot"
+  OPEN_IDS=" $slot"; [ -z "$TREE_PATH" ] || TREE_SLOT="$slot"
   echo "Instance: $slot ($(title_of "$NEWCFG" "$slot")) opening."
 fi
 for n in $(printf '%s' "$NAMED_REQ" | tr ',' ' '); do   # roles named by --only/--enable in this run (unknown names were already refused by check_overrides)
@@ -855,9 +874,23 @@ for id in $ROLES; do
       oc_forget "$id"
     fi
   fi
+  tp=""
+  if [ -n "$TREE_SLOT" ] && [ "$id" = "$TREE_SLOT" ]; then tp="$TREE_PATH"
+  else tp="$(grep "^$v=" "$GITDIR/orca-roles.trees" 2>/dev/null | head -1 | cut -d= -f2-)"; fi
+  tcd=""
+  if [ -n "$tp" ]; then
+    if [ ! -d "$tp" ]; then
+      echo "The pair tree of $t ($tp) no longer exists; not reopened."
+      printf -v "$v" '%s' ""; continue
+    fi
+    if [ "$(trust_of "$CFG")" != never ]; then
+      trust_role_in "$tp" "$CFG" "$id"
+    fi
+    tcd="cd $(printf '%q' "$tp") && ORCA_ROLES_STATE=$(printf '%q' "$STATE") "
+  fi
   h=""
   for try in 1 2 3; do
-    out="$(orca terminal create --worktree "$WT" --title "$(tab_title_of "$CFG" "$id")" --command "$(kit_env)ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1)"; crc=$?
+    out="$(orca terminal create --worktree "$WT" --title "$(tab_title_of "$CFG" "$id")" --command "${tcd}$(kit_env)ORCA_ROLES_CONFIG='$CFG' '$KIT/bin/agent.sh' $id${sid:+ --resume $sid}" --json 2>&1)"; crc=$?
     h="$(printf '%s' "$out" | handle_of)"
     if [ "$crc" = 124 ]; then
       # The list is read once, so a tab Orca opens after it is missed (N2).
@@ -881,6 +914,7 @@ for id in $ROLES; do
     pace 2; hp="$(pty_of_handle "$h")"
     [ -n "$hp" ] || echo "Could not read the ptyId of the tab of $t; after a restart it may open without memory."
   fi
+  [ -z "$tp" ] || state_set "$GITDIR/orca-roles.trees" "$v" "$tp"
   state_set "$STATE" "$v" "$h"; state_set "$PTY" "$v" "$hp"   # an interrupted launch still remembers the tabs it opened
   [ "$id" != "$FRONT" ] || rm -f "$FRONT_REOPEN_FILE"   # any new tab of the local coordinator has the current mode's settings
   tl="$(tabs_of_handle "$h")"; [ -z "$tl" ] || state_set "$TABS" "$v" "$tl"
@@ -896,10 +930,12 @@ if metrics_enabled "$CFG"; then   # what the metrics pass cannot read itself: th
 fi
 PREV_PTY="$(cat "$PTY" 2>/dev/null)"
 PREV_TABS="$(cat "$TABS" 2>/dev/null)"
+TREES="$GITDIR/orca-roles.trees"; : > "$TREES.tmp.$$"
 : > "$STATE"; : > "$PTY"; : > "$TABS.tmp.$$"
 for id in $ROLES; do   # a role with no saved tab (left closed) is not written back as VAR=
   v="$(var_of "$id")"; [ -n "${!v:-}" ] || continue
   echo "$v=${!v}" >> "$STATE"
+  grep "^$v=" "$TREES" >> "$TREES.tmp.$$" 2>/dev/null
   oskip=0; if [ -n "$OPEN_IDS" ]; then case " $OPEN_IDS " in *" $id "*) ;; *) oskip=1;; esac; fi
   if [ "$oskip" = 1 ]; then   # a role --open did not name: its saved ptyId and tabs line are kept as they were (its handle may be stale)
     echo "$v=$(printf '%s\n' "$PREV_PTY" | grep "^$v=" | head -1 | cut -d= -f2-)" >> "$PTY"
@@ -914,6 +950,7 @@ for id in $ROLES; do   # a role with no saved tab (left closed) is not written b
   [ -z "$tl" ] || echo "$v=$tl" >> "$TABS.tmp.$$"
 done
 mv "$TABS.tmp.$$" "$TABS"
+if [ -s "$TREES.tmp.$$" ]; then mv "$TREES.tmp.$$" "$TREES"; else rm -f "$TREES.tmp.$$" "$TREES"; fi
 "$KIT/bin/orca-yaml.sh" --check || true
 cat "$STATE"
 
