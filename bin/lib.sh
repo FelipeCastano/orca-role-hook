@@ -234,7 +234,7 @@ git_here() {
 # File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
 oc_session_file() {
   local gd="${2:-}"
-  [ -n "$gd" ] || gd="$(git_here git-dir)" || return 1
+  [ -n "$gd" ] || gd="$(team_git_dir)" || return 1
   gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
   printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
 }
@@ -521,7 +521,7 @@ front_var() { var_of "$(front_role "$@")"; }
 # The front role of a configuration's saved mode in this worktree (or in <git dir>).  front_of <config> [<git dir>]
 front_of() {
   local m gd="${2:-}"; m="$(mode_of --saved "$1" 2>/dev/null)" || m=programmer
-  [ -n "$gd" ] || gd="$(git_here git-dir 2>/dev/null)" || gd=""
+  [ -n "$gd" ] || gd="$(team_git_dir 2>/dev/null)" || gd=""
   [ -z "$gd" ] || gd="$(cd "$gd" 2>/dev/null && pwd)" || gd=""
   front_role "$m" "$gd"
 }
@@ -1127,21 +1127,64 @@ role_anchor() {
 }
 # A role's parameters (defaults.params + roles.<role>.params) as "k=v, k=v"
 params_of() { jq -r --arg r "$2" '((.defaults.params // {}) * (.roles[$r].params // {})) | to_entries | map("\(.key)=\(.value)") | join(", ")' "$1"; }
+# Marks a role's folder (a pair tree) as trusted the way launch.sh does for the worktree.  trust_role_in <dir> <config> <role>
+trust_role_in() {
+  ( cd "$1" || exit 0
+    case "$(rstr "$2" "$3" agent)" in claude|"") trust_folder;; esac
+    trust_custom_roles "$2" "$3" )
+}
 # A role's extra instructions for this worktree only (the Planner saves them with its skill): <git dir>/orca-roles.notes/<role>.md
-notes_file() { local gd; gd="$(git_here git-dir)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
+notes_file() { local gd; gd="$(team_git_dir)" || return 0; echo "$(cd "$gd" && pwd)/orca-roles.notes/$1.md"; }
+# The git dir that holds the team's files: the current one, or, in a pair tree (pair-tree.sh), the worktree's, named by its marker.
+team_git_dir() {
+  local gd m; gd="$(git_here absolute-git-dir)" || return 1
+  if [ -s "$gd/orca-roles.pair" ]; then m="$(head -1 "$gd/orca-roles.pair")"; [ -n "$m" ] && [ -d "$m" ] && gd="$m"; fi
+  printf '%s\n' "$gd"
+}
 # A worker's scratch folder: fixed per worktree and role, OUTSIDE the worktree ($KIT/tmp/<project>-<hash of the git dir>/<role>).
 # The agents reuse it and never delete anything in it; the kit never empties it. It is outside the worktree because
 # jest, vitest and eslint collect copies of the project that live inside it and none honors .gitignore.  scratch_dir <role>
 scratch_dir() {
   local gd h proj role="${1:-}"
   [ -n "$role" ] || return 1
-  gd="$(git_here absolute-git-dir)" || gd="$(pwd -P)"
+  gd="$(team_git_dir)" || gd="$(pwd -P)"
   h="$(printf '%s' "$gd" | { shasum 2>/dev/null || sha1sum 2>/dev/null || cksum; } | cut -d' ' -f1 | cut -c1-10)"
   proj="$(project_name .)"
   case "$proj" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) proj="$(printf '%s\n' "$proj" | tr -c 'A-Za-z0-9._\n-' '_')";; esac
   case "$role" in *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) role="$(printf '%s' "$role" | tr -c 'A-Za-z0-9._-' '_')";; esac
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
+}
+# The ignored entries of <top> (dependencies such as node_modules or a venv) linked into <dest>, which holds a copy of <top>'s files: never copied;
+# caches and build outputs stay out (a run would write into the original's, or load its built code). Prints each linked path, relative.  link_ignored_entries <top> <dest>
+link_ignored_entries() {
+  local top="$1" dest="$2" p parent
+  while IFS= read -r p; do
+    p="${p%/}"; [ -n "$p" ] || continue
+    case "/$p" in */__pycache__|*/.pytest_cache|*/.mypy_cache|*/.ruff_cache|*/.DS_Store|*/dist|*/build|*/out|*/coverage|*/htmlcov|*/target|*/.tox|*/.nox|*/.nyc_output|*/.next|*/.nuxt|*/.svelte-kit|*/.turbo|*/.parcel-cache|*/.gradle|*/.eggs) continue;; esac
+    parent="$(dirname "$p")"
+    [ -d "$dest/$parent" ] && [ ! -e "$dest/$p" ] && [ ! -L "$dest/$p" ] || continue
+    ln -s "$top/$p" "$dest/$p" && printf '%s\n' "$p"
+  done < <(git -C "$top" ls-files -o -i --exclude-standard --directory 2>/dev/null)
+  return 0
+}
+# Why the linked ignored entry <top>/<path> points back into <top> (an editable install in a virtualenv, a workspace link inside node_modules), or nothing.  link_back_reason <top> <path>
+link_back_reason() {
+  local TOP="$1" p="$2" src RAW why="" f l t
+  src="$TOP/$p"; RAW="$(git -C "$TOP" rev-parse --show-toplevel)"
+  if [ -f "$src/pyvenv.cfg" ]; then
+    f="$(find "$src" -maxdepth 6 -path '*site-packages/*' \( -name '*.pth' -o -name '__editable__*' -o -name direct_url.json \) -type f \
+      -exec grep -lF -e "$TOP" -e "$RAW" {} + 2>/dev/null | head -1)"
+    [ -n "$f" ] && why="editable install (${f#"$src"/})"
+  fi
+  if [ -z "$why" ] && [ "$(basename "$p")" = node_modules ]; then
+    while IFS= read -r l; do
+      t="$(cd "$(dirname "$l")" 2>/dev/null && cd "$(readlink "$l")" 2>/dev/null && pwd -P)" || continue
+      case "$t/" in "$src"/*) ;; "$TOP"/*) why="workspace link (${l#"$src"/} -> ${t#"$TOP"/})"; break;; esac
+    done < <(find "$src" -mindepth 1 -maxdepth 2 -type l 2>/dev/null)
+  fi
+  [ -z "$why" ] || printf '%s\n' "$why"
+  return 0
 }
 # The kit's own files a worker must not edit (paths relative to $KIT), one per line; tmp/ and backup/ stay writable.
 kit_protected_paths() {

@@ -53,6 +53,7 @@ for x in "$@"; do
   TMPS="$(mktemp)"; grep -v "^$v=" "$STATE" > "$TMPS" || true; cat "$TMPS" > "$STATE"; rm -f "$TMPS"
   PTYF="$(dirname "$STATE")/orca-roles.pty"; [ -f "$PTYF" ] && { grep -v "^$v=" "$PTYF" > "$PTYF.tmp" || true; mv "$PTYF.tmp" "$PTYF"; }
   TABSF="$(dirname "$STATE")/orca-roles.tabs"; [ -f "$TABSF" ] && { grep -v "^$v=" "$TABSF" > "$TABSF.tmp" || true; mv "$TABSF.tmp" "$TABSF"; }
+  TREESF="$(dirname "$STATE")/orca-roles.trees"; [ -f "$TREESF" ] && { grep -v "^$v=" "$TREESF" > "$TREESF.tmp" || true; mv "$TREESF.tmp" "$TREESF"; }
   b="$(instance_base "$CFG" "$id")"
   if [ -n "$b" ]; then
     TMPC="$(mktemp "$CFG.XXXXXX")"

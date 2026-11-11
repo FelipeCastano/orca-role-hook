@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -810,6 +810,7 @@ rule A10 "$AD/researcher.md" 'Never change a result and never leave out runs tha
 rule R6 "$PD/local-coordinator.md" 'the only way to relaunch one with another model is `~/.orca-roles/bin/relaunch-role.sh`, all with the user'"'"'s confirmation' '^- Never create worktrees'
 rule R6 "$PD/local-coordinator.md" '(edit nothing in `~/.orca-roles` without it; do not use `roles --set` for this)' 'model unavailable'
 rule R6 "$PD/local-coordinator.md" 'Never dispatch tasks to a role that did not start' 'model unavailable'
+rule R18 "$PD/local-coordinator.md" 'Pair trees, without asking: create and remove them only with `~/.orca-roles/bin/pair-tree.sh`, and open their Dev and Tester only with `~/.orca-roles/bin/launch.sh --add <role> --tree <path>`' '^- Never create worktrees'
 # R5 E2E browser: the install only after the user's yes and never by the Planner, never with sudo; the E2E-Tester installs and logs in nothing; only the user saves sessions
 rule R5 "$PD/local-coordinator-e2e.md" 'You never run the install yourself' '^ +- Run `~/.orca-roles/bin/e2e-browser.sh check`'
 rule R5 "$PD/local-coordinator-e2e.md" 'do not ask the user for credentials' '^ +- Once the Deployer has started'
@@ -819,6 +820,9 @@ rule R5 "$PD/deployer.md" 'Never use `sudo`' '^1\. Run `~/.orca-roles/bin/e2e-br
 rule R5 "$PD/deployer.md" 'do not run it: report it for the user' '^2\. Report its output'
 rule R5 "$PD/e2e-tester.md" 'do not try to install anything or to authenticate' '^- If a browser tool fails'
 rule R5 "$PD/e2e-tester.md" '(and do not install anything)' '^- Do not sign in'
+rule R5 "$PD/local-coordinator-e2e.md" 'do not ask the Deployer to restart or stop it while any E2E-Tester has a task in flight'
+rule R5 "$PD/local-coordinator-e2e.md" 'any other flow runs alone'
+rule R5 "$PD/e2e-tester.md" 'Add a line starting `Data:`'
 # R5 E2E flows: the E2E-Tester writes only in the flows and evidence folders, never commits or installs there, and writes to shared services only with the user's typed authorization; the Planner asks for it and checks nothing of those folders is staged
 rule R5 "$PD/e2e-tester.md" 'never commit or stage them, and never `npm install` inside `<e2eDir>`' '^- You do not modify anything in the project'
 rule R5 "$PD/e2e-tester.md" "only after the user's authorization for that scope is in your conversation" '^4\. Writes to a shared service'
@@ -891,11 +895,17 @@ for m in programmer quick academic-research; do rule E6 "$ROOT/prompts/$m/local-
 for m in programmer academic-research; do rule E6 "$ROOT/prompts/$m/local-coordinator-team.md" 'such a role is closed, not cleaned, at'; done
 rule E6 "$PD/local-coordinator-team.md" 'none needs another'"'"'s answer, each names its own output files, and none measures time, load, memory or capacity'
 rule E6 "$PD/local-coordinator-team.md" 'Only while no code task is in flight'
+rule E6 "$PD/local-coordinator-parallel.md" 'Exactly one ready and no batch open: run it in the worktree'
+rule E6 "$PD/local-coordinator-parallel.md" 'while no code task and no E2E-Tester task is in flight in the worktree and no other integration is running'
+rule E6 "$PD/local-coordinator-parallel.md" 'never runs while a pair tree has a task in flight'
+rule E6 "$PD/local-coordinator-parallel.md" 'shows no tree `open` or `integrated`'
+rule E6 "$PD/tester.md" 'write no test, mutate nothing, skip the base check and the cross-check'
 rule E6 "$PD/local-coordinator-team.md" 'Do not retry at once; give the task to the first tab of that role that reports'
 rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh --add` in this mode'
 rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the Researcher'
 rule E6 "$AD/local-coordinator-team.md" 'The Dev fix and Tester rounds of one Review round count as one batch'
 rule E6 "$PD/planner.md" 'write one brief per question, each its own `needs: research:` item'
+rule E6 "$PD/planner.md" 'Name only steps that come earlier in plan order.'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
@@ -1051,7 +1061,7 @@ SCF="$(for v in 3 '"x"' '[]' '{"maxExtraInstances":-1}' '{"maxExtraInstances":1.
 check "check_config: settings.scaling is an object of maxExtraInstances (integer 0 or more), maxLoad (number above 0) and minFreeMemoryMB (integer 0 or more) only: the defaults, 0 extra instances, 0 MB and an empty object pass; a non-object, a negative or fractional count, a zero, negative or string load, a fractional memory and an unknown key give exactly one error each" "$SCP|$SCF" "0,0,0,0,0,0|1,1,1,1,1,1,1,1,1,1,1,1,"
 RIE() { jq -c "$1" "$ROOT/config.default.json" > "$MIC"; check_config "$MIC" | grep -c "^ERROR: role ${2}:" || true; }
 check "check_config: a role id ending in a hyphen and digits and a role with instanceOf are errors naming the role; e2e-tester, dev2 and tech-verifier are not" "$(RIE '.roles["dev-2"] = {"title":"x"}' dev-2),$(RIE '.roles["x-10"] = {"title":"x"}' x-10),$(RIE '.roles.dev2 = {"title":"x"}' dev2),$(RIE '.roles["dev-a1"] = {"title":"x"}' dev-a1),$(RIE '.roles.deployer.instanceOf = "dev"' deployer),$(RIE '.roles.x = {"instanceOf":"dev"}' x),$(check_config "$ROOT/config.default.json" | grep -c 'e2e-tester\|tech-verifier' || true)" "1,1,0,0,1,1,0"
-check "config default: researcher is per-task with maxInstances 3, dev, tester and e2e-tester are per-batch, deployer has no open, settings.scaling is 4, 0.8 and 2048" "$(jq -c '[.roles.researcher.open, .roles.researcher.maxInstances, .roles.dev.open, .roles.tester.open, .roles["e2e-tester"].open, (.roles.deployer | has("open")), .settings.scaling]' "$ROOT/config.default.json")" '["per-task",3,"per-batch","per-batch","per-batch",false,{"maxExtraInstances":4,"maxLoad":0.8,"minFreeMemoryMB":2048}]'
+check "config default: researcher is per-task with maxInstances 3, dev, tester and e2e-tester are per-batch with maxInstances 3, deployer has no open, settings.scaling is 4, 0.8 and 2048" "$(jq -c '[.roles.researcher.open, .roles.researcher.maxInstances, .roles.dev.open, .roles.dev.maxInstances, .roles.tester.open, .roles.tester.maxInstances, .roles["e2e-tester"].open, .roles["e2e-tester"].maxInstances, (.roles.deployer | has("open")), .settings.scaling]' "$ROOT/config.default.json")" '["per-task",3,"per-batch",3,"per-batch",3,"per-batch",3,false,{"maxExtraInstances":4,"maxLoad":0.8,"minFreeMemoryMB":2048}]'
 jq '.roles.auditor = {"title":"Auditor"}' "$ROOT/config.default.json" > "$TMP/cv-aud.json"; printf '%s' '{"set":[{"path":["roles","auditor","model"],"value":"y"}]}' > "$TMP/cv-aud-ovr.json"
 CA1="$(check_config "$TMP/cv-aud.json")"; CA2="$(check_config "$ROOT/config.default.json" "$TMP/cv-aud-ovr.json")"
 check "check_config: roles.auditor in the config, or a saved set path roles.auditor.*, gives exactly the removed-role line" "$(printf '%s\n' "$CA1" | wc -l | tr -d ' '):$(printf '%s\n' "$CA2" | wc -l | tr -d ' '):$(printf '%s\n%s\n' "$CA1" "$CA2" | grep -c '^ERROR: the role auditor no longer exists in this version of orca-roles')" "1:1:2"
@@ -3233,6 +3243,62 @@ printf '60\n' > "$FM/sc.kern.memorystatus_level"; printf '25769803776\n' > "$FM/
 printf 'The system has 25769803776 (1572864 pages with a page size of 16384).\nSystem-wide memory free percentage: 57%%\n' > "$FM/mp"
 M1="$(fmem)"; rm -f "$FM/mp"; M2="$(fmem)"; rm -f "$FM"/sc.*; M3="$(fmem)"; rm -f "$FM/vm"; M4="$(fmem)"
 check "host_capacity on macOS: the free percentage of memory_pressure first (14008), then the sysctl form (14745), then free + inactive + speculative pages of vm_stat without purgeable (54), and - when all three give nothing" "$M1 $M2 $M3 $M4" "14008 14745 54 -"
+# --add --tree: the new tab's agent runs in a pair tree of this worktree, kept for every reopen of that tab
+LTR="$(cd "$LA" && pwd -P)"; mkdir -p "$LTR/tree1" "$LTR/tree sp" "$LTR/real"; ln -sfn "$LTR/real" "$LTR/link"; mkdir -p "$LTR/real/t3"
+ltreg() { : > "$LAG/orca-roles.pairs"; local n=0 p st; for p in "$@"; do n=$((n+1)); st=open; case "$p" in *:*) st="${p##*:}"; p="${p%:*}";; esac; printf 'b%s\t1\t%s\t%s\t%s\t%s\n' "$n" "$p" "$(printf '%040d' 0)" "$LTR/tree$n/.git" "$st" >> "$LAG/orca-roles.pairs"; done; }
+lacmd() { sed -n "s/.*--title Researcher ${1:-2} (claude) --command \\(.*\\) --json\$/\\1/p" "$LA/orca.log" | tail -1; }
+lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1"; S0="$(lasum)"; N0="$(lacre)"; V=""
+for a in "--tree $LTR/tree1" "--tree" "--tree=" "--tree a --tree b --add researcher" "--add researcher --tree a --tree=b" "--open dev --tree $LTR/tree1"; do try lal $a; V="$V$RC:$(printf '%s\n' "$OUT" | grep -c 'Nothing was changed\.' || true) "; done
+try lal --tree "$LTR/tree1"; V="$V$(printf '%s\n' "$OUT" | grep -cxF 'ERROR: --tree goes with --add. Nothing was changed.' || true)"; try lal --add researcher --tree; V="$V$(printf '%s\n' "$OUT" | grep -cxF 'ERROR: --tree needs a folder (a pair tree). Nothing was changed.' || true)"; try lal --add researcher --tree a --tree b; V="$V$(printf '%s\n' "$OUT" | grep -cxF 'ERROR: --tree takes one folder. Nothing was changed.' || true)"
+check "launch --add --tree: --tree without --add, with no value, twice, or with --open exits 1 with its message, changes nothing and opens no tab" "$V:$([ "$(lasum)" = "$S0" ] && [ "$(lacre)" = "$N0" ] && echo same || true)" "1:1 1:1 1:1 1:1 1:1 1:1 111:same"
+lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1:integrated" "$LTR/tree2:removed" "$LTR/tree3" "$LTR/real/t3"; S0="$(lasum)"; N0="$(lacre)"; V=""
+for a in "$LTR/tree1" "$LTR/tree2" "$LTR/none" "$LTR/real" "$LTR/tree sp" "tree1"; do try lal --add researcher --tree "$a"; V="$V$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: --tree: $a is not an open pair tree of this worktree (see pair-tree.sh list). Nothing was changed." || true) "; done
+check "launch --add --tree: a folder not in the registry, in state integrated or removed, missing, or a parent of a tree is refused with exit 1, nothing changed" "$V$([ "$(lasum)" = "$S0" ] && [ "$(lacre)" = "$N0" ] && [ ! -e "$LAG/orca-roles.trees" ] && echo same || true)" "1:1 1:1 1:1 1:1 1:1 1:1 same"
+try lal --add researcher --tree "$LTR/link/t3"; V="$RC:$(lacmd | sed 's/ && ORCA_ROLES_STATE=.*//')"; check "launch --add --tree: a registry path reached through a symlinked parent is accepted and the physical path is used" "$V" "0:cd $LTR/real/t3"
+lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1" "$LTR/tree sp"; N0="$(lacre)"; try lal --add researcher --tree "$LTR/tree1"; C1="$(lacmd)"; V="$RC:$(( $(lacre) - N0 ))"
+case "$C1" in "cd $LTR/tree1 && ORCA_ROLES_STATE=$LAG/orca-roles.env "*"agent.sh' researcher-2") V="$V:cmd";; *) V="$V:bad[$C1]";; esac
+V="$V:$(grep -c "^RESEARCHER_2=$LTR/tree1\$" "$LAG/orca-roles.trees" || true)"
+try lal --add researcher --tree "$LTR/tree sp"; C2="$(lacmd 3)"; case "$C2" in "cd $LTR/tree\\ sp && ORCA_ROLES_STATE="*"agent.sh' researcher-3") V="$V:sp";; *) V="$V:bad[$C2]";; esac
+V="$V:$(grep -c "^RESEARCHER_3=$LTR/tree sp\$" "$LAG/orca-roles.trees" || true)"
+lareset; try lal; : > "$LA/orca.log"; try lal --add researcher; try lal --add researcher; P="$(lacmd)"
+case "$P" in "ORCA_ROLES_CONFIG="*"agent.sh' researcher-2") V="$V:plain";; *) V="$V:plain?[$P]";; esac
+check "launch --add --tree: the tab's command starts with cd <path, quoted> && ORCA_ROLES_STATE=<state> and ends with agent.sh <slot>, a path with a space is escaped, orca-roles.trees holds <VAR>=<path>; a plain --add has no cd prefix" "$V" "0:1:cmd:1:sp:1:plain"
+
+# trust of the pair tree: the default trust marks it, trust "never" does not
+TJ="$TMP/home/.claude.json"; ltrust() { jq -r --arg d "$1" '.projects[$d].hasTrustDialogAccepted // "none"' "$TJ" 2>/dev/null || echo nofile; }
+lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1"; echo '{}' > "$TJ"; try lal --add researcher --tree "$LTR/tree1"; V="$RC:$(ltrust "$LTR/tree1"):$(printf '%s\n' "$OUT" | grep -cF "Marked $LTR/tree1 as trusted" || true)"
+cp "$KIT/config.json" "$LA/cfg.keep3"; jq '.settings.trust = "never"' "$LA/cfg.keep3" > "$KIT/config.json"; lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1"; echo '{}' > "$TJ"; try lal --add researcher --tree "$LTR/tree1"; V="$V|$RC:$(ltrust "$LTR/tree1")"; cp "$LA/cfg.keep3" "$KIT/config.json"
+check "launch --add --tree: the pair tree is marked trusted for Claude Code with the default trust, and not with settings.trust never" "$V" "0:true:1|0:none"
+# reopen keeps the tree; a deleted tree is not reopened and its lines go; the other roles stay
+lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1" "$LTR/tree sp"; try lal --add researcher --tree "$LTR/tree1"; try lal --add researcher --tree "$LTR/tree sp"
+: > "$LA/stale-h-Researcher2"; : > "$LA/orca.log"; try lal --reopen; C1="$(lacmd)"; V="$RC:$(lacre)"
+case "$C1" in "cd $LTR/tree1 && ORCA_ROLES_STATE="*"agent.sh' researcher-2") V="$V:cd";; *) V="$V:bad[$C1]";; esac
+V="$V:$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.trees" || true):$(grep -c '^RESEARCHER_3=' "$LAG/orca-roles.trees" || true)"
+rm -f "$LA/stale-h-Researcher2"; : > "$LA/stale-h-Researcher3"; rm -rf "$LTR/tree sp"; : > "$LA/orca.log"; try lal --reopen
+V="$V|$RC:$(lacre):$(printf '%s\n' "$OUT" | grep -cxF "The pair tree of Researcher 3 ($LTR/tree sp) no longer exists; not reopened." || true)"
+V="$V:$(grep -c '^RESEARCHER_3=' "$LAG/orca-roles.env" "$LAG/orca-roles.trees" "$LAG/orca-roles.pty" | cut -d: -f2 | tr '\n' ,):$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" "$LAG/orca-roles.trees" | cut -d: -f2 | tr '\n' ,):$(grep -c '^RESEARCHER=' "$LAG/orca-roles.env" || true)"
+check "launch --reopen: a lost tab of a pair-tree instance reopens with the same cd prefix and keeps its tree line; when the tree was deleted no tab is made, the message is printed and the instance's lines go while the other roles stay" "$V" "0:1:cd:1:1|0:0:1:0,0,0,:1,1,:1"
+# close-role drops only that instance's line
+lareset; try lal; try lal --add researcher; ltreg "$LTR/tree1" "$LTR/tree sp"; mkdir -p "$LTR/tree sp"; try lal --add researcher --tree "$LTR/tree1"; try lal --add researcher --tree "$LTR/tree sp"
+(cd "$LA/proj" && HOME="$TMP/home" PATH="$LA/bin:$PATH" ORCA_ROLES_STATE="$LAG/orca-roles.env" ORCA_ROLES_CONFIG="$LAG/orca-roles.config.json" "$TMP/home/.orca-roles/bin/close-role.sh" researcher-2 >/dev/null 2>&1) || true
+check "close-role.sh: closing an instance removes its orca-roles.trees line and keeps the other instance's" "$(cat "$LAG/orca-roles.trees" 2>/dev/null)" "RESEARCHER_3=$LTR/tree sp"
+# the team's files from a real pair tree: scratch folder, notes, MCP file, provenance and the clean message are the worktree's
+git -C "$LA/proj" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+lareset; try lal; try lal --add researcher; try lal --add researcher
+LPT="$(cd "$LA/proj" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/pair-tree.sh" create t7 HEAD 2>/dev/null | tail -1)"; LPG="$(git -C "$LPT" rev-parse --absolute-git-dir)"
+LCF="$LAG/orca-roles.config.json"; mkdir -p "$LAG/orca-roles.notes"; printf 'note-for-r2\n' > "$LAG/orca-roles.notes/researcher.md"
+lside() { (cd "$1" && HOME="$TMP/home" scratch_dir researcher-2; notes_file researcher; front_of "$LCF"); }
+V="$([ "$(lside "$LA/proj")" = "$(lside "$LPT")" ] && [ -n "$LPT" ] && echo same || true)"
+lmsg() { (cd "$1" && HOME="$TMP/home" PATH="$LA/bin:$PATH" ORCA_ROLES_STATE="$LAG/orca-roles.env" ORCA_ROLES_CONFIG="$LCF" "$TMP/home/.orca-roles/bin/clean.sh" --msg researcher-2 2>&1); }
+MW="$(lmsg "$LA/proj")" || true; MT="$(lmsg "$LPT")" || true; SDW="$(cd "$LA/proj" && KIT="$TMP/home/.orca-roles" scratch_dir researcher-2)"
+V="$V:$([ "$MW" = "$MT" ] && echo same || true):$(printf '%s' "$MT" | grep -c "scratchDir=$SDW" || true):$(printf '%s' "$MT" | grep -c 'note-for-r2' || true)"
+mkdir -p "$LA/fc"; printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$LA/fc/claude"; chmod +x "$LA/fc/claude"
+lagent() { (cd "$LPT" && HOME="$TMP/home" PATH="$LA/fc:$PATH" ORCA_ROLES_CONFIG="$LCF" "$TMP/home/.orca-roles/bin/agent.sh" researcher-2 2>&1); }
+rm -f "$LAG/orca-roles-mcp-researcher-2.json" "$LAG/orca-roles.provenance.jsonl" "$LPG/orca-roles-mcp-researcher-2.json" "$LPG/orca-roles.provenance.jsonl"
+AO="$(lagent)" || true; V="$V:$(printf '%s\n' "$AO" | grep -cxF "$SDW" || true):$([ -s "$LAG/orca-roles-mcp-researcher-2.json" ] && echo mcp || true):$([ -s "$LAG/orca-roles.provenance.jsonl" ] && echo prov || true):$(find "$LPG" -maxdepth 1 \( -name 'orca-roles-mcp*' -o -name '*provenance*' \) | wc -l | tr -d ' ')"
+printf '%s\n' "$LTR/gone" > "$LPG/orca-roles.pair"; V="$V:$([ "$(cd "$LPT" && scratch_dir researcher-2)" != "$SDW" ] && echo own || true)"; rm -f "$LPG/orca-roles-mcp-researcher-2.json" "$LPG/orca-roles.provenance.jsonl"; lagent >/dev/null || true; V="$V:$([ -s "$LPG/orca-roles-mcp-researcher-2.json" ] && echo own-mcp || true)"
+printf '%s\n' "$LAG" > "$LPG/orca-roles.pair"; (cd "$LA/proj" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/pair-tree.sh" remove --force t7 >/dev/null 2>&1) || true
+check "a pair tree gets the worktree's scratch_dir, notes_file, front_of, clean.sh --msg, MCP file and provenance file; a marker naming a missing folder falls back to the tree's own git dir" "$V" "same:same:1:1:1:mcp:prov:0:own:own-mcp"
 akreset; write_launch_config
 }
 
@@ -3754,7 +3820,7 @@ check "research-defaults: role order, the old seven first" "$(jq -r '.roles | ke
 check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
 check "research-defaults: researcher joins the mode in experiment and writing, opens per task with maxInstances 3, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"per-task","modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","maxInstances":3,"mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
-check "research-defaults: dev and tester join academic-research in experiment only and open per batch, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
+check "research-defaults: dev and tester join academic-research in experiment only and open per batch with maxInstances 3, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '"\(.roles[$r].model // "-"),\(.roles[$r].open // .defaults.open // "-")"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
 check "research-defaults: the programmer and pr-reviewer teams (roles, order, models, when each opens) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier; pr-reviewer opens the local coordinator, no Planner)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5,start programmer/planner=claude-opus-5-5,start programmer/researcher=claude-sonnet-5-5,per-task programmer/dev=claude-sonnet-5-5,per-batch programmer/tester=claude-sonnet-5-5,per-batch programmer/plan-reviewer=claude-opus-5-5,first-use programmer/code-reviewer=claude-opus-5-5,first-use programmer/e2e-tester=claude-opus-5-5,per-batch programmer/deployer=claude-sonnet-5-5,first-use pr-reviewer/local-coordinator=claude-sonnet-5-5,start pr-reviewer/verifier=claude-opus-5-5,first-use "
 check "research-defaults: the programmer team is the local coordinator and the eight old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "9:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/plan-reviewer programmer/code-reviewer programmer/e2e-tester programmer/deployer "
@@ -6933,6 +6999,89 @@ xerun run "$XD/eb" --label e -- true; check "crosscheck run: backLinks true in a
 rm "$XE/node_modules/@s/w" "$XE/.venv/lib/python3.12/site-packages/__editable__.pkg-0.1.pth"; xerun tree "$XD/eb" --ref HEAD; xerun run "$XD/eb" --label e -- true
 check "crosscheck: without them (a link inside node_modules is fine), no warning, and a replaced copy forgets the old ones" "$(printf '%s' "$XERR" | grep -c warning || true):$(printf '%s' "$XOUT" | jq -r .backLinks)" "0:false"
 }
+sec_pair_tree() {
+# pair-tree.sh: detached pair trees for parallel batches, integrated into the worktree as an unstaged patch
+PTD="$TMP/pt"; rm -rf "$PTD"; mkdir -p "$PTD/home" "$PTD/kit/bin" "$PTD/wt"; PW="$PTD/wt"; PTK="$PTD/kit"
+cp "$ROOT"/bin/*.sh "$PTK/bin/"
+pg() { git -C "$PW" "$@"; }
+pg init -q -b main; pg config user.email t@example.com; pg config user.name tester
+printf 'node_modules/\ndist/\n.venv/\n' > "$PW/.gitignore"; printf 'a\n' > "$PW/a.txt"; printf 'b\n' > "$PW/b.txt"; seq 1 30 > "$PW/shared.txt"
+pg add -A; pg commit -q -m init; PS0="$(pg rev-parse HEAD)"
+mkdir -p "$PW/node_modules" "$PW/dist"; printf 'dep\n' > "$PW/node_modules/m.js"; printf 'out\n' > "$PW/dist/o.js"
+ptr() { PTRC=0; PTOUT="$(cd "$PW" && KIT="$PTK" HOME="$PTD/home" bash "$PTK/bin/pair-tree.sh" "$@" 2>"$TMP/pt.err")" || PTRC=$?; PTERR="$(cat "$TMP/pt.err")"; }
+ptstate() { ( cd "$PW" && git rev-parse HEAD; git status --porcelain -uall; git diff | shasum; git worktree list | wc -l; cat "$(git rev-parse --absolute-git-dir)/orca-roles.pairs" 2>/dev/null; find "$PTK/tmp" -mindepth 2 -maxdepth 3 2>/dev/null | LC_ALL=C sort ) | shasum; }
+PGD="$(pg rev-parse --absolute-git-dir)"; PREG="$PGD/orca-roles.pairs"
+pst() { awk -F'\t' -v b="$1" '$1 == b {s = $6} END {print s}' "$PREG"; }
+cpt() { git -C "$1" -c user.email=t@example.com -c user.name=tester "${@:2}"; }
+sedl() { sed -i.bak "$2" "$1" && rm "$1.bak"; }
+# T1: create
+ptr create b1 "$PS0"; PT1="$PTOUT"
+check "pair-tree create: exit 0, the last stdout line is the tree, <batch>-1 under the kit's pairs folder" "$PTRC:$(basename "$PT1"):$([ "$(dirname "$PT1")" = "$(cd "$PTK" && pwd -P)/tmp/$(basename "$(dirname "$(dirname "$PT1")")")/pairs" ] && echo in)" "0:b1-1:in"
+check "pair-tree create: the tree is detached at the ref, its status is clean and no branch was made" "$(git -C "$PT1" rev-parse HEAD):$(git -C "$PT1" symbolic-ref -q HEAD || echo detached):$(git -C "$PT1" status --porcelain | wc -l | tr -d ' '):$(pg branch --list | wc -l | tr -d ' ')" "$PS0:detached:0:1"
+check "pair-tree create: ignored node_modules is a link to the worktree's, ignored dist is not linked" "$(readlink "$PT1/node_modules"):$([ -e "$PT1/dist" ] || [ -L "$PT1/dist" ] && echo linked || echo none)" "$(cd "$PW" && pwd -P)/node_modules:none"
+check "pair-tree create: info/exclude has /node_modules once, the line is open with the start, the marker holds the worktree's git dir" "$(grep -cx '/node_modules' "$PGD/info/exclude"):$(cut -f1,2,4,6 "$PREG" | tr '\t' ' '):$(cat "$(git -C "$PT1" rev-parse --absolute-git-dir)/orca-roles.pair")" "1:b1 1 $PS0 open:$PGD"
+# T2: refusals
+PTS="$(ptstate)"
+for bad in "create Batch1 $PS0" "create -a $PS0" "create 'a b' $PS0" "create a/b $PS0" "create '' $PS0" "create b2 nope" "create b1 $PS0" "integrate b9 $PS0" "remove b9" "bogus" "create b2" "list x" "clear x"; do
+  eval "ptr $bad"
+  check "pair-tree: refuses [$bad] with a message, changing nothing" "$([ "$PTRC" = 1 ] && echo rc1):$([ -n "$PTERR" ] && echo msg):$([ "$(ptstate)" = "$PTS" ] && echo same)" "rc1:msg:same"
+done
+PTRC=0; PTOUT="$(cd "$PT1" && KIT="$PTK" HOME="$PTD/home" bash "$PTK/bin/pair-tree.sh" list 2>&1)" || PTRC=$?
+check "pair-tree: run from inside a pair tree it refuses" "$PTRC:$(printf '%s' "$PTOUT" | grep -c 'this is a pair tree')" "1:1"
+mkdir -p "$PTD/sm"; git -C "$PTD/sm" init -q -b main; git -C "$PTD/sm" config user.email t@example.com; git -C "$PTD/sm" config user.name tester; printf 'x\n' > "$PTD/sm/x"; git -C "$PTD/sm" add -A; git -C "$PTD/sm" commit -q -m s
+pg -c protocol.file.allow=always submodule add -q "$PTD/sm" subm >/dev/null 2>&1; pg commit -q -m sub; PSS="$(pg rev-parse HEAD)"; PTS="$(ptstate)"
+ptr create sb "$PSS"
+check "pair-tree create: refuses a worktree with an initialised submodule, changing nothing" "$PTRC:$(printf '%s' "$PTERR" | grep -c 'initialised submodules'):$([ "$(ptstate)" = "$PTS" ] && echo same)" "1:1:same"
+pg rm -q -f subm >/dev/null 2>&1; rm -rf "$PW/.git/modules" "$PW/subm"; pg commit -q -m unsub
+# T3: integrate clean
+ptr create b2 "$PS0"; PT2="$PTOUT"
+printf 'a1\n' > "$PT1/a.txt"; printf 'n1\n' > "$PT1/new1.txt"; sedl "$PT1/shared.txt" '3s/.*/three-b1/'; cpt "$PT1" add -A; cpt "$PT1" commit -q -m b1; PC1="$(git -C "$PT1" rev-parse HEAD)"
+printf 'b2\n' > "$PT2/b.txt"; sedl "$PT2/shared.txt" '27s/.*/tw-b2/'; cpt "$PT2" add -A; cpt "$PT2" commit -q -m b2; PC2="$(git -C "$PT2" rev-parse HEAD)"
+ptr integrate b1 "$PC1"; R1="$PTRC:$PTOUT"; ptr integrate b2 "$PC2"
+check "pair-tree integrate: two batches from the same start integrate, unstaged, with all four changes" "$R1:$PTRC:$PTOUT:$(pg diff --cached | wc -l | tr -d ' '):$(pg status --porcelain | tr '\n' ',' ):$(sed -n '3p;27p' "$PW/shared.txt" | tr '\n' ' '):$(pst b1):$(pst b2)" "0:integrated b1: 3 file(s):0:integrated b2: 2 file(s):0: M a.txt, M b.txt, M shared.txt,?? new1.txt,:three-b1 tw-b2 :integrated:integrated"
+pg add -A; pg commit -q -m integrated; PS2="$(pg rev-parse HEAD)"; ptr remove b1; ptr remove b2
+# T4: conflict
+ptr create c1 "$PS2"; PTC1="$PTOUT"; ptr create c2 "$PS2"; PTC2="$PTOUT"
+sedl "$PTC1/shared.txt" '3s/.*/c1/'; cpt "$PTC1" commit -q -am c1; PCC1="$(git -C "$PTC1" rev-parse HEAD)"
+sedl "$PTC2/shared.txt" '3s/.*/c2/'; cpt "$PTC2" commit -q -am c2; PCC2="$(git -C "$PTC2" rev-parse HEAD)"
+ptr integrate c1 "$PCC1"; printf 'junk\n' > "$PW/untracked.txt"; printf 'edit\n' >> "$PW/a.txt"
+pstate() { ( cd "$PW" && git status --porcelain -uall; git diff | shasum; shasum untracked.txt ) | shasum; }
+PS_B="$(pstate)"; ptr integrate c2 "$PCC2"; PPATCH="$(printf '%s' "$PTOUT" | sed 's/^conflict c2: //')"
+check "pair-tree integrate: a conflict exits 4 with 'conflict <batch>: <patch>', writes nothing to the worktree and keeps the line open" "$PTRC:$(printf '%s' "$PTOUT" | grep -c '^conflict c2: .*/pairs/c2-1\.patch$'):$([ "$(pstate)" = "$PS_B" ] && echo same):$(pst c2)" "4:1:same:open"
+check "pair-tree integrate: the patch is git diff --binary start closing" "$(cmp -s "$PPATCH" <(git -C "$PW" diff --binary "$PS2" "$PCC2") && echo same)" "same"
+# T5: guard and empty
+mkdir -p "$PW/fresh"; printf 'x\n' > "$PW/fresh/x.orca-bak"; PS_B="$(pstate)"; ptr integrate c2 "$PCC2"
+check "pair-tree integrate: a .orca-bak file in an untracked folder refuses (exit 1) and writes nothing" "$PTRC:$(printf '%s' "$PTERR" | grep -c 'mutation backup'):$([ "$(pstate)" = "$PS_B" ] && echo same)" "1:1:same"
+rm -rf "$PW/fresh"; ptr create e1 "$PS2"; ptr integrate e1 "$PS2"
+check "pair-tree integrate: an empty batch prints 'nothing to integrate', exit 0, and is integrated" "$PTRC:$PTOUT:$(pst e1)" "0:nothing to integrate for e1:integrated"
+# T6: remove
+( cd "$PTC1" && bash "$PTK/bin/checkpoint.sh" k 1 >/dev/null 2>&1 ); ptr remove c2; R_O="$PTRC:$([ -d "$PTC2" ] && echo kept)"
+check "pair-tree remove: an open batch without --force is refused and its tree kept" "$R_O" "1:kept"
+ptr remove e1; ptr remove c1; ptr remove --force c2
+check "pair-tree remove: removed trees are gone (folder, git entry), lines are removed, the worktree's node_modules is intact, the trees' checkpoint refs stay" "$([ -e "$PTC1" ] && echo there || echo gone):$(pg worktree list | wc -l | tr -d ' '):$(pst e1)/$(pst c1):$(cat "$PW/node_modules/m.js"):$(pg for-each-ref refs/orca-roles/checkpoints | grep -c '/k-c1$')" "gone:1:removed/removed:dep:1"
+# T7: re-create
+ptr create c1 "$PS2"; PTN="$PTOUT"; PTRC=0; ( cd "$PTN" && bash "$PTK/bin/checkpoint.sh" k 1 >/dev/null 2>&1 ) || PTRC=$?
+check "pair-tree create: after remove the same batch gets <batch>-2 and checkpoint.sh <batch> 1 succeeds inside it, and info/exclude still has /node_modules once" "$(basename "$PTN"):$PTRC:$(grep -cx '/node_modules' "$PGD/info/exclude")" "c1-2:0:1"
+# T8: clear
+( cd "$PW" && bash "$ROOT/bin/checkpoint.sh" own 1 >/dev/null 2>&1 ); ptr clear
+check "pair-tree clear: refused while a tree is open" "$PTRC:$(printf '%s' "$PTERR" | grep -c 'pair trees still in use: c1 (open)')" "1:1"
+ptr remove --force c1; ptr clear
+check "pair-tree clear: deletes the trees' checkpoint refs, patches and the registry, keeps the worktree's own refs" "$PTRC:$PTOUT:$(pg for-each-ref refs/orca-roles/checkpoints | grep -c '/k-c1$'):$(pg for-each-ref refs/orca-roles/checkpoints | grep -c '/own-c1$'):$([ -e "$PREG" ] && echo reg || echo noreg):$(ls "$PTK"/tmp/*/pairs/*.patch 2>/dev/null | wc -l | tr -d ' ')" "0:cleared 6 pair tree(s):0:1:noreg:0"
+ptr clear; check "pair-tree clear: with no registry it prints 'cleared 0 pair tree(s)'" "$PTRC:$PTOUT" "0:cleared 0 pair tree(s)"
+# T9: list and -h
+ptr list; check "pair-tree list: without a registry prints nothing" "$PTRC:$PTOUT" "0:"
+ptr create l1 "$PS2"; ptr list
+check "pair-tree list: one line per tree: batch, state, path, first 12 hex of the start" "$(printf '%s' "$PTOUT" | cut -f1,2,4 | tr '\t' ' '):$(printf '%s' "$PTOUT" | cut -f3 | grep -c '/pairs/l1-1$')" "l1 open ${PS2:0:12}:1"
+ptr remove --force l1; ptr clear >/dev/null; ptr -h
+check "pair-tree -h prints the usage on stdout, exit 0" "$PTRC:$(printf '%s\n' "$PTOUT" | sed -n 1p | cut -c1-14):$(printf '%s\n' "$PTOUT" | grep -c '^#   pair-tree.sh ')" "0:# Pair trees: :5"
+# T10: back-links
+mkdir -p "$PW/.venv/lib/python3/site-packages"; printf 'home = x\n' > "$PW/.venv/pyvenv.cfg"; printf '%s/src\n' "$(cd "$PW" && pwd -P)" > "$PW/.venv/lib/python3/site-packages/__editable__.x.pth"
+EX0="$(cat "$PGD/info/exclude")"; PTS="$(ptstate)"; ptr create v1 "$PS2"
+check "pair-tree create: a linked venv whose editable install points into the worktree is refused: no tree, no registry line, no new exclude line" "$PTRC:$(printf '%s' "$PTERR" | grep -c '\.venv links back into the worktree, editable install'):$([ "$(cat "$PGD/info/exclude")" = "$EX0" ] && echo same):$([ "$(ptstate)" = "$PTS" ] && echo same)" "1:1:same:same"
+printf '/elsewhere/src\n' > "$PW/.venv/lib/python3/site-packages/__editable__.x.pth"; ptr create v1 "$PS2"
+check "pair-tree create: the same venv without the worktree's path is linked" "$PTRC:$(readlink "$PTOUT/.venv" | sed 's|.*/||')" "0:.venv"
+ptr remove --force v1
+}
 
 sec_model_check() {
 # A role whose model does not exist is detected, recorded and escalated, never switched (kickoff.sh), with a fake orca whose screen accumulates history
@@ -8927,7 +9076,7 @@ tst() { (cd "${TSD:-$TS/proj}" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROL
 tsr() { if OUT="$(tst "$@")"; then RC=0; else RC=$?; fi; }
 tsl() { printf '%s\n' "$OUT" | tr '\t' '|'; }
 tsr; E1="$RC:$(tsl | tr '\n' '/')"
-check "team-status: one tab-separated line per role in orca-roles.env order: Title, state, since, task, tool, summary (working, waiting for blocked, interrupted, failed, no-status, no-tab, done, the latest row of a shared paneKey, an unknown state as is; the first task id of the prompt, role-message, -; 100 characters kept and 101 cut with an ellipsis, first line only, tabs as spaces, - when empty)" "$E1" "0:Planner|working|45s|task_0f3a9c|Bash|$(printf 'x%.0s' $(seq 100))…/Dev|waiting|12m|-|-|$L100/Tester|interrupted|1h05m|role-message|-|-/aud|failed|-|-|-|a b/dep|no-status|-|-|-|-/gh|no-tab|-|-|-|-/rm|done|1s|role-message|-|-/dup|done|3s|task_0000aa|-|-/uk|weird|5s|-|-|-/ud|done|2s|-|-|-/ud2|done|2s|-|-|-/ud3|done|2s|-|-|-/ud4|done|2s|task_4444|-|-/s1|working|59s|-|-|-/s2|working|1m|-|-|-/s3|working|59m|-|-|-/s4|working|1h00m|-|-|-/s5|working|0s|-|-|-/s6|working|2h01m|-|-|-/"
+check "team-status: one tab-separated line per role in orca-roles.env order: Title, state, since, task, tool, summary (working, waiting for blocked, interrupted, failed, an agent listed only under another worktree's row, no-tab, done, the latest row of a shared paneKey, an unknown state as is; the first task id of the prompt, role-message, -; 100 characters kept and 101 cut with an ellipsis, first line only, tabs as spaces, - when empty)" "$E1" "0:Planner|working|45s|task_0f3a9c|Bash|$(printf 'x%.0s' $(seq 100))…/Dev|waiting|12m|-|-|$L100/Tester|interrupted|1h05m|role-message|-|-/aud|failed|-|-|-|a b/dep|working|-|-|-|-/gh|no-tab|-|-|-|-/rm|done|1s|role-message|-|-/dup|done|3s|task_0000aa|-|-/uk|weird|5s|-|-|-/ud|done|2s|-|-|-/ud2|done|2s|-|-|-/ud3|done|2s|-|-|-/ud4|done|2s|task_4444|-|-/s1|working|59s|-|-|-/s2|working|1m|-|-|-/s3|working|59m|-|-|-/s4|working|1h00m|-|-|-/s5|working|0s|-|-|-/s6|working|2h01m|-|-|-/"
 tsr --json; J1="$RC:$(printf '%s' "$OUT" | jq -c 'length'):$(printf '%s' "$OUT" | jq -r '[.[] | keys_unsorted | join(",")] | unique | join(";")')"
 tsr; TXT="$OUT"; tsr --json; J2="$(printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")')"
 JD="$(printf '%s' "$OUT" | jq -c '[.[] | select(.role == "dev") | [.handle, .paneKey, .sinceMs]][0]')"; cp "$TSG/orca-roles.config.json" "$TS/cfg.keep"; jq -c '.roles.researcher = {"title": "Researcher", "open": "first-use"}' "$TS/cfg.keep" > "$TSG/orca-roles.config.json"

@@ -37,7 +37,8 @@ while IFS= read -r p; do
   if [ "$p" = "$TOP" ] || [ "$(cd "$p" 2>/dev/null && pwd -P)" = "$TOP" ]; then ROW="$p"; break; fi
 done <<< "$(printf '%s' "$PS" | jq -r '.result.worktrees[].path')"
 [ -n "$ROW" ] || { echo "team-status: Orca has no worktree at $TOP" >&2; exit 2; }
-AGENTS="$(printf '%s' "$PS" | jq -c --arg p "$ROW" '[.result.worktrees[] | select(.path == $p) | .agents[]?]')"
+# agents of every row: a pair tree's agent may be listed under the pair tree, its tab under this worktree; paneKeys are unique
+AGENTS="$(printf '%s' "$PS" | jq -c '[.result.worktrees[] | .agents[]?]')"
 
 NOW="${ORCA_ROLES_NOW_MS:-$(( $(date +%s) * 1000 ))}"   # the clock, in ms; the variable is for tests
 ROLES="[]"
