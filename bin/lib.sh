@@ -383,7 +383,7 @@ launchable_roles() {
 HIDDEN_AGENTS="claude"
 hidden_capable() { case " $HIDDEN_AGENTS " in *" ${1:-claude} "*) return 0;; esac; return 1; }
 # When a role's tab opens: start (with the team), first-use (before its first task, then it stays), per-task (before each task, closed after
-# its report) or hidden (never a tab: the local coordinator runs it with hidden-role.sh). A role without its own value takes defaults.open (the
+# its report), per-batch (before its first task of each batch, kept through the batch, closed when the batch closes; per-task in pr-reviewer, which has no batches) or hidden (never a tab: the local coordinator runs it with hidden-role.sh). A role without its own value takes defaults.open (the
 # kit ships first-use); none at all, or any other value, = start; the front role and the Planner always start. A hidden value on a role whose
 # agent cannot run hidden gives first-use (an explicit one is a config error, see check_config).  open_of <config> <role>
 open_of() {
@@ -391,9 +391,16 @@ open_of() {
   v="$(rstr "$1" "$2" open)"
   case "$v" in
     first-use|per-task) printf '%s' "$v";;
+    per-batch) if [ "$(mode_of --saved "$1" 2>/dev/null || echo programmer)" = pr-reviewer ]; then printf per-task; else printf per-batch; fi;;
     hidden) if [ "$2" = planner ]; then printf start; elif hidden_capable "$(rstr "$1" "$2" agent)"; then printf hidden; else printf first-use; fi;;
     *) printf start;;
   esac
+}
+# max_instances <config> <id>: the role's effective maxInstances (1 unless its open is per-task or per-batch and its agent claude or codex)
+max_instances() {
+  jq -r --arg r "$2" '.roles[$r] as $x | if ($x | type) != "object" or ($x | has("instanceOf")) or (($x.maxInstances? // null) | type) != "number" or $x.maxInstances != ($x.maxInstances | floor) then 1
+    else (($x.open // .defaults.open // "start") as $o | ($x.agent // .defaults.agent // "claude") as $a
+      | if ($o | IN("per-task", "per-batch")) and ($a | IN("claude", "codex")) then $x.maxInstances else 1 end) end' "$1" 2>/dev/null || echo 1
 }
 # A process's start time as one word (ps lstart, spaces as _), or nothing when it is gone: with the pid it names one process, so a reused pid is not taken for it. LC_ALL=C: the supervisor and --status must print it alike
 proc_start() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' | tr -s ' ' '_'; }
@@ -489,14 +496,20 @@ REPORT_MARK_RE='^\s*(done|hecho)(\W|$)'
 # ["{kit}/plugin"] was the default of the planner's pluginDirs before superpowers: a user still on it moves to the new default.
 # ["programmer"] was the default of the local coordinator's modes and "all" the planner's, before the local coordinator became every mode's front role: a user still on them moves to the new defaults.
 # {"type":"sse","url":"https://mcp.atlassian.com/v1/sse"} was the default of the atlassian MCP server before Atlassian's /v2/mcp endpoint: a user still on exactly it moves to the new default.
-# "first-use" was every kit role's own open value before defaults.open: a role still on it moves to the default, so that a defaults.open of the user's reaches it. Only a config with no defaults.open (one from before it) is moved: once the config has one, a kit role's "first-use" is the user's own.
+# "first-use" was every kit role's own open value before defaults.open: a kit role the user still has on it moves to the kit's open value for it (none: it follows defaults.open), so that a defaults.open of the user's reaches it. Only a config with no defaults.open (one from before it) is moved: once the config has one, a kit role's "first-use" is the user's own.
+# A user's own defaults.open other than the kit's is a team-wide choice: a kit role with no open of its own does not take the kit's new per-task or per-batch value.
 # ["programmer", "academic-research"] was the default of researcher's, dev's and tester's modes before quick joined them: a user still on it moves to the new default.
 upgrade_config() {  # $1 = config.default.json, $2 = the user's config.json, [$3 = the kit folder, unused] → stdout
   jq -s --argjson l "$LEGACY_ROLES" --argjson old_pw "$OLD_PLAYWRIGHT_MCP" "$LEGACY_JQ"' .[0] as $d | (.[1] | if (.roles? | type) == "object" then . else .roles = {} end | legacy($l)) as $u | ($d * $u) as $m
     | $m | .roles = ((($u.roles | keys_unsorted) + (($d.roles | keys_unsorted) - ($u.roles | keys_unsorted)))
                      | map({key: ., value: $m.roles[.]}) | from_entries)
     | del(.roles.auditor)
-    | .roles |= with_entries(.key as $k | if (($u.defaults.open? // null) == null) and ($d.roles | has($k)) and (($d.roles[$k] | has("open")) | not) and ((.value | type) == "object") and (.value.open == "first-use") then .value |= del(.open) else . end)
+    | .roles |= with_entries(.key as $k
+        | if (($u.defaults.open? // null) == null) and ($d.roles | has($k)) and ((.value | type) == "object") and ((($u.roles[$k]? | objects | .open?) // null) == "first-use")
+          then (if ($d.roles[$k] | has("open")) then .value.open = $d.roles[$k].open else .value |= del(.open) end)
+          elif (($u.defaults.open? // null) != null) and ($u.defaults.open != $d.defaults.open) and ($d.roles | has($k)) and (($d.roles[$k].open? // "") | IN("per-task", "per-batch")) and ((.value | type) == "object") and ((($u.roles[$k]? | type) != "object") or (($u.roles[$k] | has("open")) | not))
+          then .value |= del(.open)
+          else . end)
     | .roles.tester.params.maxSelfMutants |= (if . == 5 then $d.roles.tester.params.maxSelfMutants else . end)
     | .roles.researcher.modes |= (if . == ["programmer"] then $d.roles.researcher.modes else . end)
     | .roles.dev.modes |= (if . == ["programmer"] then $d.roles.dev.modes else . end)
@@ -610,14 +623,35 @@ check_config() {
   out="$(jq -r '.roles | to_entries[] | select(.value | has("disallowedTools")) | select(.value.disallowedTools | type != "array" or any(.[]; type != "string"))
     | "ERROR: role \(.key): disallowedTools must be a list of tool names"' "$1" 2>/dev/null)" || true
   [ -z "$out" ] || printf '%s\n' "$out"
-  out="$(jq -r --arg ha "$HIDDEN_AGENTS" '(.roles | to_entries[] | select(.value | type == "object" and has("open")) | select(.value.open | IN("start", "first-use", "per-task", "hidden") | not)
-      | "ERROR: role \(.key): open must be \"start\", \"first-use\", \"per-task\" or \"hidden\" (got \(.value.open | tojson))"),
-    (.defaults? | objects | select(has("open")) | select(.open | IN("start", "first-use", "per-task", "hidden") | not)
-      | "ERROR: defaults.open must be \"start\", \"first-use\", \"per-task\" or \"hidden\" (got \(.open | tojson))"),
+  out="$(jq -r --arg ha "$HIDDEN_AGENTS" '(.roles | to_entries[] | select(.value | type == "object" and has("open")) | select(.value.open | IN("start", "first-use", "per-task", "per-batch", "hidden") | not)
+      | "ERROR: role \(.key): open must be \"start\", \"first-use\", \"per-task\", \"per-batch\" or \"hidden\" (got \(.value.open | tojson))"),
+    (.defaults? | objects | select(has("open")) | select(.open | IN("start", "first-use", "per-task", "per-batch", "hidden") | not)
+      | "ERROR: defaults.open must be \"start\", \"first-use\", \"per-task\", \"per-batch\" or \"hidden\" (got \(.open | tojson))"),
     (($ha | split(" ") | map(select(. != ""))) as $hl | .defaults as $d | .roles | to_entries[] | select(.value | type == "object" and .open == "hidden")
       | if .key == "planner" or .key == "local-coordinator" then "ERROR: role \(.key): open \"hidden\" is not allowed: this role needs a tab"
         else (.value.agent // $d.agent // "claude") as $ag | select($hl | index($ag) | not)
           | "ERROR: role \(.key): open \"hidden\" needs agent \"\($hl | join(", "))\" (got \"\($ag)\")" end)' "$1" 2>/dev/null)" || true
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r '(.roles | to_entries[] | .key as $r | .value as $v
+      | (if ($r | test("-[0-9]+$")) then "ERROR: role \($r): a role id must not end in a hyphen and digits (the kit names a role'"'"'s extra instances that way)" else empty end),
+        (if ($v | type) == "object" then
+          (if ($v | has("instanceOf")) then "ERROR: role \($r): instanceOf is reserved for the kit'"'"'s instances" else empty end),
+          (if ($v | has("maxInstances")) and $v.maxInstances != null then
+            ($v.maxInstances | if type != "number" or . != floor or . < 1 then "ERROR: role \($r): maxInstances must be a positive integer"
+              elif . > 1 and ($r | IN("planner", "plan-reviewer", "code-reviewer", "local-coordinator")) then "ERROR: role \($r): maxInstances must be 1: this role never has instances"
+              else empty end)
+           else empty end)
+         else empty end)),
+    (.settings // {} | if has("scaling") and .scaling != null then
+        (.scaling | if type != "object" then "ERROR: invalid configuration: settings.scaling must be an object"
+          else
+            ((keys - ["maxExtraInstances", "maxLoad", "minFreeMemoryMB"]) as $k | if ($k | length) > 0 then "ERROR: invalid configuration: settings.scaling has unknown keys (\($k | join(", "))); its keys are maxExtraInstances, maxLoad and minFreeMemoryMB" else empty end),
+            (if has("maxExtraInstances") and .maxExtraInstances != null and ((.maxExtraInstances | type) != "number" or .maxExtraInstances != (.maxExtraInstances | floor) or .maxExtraInstances < 0) then "ERROR: invalid configuration: settings.scaling.maxExtraInstances must be a non-negative integer" else empty end),
+            (if has("maxLoad") and .maxLoad != null and ((.maxLoad | type) != "number" or .maxLoad <= 0) then "ERROR: invalid configuration: settings.scaling.maxLoad must be a number above 0" else empty end),
+            (if has("minFreeMemoryMB") and .minFreeMemoryMB != null and ((.minFreeMemoryMB | type) != "number" or .minFreeMemoryMB != (.minFreeMemoryMB | floor) or .minFreeMemoryMB < 0) then "ERROR: invalid configuration: settings.scaling.minFreeMemoryMB must be a non-negative integer" else empty end)
+          end)
+      else empty end)' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: roles.<role>.maxInstances and settings.scaling must be valid (see README)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   out="$(jq -r '[(.defaults?, .roles[]?) | objects | select(has("modelError")) | .modelError | select(type != "string" or . == "")]
     | if length > 0 then "ERROR: invalid configuration: modelError must be a non-empty string" else empty end' "$1" 2>/dev/null)" \
@@ -884,7 +918,7 @@ coordinator_run() {
 # The front role's startup message: the local coordinator's in every mode (the Planner, where the mode has one, is a worker
 # and is one of its handles).  planner_msg <config> "<enabled roles>" <state> <jira_key> <jira_url> <resume 0|1>
 planner_msg() {
-  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front lfirst ltask lhid team
+  local cfg="$1" roles="$2" state="$3" key="$4" url="$5" resume="$6" oldmode="${7:-}" id v t handles="" active="" extra params msg lang art cap oc esc e cm cr xc front lfirst ltask lhid lbatch linst team n
   front="$(front_role "$(mode_of --saved "$cfg")")"
   # shellcheck source=/dev/null
   . "$state"
@@ -893,14 +927,17 @@ planner_msg() {
     v="$(var_of "$id")"; t="$(title_of "$cfg" "$id")"
     handles="$handles $t=${!v},"; active="$active $t"
   done
-  lfirst=""; ltask=""; lhid=""; team="$roles"
+  lfirst=""; ltask=""; lhid=""; lbatch=""; linst=""; team="$roles"
   for id in $(launchable_roles "$cfg" 2>/dev/null); do
     [ "$id" = "$front" ] && continue
     case "$(open_of "$cfg" "$id")" in
       first-use) case " $roles " in *" $id "*) ;; *) lfirst="$lfirst, $(title_of "$cfg" "$id") ($id)"; team="$team $id";; esac;;
       per-task) ltask="$ltask, $(title_of "$cfg" "$id") ($id)"; case " $roles " in *" $id "*) ;; *) team="$team $id";; esac;;
+      per-batch) lbatch="$lbatch, $(title_of "$cfg" "$id") ($id)"; case " $roles " in *" $id "*) ;; *) team="$team $id";; esac;;
       hidden) case " $roles " in *" $id "*) ;; *) lhid="$lhid, $(title_of "$cfg" "$id") ($id)"; team="$team $id";; esac;;
     esac
+    n="$(max_instances "$cfg" "$id")"
+    [ "$n" -gt 1 ] && linst="$linst, $(title_of "$cfg" "$id") ($id, up to $n)"
   done
   extra="$(jq -r --arg f "$front" --argjson act "$(printf '%s\n' $team | grep . | jq -R . | jq -s .)" \
     '[.roles | to_entries[] | select(.key != $f and (.key as $k | $act | index($k)) and .value.description) | "\(.value.title // .key): \(.value.description)"] | join("; ")' "$cfg")"
@@ -910,6 +947,8 @@ planner_msg() {
   msg="$msg Active roles in this workspace:${active:- none}. Handles:${handles%,}."
   [ -n "$lfirst" ] && msg="$msg Roles opened on first use, not open yet (see \"The team\" in your prompt): ${lfirst#, }."
   [ -n "$ltask" ] && msg="$msg Roles opened per task (see \"The team\" in your prompt): ${ltask#, }."
+  [ -n "$lbatch" ] && msg="$msg Roles opened per batch (see \"The team\" in your prompt): ${lbatch#, }."
+  [ -n "$linst" ] && msg="$msg Roles that can run several instances at once (see \"The team\" in your prompt): ${linst#, }."
   [ -n "$lhid" ] && msg="$msg Hidden roles, with no tab, run with hidden-role.sh (see \"The team\" in your prompt): ${lhid#, }."
   lang="$(setting "$cfg" language auto)"   # settings.language: "auto" = the language the user writes in
   [ "$lang" != auto ] && [ -n "$lang" ] && msg="$msg Always reply to the user in $lang, whatever language they write in."

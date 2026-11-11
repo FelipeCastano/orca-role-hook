@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opens the tabs of the worktree's enabled roles and starts their kickoff in the background.
 # Usage: launch.sh [id:<worktree>] [exceptions]
-#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it) (a role named by --only or --enable in this run opens now even if its "open" is "first-use" or "per-task")
+#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it) (a role named by --only or --enable in this run opens now even if its "open" is "first-use", "per-task" or "per-batch")
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
@@ -11,7 +11,7 @@
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
-#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use" or "per-task" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
+#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use", "per-task" or "per-batch" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -322,7 +322,7 @@ for i in $(seq 1 "$WAIT"); do
 done
 LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
 if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then LROLES="$FRONT"; fi
-OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""; LAZY_HID=""
+OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""; LAZY_BATCH=""; LAZY_HID=""
 if [ -n "$OPEN_REQ" ]; then
   [ "$FRESH" = 0 ] || fail "ERROR: --open needs an open team: run roles first. Nothing was changed."
   { [ "$ASK" = 0 ] && [ "$PENDING" = 0 ]; } || fail "ERROR: --open needs a chosen mode: choose the mode first. Nothing was changed."
@@ -350,6 +350,7 @@ if [ "$ASK" = 0 ]; then
     if [ "$om" = hidden ]; then LAZY_HID="${LAZY_HID:+$LAZY_HID, }$(title_of "$NEWCFG" "$id") ($id)"; continue; fi
     case " $OPEN_IDS $NAMED_IDS " in *" $id "*) KEEP="$KEEP $id"; continue;; esac
     if [ "$om" = first-use ]; then LAZY_FIRST="${LAZY_FIRST:+$LAZY_FIRST, }$(title_of "$NEWCFG" "$id") ($id)"
+    elif [ "$om" = per-batch ]; then LAZY_BATCH="${LAZY_BATCH:+$LAZY_BATCH, }$(title_of "$NEWCFG" "$id") ($id)"
     else LAZY_TASK="${LAZY_TASK:+$LAZY_TASK, }$(title_of "$NEWCFG" "$id") ($id)"; fi
   done
   LROLES="${KEEP# }"
@@ -614,6 +615,7 @@ else
 fi
 [ -z "$LAZY_FIRST" ] || echo "Opened on first use (not open yet; the local coordinator opens each with launch.sh --open <id> before its first task): $LAZY_FIRST."
 [ -z "$LAZY_TASK" ] || echo "Opened per task (not open yet; the local coordinator opens each before each of its tasks and closes it after its report): $LAZY_TASK."
+[ -z "$LAZY_BATCH" ] || echo "Opened per batch (not open yet; the local coordinator opens each before its first task of each batch and closes it when the batch closes): $LAZY_BATCH."
 [ -z "$LAZY_HID" ] || echo "Hidden (no tab; the local coordinator runs each with hidden-role.sh): $LAZY_HID."
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first

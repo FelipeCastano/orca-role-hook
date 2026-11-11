@@ -9,6 +9,7 @@
     "language": "auto",
     "mode": "programmer",
     "oracle": { "enabled": false, "maxLoad": 0.8, "waitMax": 300, "timeout": 600, "retries": 1 },
+    "scaling": { "maxExtraInstances": 4, "maxLoad": 0.8, "minFreeMemoryMB": 2048 },
     "sessionHook": true,
     "telemetry": { "roleAttribute": false },
     "metrics": { "enabled": true, "otlpEndpoint": "http://127.0.0.1:4318/v1/metrics", "prometheusUrl": "http://127.0.0.1:9090", "intervalSeconds": 60, "retentionDays": 90, "allowRemote": false },
@@ -62,14 +63,17 @@
     "researcher": {
       "title": "Researcher",
       "enabled": true,
+      "open": "per-task",
       "modes": ["programmer", "academic-research", "quick"],
       "phases": ["experiment", "writing"],
       "model": "claude-sonnet-5-5",
+      "maxInstances": 3,
       "mcp": ["context7"]
     },
     "dev": {
       "title": "Dev",
       "enabled": true,
+      "open": "per-batch",
       "modes": ["programmer", "academic-research", "quick"],
       "phases": ["experiment"],
       "model": "claude-sonnet-5-5",
@@ -78,6 +82,7 @@
     "tester": {
       "title": "Tester",
       "enabled": true,
+      "open": "per-batch",
       "modes": ["programmer", "academic-research", "quick"],
       "phases": ["experiment"],
       "model": "claude-sonnet-5-5",
@@ -119,6 +124,7 @@
     "e2e-tester": {
       "title": "E2E-Tester",
       "enabled": true,
+      "open": "per-batch",
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
       "mcp": ["playwright"],
