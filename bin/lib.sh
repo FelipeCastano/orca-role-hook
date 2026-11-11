@@ -402,6 +402,69 @@ max_instances() {
     else (($x.open // .defaults.open // "start") as $o | ($x.agent // .defaults.agent // "claude") as $a
       | if ($o | IN("per-task", "per-batch")) and ($a | IN("claude", "codex")) then $x.maxInstances else 1 end) end' "$1" 2>/dev/null || echo 1
 }
+# The role an instance belongs to (nothing for a role).  instance_base <config> <id>
+instance_base() { jq -r --arg i "$2" '.roles[$i].instanceOf // empty' "$1" 2>/dev/null; }
+# Writes the entry of instance <role>-<n> in a configuration file: the role's entry without maxInstances, a numbered title and instanceOf.  instance_entry <config file> <role> <n>
+instance_entry() {
+  jq --arg r "$2" --arg n "$3" '.roles[$r + "-" + $n] = ((.roles[$r] | del(.maxInstances)) + {title: "\(.roles[$r].title // $r) \($n)", instanceOf: $r})' "$1" > "$1.inst.$$" && mv "$1.inst.$$" "$1"
+  local rc=$?; rm -f "$1.inst.$$"; return $rc
+}
+# Rebuilds in a configuration file the entries of the instances that have a saved tab in the state file.  materialize_instances <config file> <state file>
+materialize_instances() {
+  [ -s "$2" ] || return 0
+  local line v id base n
+  while IFS= read -r line || [ -n "$line" ]; do
+    v="${line%%=*}"; [ -n "${line#*=}" ] || continue
+    id="$(printf '%s' "$v" | tr 'A-Z_' 'a-z-')"; base="${id%-*}"; n="${id##*-}"
+    [ "$base" != "$id" ] || continue
+    case "$n" in ''|*[!0-9]*|0*) continue;; esac
+    [ "$n" -ge 2 ] || continue
+    jq -e --arg i "$id" --arg b "$base" '(.roles[$i] == null) and ((.roles[$b] | type) == "object") and (.roles[$b].instanceOf == null)' "$1" >/dev/null 2>&1 || continue
+    instance_entry "$1" "$base" "$n" || return 1
+  done < "$2"
+  return 0
+}
+# "<saved tabs of the role and its instances> <saved instance tabs of the whole team>".  instance_tabs <config> <state file> <role>
+instance_tabs() {
+  local ids; ids="$(sed -n 's/^\([^=]*\)=..*/\1/p' "$2" 2>/dev/null | tr 'A-Z_' 'a-z-' | jq -R . | jq -s . 2>/dev/null)"; [ -n "$ids" ] || ids='[]'
+  jq -r --arg r "$3" --argjson ids "$ids" '. as $c | [$ids[] | select(. == $r or ($c.roles[.].instanceOf? == $r))] as $k | [$ids[] | select($c.roles[.].instanceOf? != null)] as $e | "\($k | length) \($e | length)"' "$1" 2>/dev/null || echo "0 0"
+}
+# The id of the tab a role opens next: its own when it has none, else <role>-<n> with the lowest free n up to its maxInstances; nothing when none is free.  instance_slot <config> <state file> <role>
+instance_slot() {
+  local n max; grep -q "^$(var_of "$3")=." "$2" 2>/dev/null || { printf '%s' "$3"; return 0; }
+  max="$(max_instances "$1" "$3")"
+  for ((n = 2; n <= max; n++)); do
+    grep -q "^$(var_of "$3-$n")=." "$2" 2>/dev/null || { printf '%s-%s' "$3" "$n"; return 0; }
+  done
+}
+# "<load1> <cores> <availableMB>" of this machine, each "-" when unreadable (test hook: ORCA_ROLES_HOST_CAPACITY, a command printing the same).  host_capacity
+host_capacity() {
+  [ -n "${ORCA_ROLES_HOST_CAPACITY:-}" ] && { "$ORCA_ROLES_HOST_CAPACITY"; return 0; }
+  local lc mem="" out total pct ps pages l v
+  lc="$(python3 -c 'import os; print("%.2f %d" % (os.getloadavg()[0], os.cpu_count() or 1))' 2>/dev/null)" || lc=""
+  case "$lc" in *" "*) ;; *) lc="- -";; esac
+  case "$(uname -s 2>/dev/null)" in
+    Linux) mem="$(awk '/^MemAvailable:/ {print int($2 / 1024); exit}' /proc/meminfo 2>/dev/null)";;
+    Darwin)
+      out="$(memory_pressure -Q 2>/dev/null)"
+      total="$(printf '%s\n' "$out" | awk '/^The system has/ {print $4; exit}')"
+      pct="$(printf '%s\n' "$out" | awk '/free percentage/ {print $NF; exit}')"; pct="${pct%\%}"
+      case "$total$pct" in ''|*[!0-9]*) total=""; pct="";; esac
+      if [ -z "$total" ] || [ -z "$pct" ]; then
+        pct="$(sysctl -n kern.memorystatus_level 2>/dev/null)"; total="$(sysctl -n hw.memsize 2>/dev/null)"
+        case "$total$pct" in ''|*[!0-9]*) total=""; pct="";; esac
+      fi
+      if [ -n "$total" ] && [ -n "$pct" ]; then mem=$((total / 1048576 * pct / 100))
+      else
+        out="$(vm_stat 2>/dev/null)"
+        ps="$(printf '%s\n' "$out" | head -1 | sed -n 's/.*page size of \([0-9][0-9]*\).*/\1/p')"
+        pages="$(printf '%s\n' "$out" | awk '/^Pages (free|inactive|speculative):/ {v = $NF; sub(/\.$/, "", v); s += v; n++} END {if (n) print s}')"
+        case "$ps$pages" in ''|*[!0-9]*) ;; *) mem=$((pages * ps / 1048576));; esac
+      fi;;
+  esac
+  case "$mem" in ''|*[!0-9]*) mem="-";; esac
+  printf '%s %s\n' "$lc" "$mem"
+}
 # A process's start time as one word (ps lstart, spaces as _), or nothing when it is gone: with the pid it names one process, so a reused pid is not taken for it. LC_ALL=C: the supervisor and --status must print it alike
 proc_start() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' | tr -s ' ' '_'; }
 proc_is() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$2" != - ] && kill -0 "$1" 2>/dev/null && [ "$(proc_start "$1")" = "$2" ]; }   # proc_is <pid> <start>
@@ -472,11 +535,12 @@ front_label() {
 prompts_dir_of() { local m; m="$(mode_of --saved "$1" 2>/dev/null)" || return 1; echo "$KIT/prompts/$m"; }
 # A role's prompt file: "prompt" as a string (legacy: programmer only) or as {"<mode>": path} (accepts ~, {kit} and {home}), or the mode's prompts/<mode>/<role>.md
 prompt_of() {
-  local m p; m="$(mode_of --saved "$1" 2>/dev/null)" || return 1
+  local m p b; m="$(mode_of --saved "$1" 2>/dev/null)" || return 1
+  b="$(instance_base "$1" "$2")"; b="${b:-$2}"
   p="$(jq -r --arg r "$2" --arg m "$m" '.roles[$r].prompt as $p
     | if ($p | type) == "string" then (if $m == "programmer" then $p else empty end)
       elif ($p | type) == "object" then ($p[$m] // empty | strings) else empty end' "$1")"
-  p="$(expand_path "$p")"; echo "${p:-$KIT/prompts/$m/$2.md}"   # accepts ~, {kit} and {home}
+  p="$(expand_path "$p")"; echo "${p:-$KIT/prompts/$m/$b.md}"   # accepts ~, {kit} and {home}
 }
 # Updates a user configuration with the new keys/roles of the default one, without overwriting values or the order of their roles.
 # Roles renamed between versions (old id → new id), applied to the user's config, .orca-roles.json and the setup script options.
@@ -1112,7 +1176,7 @@ common_of() {
 # The role's "common" field (a path; accepts ~, {kit} and {home}) replaces the mode's common-workers.md, e.g. with the compact common-peon.md
 # for small models; if that file does not exist, the standard one is used and a warning goes to stderr.
 worker_msg() {
-  local p n notes="" fg="" cm short=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; n="$(notes_file "$2")"
+  local p n b notes="" fg="" cm short=""; p="$(params_of "$1" "$2")"; p="${p:+$p, }scratchDir=$(scratch_dir "$2")"; b="$(instance_base "$1" "$2")"; n="$(notes_file "${b:-$2}")"
   case "$(rstr "$1" "$2" agent)" in claude|"") ;; *) fg=" Run every orca orchestration command (and its CLI under any other name) in the foreground, as a direct shell command, and wait for it to finish: never as a background task or through a subagent, or Orca will not get your report.";; esac
   [ -n "$n" ] && [ -s "$n" ] && notes=" Additional instructions for this worktree, which take precedence over your prompt if they conflict: $(tr '\n' ' ' < "$n" | sed 's/  */ /g; s/ $//')"
   cm="$(common_of "$1" "$2")"

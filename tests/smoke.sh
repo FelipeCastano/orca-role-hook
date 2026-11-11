@@ -3132,6 +3132,93 @@ loreset; try lol; S0="$(losum)"; : > "$LOG/orca-roles.mode-pending"; try lol --o
 jq '.settings.mode = "pr-reviewer"' "$KIT/config.json" > "$LO/cfg-mode.json"; cp "$KIT/config.json" "$LO/cfg-keep.json"; cp "$LO/cfg-mode.json" "$KIT/config.json"; try lol --open dev; P2="$RC:$(grep -c 'terminal close' "$LO/orca.log" || true)"; cp "$LO/cfg-keep.json" "$KIT/config.json"; P3S="$([ "$(losum)" = "$S0" ] && echo same)"
 loreset; try lol --open dev; P3="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs an open team' || true):$(grep -c '^terminal create' "$LO/orca.log" || true):$(ls "$LOG"/orca-roles.env 2>/dev/null | wc -l | tr -d ' ' || true)"; loreset
 check "launch --open: refused with nothing changed (no tab closed) while the mode is pending and after the configuration changed the open team's mode, and on a fresh worktree" "$P1|$P2|$P3S|$P3" "1:1|1:0|same|1:1:0:0"
+# --add: one more tab of a scalable role (instances), their caps, the hardware check and recovery after a restart
+LA="$TMP/la"; mkdir -p "$LA/bin" "$LA/proj"; git -C "$LA/proj" init -q; LAG="$LA/proj/.git"
+printf '#!/bin/sh\necho "$*" >> "%s/kick.log"\n' "$LA" > "$LA/bin/kickoff"; printf '#!/bin/sh\necho 4242\n' > "$LA/bin/agentpid"
+printf '#!/bin/sh\necho x >> "%s/hook.calls"\ncat "%s/cap"\n' "$LA" "$LA" > "$LA/bin/cap"; chmod +x "$LA/bin/kickoff" "$LA/bin/agentpid" "$LA/bin/cap"
+cat > "$LA/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LA/orca.log"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*}"; echo "{\"handle\":\"h-\$(echo "\$t" | tr -d ' ')\"}";;
+  "terminal list") echo '{"terminals":[]}';;
+  "terminal show") if [ -f "$LA/stale-\$4" ]; then echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; fi
+    echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\",\"tabId\":\"tab-\$4\",\"leafId\":\"leaf-\$4\"}}}";;
+esac
+exit 0
+EOS
+chmod +x "$LA/bin/orca"; printf '# Scout\n' > "$LA/scout.md"
+lal() { (cd "$LA/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LA/bin:$PATH" ORCA_ROLES_KICKOFF="$LA/bin/kickoff" ORCA_ROLES_AGENT_PID="$LA/bin/agentpid" ORCA_ROLES_HOST_CAPACITY="$LA/bin/cap" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+lacfg() { write_launch_config; jq --arg s "$LA/scout.md" '.roles.researcher = {"title":"Researcher","open":"per-task","maxInstances":3} | .roles.scout = {"title":"Scout","open":"start","maxInstances":3,"prompt":$s} | .roles.hid = {"title":"Hid","open":"hidden","prompt":$s} | .settings.scaling = {"maxExtraInstances":4,"maxLoad":0.8,"minFreeMemoryMB":2048}' "$KIT/config.json" > "$LA/cfg.json" && cp "$LA/cfg.json" "$KIT/config.json"; }
+lareset() { rm -rf "$LAG"/orca-roles.* "$LA"/stale-*; : > "$LA/orca.log"; : > "$LA/kick.log"; : > "$LA/hook.calls"; echo "1.00 8 9000" > "$LA/cap"; }
+lasum() { cat "$LAG/orca-roles.env" "$LAG/orca-roles.pty" "$LAG/orca-roles.tabs" "$LAG/orca-roles.overrides.json" "$LAG/orca-roles.config.json" 2>/dev/null | cksum || true; }
+lacre() { grep -c '^terminal create' "$LA/orca.log" || true; }
+lainst() { printf '%s\n' "$OUT" | grep -cx "Instance: $1 opening\\." || true; }
+lagive() { grep -v "^$1=" "$LAG/orca-roles.env" > "$LA/env.x"; cp "$LA/env.x" "$LAG/orca-roles.env"; }
+lacfg; lareset; try lal; try lal --add researcher; I1="$RC:$(lainst 'researcher (Researcher)'):$(wc -l < "$LA/hook.calls" | tr -d ' ')"
+try lal --add researcher; I2="$RC:$(lainst 'researcher-2 (Researcher 2)')"; try lal --add researcher; I3="$RC:$(lainst 'researcher-3 (Researcher 3)')"
+lagive RESEARCHER_2; try lal --add researcher; I4="$RC:$(lainst 'researcher-2 (Researcher 2)'):$(grep -c '^RESEARCHER_[0-9]*=' "$LAG/orca-roles.env" || true)"
+lagive RESEARCHER; lagive RESEARCHER_2; try lal --add researcher; I5="$RC:$(lainst 'researcher (Researcher)')"
+check "launch --add: the slot is the role's own tab when it has none (no hardware check run), else the lowest free number (researcher and researcher-3 open give researcher-2, never researcher-4), and each run opens exactly that tab" "$I1|$I2|$I3|$I4|$I5" "0:1:0|0:1|0:1|0:1:2|0:1"
+lareset; try lal; try lal --add researcher; try lal --add=researcher; D0="$RC"; kicked3() { [ "$(wc -l < "$LA/kick.log")" -ge 3 ]; }; poll kicked3
+DC="$LAG/orca-roles.config.json"
+check "launch --add: the instance opens as Researcher 2 (claude) running agent.sh researcher-2, is saved as RESEARCHER_2 and as an entry of the saved config (numbered title, instanceOf, no maxInstances), has its own scratch folder, is kicked off, and its worker message names the role's prompt and the instance's scratch folder" "$D0:$(grep -c -- '--title Researcher 2 (claude)' "$LA/orca.log" || true):$(grep -c "agent.sh' researcher-2" "$LA/orca.log" || true):$(grep -c '^RESEARCHER_2=h-Researcher2$' "$LAG/orca-roles.env" || true):$(jq -r '.roles["researcher-2"] | [.title, .instanceOf, (has("maxInstances") | tostring)] | join(",")' "$DC"):$([ -d "$(cd "$LA/proj" && scratch_dir researcher-2)" ] && echo dir):$(tail -1 "$LA/kick.log" | grep -c ' researcher-2\( \|$\)' || true):$( (cd "$LA/proj" && worker_msg "$DC" researcher-2) | grep -c "prompts/programmer/researcher.md.*scratchDir=[^ ,]*/researcher-2" || true)" "0:1:1:1:Researcher 2,researcher,false:dir:1:1"
+lareset; try lal; try lal --add researcher; try lal --add researcher; try lal --add researcher; C0="$RC"; S0="$(lasum)"; N0="$(lacre)"; : > "$LA/hook.calls"
+try lal --add researcher; C1="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Researcher: it has 3 tab(s) open and its maxInstances is 3; no instance was opened\.' || true)"
+try lal --add dev; C2="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Dev: it has 1 tab(s) open and its maxInstances is 1; no instance was opened\.' || true)"
+try lal --add scout; C3="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Scout: it cannot have instances: its open is "start" and its agent is "claude" (instances need open "per-task" or "per-batch" and agent "claude" or "codex"); no instance was opened\.' || true)"
+CS="$([ "$(lasum)" = "$S0" ] && echo same):$([ "$(lacre)" = "$N0" ] && echo same)"
+cp "$KIT/config.json" "$LA/cfg.keep"; jq '.settings.scaling.maxExtraInstances = 1' "$LA/cfg.keep" > "$KIT/config.json"; lagive RESEARCHER_3; S2="$(lasum)"; N2="$(lacre)"
+try lal --add researcher; C4="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Researcher: 1 extra instance(s) are open in this worktree and settings.scaling.maxExtraInstances is 1; no instance was opened\.' || true):$([ "$(lasum)" = "$S2" ] && echo same):$([ "$(lacre)" = "$N2" ] && echo same)"
+H="$(wc -l < "$LA/hook.calls" | tr -d ' ')"
+jq '.settings.scaling.maxExtraInstances = 0' "$LA/cfg.keep" > "$KIT/config.json"; lareset; try lal; try lal --add researcher; C5="$RC:$(lainst 'researcher (Researcher)')"; try lal --add researcher; C6="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Researcher: 0 extra instance(s) are open in this worktree and settings.scaling.maxExtraInstances is 0; no instance was opened\.' || true)"
+H="$H:$(wc -l < "$LA/hook.calls" | tr -d ' ')"; cp "$LA/cfg.keep" "$KIT/config.json"
+check "launch --add: refused with exit 3, nothing changed, no tab and no hardware check, over the role's maxInstances (researcher at 3, dev at 1), over a maxInstances its open or agent cannot give (scout), and over the team's maxExtraInstances (1 with an instance open, 0 for every instance while the role's own tab opens)" "$C0|$C1|$C2|$C3|$CS|$C4|$C5|$C6|$H" "0|3:1|3:1|3:1|same:same|3:1:same:same|0:1|3:1|0:0"
+# the hardware check: the hook gives "<load> <cores> <MB>"; refusals and notes are exact, nothing changes on a refusal, the order is the caps first
+lacap() { lareset; try lal; try lal --add researcher; echo "$1" > "$LA/cap"; HS="$(lasum)"; HN="$(lacre)"; : > "$LA/hook.calls"; try lal --add researcher; }
+hw() { lacap "$1"; HWR="$(printf '%s:%s:%s' "$RC" "$(printf '%s\n' "$OUT" | grep -c '^Instance: researcher-2 ' || true)" "$([ "$(lasum)" = "$HS" ] && [ "$(lacre)" = "$HN" ] && echo same || echo changed)")"; }
+LDR='REFUSED: Researcher: the 1-minute load is %s on 8 cores, at or over settings.scaling.maxLoad 0.8 per core; no instance was opened.'
+hw '6.39 8 9000'; W1="$HWR"; hw '6.40 8 9000'; W2="$HWR"; W2L="$(printf '%s\n' "$OUT" | grep -cxF "$(printf "$LDR" 6.40)" || true)"; hw '7.20 8 9000'; W3="$HWR"; W3L="$(printf '%s\n' "$OUT" | grep -cxF "$(printf "$LDR" 7.20)" || true)"
+hw '1.00 8 2048'; W4="$HWR"; hw '1.00 8 2047'; W5="$HWR"; W5L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2047 MB of memory available, under settings.scaling.minFreeMemoryMB 2048; no instance was opened.' || true)"
+hw '7.20 8 100'; W6="$HWR"; W6L="$(printf '%s\n' "$OUT" | grep -c 'MB of memory' || true)"
+jq '.settings.scaling.minFreeMemoryMB = 0' "$KIT/config.json" > "$LA/cfg.x"; cp "$KIT/config.json" "$LA/cfg.keep2"; cp "$LA/cfg.x" "$KIT/config.json"; hw '1.00 8 10'; W7="$HWR"; W7N="$(printf '%s\n' "$OUT" | grep -c '^Note:' || true)"; cp "$LA/cfg.keep2" "$KIT/config.json"
+hw '- - -'; W8="$HWR"; W8N="$(printf '%s\n' "$OUT" | grep -cxF -e 'Note: the load check was skipped: the load or the number of cores could not be read on this system.' -e 'Note: the memory check was skipped: the available memory could not be read on this system.' || true)"
+hw '- 8 9000'; W9="$HWR"; W9N="$(printf '%s\n' "$OUT" | grep -c '^Note: the load check was skipped' || true):$(printf '%s\n' "$OUT" | grep -c '^Note: the memory check' || true)"
+hw '1.00 8 -'; W10="$HWR"; W10N="$(printf '%s\n' "$OUT" | grep -c '^Note: the memory check was skipped' || true)"
+check "launch --add: the hardware check refuses at load >= maxLoad x cores (6.39 opens, 6.40 and 7.20 refuse) and under minFreeMemoryMB (2048 opens, 2047 refuses; 0 disables it), with the exact lines, nothing changed on a refusal, the load first; unreadable values print a Note and never refuse" "$W1|$W2:$W2L|$W3:$W3L|$W4|$W5:$W5L|$W6:$W6L|$W7:$W7N|$W8:$W8N|$W9:$W9N|$W10:$W10N" "0:1:changed|3:0:same:1|3:0:same:1|0:1:changed|3:0:same:1|3:0:same:0|0:1:changed:0|0:1:changed:2|0:1:changed:1:0|0:1:changed:1"
+# instances survive later launches and --reopen
+lareset; try lal; try lal --add researcher; try lal --add researcher
+R0="$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true)"; try lal; R1="$RC:$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true):$(jq -r '.roles["researcher-2"].instanceOf // "none"' "$LAG/orca-roles.config.json")"
+try lal --open dev; R2="$RC:$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true):$(jq -r '.roles["researcher-2"].instanceOf // "none"' "$LAG/orca-roles.config.json")"
+: > "$LA/stale-h-Researcher2"; N0="$(grep -c -- '--title Researcher 2 (claude)' "$LA/orca.log" || true)"; try lal --reopen
+R3="$RC:$(( $(grep -c -- '--title Researcher 2 (claude)' "$LA/orca.log" || true) - N0 )):$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true):$(grep -c -- '--title Researcher (claude)' "$LA/orca.log" || true)"
+lagive RESEARCHER_2; try lal; R4="$RC:$(jq -r '.roles["researcher-2"] // "none"' "$LAG/orca-roles.config.json")"
+check "launch --add: a saved instance stays in orca-roles.env and its entry is rebuilt in the saved config by a later plain launch and by --open of another role, --reopen reopens its lost tab as that instance (the role's own tab is not reopened again), and an instance with no saved tab is dropped from the config" "$R0|$R1|$R2|$R3|$R4" "1|0:1:researcher|0:1:researcher|0:1:1:1|0:none"
+# usage errors: exit 1 (not 3), nothing changed
+lareset; try lal; try lal --add researcher; S0="$(lasum)"; N0="$(lacre)"; U=""
+for a in "--add researcher --open dev" "--add a --add b" "--add" "--add=" "--add researcher --reopen" "--add researcher --set roles.dev.model=x" "--add researcher --reset" "--add researcher --status" "--add nosuch" "--add researcher-2" "--add hid" "--add scout --mode pr-reviewer"; do
+  try lal $a; U="$U$RC:$(printf '%s\n' "$OUT" | grep -c 'Nothing was changed\.' || true) "
+done
+check "launch --add: usage errors (a second --add, no role, another option of any kind, an unknown role, an instance, a hidden role) exit 1 with Nothing was changed, never 3, and change nothing" "$U$([ "$(lasum)" = "$S0" ] && [ "$(lacre)" = "$N0" ] && echo same)" "$(for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '1:1 '; done)same"
+try lal --add=researcher; U1="$RC:$(lainst 'researcher-2 (Researcher 2)')"; lareset; try lal --add researcher; U2="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs an open team' || true):$(lacre)"
+check "launch --add: --add=<role> opens the instance; on a fresh worktree it is refused with exit 1 (needs an open team) and opens nothing" "$U1|$U2" "0:1|1:1:0"
+# host_capacity: its three fields on this machine, and the macOS memory sources one by one with fake commands
+HC="$(unset ORCA_ROLES_HOST_CAPACITY; host_capacity)"
+case "$HC" in [0-9]*.[0-9][0-9]" "[1-9]*" "[0-9-]*) HCS=shape;; *) HCS="bad:$HC";; esac
+printf '%s' "$HC" | grep -Eq '^[0-9]+\.[0-9]{2} [0-9]+ ([0-9]+|-)$' || HCS="bad:$HC"
+check "host_capacity: prints the load with two decimals, the cores as an integer and the available MB as an integer (or - when the system gives none) on this machine" "$HCS" "shape"
+FM="$TMP/fakemem"; rm -rf "$FM"; mkdir -p "$FM/bin"
+printf '#!/bin/sh\n[ "$1" = -s ] && echo Darwin\n' > "$FM/bin/uname"
+printf '#!/bin/sh\n[ -f "%s/mp" ] && cat "%s/mp"\n' "$FM" "$FM" > "$FM/bin/memory_pressure"
+printf '#!/bin/sh\n[ -f "%s/sc.$2" ] && cat "%s/sc.$2"\n' "$FM" "$FM" > "$FM/bin/sysctl"
+printf '#!/bin/sh\n[ -f "%s/vm" ] && cat "%s/vm"\n' "$FM" "$FM" > "$FM/bin/vm_stat"; chmod +x "$FM"/bin/*
+fmem() { (PATH="$FM/bin:$PATH"; unset ORCA_ROLES_HOST_CAPACITY; host_capacity | cut -d' ' -f3); }
+rm -f "$FM"/mp "$FM"/sc.* "$FM"/vm
+printf 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 1000.\nPages active: 5000.\nPages inactive: 2000.\nPages speculative: 500.\nPages purgeable: 9000.\n' > "$FM/vm"
+printf '60\n' > "$FM/sc.kern.memorystatus_level"; printf '25769803776\n' > "$FM/sc.hw.memsize"
+printf 'The system has 25769803776 (1572864 pages with a page size of 16384).\nSystem-wide memory free percentage: 57%%\n' > "$FM/mp"
+M1="$(fmem)"; rm -f "$FM/mp"; M2="$(fmem)"; rm -f "$FM"/sc.*; M3="$(fmem)"; rm -f "$FM/vm"; M4="$(fmem)"
+check "host_capacity on macOS: the free percentage of memory_pressure first (14008), then the sysctl form (14745), then free + inactive + speculative pages of vm_stat without purgeable (54), and - when all three give nothing" "$M1 $M2 $M3 $M4" "14008 14745 54 -"
 akreset; write_launch_config
 }
 
@@ -3650,11 +3737,11 @@ D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester plan-reviewer code-reviewer verifier e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
 check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
-check "research-defaults: researcher joins the mode in experiment and writing, opens per task with maxInstances 3, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"per-task","modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","maxInstances":3,"mcp":["context7"]}'
+check "research-defaults: researcher joins the mode in experiment and writing, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
-check "research-defaults: dev and tester join academic-research in experiment only and open per batch, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
+check "research-defaults: dev and tester join academic-research in experiment only, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '"\(.roles[$r].model // "-"),\(.roles[$r].open // .defaults.open // "-")"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
-check "research-defaults: the programmer and pr-reviewer teams (roles, order, models, when each opens) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier; pr-reviewer opens the local coordinator, no Planner)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5,start programmer/planner=claude-opus-5-5,start programmer/researcher=claude-sonnet-5-5,per-task programmer/dev=claude-sonnet-5-5,per-batch programmer/tester=claude-sonnet-5-5,per-batch programmer/plan-reviewer=claude-opus-5-5,first-use programmer/code-reviewer=claude-opus-5-5,first-use programmer/e2e-tester=claude-opus-5-5,per-batch programmer/deployer=claude-sonnet-5-5,first-use pr-reviewer/local-coordinator=claude-sonnet-5-5,start pr-reviewer/verifier=claude-opus-5-5,first-use "
+check "research-defaults: the programmer and pr-reviewer teams (roles, order, models, when each opens) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier; pr-reviewer opens the local coordinator, no Planner)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5,start programmer/planner=claude-opus-5-5,start programmer/researcher=claude-sonnet-5-5,first-use programmer/dev=claude-sonnet-5-5,first-use programmer/tester=claude-sonnet-5-5,first-use programmer/plan-reviewer=claude-opus-5-5,first-use programmer/code-reviewer=claude-opus-5-5,first-use programmer/e2e-tester=claude-opus-5-5,first-use programmer/deployer=claude-sonnet-5-5,first-use pr-reviewer/local-coordinator=claude-sonnet-5-5,start pr-reviewer/verifier=claude-opus-5-5,first-use "
 check "research-defaults: the programmer team is the local coordinator and the eight old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "9:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/plan-reviewer programmer/code-reviewer programmer/e2e-tester programmer/deployer "
 pk_setup
 mkdir -p "$PK/prompts/academic-research"; echo "# local coordinator" > "$PK/prompts/academic-research/local-coordinator.md"; echo "# planner" > "$PK/prompts/academic-research/planner.md"; for r in dev tester; do echo "# $r" > "$PK/prompts/academic-research/$r.md"; done; echo "# cw" > "$PK/prompts/academic-research/common-workers.md"
@@ -6027,7 +6114,7 @@ mgi; M3="$MRC3:$(mgn):$([ "$(cksum < "$MK/config.json")" = "$MS1" ] && echo same
 printf '%s' '{"defaults":{"open":"start"},"roles":{"dev":{"open":"first-use"},"mine":{}}}' > "$MK/config.json"
 mgi; M4="$MRC3:$(mgn):$(jq -r '.defaults.open + "," + (.roles.dev.open // "none")' "$MK/config.json")"
 printf '%s' '{"roles":{"dev":{"open":"start"}}}' > "$MK/config.json"; mgi; mgi
-check "install: an update moves a kit role on first-use to the kit's own open (Dev to per-batch) and keeps start, per-task and a user role's first-use, prints the notice once naming only the enabled roles that had no open, and a second install prints none and changes nothing; with the user's defaults.open nothing is printed and a kit role's first-use is kept; a user's start on Dev survives two installs" "$M1|$M2|$M3|$M4|$(jq -r .roles.dev.open "$MK/config.json")" "0:1:mine|per-batch,per-task,start,none,first-use:first-use,start|0:0:same|0:0:start,first-use|start"
+check "install: an update moves a kit role on first-use to defaults.open and keeps start, per-task and a user role's first-use, prints the notice once naming only the enabled roles that had no open, and a second install prints none and changes nothing; with the user's defaults.open nothing is printed and a kit role's first-use is kept; a user's start on Dev survives two installs" "$M1|$M2|$M3|$M4|$(jq -r .roles.dev.open "$MK/config.json")" "0:1:mine|none,per-task,start,none,first-use:first-use,start|0:0:same|0:0:start,first-use|start"
 }
 
 sec_install() {
@@ -9052,7 +9139,7 @@ hc '.defaults.open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | wc -l | tr
 hc '.roles["dev-opencode"].open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role dev-opencode: open "hidden" needs agent "claude" (got "opencode")$' || true)"
 hc '.roles.planner.open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role planner: open "hidden" is not allowed: this role needs a tab$' || true)"
 hc '.roles["local-coordinator"].open = "hidden"'; T1="$T1:$(check_config "$HD/c.json" | gc '^ERROR: role local-coordinator: open "hidden" is not allowed: this role needs a tab$' || true)"
-hc '.defaults.open = "hidden" | del(.roles.planner.open) | del(.roles.dev.open)'; T1="$T1:$(open_of "$HD/c.json" dev-opencode)/$(open_of "$HD/c.json" dev)/$(open_of "$HD/c.json" planner)/$(open_of "$HD/c.json" local-coordinator)"
+hc '.defaults.open = "hidden" | del(.roles.planner.open)'; T1="$T1:$(open_of "$HD/c.json" dev-opencode)/$(open_of "$HD/c.json" dev)/$(open_of "$HD/c.json" planner)/$(open_of "$HD/c.json" local-coordinator)"
 
 # 2: launch
 HL="$TMP/hl"; rm -rf "$HL"; mkdir -p "$HL/bin" "$HL/proj"; git -C "$HL/proj" init -q; HLG="$HL/proj/.git"
