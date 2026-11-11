@@ -70,13 +70,7 @@ case "$CMD" in
       || die "cannot extract $REF into $DIR"
     # ignored entries of the worktree whose parent exists in the copy: linked, never copied; caches and build outputs stay out (a run would write into the worktree's, or load its built code)
     LINKS=()
-    while IFS= read -r p; do
-      p="${p%/}"; [ -n "$p" ] || continue
-      case "/$p" in */__pycache__|*/.pytest_cache|*/.mypy_cache|*/.ruff_cache|*/.DS_Store|*/dist|*/build|*/out|*/coverage|*/htmlcov|*/target|*/.tox|*/.nox|*/.nyc_output|*/.next|*/.nuxt|*/.svelte-kit|*/.turbo|*/.parcel-cache|*/.gradle|*/.eggs) continue;; esac
-      parent="$(dirname "$p")"
-      [ -d "$D/$parent" ] && [ ! -e "$D/$p" ] && [ ! -L "$D/$p" ] || continue
-      ln -s "$TOP/$p" "$D/$p" && LINKS+=("$p")
-    done < <(git -C "$TOP" ls-files -o -i --exclude-standard --directory 2>/dev/null)
+    while IFS= read -r p; do [ -n "$p" ] && LINKS+=("$p"); done < <(link_ignored_entries "$TOP" "$D")
     g() { git -C "$D" -c user.name=crosscheck -c user.email=crosscheck@localhost -c core.hooksPath=/dev/null -c commit.gpgsign=false "$@"; }
     g init -q || die "cannot create the copy's repo in $DIR"
     for p in ${LINKS[@]+"${LINKS[@]}"}; do printf '/%s\n' "$p"; done >> "$D/.git/info/exclude"
@@ -84,20 +78,8 @@ case "$CMD" in
     printf '%s\n' "$SHA" > "$D/.git/$MARK"
     # a linked entry that points back into the worktree (an editable Python install, a workspace package in node_modules) makes code run
     # in the copy load the worktree's version: each one found is warned about and recorded, and run reports it
-    RAW="$(git rev-parse --show-toplevel)"
     for p in ${LINKS[@]+"${LINKS[@]}"}; do
-      src="$TOP/$p"; why=""
-      if [ -f "$src/pyvenv.cfg" ]; then
-        f="$(find "$src" -maxdepth 6 -path '*site-packages/*' \( -name '*.pth' -o -name '__editable__*' -o -name direct_url.json \) -type f \
-          -exec grep -lF -e "$TOP" -e "$RAW" {} + 2>/dev/null | head -1)"
-        [ -n "$f" ] && why="editable install (${f#"$src"/})"
-      fi
-      if [ -z "$why" ] && [ "$(basename "$p")" = node_modules ]; then
-        while IFS= read -r l; do
-          t="$(cd "$(dirname "$l")" 2>/dev/null && cd "$(readlink "$l")" 2>/dev/null && pwd -P)" || continue
-          case "$t/" in "$src"/*) ;; "$TOP"/*) why="workspace link (${l#"$src"/} -> ${t#"$TOP"/})"; break;; esac
-        done < <(find "$src" -mindepth 1 -maxdepth 2 -type l 2>/dev/null)
-      fi
+      why="$(link_back_reason "$TOP" "$p")"
       [ -n "$why" ] || continue
       printf '%s: %s\n' "$p" "$why" >> "$D/.git/$MARK.back"
       echo "crosscheck.sh: warning: $p links back into the worktree, $why: code run in this copy may load the worktree's version instead of the copy's" >&2

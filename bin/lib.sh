@@ -1143,6 +1143,37 @@ scratch_dir() {
   [ -n "$h" ] && [ -n "$proj" ] || return 1
   printf '%s' "$KIT/tmp/$proj-$h/$role"
 }
+# The ignored entries of <top> (dependencies such as node_modules or a venv) linked into <dest>, which holds a copy of <top>'s files: never copied;
+# caches and build outputs stay out (a run would write into the original's, or load its built code). Prints each linked path, relative.  link_ignored_entries <top> <dest>
+link_ignored_entries() {
+  local top="$1" dest="$2" p parent
+  while IFS= read -r p; do
+    p="${p%/}"; [ -n "$p" ] || continue
+    case "/$p" in */__pycache__|*/.pytest_cache|*/.mypy_cache|*/.ruff_cache|*/.DS_Store|*/dist|*/build|*/out|*/coverage|*/htmlcov|*/target|*/.tox|*/.nox|*/.nyc_output|*/.next|*/.nuxt|*/.svelte-kit|*/.turbo|*/.parcel-cache|*/.gradle|*/.eggs) continue;; esac
+    parent="$(dirname "$p")"
+    [ -d "$dest/$parent" ] && [ ! -e "$dest/$p" ] && [ ! -L "$dest/$p" ] || continue
+    ln -s "$top/$p" "$dest/$p" && printf '%s\n' "$p"
+  done < <(git -C "$top" ls-files -o -i --exclude-standard --directory 2>/dev/null)
+  return 0
+}
+# Why the linked ignored entry <top>/<path> points back into <top> (an editable install in a virtualenv, a workspace link inside node_modules), or nothing.  link_back_reason <top> <path>
+link_back_reason() {
+  local TOP="$1" p="$2" src RAW why="" f l t
+  src="$TOP/$p"; RAW="$(git -C "$TOP" rev-parse --show-toplevel)"
+  if [ -f "$src/pyvenv.cfg" ]; then
+    f="$(find "$src" -maxdepth 6 -path '*site-packages/*' \( -name '*.pth' -o -name '__editable__*' -o -name direct_url.json \) -type f \
+      -exec grep -lF -e "$TOP" -e "$RAW" {} + 2>/dev/null | head -1)"
+    [ -n "$f" ] && why="editable install (${f#"$src"/})"
+  fi
+  if [ -z "$why" ] && [ "$(basename "$p")" = node_modules ]; then
+    while IFS= read -r l; do
+      t="$(cd "$(dirname "$l")" 2>/dev/null && cd "$(readlink "$l")" 2>/dev/null && pwd -P)" || continue
+      case "$t/" in "$src"/*) ;; "$TOP"/*) why="workspace link (${l#"$src"/} -> ${t#"$TOP"/})"; break;; esac
+    done < <(find "$src" -mindepth 1 -maxdepth 2 -type l 2>/dev/null)
+  fi
+  [ -z "$why" ] || printf '%s\n' "$why"
+  return 0
+}
 # The kit's own files a worker must not edit (paths relative to $KIT), one per line; tmp/ and backup/ stay writable.
 kit_protected_paths() {
   printf '%s\n' 'prompts/**' 'roles/**' 'bin/**' 'plugin/**' 'plugins/**' 'shim/**' 'pw/**' 'mcp/**' 'browsers/**' 'browser/**' \

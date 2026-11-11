@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -6933,6 +6933,89 @@ check "crosscheck tree: an editable install and a workspace link pointing back i
 xerun run "$XD/eb" --label e -- true; check "crosscheck run: backLinks true in a copy whose links point back into the worktree" "$(printf '%s' "$XOUT" | jq -r .backLinks)" "true"
 rm "$XE/node_modules/@s/w" "$XE/.venv/lib/python3.12/site-packages/__editable__.pkg-0.1.pth"; xerun tree "$XD/eb" --ref HEAD; xerun run "$XD/eb" --label e -- true
 check "crosscheck: without them (a link inside node_modules is fine), no warning, and a replaced copy forgets the old ones" "$(printf '%s' "$XERR" | grep -c warning || true):$(printf '%s' "$XOUT" | jq -r .backLinks)" "0:false"
+}
+sec_pair_tree() {
+# pair-tree.sh: detached pair trees for parallel batches, integrated into the worktree as an unstaged patch
+PTD="$TMP/pt"; rm -rf "$PTD"; mkdir -p "$PTD/home" "$PTD/kit/bin" "$PTD/wt"; PW="$PTD/wt"; PTK="$PTD/kit"
+cp "$ROOT"/bin/*.sh "$PTK/bin/"
+pg() { git -C "$PW" "$@"; }
+pg init -q -b main; pg config user.email t@example.com; pg config user.name tester
+printf 'node_modules/\ndist/\n.venv/\n' > "$PW/.gitignore"; printf 'a\n' > "$PW/a.txt"; printf 'b\n' > "$PW/b.txt"; seq 1 30 > "$PW/shared.txt"
+pg add -A; pg commit -q -m init; PS0="$(pg rev-parse HEAD)"
+mkdir -p "$PW/node_modules" "$PW/dist"; printf 'dep\n' > "$PW/node_modules/m.js"; printf 'out\n' > "$PW/dist/o.js"
+ptr() { PTRC=0; PTOUT="$(cd "$PW" && KIT="$PTK" HOME="$PTD/home" bash "$PTK/bin/pair-tree.sh" "$@" 2>"$TMP/pt.err")" || PTRC=$?; PTERR="$(cat "$TMP/pt.err")"; }
+ptstate() { ( cd "$PW" && git rev-parse HEAD; git status --porcelain -uall; git diff | shasum; git worktree list | wc -l; cat "$(git rev-parse --absolute-git-dir)/orca-roles.pairs" 2>/dev/null; find "$PTK/tmp" -mindepth 2 -maxdepth 3 2>/dev/null | LC_ALL=C sort ) | shasum; }
+PGD="$(pg rev-parse --absolute-git-dir)"; PREG="$PGD/orca-roles.pairs"
+pst() { awk -F'\t' -v b="$1" '$1 == b {s = $6} END {print s}' "$PREG"; }
+cpt() { git -C "$1" -c user.email=t@example.com -c user.name=tester "${@:2}"; }
+sedl() { sed -i.bak "$2" "$1" && rm "$1.bak"; }
+# T1: create
+ptr create b1 "$PS0"; PT1="$PTOUT"
+check "pair-tree create: exit 0, the last stdout line is the tree, <batch>-1 under the kit's pairs folder" "$PTRC:$(basename "$PT1"):$([ "$(dirname "$PT1")" = "$(cd "$PTK" && pwd -P)/tmp/$(basename "$(dirname "$(dirname "$PT1")")")/pairs" ] && echo in)" "0:b1-1:in"
+check "pair-tree create: the tree is detached at the ref, its status is clean and no branch was made" "$(git -C "$PT1" rev-parse HEAD):$(git -C "$PT1" symbolic-ref -q HEAD || echo detached):$(git -C "$PT1" status --porcelain | wc -l | tr -d ' '):$(pg branch --list | wc -l | tr -d ' ')" "$PS0:detached:0:1"
+check "pair-tree create: ignored node_modules is a link to the worktree's, ignored dist is not linked" "$(readlink "$PT1/node_modules"):$([ -e "$PT1/dist" ] || [ -L "$PT1/dist" ] && echo linked || echo none)" "$(cd "$PW" && pwd -P)/node_modules:none"
+check "pair-tree create: info/exclude has /node_modules once, the line is open with the start, the marker holds the worktree's git dir" "$(grep -cx '/node_modules' "$PGD/info/exclude"):$(cut -f1,2,4,6 "$PREG" | tr '\t' ' '):$(cat "$(git -C "$PT1" rev-parse --absolute-git-dir)/orca-roles.pair")" "1:b1 1 $PS0 open:$PGD"
+# T2: refusals
+PTS="$(ptstate)"
+for bad in "create Batch1 $PS0" "create -a $PS0" "create 'a b' $PS0" "create a/b $PS0" "create '' $PS0" "create b2 nope" "create b1 $PS0" "integrate b9 $PS0" "remove b9" "bogus" "create b2" "list x" "clear x"; do
+  eval "ptr $bad"
+  check "pair-tree: refuses [$bad] with a message, changing nothing" "$([ "$PTRC" = 1 ] && echo rc1):$([ -n "$PTERR" ] && echo msg):$([ "$(ptstate)" = "$PTS" ] && echo same)" "rc1:msg:same"
+done
+PTRC=0; PTOUT="$(cd "$PT1" && KIT="$PTK" HOME="$PTD/home" bash "$PTK/bin/pair-tree.sh" list 2>&1)" || PTRC=$?
+check "pair-tree: run from inside a pair tree it refuses" "$PTRC:$(printf '%s' "$PTOUT" | grep -c 'this is a pair tree')" "1:1"
+mkdir -p "$PTD/sm"; git -C "$PTD/sm" init -q -b main; git -C "$PTD/sm" config user.email t@example.com; git -C "$PTD/sm" config user.name tester; printf 'x\n' > "$PTD/sm/x"; git -C "$PTD/sm" add -A; git -C "$PTD/sm" commit -q -m s
+pg -c protocol.file.allow=always submodule add -q "$PTD/sm" subm >/dev/null 2>&1; pg commit -q -m sub; PSS="$(pg rev-parse HEAD)"; PTS="$(ptstate)"
+ptr create sb "$PSS"
+check "pair-tree create: refuses a worktree with an initialised submodule, changing nothing" "$PTRC:$(printf '%s' "$PTERR" | grep -c 'initialised submodules'):$([ "$(ptstate)" = "$PTS" ] && echo same)" "1:1:same"
+pg rm -q -f subm >/dev/null 2>&1; rm -rf "$PW/.git/modules" "$PW/subm"; pg commit -q -m unsub
+# T3: integrate clean
+ptr create b2 "$PS0"; PT2="$PTOUT"
+printf 'a1\n' > "$PT1/a.txt"; printf 'n1\n' > "$PT1/new1.txt"; sedl "$PT1/shared.txt" '3s/.*/three-b1/'; cpt "$PT1" add -A; cpt "$PT1" commit -q -m b1; PC1="$(git -C "$PT1" rev-parse HEAD)"
+printf 'b2\n' > "$PT2/b.txt"; sedl "$PT2/shared.txt" '27s/.*/tw-b2/'; cpt "$PT2" add -A; cpt "$PT2" commit -q -m b2; PC2="$(git -C "$PT2" rev-parse HEAD)"
+ptr integrate b1 "$PC1"; R1="$PTRC:$PTOUT"; ptr integrate b2 "$PC2"
+check "pair-tree integrate: two batches from the same start integrate, unstaged, with all four changes" "$R1:$PTRC:$PTOUT:$(pg diff --cached | wc -l | tr -d ' '):$(pg status --porcelain | tr '\n' ',' ):$(sed -n '3p;27p' "$PW/shared.txt" | tr '\n' ' '):$(pst b1):$(pst b2)" "0:integrated b1: 3 file(s):0:integrated b2: 2 file(s):0: M a.txt, M b.txt, M shared.txt,?? new1.txt,:three-b1 tw-b2 :integrated:integrated"
+pg add -A; pg commit -q -m integrated; PS2="$(pg rev-parse HEAD)"; ptr remove b1; ptr remove b2
+# T4: conflict
+ptr create c1 "$PS2"; PTC1="$PTOUT"; ptr create c2 "$PS2"; PTC2="$PTOUT"
+sedl "$PTC1/shared.txt" '3s/.*/c1/'; cpt "$PTC1" commit -q -am c1; PCC1="$(git -C "$PTC1" rev-parse HEAD)"
+sedl "$PTC2/shared.txt" '3s/.*/c2/'; cpt "$PTC2" commit -q -am c2; PCC2="$(git -C "$PTC2" rev-parse HEAD)"
+ptr integrate c1 "$PCC1"; printf 'junk\n' > "$PW/untracked.txt"; printf 'edit\n' >> "$PW/a.txt"
+pstate() { ( cd "$PW" && git status --porcelain -uall; git diff | shasum; shasum untracked.txt ) | shasum; }
+PS_B="$(pstate)"; ptr integrate c2 "$PCC2"; PPATCH="$(printf '%s' "$PTOUT" | sed 's/^conflict c2: //')"
+check "pair-tree integrate: a conflict exits 4 with 'conflict <batch>: <patch>', writes nothing to the worktree and keeps the line open" "$PTRC:$(printf '%s' "$PTOUT" | grep -c '^conflict c2: .*/pairs/c2-1\.patch$'):$([ "$(pstate)" = "$PS_B" ] && echo same):$(pst c2)" "4:1:same:open"
+check "pair-tree integrate: the patch is git diff --binary start closing" "$(cmp -s "$PPATCH" <(git -C "$PW" diff --binary "$PS2" "$PCC2") && echo same)" "same"
+# T5: guard and empty
+mkdir -p "$PW/fresh"; printf 'x\n' > "$PW/fresh/x.orca-bak"; PS_B="$(pstate)"; ptr integrate c2 "$PCC2"
+check "pair-tree integrate: a .orca-bak file in an untracked folder refuses (exit 1) and writes nothing" "$PTRC:$(printf '%s' "$PTERR" | grep -c 'mutation backup'):$([ "$(pstate)" = "$PS_B" ] && echo same)" "1:1:same"
+rm -rf "$PW/fresh"; ptr create e1 "$PS2"; ptr integrate e1 "$PS2"
+check "pair-tree integrate: an empty batch prints 'nothing to integrate', exit 0, and is integrated" "$PTRC:$PTOUT:$(pst e1)" "0:nothing to integrate for e1:integrated"
+# T6: remove
+( cd "$PTC1" && bash "$PTK/bin/checkpoint.sh" k 1 >/dev/null 2>&1 ); ptr remove c2; R_O="$PTRC:$([ -d "$PTC2" ] && echo kept)"
+check "pair-tree remove: an open batch without --force is refused and its tree kept" "$R_O" "1:kept"
+ptr remove e1; ptr remove c1; ptr remove --force c2
+check "pair-tree remove: removed trees are gone (folder, git entry), lines are removed, the worktree's node_modules is intact, the trees' checkpoint refs stay" "$([ -e "$PTC1" ] && echo there || echo gone):$(pg worktree list | wc -l | tr -d ' '):$(pst e1)/$(pst c1):$(cat "$PW/node_modules/m.js"):$(pg for-each-ref refs/orca-roles/checkpoints | grep -c '/k-c1$')" "gone:1:removed/removed:dep:1"
+# T7: re-create
+ptr create c1 "$PS2"; PTN="$PTOUT"; PTRC=0; ( cd "$PTN" && bash "$PTK/bin/checkpoint.sh" k 1 >/dev/null 2>&1 ) || PTRC=$?
+check "pair-tree create: after remove the same batch gets <batch>-2 and checkpoint.sh <batch> 1 succeeds inside it, and info/exclude still has /node_modules once" "$(basename "$PTN"):$PTRC:$(grep -cx '/node_modules' "$PGD/info/exclude")" "c1-2:0:1"
+# T8: clear
+( cd "$PW" && bash "$ROOT/bin/checkpoint.sh" own 1 >/dev/null 2>&1 ); ptr clear
+check "pair-tree clear: refused while a tree is open" "$PTRC:$(printf '%s' "$PTERR" | grep -c 'pair trees still in use: c1 (open)')" "1:1"
+ptr remove --force c1; ptr clear
+check "pair-tree clear: deletes the trees' checkpoint refs, patches and the registry, keeps the worktree's own refs" "$PTRC:$PTOUT:$(pg for-each-ref refs/orca-roles/checkpoints | grep -c '/k-c1$'):$(pg for-each-ref refs/orca-roles/checkpoints | grep -c '/own-c1$'):$([ -e "$PREG" ] && echo reg || echo noreg):$(ls "$PTK"/tmp/*/pairs/*.patch 2>/dev/null | wc -l | tr -d ' ')" "0:cleared 6 pair tree(s):0:1:noreg:0"
+ptr clear; check "pair-tree clear: with no registry it prints 'cleared 0 pair tree(s)'" "$PTRC:$PTOUT" "0:cleared 0 pair tree(s)"
+# T9: list and -h
+ptr list; check "pair-tree list: without a registry prints nothing" "$PTRC:$PTOUT" "0:"
+ptr create l1 "$PS2"; ptr list
+check "pair-tree list: one line per tree: batch, state, path, first 12 hex of the start" "$(printf '%s' "$PTOUT" | cut -f1,2,4 | tr '\t' ' '):$(printf '%s' "$PTOUT" | cut -f3 | grep -c '/pairs/l1-1$')" "l1 open ${PS2:0:12}:1"
+ptr remove --force l1; ptr clear >/dev/null; ptr -h
+check "pair-tree -h prints the usage on stdout, exit 0" "$PTRC:$(printf '%s\n' "$PTOUT" | sed -n 1p | cut -c1-14):$(printf '%s\n' "$PTOUT" | grep -c '^#   pair-tree.sh ')" "0:# Pair trees: :5"
+# T10: back-links
+mkdir -p "$PW/.venv/lib/python3/site-packages"; printf 'home = x\n' > "$PW/.venv/pyvenv.cfg"; printf '%s/src\n' "$(cd "$PW" && pwd -P)" > "$PW/.venv/lib/python3/site-packages/__editable__.x.pth"
+EX0="$(cat "$PGD/info/exclude")"; PTS="$(ptstate)"; ptr create v1 "$PS2"
+check "pair-tree create: a linked venv whose editable install points into the worktree is refused: no tree, no registry line, no new exclude line" "$PTRC:$(printf '%s' "$PTERR" | grep -c '\.venv links back into the worktree, editable install'):$([ "$(cat "$PGD/info/exclude")" = "$EX0" ] && echo same):$([ "$(ptstate)" = "$PTS" ] && echo same)" "1:1:same:same"
+printf '/elsewhere/src\n' > "$PW/.venv/lib/python3/site-packages/__editable__.x.pth"; ptr create v1 "$PS2"
+check "pair-tree create: the same venv without the worktree's path is linked" "$PTRC:$(readlink "$PTOUT/.venv" | sed 's|.*/||')" "0:.venv"
+ptr remove --force v1
 }
 
 sec_model_check() {
