@@ -35,7 +35,7 @@ agent_git_dir() {
 }
 # The role's MCP servers, in a file in mcpServers format. With mcp="all" none is generated: the agent uses its own configuration.
 MCPFILE=""
-if [ "$AGENT" != opencode ] && [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
+if [ "$(rcfg "$CFG" "$ROLE" mcp)" != '"all"' ]; then
   role_context "$CFG" "$ROLE" .          # placeholders {worktree}, {project}, {evidenceDir}, {browserState}...
   ensure_browser_state "$ORCA_ROLES_BROWSER_STATE"
   # In the worktree's git dir, one per role, rewritten on every start (outside a repo, a temporary file)
@@ -177,14 +177,24 @@ case "$AGENT" in
     exec "${RUN[@]+"${RUN[@]}"}" codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
     ;;
   opencode)
-    # OpenCode 2.x: `opencode mini` takes --agent and --model (the main TUI takes neither). The role's system prompt is a project agent
-    # file that opencode-prepare.sh writes in the worktree. It takes its working directory from $PWD, so PWD is the physical path.
-    if [ "$(rcfg "$CFG" "$ROLE" mcp | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
-      echo "agent.sh: $ROLE (opencode) does not get the kit's MCP servers; configure them in OpenCode itself." >&2
+    # OpenCode 2.x: `opencode mini` takes --agent and --model (the main TUI takes neither). The role's agent is in a configuration file the kit
+    # writes in the git dir (opencode-prepare.sh), passed as OPENCODE_CONFIG, which only a private server reads: --standalone. PWD is the physical path.
+    SA=1
+    while IFS= read -r o; do
+      case "$o" in
+        --standalone) SA=0;;
+        --server|--server=*) echo "agent.sh: $ROLE (opencode): --server in extraArgs is not supported: the kit gives the role its agent, MCP servers and trust settings through a private server (--standalone). Remove it from roles.$ROLE.extraArgs." >&2; exit 1;;
+      esac
+    done < <(rcfg "$CFG" "$ROLE" extraArgs | jq -r '.[]?' 2>/dev/null)
+    OCCFG="$(ORCA_ROLES_MCP="$MCPFILE" ORCA_ROLES_CONFIG="$CFG" "$KIT/bin/opencode-prepare.sh" "$ROLE")" && [ -n "$OCCFG" ] || { echo "agent.sh: could not prepare the OpenCode agent for $ROLE" >&2; exit 1; }
+    if [ -n "${OPENCODE_CONFIG:-}" ] && [ "$OPENCODE_CONFIG" != "$OCCFG" ]; then
+      echo "agent.sh: $ROLE (opencode): OPENCODE_CONFIG ($OPENCODE_CONFIG) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." >&2
     fi
-    ORCA_ROLES_CONFIG="$CFG" "$KIT/bin/opencode-prepare.sh" "$ROLE" || { echo "agent.sh: could not prepare the OpenCode agent for $ROLE" >&2; exit 1; }
+    export OPENCODE_CONFIG="$OCCFG"
     cd "$(pwd -P)"; PWD="$(pwd -P)"; export PWD
-    ARGS+=(mini --agent "orca-$ROLE")
+    ARGS+=(mini)
+    if [ "$SA" = 1 ]; then ARGS+=(--standalone); fi
+    ARGS+=(--agent "orca-$ROLE")
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
     N0=${#ARGS[@]}; add_list extraArgs
     # Own session id, saved in the git dir, so close-role.sh/launch.sh/clean.sh can delete or continue the role's session. A session flag in

@@ -1828,6 +1828,19 @@ check "mcp_file filters by name" "$(mcp_file "$C" cx | jq -c '.mcpServers | keys
 check "mcp_file empty" "$(mcp_file "$C" cua | jq -c .)" '{"mcpServers":{}}'
 mcp_file "$C" cx > "$TMP/mcp.json"
 check "codex overrides" "$(codex_mcp_overrides "$TMP/mcp.json" | tr '\n' '|')" 'mcp_servers.ctx.url="http://ctx"|mcp_servers.pw.command="npx"|mcp_servers.pw.args=["-y","@playwright/mcp@latest"]|mcp_servers.pw.env={A = "1"}|'
+cat > "$TMP/mcp-oc.json" <<'J'
+{ "mcpServers": {
+    "r1": { "type": "http", "url": "https://h/x", "headers": { "A": "b" } },
+    "r2": { "url": "https://h/y" },
+    "r3": { "url": "https://h/z", "headers": "no" },
+    "l1": { "command": "x", "args": [1, "y"], "env": { "K": "V" } },
+    "l2": { "command": "x" },
+    "l3": { "command": "x", "args": "nope", "env": ["no"] },
+    "n1": { "type": "http" },
+    "b1": { "url": "https://h/b", "command": "x", "args": ["a"], "env": { "K": "V" } },
+    "u1": { "url": 5, "command": "x" } } }
+J
+check "opencode_mcp_servers: remote with and without headers, local with args, env, without args, non-array args, both, neither" "$(opencode_mcp_servers "$TMP/mcp-oc.json")" '{"r1":{"type":"remote","url":"https://h/x","headers":{"A":"b"}},"r2":{"type":"remote","url":"https://h/y"},"r3":{"type":"remote","url":"https://h/z"},"l1":{"type":"local","command":["x","1","y"],"environment":{"K":"V"}},"l2":{"type":"local","command":["x"]},"l3":{"type":"local","command":["x"]},"b1":{"type":"remote","url":"https://h/b"},"u1":{"type":"local","command":["x"]}}'
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/codex"
 cp "$TMP/fakebin/codex" "$TMP/fakebin/claude"
 fake_bash
@@ -5802,7 +5815,7 @@ check "custom trust: filter that turns non-object on the retry -> untouched (as 
 }
 
 sec_opencode() {
-# agent: "opencode": opencode-prepare.sh writes the agent file, agent.sh runs `opencode mini --agent orca-<role>`; stub opencode only
+# agent: "opencode": opencode-prepare.sh writes the role's configuration file, agent.sh runs `opencode mini --standalone --agent orca-<role>` with it as OPENCODE_CONFIG; stub opencode only
 OC="$TMP/oc"; rm -rf "$OC"; mkdir -p "$OC/bin" "$OC/real/wt"; ln -sfn "$OC/real" "$OC/link"
 cat > "$OC/bin/opencode" <<'EOS'
 #!/bin/bash
@@ -5816,7 +5829,7 @@ case "$1 $2" in   # OpenCode sessions: list prints the JSON in $OC_LIST; delete 
     case "${OC_DELMODE:-}" in fail) exit 3;; hang) echo $$ > "$OC_DELLOG.pid"; exec sleep 30;; esac
     exit 0;;
 esac
-{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; } > "$OC_OUT"
+{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; echo "OPENCODE_CONFIG=${OPENCODE_CONFIG-}"; echo "DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}"; } > "$OC_OUT"
 EOS
 chmod +x "$OC/bin/opencode"
 git -C "$OC/real/wt" init -q; OCW="$OC/link/wt"; OCWP="$(cd "$OC/real/wt" && pwd -P)"; KITP="$(cd "$KIT" && pwd -P)"
@@ -5838,9 +5851,12 @@ exit 0
 EOS
 chmod +x "$OC/bin/orca"
 ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
-FILE="$OCW/.opencode/agents/orca-dev.md"
+ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }   # a role's configuration file (physical git dir)
+ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
+FILE="$(ocf dev)"
 try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
-check "opencode: argv is mini --agent orca-dev --model p/m + extraArgs + --session <own id>; PWD is the physical path" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "mini
+check "opencode: argv is mini --standalone --agent orca-dev --model p/m + extraArgs + --session <own id>; PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "mini
+--standalone
 --agent
 orca-dev
 --model
@@ -5849,74 +5865,97 @@ p/m
 y z
 --session
 ses_orca_dev_N
-PWD=$OCWP"
-check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,4p "$OC/out" | tr '\n' ' ')" "mini --agent orca-tester --session "
-check "opencode: the agent file is written in the worktree" "$([ -f "$FILE" ] && echo yes)" "yes"
-FM="$(awk 'NR==1 && $0=="---"{f=1;next} f&&$0=="---"{exit} f' "$FILE")"
-EXPECT_FM="description: \"orca-roles Dev role\"
-mode: \"primary\"
-model: \"p/m\"
-steps: 5
-permissions:
-  - {\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
-  - {\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"allow\"}
-  - {\"action\":\"question\",\"resource\":\"*\",\"effect\":\"deny\"}
-  - {\"action\":\"shell\",\"resource\":\"git push*\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/roles/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/plugins/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/shim/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/pw/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/mcp/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/browsers/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/browser/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/trusted.list\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/.manifest\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/.installed\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}"
-check "opencode: frontmatter is exactly the expected text (allow first, the role's valid items, then the kit's denies last)" "$FM" "$EXPECT_FM"
+PWD=$OCWP
+OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json
+DPC=unset"
+check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,5p "$OC/out" | tr '\n' ' ')" "mini --standalone --agent orca-tester --session "
+check "opencode: the configuration file is written in the git dir and the worktree has no .opencode" "$([ -f "$FILE" ] && echo yes):$([ -e "$OC/real/wt/.opencode" ] && echo yes || echo no)" "yes:no"
+FM="$(ocperms dev)"
+EXPECT_FM="{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
+{\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"allow\"}
+{\"action\":\"question\",\"resource\":\"*\",\"effect\":\"deny\"}
+{\"action\":\"shell\",\"resource\":\"git push*\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/roles/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/plugins/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/shim/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/pw/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/mcp/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/browsers/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/browser/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/trusted.list\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/.manifest\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/.installed\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}"
+check "opencode: the agent is exactly the expected JSON without system (allow first, the role's valid items, then the kit's denies last)" "$(jq -c '.agents["orca-dev"] | del(.system)' "$FILE")" "$(jq -nc --argjson p "$(printf '%s\n' "$EXPECT_FM" | jq -sc .)" '{description: "orca-roles Dev role", mode: "primary", model: "p/m", steps: 5, permissions: $p}')"
 check "opencode: the kit's deny on its prompts comes after a role item that allows them (the last matching rule wins)" "$([ "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"deny\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" -gt "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"allow\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" ] && echo after)" "after"
-check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | sed 's/^  - //' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
-OCA="$OCW/.opencode/agents/orca-code-reviewer.md"; try ocrun opencode-prepare.sh code-reviewer
-check "opencode: the code-reviewer's subagent deny comes right after the question deny" "$(grep -A1 -F '"action":"question"' "$OCA" | tail -1)" '  - {"action":"subagent","resource":"*","effect":"deny"}'
+check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
+try ocrun opencode-prepare.sh code-reviewer
+check "opencode: the code-reviewer's subagent deny comes right after the question deny" "$(ocperms code-reviewer | grep -A1 -F '"action":"question"' | tail -1)" '{"action":"subagent","resource":"*","effect":"deny"}'
 jq '.roles["code-reviewer"] = {"title": "Code-Reviewer", "agent": "opencode", "opencode": {"permissions": [{"action": "subagent", "resource": "*", "effect": "allow"}]}}' "$OC/cfg.json" > "$OC/cfg-aud.json"; OCCFG="$OC/cfg-aud.json" try ocrun opencode-prepare.sh code-reviewer
-check "opencode: the code-reviewer's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(grep -nF '"action":"subagent"' "$OCA" | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
-RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(grep -c '"action":"subagent","resource":"\*","effect":"deny"' "$OCW/.opencode/agents/orca-$r.md" || true)"; done
-check "opencode: the plan-reviewer's and the verifier's files carry the subagent deny" "$RV" "11"
-check "opencode: a dev role's file has no subagent line" "$(grep -c '"action":"subagent"' "$FILE" || true)" "0"
-if python3 -c 'import yaml' 2>/dev/null; then
-  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 21"
-else echo "ok   opencode: PyYAML not installed, the frontmatter was checked as exact text only"; fi
+check "opencode: the code-reviewer's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(ocperms code-reviewer | grep -nF '"action":"subagent"' | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
+RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(ocperms "$r" | grep -c '"action":"subagent","resource":"\*","effect":"deny"' || true)"; done
+check "opencode: the plan-reviewer's and the verifier's configuration carry the subagent deny" "$RV" "11"
+check "opencode: a dev role's permissions have no subagent item" "$(ocperms dev | grep -c '"action":"subagent"' || true)" "0"
+check "opencode: the file's only top-level key is agents, its agent keys are in order, 21 permissions" "$(jq -c '[keys, (.agents | keys), (.agents["orca-dev"] | keys_unsorted), (.agents["orca-dev"].permissions | length), (.agents["orca-dev"].steps | type)]' "$FILE")" '[["agents"],["orca-dev"],["description","mode","model","steps","system","permissions"],21,"number"]'
 check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
-BODY="$(awk 'NR==1{next} f{print;next} $0=="---"{f=1}' "$FILE")"
+BODY="$(jq -r '.agents["orca-dev"].system' "$FILE")"
 ANC="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$OC/cfg.json" dev)"
 check "opencode: body = anchor, blank, the role's common file, blank, the role's prompt" "$BODY" "$ANC
 
 $(cat "$KIT/prompts/programmer/common-peon.md")
 
 $(cat "$KIT/prompts/programmer/dev.md")"
-OCT="$OCW/.opencode/agents/orca-tester.md"
-check "opencode: without role common the body uses common-workers.md" "$(grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")" "$OCT"):$(grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" "$OCT" || true)" "1:0"
+OCT="$(ocf tester)"; ocsys() { jq -r '.agents | to_entries[0].value.system' "$1"; }
+check "opencode: without role common the system prompt uses common-workers.md" "$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")"):$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" || true)" "1:0"
 # steps: role value, settings.flow default, invalid role value (left out with a warning), nothing
-check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(grep '^steps:' "$OCT")" "steps: 77"
-try ocrun opencode-prepare.sh e2e-tester; check "opencode: an invalid role steps is reported and left out" "$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(grep -c '^steps:' "$OCW/.opencode/agents/orca-e2e-tester.md" || true)" "0:1:0"
+check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(jq -r '.agents["orca-tester"].steps' "$OCT")" "77"
+try ocrun opencode-prepare.sh e2e-tester; R1="$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-e2e-tester"] | has("steps")' "$(ocf e2e-tester)"):$(grep -c '{env:' <<<"$OUT")$(ocrun opencode-prepare.sh dev | grep -c '{env:' || true)"
+printf 'common {env:HOME} and {file:/x}\n' > "$OC/common-env.md"; jq --arg c "$OC/common-env.md" '.roles["e2e-tester"].common = $c' "$OC/cfg.json" > "$OC/cfg-env.json"; OCCFG="$OC/cfg-env.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
+WARN="opencode-prepare.sh: warning: the system prompt of e2e-tester contains {env: or {file:, which OpenCode replaces with an environment variable or a file's content when it loads the role's configuration."
+check "opencode: an invalid role steps is reported and left out; a {env: in the system prompt warns once (the kit's prompts never do) and the file is still written" "$R1:$RC:$(grep -cxF -- "$WARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].system' "$(ocf e2e-tester)" | grep -c '{env:HOME}')" "0:1:false:00:0:1:1"
 jq 'del(.settings.flow)' "$OC/cfg.json" > "$OC/cfg-nf.json"; OCCFG="$OC/cfg-nf.json" ocrun opencode-prepare.sh tester >/dev/null
-check "opencode: no steps anywhere, no steps line" "$(grep -c '^steps:' "$OCT" || true)" "0"
+check "opencode: no steps anywhere, no steps key" "$(jq '.agents["orca-tester"] | has("steps")' "$OCT")" "false"
 jq '.settings.flow.maxStepsPerWorker = "x"' "$OC/cfg.json" > "$OC/cfg-bf.json"; OCCFG="$OC/cfg-bf.json"; try ocrun opencode-prepare.sh tester
-check "opencode: an invalid flow default is reported and left out" "$RC:$(grep -c 'maxStepsPerWorker must be a positive integer' <<<"$OUT"):$(grep -c '^steps:' "$OCT" || true)" "0:1:0"
+check "opencode: an invalid flow default is reported and left out" "$RC:$(grep -c 'maxStepsPerWorker must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-tester"] | has("steps")' "$OCT")" "0:1:false"
 OCCFG=""
-# the exclude pattern goes in once, in info/exclude; no .gitignore is created
+# nothing is written in the worktree: no .opencode, nothing in info/exclude, no .gitignore, status unchanged
 ocrun opencode-prepare.sh dev >/dev/null; ocrun opencode-prepare.sh dev >/dev/null
-check "opencode: the exclude pattern is added once and no .gitignore is touched" "$(grep -cxF '/.opencode/agents/orca-*.md' "$OC/real/wt/.git/info/exclude"):$(ls "$OC/real/wt/.gitignore" 2>/dev/null | wc -l | tr -d ' '):$(git -C "$OC/real/wt" status --short | wc -l | tr -d ' ')" "1:0:0"
-check "opencode: no temp file left in the agents folder" "$(find "$OCW/.opencode/agents" -mindepth 1 -maxdepth 1 ! -name 'orca-*' | wc -l | tr -d ' ')" "0"
-# the MCP servers are not passed: a role with an mcp list gets one warning and no file
-try ocrun agent.sh tester; check "opencode: a role with an mcp list gets the MCP warning, no MCP file" "$RC:$(grep -c 'does not get the kit.s MCP servers' <<<"$OUT"):$(find "$OC/real/wt/.git" -mindepth 1 -maxdepth 1 -name '*orca-roles-mcp*' | wc -l | tr -d ' ')" "0:1:0"
-try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning" "$(grep -c 'MCP servers' <<<"$OUT")" "0"
+check "opencode: the worktree gets nothing: no exclude line, no .gitignore, no .opencode, status unchanged" "$(grep -c 'opencode' "$OC/real/wt/.git/info/exclude" || true):$(ls "$OC/real/wt/.gitignore" 2>/dev/null | wc -l | tr -d ' '):$([ -e "$OC/real/wt/.opencode" ] && echo yes || echo no):$(git -C "$OC/real/wt" status --short | wc -l | tr -d ' ')" "0:0:no:0"
+check "opencode: no temp file left in the git dir" "$(find "$OC/real/wt/.git" -mindepth 1 -maxdepth 1 -name 'orca-roles-opencode-*.tmp.*' | wc -l | tr -d ' ')" "0"
+# an agent file left by an older kit: an untracked one goes (with the folders it leaves empty), another role's and a tracked one stay,
+# nothing is removed behind a symbolic link (a pair tree of an older kit links .opencode)
+OCR="$OC/real/wt"; mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; : > "$OCR/.opencode/agents/orca-tester.md"
+ocrun opencode-prepare.sh dev >/dev/null; ST1="$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone):$([ -e "$OCR/.opencode/agents/orca-tester.md" ] && echo kept || echo gone)"
+rm -f "$OCR/.opencode/agents/orca-tester.md"; : > "$OCR/.opencode/agents/orca-dev.md"; ocrun opencode-prepare.sh dev >/dev/null; ST2="$([ -e "$OCR/.opencode" ] && echo kept || echo gone)"
+mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; git -C "$OCR" add -f .opencode/agents/orca-dev.md; ocrun opencode-prepare.sh dev >/dev/null
+ST3="$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone)"; git -C "$OCR" rm -q --cached -f .opencode/agents/orca-dev.md; rm -rf "$OCR/.opencode"
+mkdir -p "$OC/pair"; git -C "$OC/pair" init -q; mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; ln -sfn "$OCR/.opencode" "$OC/pair/.opencode"
+OCW="$OC/pair"; try ocrun opencode-prepare.sh dev; ST4="$RC:$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone)"; rm -f "$OC/pair/.opencode"; rm -rf "$OCR/.opencode"; OCW="$OC/link/wt"
+mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; : > "$OCR/.opencode/other"; ocrun opencode-prepare.sh dev >/dev/null
+ST5="$([ -e "$OCR/.opencode/agents" ] && echo agents || echo noagents):$([ -e "$OCR/.opencode/other" ] && echo kept || echo gone):$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone)"; rm -rf "$OCR/.opencode"
+mkdir -p "$OCR/.opencode/agents" "$OC/target"; : > "$OC/target/keep"; ln -s "$OC/target/keep" "$OCR/.opencode/agents/orca-dev.md"; ocrun opencode-prepare.sh dev >/dev/null
+ST6="$([ -L "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone):$([ -e "$OC/target/keep" ] && echo kept || echo gone):$([ -e "$OCR/.opencode" ] && echo kept || echo gone)"; rm -rf "$OCR/.opencode"
+mkdir -p "$OCR/.opencode" "$OC/tagents"; : > "$OC/tagents/orca-dev.md"; ln -sfn "$OC/tagents" "$OCR/.opencode/agents"; ocrun opencode-prepare.sh dev >/dev/null
+ST7="$([ -e "$OC/tagents/orca-dev.md" ] && echo kept || echo gone)"; rm -rf "$OCR/.opencode"
+check "opencode: a stale untracked agent file is deleted (with the empty folders), another role's, a tracked one and one behind a link stay" "$ST1 $ST2 $ST3 $ST4 $ST5 $ST6 $ST7" "gone:kept gone kept 0:kept noagents:kept:gone gone:kept:gone kept"
+# the role's MCP servers go into its configuration file
+try ocrun agent.sh tester; check "opencode: a role with an mcp list gets its servers in its configuration file and no warning" "$RC:$(grep -c 'MCP servers' <<<"$OUT"):$(jq -c '.mcp.servers' "$(ocf tester)"):$([ -f "$OC/real/wt/.git/orca-roles-mcp-tester.json" ] && echo file)" '0:0:{"pw":{"type":"local","command":["x"]}}:file'
+try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning and no mcp key" "$(grep -c 'MCP servers' <<<"$OUT"):$(jq 'has("mcp")' "$FILE")" "0:false"
+# extraArgs: --standalone is not repeated; --server is refused with nothing started, written or saved
+OCG0="$OC/real/wt/.git"; jq '.roles.dev.extraArgs = ["--x", "--standalone", "y z"]' "$OC/cfg.json" > "$OC/cfg-sa.json"; rm -f "$OC/out"; OCCFG="$OC/cfg-sa.json" try ocrun agent.sh dev
+SA1="$RC:$(tr '\n' ' ' < "$OC/out" | sed 's/ses_orca_dev_[0-9]* /ses_N /')"
+SV=""; for sv in '["--server", "http://127.0.0.1:1"]' '["--server=http://127.0.0.1:1"]' '["--x", "--server"]'; do
+  jq --argjson a "$sv" '.roles.dev.extraArgs = $a' "$OC/cfg.json" > "$OC/cfg-sv.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json" "$OCG0/orca-roles-opencode-dev.session"
+  OCCFG="$OC/cfg-sv.json" try ocrun agent.sh dev
+  SV="$SV $RC:$(grep -cxF -- "agent.sh: dev (opencode): --server in extraArgs is not supported: the kit gives the role its agent, MCP servers and trust settings through a private server (--standalone). Remove it from roles.dev.extraArgs." <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
+done
+check "opencode: extraArgs --standalone is passed once at its position; --server (both forms) exits 1 with the message, nothing started, no JSON, no session" "$SA1$SV" "0:mini --agent orca-dev --model p/m --x --standalone y z --session ses_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset  1:1:1: 1:1:1: 1:1:1:"
 check "opencode: provenance records the opencode version" "$(tail -1 "$OC/real/wt/.git/orca-roles.provenance.jsonl" | jq -r '[.agent, .cliVersion] | join(" ")')" "opencode opencode 9.9.9"
 # failures: outside a repo, and agent.sh stops when the preparation fails
 mkdir -p "$OC/norepo"; OCW="$OC/norepo"; try ocrun opencode-prepare.sh dev; check "opencode: outside a git repo prepare exits 1 with a message" "$RC:$(grep -c 'not inside a git repository' <<<"$OUT")" "1:1"

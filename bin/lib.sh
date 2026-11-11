@@ -238,6 +238,20 @@ oc_session_file() {
   gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
   printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
 }
+# File with a role's OpenCode configuration (opencode-prepare.sh writes it, agent.sh passes it as OPENCODE_CONFIG).  oc_config_file <role> [<git dir>]
+oc_config_file() {
+  local gd="${2:-}"
+  [ -n "$gd" ] || gd="$(team_git_dir)" || return 1
+  gd="$(cd "$gd" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/orca-roles-opencode-%s.json' "$gd" "$1"
+}
+# Whether the kit's opencode calls must keep the project's own OpenCode configuration and plugins off: settings.trust "never" in
+# $ORCA_ROLES_CONFIG (when it is a file), else in the team's saved configuration. Only a private server honours the switch.  oc_untrusted
+oc_untrusted() {
+  local c="${ORCA_ROLES_CONFIG:-}" gd
+  if [ -z "$c" ] || [ ! -f "$c" ]; then gd="$(team_git_dir)" || return 1; c="$gd/orca-roles.config.json"; [ -f "$c" ] || return 1; fi
+  [ "$(trust_of "$c" 2>/dev/null)" = never ]
+}
 # Runs `opencode <args>` in the current worktree (OpenCode scopes sessions to the directory), stdin closed, output in <file>, cut after
 # <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
 oc_bounded() {
@@ -1299,6 +1313,16 @@ codex_mcp_overrides() {
       (if .command and .args then "mcp_servers.\($n).args=\(.args | @json)" else empty end),
       (if .url then "mcp_servers.\($n).url=\(.url | @json)" else empty end),
       (if .env then "mcp_servers.\($n).env={" + ([.env | to_entries[] | "\(.key) = \(.value | @json)"] | join(", ")) + "}" else empty end)' "$1"
+}
+# The same servers in OpenCode's format, as one JSON object {"<name>": {...}} for its "mcp": {"servers": ...}: a server with a url is
+# {"type": "remote", "url", "headers"?}, one with a command {"type": "local", "command": [command, args...], "environment"?}; any other is
+# left out (as codex_mcp_overrides does).  opencode_mcp_servers <mcp file>
+opencode_mcp_servers() {
+  jq -c '(.mcpServers // {}) | with_entries(.value |= (
+      if (.url | type) == "string" then {type: "remote", url: .url} + (if (.headers | type) == "object" then {headers: .headers} else {} end)
+      elif (.command | type) == "string" then {type: "local", command: ([.command] + (if (.args | type) == "array" then .args | map(tostring) else [] end))}
+        + (if (.env | type) == "object" then {environment: .env} else {} end)
+      else null end)) | with_entries(select(.value != null))' "$1"
 }
 # Project name: the main repo's folder (not the worktree's); if it is not a repo, the given folder.  project_name <folder>
 project_name() {
