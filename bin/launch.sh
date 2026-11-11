@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opens the tabs of the worktree's enabled roles and starts their kickoff in the background.
 # Usage: launch.sh [id:<worktree>] [exceptions]
-#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it) (a role named by --only or --enable in this run opens now even if its "open" is "first-use" or "per-task")
+#   --only a,b       only those roles (the local coordinator always runs, and the planner in the modes that have it) (a role named by --only or --enable in this run opens now even if its "open" is "first-use", "per-task" or "per-batch")
 #   --enable a,b     enables roles disabled in the configuration
 #   --disable a,b    disables roles
 #   --set path=value any configuration key (e.g. roles.dev.model=claude-opus-5-5, settings.jiraHandoff=false)
@@ -11,7 +11,8 @@
 #   --reset          forgets this worktree's saved exceptions first, so only the options of this run apply
 #   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
-#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use" or "per-task" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
+#   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use", "per-task" or "per-batch" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
+#   --add <role>     opens one more tab of that role (id or title) now: its own tab when it has none, else the instance <id>-<n> with the lowest free n; refused (exit 3, a line starting REFUSED:) over its maxInstances, settings.scaling or the machine's load or memory. Not saved. Takes no other option.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -20,11 +21,11 @@
 # Only one launch runs per worktree at a time (orca-roles.lock in its git dir). If Orca cannot tell which tabs are open
 # ("Orca is not ready"), it stops before closing or opening anything.
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,21p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,22p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 type -P orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
-WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=(); OPEN_REQ=""; NAMED_REQ=""
+WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=(); OPEN_REQ=""; NAMED_REQ=""; ADD_REQ=""; ADD_SEEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
@@ -32,6 +33,11 @@ while [ $# -gt 0 ]; do
     --reopen) REOPEN=1;;
     --open) OPEN_REQ="${OPEN_REQ:+$OPEN_REQ,}${2:-}"; shift;;
     --open=*) OPEN_REQ="${OPEN_REQ:+$OPEN_REQ,}${1#--open=}";;
+    --add|--add=*)
+      if [ "$1" = --add ]; then av="${2:-}"; shift; else av="${1#--add=}"; fi
+      [ "$ADD_SEEN" = 0 ] || { echo "ERROR: --add takes one role (got: $ADD_REQ, $av). Nothing was changed."; exit 1; }
+      [ -n "$av" ] || { echo "ERROR: --add needs a role (an id or a title). Nothing was changed."; exit 1; }
+      ADD_SEEN=1; ADD_REQ="$av";;
     --only|--enable|--disable|--set|--mode)
       case "$1" in --only|--enable) NAMED_REQ="${NAMED_REQ:+$NAMED_REQ,}${2:-}";; esac
       FLAGS+=("$1" "${2:-}"); shift;;
@@ -52,6 +58,13 @@ if [ -n "$OPEN_REQ" ]; then
   [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
   [ "$REOPEN" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reopen"
   [ -z "$OTHERS" ] || { echo "ERROR: --open takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
+fi
+if [ -n "$ADD_REQ" ]; then
+  OTHERS=""; [ ${#FLAGS[@]} -gt 0 ] && OTHERS="${FLAGS[*]}"
+  [ -z "$OPEN_REQ" ] || OTHERS="${OTHERS:+$OTHERS }--open"
+  [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
+  [ "$REOPEN" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reopen"
+  [ -z "$OTHERS" ] || { echo "ERROR: --add takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
 fi
 git_here_init
 # a terminal of one worktree can be used in the folder of another: the folder's worktree wins over the terminal's
@@ -161,6 +174,7 @@ if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launc
   if [ ! -e "$MARKER" ]; then
     for role in $(launchable_roles "$SCFG" 2>/dev/null); do
       grep -q "^$(var_of "$role")=" "$STATE" && continue
+      [ -z "$(instance_base "$SCFG" "$role")" ] || continue
       om="$(open_of "$SCFG" "$role")"; [ "$om" != start ] || continue
       cm="$(role_model "$SCFG" "$role")"
       printf '%s\t-\tnot opened (%s)\t%s\t-\t-\t-\n' "$(title_of "$SCFG" "$role")" "${om/-/ }" "${cm:--}"
@@ -206,6 +220,7 @@ NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
 fail() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; sw="${SWITCH_FROM:-}"; [ -n "$sw" ] || sw="$(cat "$SWITCH_FILE" 2>/dev/null)"
   m="$1"; [ -z "$sw" ] || { case "$m" in *.) ;; *) m="$m.";; esac; m="$m The workers of mode $sw were already closed: run roles again to finish the switch."; }
   echo "$m"; exit 1; }
+refuse() { rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"; echo "REFUSED: $1"; exit 3; }
 merged_config . > "$NEWCFG" || fail "ERROR: invalid configuration (check ~/.orca-roles/config.json and .orca-roles.json)"
 PREV_MODE=""; [ -f "$CFG" ] && PREV_MODE="$(jq -r '.settings.mode // "programmer"' "$CFG" 2>/dev/null)"   # the mode of the last launch
 [ "$PREV_MODE" != academic-writer ] || PREV_MODE=academic-research   # configs saved by kits before v1.4
@@ -266,6 +281,7 @@ if [ -n "$OVRSRC" ]; then
 fi
 ERR="$(check_config "$NEWCFG" "$OVRSRC")"
 [ -z "$ERR" ] || fail "$ERR"
+materialize_instances "$NEWCFG" "$STATE" || fail "ERROR: could not rebuild the saved team's instances in the configuration. Nothing was changed."
 NEWMODE="$(mode_of "$NEWCFG")"
 ASK=0
 if [ "$NEED" = 1 ] && [ "$(setting "$NEWCFG" enableAskModeOnStart true)" != false ]; then ASK=1; fi
@@ -322,7 +338,7 @@ for i in $(seq 1 "$WAIT"); do
 done
 LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
 if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then LROLES="$FRONT"; fi
-OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""; LAZY_HID=""
+OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""; LAZY_BATCH=""; LAZY_HID=""
 if [ -n "$OPEN_REQ" ]; then
   [ "$FRESH" = 0 ] || fail "ERROR: --open needs an open team: run roles first. Nothing was changed."
   { [ "$ASK" = 0 ] && [ "$PENDING" = 0 ]; } || fail "ERROR: --open needs a chosen mode: choose the mode first. Nothing was changed."
@@ -339,6 +355,60 @@ if [ -n "$OPEN_REQ" ]; then
     OPEN_IDS="$OPEN_IDS $r"
   done
 fi
+if [ -n "$ADD_REQ" ]; then
+  [ "$FRESH" = 0 ] || fail "ERROR: --add needs an open team: run roles first. Nothing was changed."
+  { [ "$ASK" = 0 ] && [ "$PENDING" = 0 ]; } || fail "ERROR: --add needs a chosen mode: choose the mode first. Nothing was changed."
+  [ -z "$PREV_MODE" ] || [ "$PREV_MODE" = "$NEWMODE" ] || fail "ERROR: --add: the configuration now gives mode $NEWMODE but the team was opened in mode $PREV_MODE; a mode switch goes through the local coordinator (\"Choosing and switching the mode\"). Nothing was changed."
+  if [ "$NEWMODE" = academic-research ] && [ -f "$CFG" ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then
+    fail "ERROR: --add: the phase changed from $(phase_of "$CFG") to $(phase_of "$NEWCFG"); change it with ~/.orca-roles/bin/phase.sh. Nothing was changed."
+  fi
+  r="$(resolve_role "$NEWCFG" "$ADD_REQ")"
+  case " $LROLES " in *" ${r:-?} "*) ;; *) fail "ERROR: --add: '$ADD_REQ' is not a role of this worktree's team (mode $NEWMODE: $(echo $LROLES)). Nothing was changed.";; esac
+  [ -z "$(instance_base "$NEWCFG" "$r")" ] || fail "ERROR: --add: '$ADD_REQ' is an instance; name its role ($(instance_base "$NEWCFG" "$r")). Nothing was changed."
+  if [ "$(open_of "$NEWCFG" "$r")" = hidden ] && ! grep -q "^$(var_of "$r")=." "$STATE" 2>/dev/null; then
+    fail "ERROR: --add: '$ADD_REQ' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed."
+  fi
+  AT="$(title_of "$NEWCFG" "$r")"
+  read -r k e <<< "$(instance_tabs "$NEWCFG" "$STATE" "$r")"
+  max="$(max_instances "$NEWCFG" "$r")"
+  if [ "$k" -ge "$max" ]; then
+    raw="$(jq -r --arg r "$r" '.roles[$r].maxInstances // 1' "$NEWCFG" 2>/dev/null)"
+    if [ "${raw:-1}" -gt 1 ] 2>/dev/null && [ "$max" = 1 ]; then
+      ao="$(jq -r --arg r "$r" '.roles[$r].open // .defaults.open // "start"' "$NEWCFG")"; aa="$(jq -r --arg r "$r" '.roles[$r].agent // .defaults.agent // "claude"' "$NEWCFG")"
+      refuse "$AT: it cannot have instances: its open is \"$ao\" and its agent is \"$aa\" (instances need open \"per-task\" or \"per-batch\" and agent \"claude\" or \"codex\"); no instance was opened."
+    fi
+    refuse "$AT: it has $k tab(s) open and its maxInstances is $max; no instance was opened."
+  fi
+  slot="$(instance_slot "$NEWCFG" "$STATE" "$r")"
+  if [ "$slot" != "$r" ]; then
+    emax="$(jq -r '.settings.scaling.maxExtraInstances // 4' "$NEWCFG")"
+    if [ "$e" -ge "$emax" ]; then
+      refuse "$AT: $e extra instance(s) are open in this worktree and settings.scaling.maxExtraInstances is $emax; no instance was opened."
+    fi
+    # hardware check (e4)
+    ml="$(jq -r '.settings.scaling.maxLoad // 0.8 | tostring' "$NEWCFG")"; mm="$(jq -r '.settings.scaling.minFreeMemoryMB // 2048 | tostring' "$NEWCFG")"
+    read -r hload hcores hmem <<< "$(host_capacity)"
+    if awk -v a="${hload:--}" -v b="${hcores:--}" 'BEGIN { exit !(a ~ /^[0-9]+(\.[0-9]+)?$/ && b ~ /^[0-9]+$/ && b > 0) }'; then
+      if awk -v l="$hload" -v c="$hcores" -v m="$ml" 'BEGIN { exit !(l >= m * c) }'; then
+        refuse "$AT: the 1-minute load is $hload on $hcores cores, at or over settings.scaling.maxLoad $ml per core; no instance was opened."
+      fi
+    else
+      echo "Note: the load check was skipped: the load or the number of cores could not be read on this system."
+    fi
+    if awk -v m="$mm" 'BEGIN { exit !(m > 0) }'; then
+      case "${hmem:--}" in
+        ''|*[!0-9]*) echo "Note: the memory check was skipped: the available memory could not be read on this system.";;
+        *) if awk -v a="$hmem" -v m="$mm" 'BEGIN { exit !(a < m) }'; then
+             refuse "$AT: $hmem MB of memory available, under settings.scaling.minFreeMemoryMB $mm; no instance was opened."
+           fi;;
+      esac
+    fi
+    instance_entry "$NEWCFG" "$r" "${slot##*-}" || fail "ERROR: --add: could not write the instance in the configuration. Nothing was changed."
+    LROLES="$LROLES $slot"
+  fi
+  OPEN_IDS=" $slot"
+  echo "Instance: $slot ($(title_of "$NEWCFG" "$slot")) opening."
+fi
 for n in $(printf '%s' "$NAMED_REQ" | tr ',' ' '); do   # roles named by --only/--enable in this run (unknown names were already refused by check_overrides)
   r="$(resolve_role "$NEWCFG" "$n")"; [ -z "$r" ] || NAMED_IDS="$NAMED_IDS $r"
 done
@@ -346,10 +416,15 @@ if [ "$ASK" = 0 ]; then
   KEEP=""
   for id in $LROLES; do
     om="$(open_of "$NEWCFG" "$id")"
+    if [ -n "$(instance_base "$NEWCFG" "$id")" ] && ! grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then
+      case " $OPEN_IDS " in *" $id "*) KEEP="$KEEP $id";; esac
+      continue
+    fi
     if [ "$om" = start ] || grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then KEEP="$KEEP $id"; continue; fi
     if [ "$om" = hidden ]; then LAZY_HID="${LAZY_HID:+$LAZY_HID, }$(title_of "$NEWCFG" "$id") ($id)"; continue; fi
     case " $OPEN_IDS $NAMED_IDS " in *" $id "*) KEEP="$KEEP $id"; continue;; esac
     if [ "$om" = first-use ]; then LAZY_FIRST="${LAZY_FIRST:+$LAZY_FIRST, }$(title_of "$NEWCFG" "$id") ($id)"
+    elif [ "$om" = per-batch ]; then LAZY_BATCH="${LAZY_BATCH:+$LAZY_BATCH, }$(title_of "$NEWCFG" "$id") ($id)"
     else LAZY_TASK="${LAZY_TASK:+$LAZY_TASK, }$(title_of "$NEWCFG" "$id") ($id)"; fi
   done
   LROLES="${KEEP# }"
@@ -614,6 +689,7 @@ else
 fi
 [ -z "$LAZY_FIRST" ] || echo "Opened on first use (not open yet; the local coordinator opens each with launch.sh --open <id> before its first task): $LAZY_FIRST."
 [ -z "$LAZY_TASK" ] || echo "Opened per task (not open yet; the local coordinator opens each before each of its tasks and closes it after its report): $LAZY_TASK."
+[ -z "$LAZY_BATCH" ] || echo "Opened per batch (not open yet; the local coordinator opens each before its first task of each batch and closes it when the batch closes): $LAZY_BATCH."
 [ -z "$LAZY_HID" ] || echo "Hidden (no tab; the local coordinator runs each with hidden-role.sh): $LAZY_HID."
 
 # Terminals that existed before the team, in a new worktree: the composer's extra session is among them, still with its first
@@ -815,8 +891,8 @@ if metrics_enabled "$CFG"; then   # what the metrics pass cannot read itself: th
   metrics_worktree "$MTOP" "$(project_name .)" "$(metrics_task "$CFG" "$MTOP")"
   metrics_event "$MPHYS" launch ""
   [ "${ORCA_ROLES_RELAUNCH:-}" != 1 ] || metrics_event "$MPHYS" relaunch "$FRONT"
-  for id in $REMEMBERED $RESUMED; do metrics_event "$MPHYS" reopened "$id"; done
-  for id in $KEPT_DETACHED; do metrics_event "$MPHYS" detached-kept "$id"; done
+  for id in $REMEMBERED $RESUMED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" reopened "${b:-$id}"; done
+  for id in $KEPT_DETACHED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" detached-kept "${b:-$id}"; done
 fi
 PREV_PTY="$(cat "$PTY" 2>/dev/null)"
 PREV_TABS="$(cat "$TABS" 2>/dev/null)"

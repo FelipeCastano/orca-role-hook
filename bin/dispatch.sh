@@ -27,9 +27,10 @@ MCFG="${GITDIR:+$GITDIR/orca-roles.config.json}"; [ -f "$MCFG" ] || { MCFG="$KIT
 METRICS=0; metrics_enabled "$MCFG" && METRICS=1
 MTOP=""; if [ -n "$GITDIR" ] && MTOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then MTOP="$(cd "$MTOP" && pwd -P)"; else MTOP=""; fi
 mevent() {  # mevent <event> <task> <handle>
-  local id=""
+  local id="" b
   [ "$METRICS" = 1 ] || return 0
   id="$(role_of_handle "$3")"
+  [ -n "$id" ] && { b="$(instance_base "$MCFG" "$id")"; id="${b:-$id}"; }
   metrics_event "$MTOP" "$1" "$id" "$2"
 }
 role_of_handle() {  # role_of_handle <handle>: the role id that owns it in this worktree, or nothing
