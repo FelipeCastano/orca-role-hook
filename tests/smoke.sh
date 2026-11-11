@@ -896,6 +896,7 @@ rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh
 rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the Researcher'
 rule E6 "$AD/local-coordinator-team.md" 'The Dev fix and Tester rounds of one Review round count as one batch'
 rule E6 "$PD/planner.md" 'write one brief per question, each its own `needs: research:` item'
+rule E6 "$PD/planner.md" 'Name only steps that come earlier in plan order.'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
