@@ -1119,7 +1119,7 @@ check "planner_msg: first-use, per-task (also while open) and per-batch roles in
 # OpenCode workers: the coordinator is told how to stop them (close-role.sh) and that Orca's supervision of them is not verified; no --inject
 jq '.roles.dev.agent = "opencode"' "$KIT/config.json" > "$TMP/oc-pm.json"
 MO="$(planner_msg "$TMP/oc-pm.json" "planner dev sec" "$TMP/state.env" "" "" 0)"
-check "planner_msg: an opencode worker -> one supervision sentence naming only it" "$(printf '%s' "$MO" | grep -o 'OpenCode workers ([^)]*)') $(printf '%s' "$MO" | grep -c 'bin/close-role.sh <id>') $(printf '%s' "$MO" | grep -c -- '--inject' || true)" "OpenCode workers (Dev) 1 0"
+check "planner_msg: an opencode worker -> one supervision sentence naming only it, pinning that worker-stop only marks the dispatch stopped" "$(printf '%s' "$MO" | grep -o 'OpenCode workers ([^)]*)') $(printf '%s' "$MO" | grep -c 'bin/close-role.sh <id>') $(printf '%s' "$MO" | grep -c 'worker-stop only marks the dispatch stopped and the turn keeps running') $(printf '%s' "$MO" | grep -c -- '--inject' || true)" "OpenCode workers (Dev) 1 1 0"
 check "planner_msg: no opencode worker -> no OpenCode sentence" "$(printf '%s' "$M1" | grep -c 'OpenCode workers' || true)" "0"
 # A coordinator's marker for this worktree (prompts/coordinator.md): the fresh Planner waits for its dispatch; other worktrees' markers and the resume modes change nothing
 CW="$TMP/cw"; rm -rf "$CW"; mkdir -p "$CW"; git -C "$CW" init -q; mkdir -p "$CW/.git/orca-roles.coordinated"
