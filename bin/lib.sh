@@ -308,6 +308,50 @@ oc_session_delete() {
   oc_delete_id "$id"
   rm -f "$f"; return 0
 }
+# The pids of this user's OpenCode processes of a role's tab whose ORCA_TERMINAL_HANDLE is <handle>, one per line: its 'opencode mini' and the private
+# 'opencode serve --stdio' child, never the shared 'opencode serve --service' nor any other subcommand. Test hook: ORCA_ROLES_OC_PIDS (a command called with the handle).  oc_pids_of_handle <handle>
+oc_pids_of_handle() {
+  [ -n "${1:-}" ] || return 0
+  [ -n "${ORCA_ROLES_OC_PIDS:-}" ] && { "$ORCA_ROLES_OC_PIDS" "$1"; return 0; }   # test hook
+  local pid env me args; me="$(id -u)"
+  for pid in $(ps -axo pid=,uid=,comm= 2>/dev/null | awk -v u="$me" '$2 == u && $3 ~ /(^|\/)opencode$/ {print $1}'); do
+    args=" $(ps -o args= -p "$pid" 2>/dev/null) "
+    case "$args" in *" --service "*) continue;; esac   # the user's shared OpenCode service: never
+    case "$(printf '%s\n' "$args" | awk '{print $2}')" in
+      mini) ;;
+      serve) case "$args" in *" --stdio "*) ;; *) continue;; esac;;
+      *) continue;;
+    esac
+    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
+    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" && echo "$pid"
+  done
+  return 0
+}
+# Sends a signal to pids, quietly. Test hook: ORCA_ROLES_KILL (a command called with the signal name and the pids).  oc_kill <TERM|KILL> <pid>...
+oc_kill() { local s="$1"; shift; if [ -n "${ORCA_ROLES_KILL:-}" ]; then "$ORCA_ROLES_KILL" "$s" "$@"; else kill -s "$s" "$@" 2>/dev/null; fi; return 0; }
+# Ends the OpenCode processes that still carry the handle of a tab the kit closed, found gone or replaced (closing a tab does not always end them):
+# TERM, then KILL for those still there after ORCA_ROLES_REAP_WAIT seconds (default 5, checked every second). Prints one line when it ended any.  oc_reap <handle> <title>
+oc_reap() {
+  local pids left i=0 w="${ORCA_ROLES_REAP_WAIT:-5}"
+  case "$w" in ''|*[!0-9]*) w=5;; esac
+  pids="$(oc_pids_of_handle "$1" | tr '\n' ' ')"; pids="${pids% }"
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086
+  oc_kill TERM $pids
+  left="$pids"
+  while [ -n "$left" ] && [ "$i" -lt "$w" ]; do sleep 1; i=$((i + 1)); left="$(oc_pids_of_handle "$1" | tr '\n' ' ')"; left="${left% }"; done
+  # shellcheck disable=SC2086
+  [ -z "$left" ] || oc_kill KILL $left
+  echo "$2: ended the OpenCode process left running by its tab ($1, pid $pids)."
+  return 0
+}
+# oc_reap for each non-empty handle, only when the role's agent is opencode in <config>.  oc_reap_role <config> <role> <title> <handle>...
+oc_reap_role() {
+  local cfg="$1" role="$2" title="$3" h; shift 3
+  [ "$(rstr "$cfg" "$role" agent)" = opencode ] || return 0
+  for h in "$@"; do [ -z "$h" ] || oc_reap "$h" "$title"; done
+  return 0
+}
 
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.

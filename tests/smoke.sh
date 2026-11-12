@@ -175,6 +175,8 @@ trap on_exit EXIT   # bash 3.2 can exit 0 on an unbound variable
 set -E; trap '[ "$BASH_SUBSHELL" != 0 ] || case $- in *e*) ERR_AT="at line $LINENO: $BASH_COMMAND";; esac' ERR
 KIT="$TMP/kit"; mkdir -p "$KIT"   # not exported: the scripts under test find their kit through the fake HOME, as in real use
 printf '#!/bin/sh\n[ -e "%s/nopid.$1" ] || echo 4242\n' "$TMP" > "$TMP/agent-pid"; chmod +x "$TMP/agent-pid"; export ORCA_ROLES_AGENT_PID="$TMP/agent-pid"   # by default every fake tab with an agent identity has a live agent process behind it; a handle with a nopid.<handle> file in $TMP has none (a test that needs another answer points the hook at its own script)
+printf '#!/bin/sh\n[ -f "%s/ocpids.$1" ] && cat "%s/ocpids.$1"\nexit 0\n' "$TMP" "$TMP" > "$TMP/oc-pids"; chmod +x "$TMP/oc-pids"; export ORCA_ROLES_OC_PIDS="$TMP/oc-pids"   # the OpenCode processes of a handle: those listed in ocpids.<handle>, none by default
+printf '#!/bin/sh\ns="$1"; shift; printf "kill %%s %%s\\n" "$s" "$*" >> "${OC_KILLLOG:-%s/kill.log}"\n' "$TMP" > "$TMP/oc-kill"; chmod +x "$TMP/oc-kill"; export ORCA_ROLES_KILL="$TMP/oc-kill"; export ORCA_ROLES_REAP_WAIT=1   # signals are only logged, never sent from the suite
 export ORCA_ROLES_SUPERPOWERS_FETCH=skip   # install.sh must never reach the network from the suite (the fetch tests put a fake git first on the PATH and clear this)
 NOORCA="$TMP/noorca"; mkdir -p "$NOORCA"; printf '#!/bin/sh\necho "$*" >> "%s/calls.log"\necho '"'"'{"ok":true,"result":{"worktrees":[]}}'"'"'\n' "$NOORCA" > "$NOORCA/orca"; chmod +x "$NOORCA/orca"; : > "$NOORCA/calls.log"; PATH="$NOORCA:$PATH"   # a no-op orca first on the PATH: install.sh (which lists Orca's worktrees) and the other scripts never reach the user's real Orca from the suite; a check that needs another orca puts its own first
 cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
@@ -5860,7 +5862,7 @@ echo "orca $*" >> "${OC_DELLOG:-/dev/null}"
 exit 0
 EOS
 chmod +x "$OC/bin/orca"
-ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
+ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_KILLLOG="${OCKILL:-}" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
 ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }   # a role's configuration file (physical git dir)
 ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
 FILE="$(ocf dev)"
@@ -6047,9 +6049,25 @@ OCCFG=""
 # a tab Orca reports as stale (it was already gone): no close is tried, and the role's files go the same way
 oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"; mkdir -p "$OC/stbin"
 printf '#!/bin/sh\necho "orca $*" >> "%s"\ncase "$1 $2" in "terminal show") echo %s; exit 1;; esac\nexit 0\n' "$OCLOG" "'{\"ok\":false,\"error\":{\"code\":\"terminal_handle_stale\"}}'" > "$OC/stbin/orca"; chmod +x "$OC/stbin/orca"
-(cd "$OCW" && HOME="$TMP/home" PATH="$OC/stbin:$OC/bin:$PATH" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$OC/cfg.json" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1); CE4=$?
-CE4="$CE4:$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo mcp):$([ -e "$SF" ] && echo session):$(grep -c '^orca terminal close' "$OCLOG" || true):$(cat "$OCSTATE")"
-check "opencode close-role: the session file, the role's OpenCode configuration and its MCP file are gone and the role's line left the state (also when Orca reports the tab stale: no close tried); a Claude role's close removes its own two files (no opencode call, Dev's MCP file kept); an instance's close removes its own files and its configuration entry, leaving Dev's files and session untouched" "$CE1|$CE2|$CE3|$CE4" "0::::CL=h-cl|0:::devmcp:0|0:::true:devjson:devmcp:ses_saved_1|0::::0:CL=h-cl"
+printf '907\n' > "$TMP/ocpids.h-dev"
+(cd "$OCW" && HOME="$TMP/home" PATH="$OC/stbin:$OC/bin:$PATH" OC_KILLLOG="$OCLOG" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$OC/cfg.json" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1); CE4=$?
+rm -f "$TMP/ocpids.h-dev"
+CE4="$CE4:$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo mcp):$([ -e "$SF" ] && echo session):$(grep -c '^orca terminal close' "$OCLOG" || true):$(cat "$OCSTATE"):$(grep -c '^kill TERM 907$' "$OCLOG" || true)"
+# a tab closed normally with an OpenCode process left behind: TERM after the tab close, its line, exit 0
+oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '908\n' > "$TMP/ocpids.h-dev"
+OCKILL="$OCLOG"; try ocrun close-role.sh dev; OCKILL=""; rm -f "$TMP/ocpids.h-dev"
+CE5="$RC:$(awk '/^orca terminal close --terminal h-dev --tab/{c=NR} /^kill TERM 908$/{if (!k) k=NR} END {print (k && c && k < c) ? "before" : (k ? "after" : "missing")}' "$OCLOG"):$(grep -cFx 'Dev: ended the OpenCode process left running by its tab (h-dev, pid 908).' <<<"$OUT" || true)"
+# Orca does not answer about the tab: nothing is changed, so nothing is reaped either
+oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '909\n' > "$TMP/ocpids.h-dev"; mkdir -p "$OC/abin"
+printf '#!/bin/sh\necho "orca $*" >> "%s"\ncase "$1 $2" in "terminal show") echo %s; exit 1;; esac\nexit 0\n' "$OCLOG" "'{\"ok\":false,\"error\":{\"code\":\"no_response\"}}'" > "$OC/abin/orca"; chmod +x "$OC/abin/orca"
+CE6=0; (cd "$OCW" && HOME="$TMP/home" PATH="$OC/abin:$OC/bin:$PATH" OC_KILLLOG="$OCLOG" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$OC/cfg.json" "$TMP/home/.orca-roles/bin/close-role.sh" dev > "$OC/na.out" 2>&1) || CE6=$?
+rm -f "$TMP/ocpids.h-dev"
+CE6="$CE6:$(grep -c 'Orca did not answer about its tab (h-dev); nothing was changed.' "$OC/na.out" || true):$(grep -c '^kill ' "$OCLOG" || true):$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$(grep -c '^DEV=' "$OCSTATE" || true)"
+# a claude role with a pid file for its handle: no scan, no kill
+oc_close_setup; printf '910\n' > "$TMP/ocpids.h-cl"
+OCKILL="$OCLOG"; try ocrun close-role.sh cl; OCKILL=""; rm -f "$TMP/ocpids.h-cl"
+CE7="$RC:$(grep -c '^kill ' "$OCLOG" || true)"
+check "opencode close-role: the session file, the role's OpenCode configuration and its MCP file are gone and the role's line left the state (also when Orca reports the tab stale: no close tried but its OpenCode process reaped); the OpenCode process left behind by a closed tab is ended (TERM after the close, its line) and none is reaped when Orca did not answer about the tab; a Claude role's close removes its own two files, calls no opencode and reaps nothing (Dev's MCP file kept); an instance's close removes its own files and its configuration entry, leaving Dev's files and session untouched" "$CE1|$CE2|$CE3|$CE4|$CE5|$CE6|$CE7" "0::::CL=h-cl|0:::devmcp:0|0:::true:devjson:devmcp:ses_saved_1|0::::0:CL=h-cl:1|0:after:1|1:1:0:json:1|0:0"
 oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
 check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
 oc_close_setup; OCDELMODE=hang; OCTO=1; T0=$(date +%s); try ocrun close-role.sh dev; T1=$(date +%s); OCDELMODE=""; OCTO=""
@@ -6117,13 +6135,21 @@ oc_launch() {  # <env dev handle> <terminal list json> [saved session file: its 
   local sesf="${3-ses_saved_abc}"   # an explicit empty third argument writes an empty first line (a half-written file)
   case "$sesf" in -) rm -f "$LP/.git/orca-roles-opencode-dev.session";; *) printf '%s\n' "$sesf" > "$LP/.git/orca-roles-opencode-dev.session";; esac
   printf '%s' "$2" > "$OC/llist.json"; : > "$LLOG"; : > "$LSEQ"; rm -f "$LP/.git/orca-roles.config.json"
-  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)" && RC=0 || RC=$?
+  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" OC_KILLLOG="$LLOG" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)" && RC=0 || RC=$?
 }
+# the reap of a replaced tab's OpenCode processes runs before the role's new tab is created. ocorder <log> <pid>: before/after/missing
+ocorder() { awk -v p="$2" '$0 == "kill TERM " p {if (!k) k = NR} /terminal create .*--title Dev/ {if (!c) c = NR} END {print (k && c && k < c) ? "before" : (k ? "after" : "missing")}' "$1"; }
+printf '902\n' > "$TMP/ocpids.old-dev"; printf '903\n' > "$TMP/ocpids.rs-dev"
 oc_launch old-dev '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@q2","title":"y"}]}'
-check "opencode launch: a restored tab is reopened with the saved id; nothing is deleted" "$RC:$(grep -c "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation (ses_saved_abc)" <<<"$OUT"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING)" "0:1:1:0:ses_saved_abc"
+K5="$(grep -c '^kill TERM 90[23]$' "$LLOG" || true):$(ocorder "$LLOG" 902):$(ocorder "$LLOG" 903)"
+rm -f "$TMP/ocpids.old-dev" "$TMP/ocpids.rs-dev"
+check "opencode launch: a restored tab is reopened with the saved id; nothing is deleted; the old and the restored handle are reaped (two TERM lines) before the new tab is created" "$RC:$(grep -c "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation (ses_saved_abc)" <<<"$OUT"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$K5" "0:1:1:0:ses_saved_abc:2:before:before"
 R1=""
+K1=""
 for GOOD in 'ses_saved_abc' 'ses_orca_dev-2_1731400000123' 'ses_ABCdef123_x'; do   # every form of a valid id
+  [ "$GOOD" != ses_saved_abc ] || printf '901\n' > "$TMP/ocpids.old-dev"
   oc_launch old-dev '{"terminals":[]}' "$GOOD"
+  if [ "$GOOD" = ses_saved_abc ]; then K1="$(ocorder "$LLOG" 901)"; rm -f "$TMP/ocpids.old-dev"; fi
   if [ "$RC" = 0 ] && [ "$(grep -c "no longer exists; opening a new one with its conversation ($GOOD)." <<<"$OUT")" = 1 ] && [ "$(grep -c "agent.sh' dev --resume $GOOD --json" "$LLOG")" = 1 ] && [ "$(grep -c '^delete' "$LSEQ" || true)" = 0 ] && [ "$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING)" = "$GOOD" ]
   then R1="$R1 ok"; else R1="$R1 BAD[$GOOD]"; fi
 done
@@ -6137,10 +6163,19 @@ done
 R2="${R2# }"
 oc_launch old-dev '{"terminals":[]}' -
 R3="$RC:$(grep -cFx 'The previous tab of Dev (old-dev) no longer exists; opening a new one.' <<<"$OUT"):$(grep -c "agent.sh' dev --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true)"
-check "opencode launch: a tab that no longer exists: a valid saved id (letters, digits, an underscore, a hyphen) continues it (with its conversation, nothing deleted, the file kept); an id that is not ses_ plus [A-Za-z0-9_-]+, or no file, opens without --resume and deletes nothing" "$R1|$R2|$R3" "ok ok ok|ok ok ok ok ok ok|0:1:1:0"
+# the same role as a Claude one (its agent changed with --set, so its OpenCode session file is still there): today's reopen, byte for byte:
+# the RESUMED line, no --resume, nothing deleted and no process scanned for it. oc_saved_id only answers for an opencode role
+cp "$KIT/config.json" "$OC/kit-config.c2"; jq 'del(.roles.dev.agent)' "$OC/kit-config.c2" > "$KIT/config.json"
+printf '909\n' > "$TMP/ocpids.old-dev"
+oc_launch old-dev '{"terminals":[]}'
+rm -f "$TMP/ocpids.old-dev"; cp "$OC/kit-config.c2" "$KIT/config.json"
+K6="$RC:$(grep -cFx 'The previous tab of Dev (old-dev) no longer exists; opening a new one.' <<<"$OUT"):$(printf '%s\n' "$OUT" | grep -c 'with its conversation' || true):$(grep -c "agent.sh' dev --json" "$LLOG"):$(grep -c "agent.sh' dev --resume" "$LLOG" || true):$(grep -c '^delete' "$LSEQ" || true):$(grep -c '^kill ' "$LLOG" || true):$([ -e "$LP/.git/orca-roles-opencode-dev.session" ] && echo file)"
+check "opencode launch: a tab that no longer exists: a valid saved id (letters, digits, an underscore, a hyphen) continues it (with its conversation, nothing deleted, the file kept) and its handle is reaped before the new tab is created; an id that is not ses_ plus [A-Za-z0-9_-]+, or no file, opens without --resume and deletes nothing; a Claude role with a leftover session file keeps today's reopen (the RESUMED line, no --resume, nothing deleted, no process scanned)" "$R1|$R2|$R3|$K1|$K6" "ok ok ok|ok ok ok ok ok ok|0:1:1:0|before|0:1:0:1:0:0:0:file"
 check "opencode launch: the fake orca drops the tab-title suffix, so the handle saved for the replaced tab is the plain role title" "$(grep '^DEV=' "$LP/.git/orca-roles.env")" "DEV=new-Dev"
+printf '904\n' > "$TMP/ocpids.orph-dev"
 oc_launch orph-dev '{"terminals":[]}'
-check "opencode launch: a closed tab whose session Orca kept running: it is reopened with its conversation, nothing deleted; a live 'opencode mini' does not keep the orphaned tab" "$RC:$(grep -c 'was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT"):$(grep -c 'as detached but its agent is running' <<<"$OUT" || true):$(grep -c 'terminal close --terminal orph-dev' "$LLOG"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING)" "0:1:0:1:1:0:ses_saved_abc"
+rm -f "$TMP/ocpids.orph-dev"
+check "opencode launch: a closed tab whose session Orca kept running: it is reopened with its conversation, nothing deleted, its handle reaped before the new tab; a live 'opencode mini' does not keep the orphaned tab" "$RC:$(grep -c 'was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT"):$(grep -c 'as detached but its agent is running' <<<"$OUT" || true):$(grep -c 'terminal close --terminal orph-dev' "$LLOG"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$(ocorder "$LLOG" 904)" "0:1:0:1:1:0:ses_saved_abc:before"
 # a live OpenCode tab whose 'opencode mini' runs is reused; without a pid its agent is gone (state 2): the tab is closed and
 # a new one opens with its conversation (nothing is deleted)
 oc_live() {  # <env dev handle> <terminal list json> [pid hook (default the suite's)] [ORCA_ROLES_AGENT_CHECKS (default 1)]
@@ -6148,25 +6183,45 @@ oc_live() {  # <env dev handle> <terminal list json> [pid hook (default the suit
   printf 'LOCAL_COORDINATOR=live-pl\nDEV=live-dev\n' > "$LP/.git/orca-roles.kicked"
   printf 'ses_saved_abc\n' > "$LP/.git/orca-roles-opencode-dev.session"
   printf '%s' "$2" > "$OC/llist.json"; : > "$LLOG"; : > "$LSEQ"; rm -f "$LP/.git/orca-roles.config.json"
-  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" ORCA_ROLES_AGENT_PID="${3:-$TMP/agent-pid}" ORCA_ROLES_AGENT_CHECKS="${4:-1}" ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)" && RC=0 || RC=$?
+  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" OC_KILLLOG="$LLOG" ORCA_ROLES_AGENT_PID="${3:-$TMP/agent-pid}" ORCA_ROLES_AGENT_CHECKS="${4:-1}" ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)" && RC=0 || RC=$?
 }
 LIVELIST='{"terminals":[{"handle":"live-dev","ptyId":"wt@@q2","title":"Dev"}]}'
 oc_live live-dev "$LIVELIST"
 LV1="$RC:$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true):$(grep -c 'terminal close --terminal live-dev' "$LLOG" || true):$(grep -c "agent.sh' dev " "$LLOG" || true):$(grep -c '^delete' "$LSEQ" || true)"
-touch "$TMP/nopid.live-dev"; oc_live live-dev "$LIVELIST"; rm -f "$TMP/nopid.live-dev"
-LV2="$RC:$(grep -cFx 'The agent in the tab of Dev (live-dev) is gone; closing that tab and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT" || true):$(grep -c 'terminal close --terminal live-dev --tab' "$LLOG" || true):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG" || true):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$(grep -cFx 'Resuming workspace: dev keep their conversation.' <<<"$OUT" || true)"
+printf '905\n' > "$TMP/ocpids.live-dev"; touch "$TMP/nopid.live-dev"; oc_live live-dev "$LIVELIST"; rm -f "$TMP/nopid.live-dev"
+K2="$(ocorder "$LLOG" 905)"; rm -f "$TMP/ocpids.live-dev"
+LV2="$RC:$(grep -cFx 'The agent in the tab of Dev (live-dev) is gone; closing that tab and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT" || true):$(grep -c 'terminal close --terminal live-dev --tab' "$LLOG" || true):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG" || true):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$(grep -cFx 'Resuming workspace: dev keep their conversation.' <<<"$OUT" || true):$K2"
 # a hook that answers nothing on the first call and a pid on the second: the tab is alive once the retries are used up
 printf '#!/bin/sh\nif [ "$1" = live-dev ]; then f="%s/cnt.live-dev"; n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$f"; [ "$n" -ge 2 ] || exit 0; fi\necho 4242\n' "$TMP" > "$TMP/agent-pid2"; chmod +x "$TMP/agent-pid2"
 rm -f "$TMP/cnt.live-dev"; oc_live live-dev "$LIVELIST" "$TMP/agent-pid2" 2; rm -f "$TMP/cnt.live-dev"
 LV3="$RC:$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true):$(grep -c 'terminal close --terminal live-dev' "$LLOG" || true):$(grep -c "agent.sh' dev " "$LLOG" || true)"
-check "opencode launch: a live tab with a 'mini' behind its handle is reused (nothing closed, opened or deleted), also when the pid only appears on the second check; without a pid the agent is gone, the tab is closed and a new one opens with its conversation and the 'keep their conversation.' line, nothing deleted" "$LV1|$LV2|$LV3" "0:1:0:0:0|0:1:1:1:0:ses_saved_abc:1|0:1:0:0"
+check "opencode launch: a live tab with a 'mini' behind its handle is reused (nothing closed, opened or deleted), also when the pid only appears on the second check; without a pid the agent is gone, the tab is closed and a new one opens with its conversation and the 'keep their conversation.' line, nothing deleted" "$LV1|$LV2|$LV3" "0:1:0:0:0|0:1:1:1:0:ses_saved_abc:1:before|0:1:0:0"
 # --status with no pid hook and a fake ps first on the PATH (the real ps of the machine is never reached): a 'mini' behind the
 # handle is alive, a handle carried only by 'opencode serve' or 'opencode run' is agent gone, a claude process still counts
 PSB="$OC/psbin"; mkdir -p "$PSB"
 cat > "$PSB/ps" <<'EOS'
 #!/bin/bash
+echo "$*" >> "$(dirname "$0")/calls.log"
 case "$*" in
   "-axo pid=,comm=") printf '106 opencode\n103 opencode\n101 opencode\n102 /usr/local/bin/opencode\n104 opencode\n105 claude\n107 codex\n';;
+  "-axo pid=,uid=,comm=") me="$(id -u)"; o=$((me + 1)); printf '110 %s opencode\n111 %s opencode\n112 %s /x/bin/opencode\n113 %s opencode\n114 %s opencode\n115 %s opencode\n116 %s opencode\n117 %s claude\n118 %s node\n119 %s opencode\n120 %s opencode\n121 %s opencode\n122 %s opencode\n' "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$o" "$me" "$me" "$me";;
+  "eww -p 110"|"eww -p 111"|"eww -p 112"|"eww -p 113"|"eww -p 114"|"eww -p 115"|"eww -p 116"|"eww -p 117"|"eww -p 118"|"eww -p 119") echo "$3 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_a";;
+  "eww -p 120") echo '120 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_ab';;
+  "eww -p 121") echo '121 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_';;
+  "eww -p 122") echo '122 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_a';;
+  "-o args= -p 110") echo 'opencode mini --standalone --agent orca-a --session ses_a';;
+  "-o args= -p 111") echo '/x/bin/opencode serve --stdio --port 0';;
+  "-o args= -p 112") echo '/x/bin/opencode serve --service';;
+  "-o args= -p 113") echo 'opencode serve --port 4096';;
+  "-o args= -p 114") echo 'opencode run --agent orca-a';;
+  "-o args= -p 115") echo 'opencode session list';;
+  "-o args= -p 116") echo 'opencode';;
+  "-o args= -p 117") echo '/usr/local/bin/claude --resume 11111111-2222-3333-4444-555555555555';;
+  "-o args= -p 118") echo 'node /x/bin/opencode';;
+  "-o args= -p 119") echo 'opencode mini --standalone --agent orca-a --session ses_a';;
+  "-o args= -p 120") echo 'opencode mini --standalone --agent orca-b --session ses_b';;
+  "-o args= -p 121") echo 'opencode mini --standalone --agent orca-c --session ses_c';;
+  "-o args= -p 122") echo 'opencode serve --stdio --service';;
   "eww -p 101") echo '101 ? S 0:00.01 mini ORCA_TERMINAL_HANDLE=live-dev';;
   "eww -p 102") echo '102 ? S 0:00.01 serve ORCA_TERMINAL_HANDLE=tst-serve';;
   "eww -p 103") echo '103 ? S 0:00.01 mini ORCA_TERMINAL_HANDLE=live-dev-2';;
@@ -6195,6 +6250,29 @@ printf 'LOCAL_COORDINATOR=cl-tab\nDEV=live-dev\nTESTER=tst-serve\nCXS=cx-tab\n' 
 ST2="$(cd "$LP" && env -u ORCA_ROLES_AGENT_PID HOME="$TMP/home" PATH="$PSB:$OC/lbin:$OC/bin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" --status 2>&1 | awk -F'\t' '$2 ~ /^(cl-tab|live-dev|tst-serve|cx-tab)$/ {printf "%s=%s ", $2, $3}')"
 cp "$OC/kit-config.b1" "$KIT/config.json"
 check "opencode status: with no pid hook and a fake ps, a 'mini' behind the handle is alive (a longer handle with it as a prefix does not match, 'serve' and 'run' do not count), a handle carried only by them is agent gone, a claude and a codex process are still found" "$ST2" "cl-tab=alive live-dev=alive tst-serve=agent gone cx-tab=alive "
+# which OpenCode processes of a tab are ended. Real scan (ORCA_ROLES_OC_PIDS unset) with the fake ps: only this user's 'mini' and private
+# 'serve --stdio' of the exact handle; the shared service, another subcommand, another comm, another uid and a longer handle never match;
+# an empty handle never scans. The reap sends TERM, then KILL only for a pid still listed, and every signal goes through the ORCA_ROLES_KILL hook.
+OC4="$OC/reap"; rm -rf "$OC4"; mkdir -p "$OC4"
+# guarded so an older tree without the functions reports a FAIL here instead of aborting the section (bash 3.2: declare -F)
+if declare -F oc_pids_of_handle >/dev/null 2>&1 && declare -F oc_reap >/dev/null 2>&1; then FN4=functions; else FN4=no-functions; fi
+PIDS4=""; AB4=""; EMPTY4=""; A4=""; B4=""; C4=""
+if [ "$FN4" = functions ]; then
+PIDS4="$( ( unset ORCA_ROLES_OC_PIDS; PATH="$PSB:$PATH" oc_pids_of_handle term_a ) | tr '\n' ' ')"; PIDS4="${PIDS4% }"
+AB4="$( ( unset ORCA_ROLES_OC_PIDS; PATH="$PSB:$PATH" oc_pids_of_handle term_ab ) | tr '\n' ' ')"; AB4="${AB4% }"
+: > "$PSB/calls.log"; ( unset ORCA_ROLES_OC_PIDS; PATH="$PSB:$PATH" oc_pids_of_handle "" ) > "$OC4/empty.out"
+EMPTY4="$(wc -l < "$OC4/empty.out" | tr -d ' '):$(wc -l < "$PSB/calls.log" | tr -d ' ')"
+: > "$OC4/kl.log"; printf '201\n' > "$TMP/ocpids.term_x"
+O4A="$(OC_KILLLOG="$OC4/kl.log" oc_reap term_x Dev)"; rm -f "$TMP/ocpids.term_x"
+A4="$(grep -c '^kill TERM 201$' "$OC4/kl.log" || true):$(grep -c '^kill KILL 201$' "$OC4/kl.log" || true):$(grep -cFx 'Dev: ended the OpenCode process left running by its tab (term_x, pid 201).' <<<"$O4A" || true)"
+: > "$OC4/kl2.log"; printf '202\n' > "$TMP/ocpids.term_y"
+printf '#!/bin/sh\ns="$1"; shift\nprintf "kill %%s %%s\\n" "$s" "$*" >> "%s"\n[ "$s" = TERM ] && rm -f "%s/ocpids.term_y"\nexit 0\n' "$OC4/kl2.log" "$TMP" > "$OC4/kill-drop"; chmod +x "$OC4/kill-drop"
+O4B="$(ORCA_ROLES_KILL="$OC4/kill-drop" oc_reap term_y Dev)"; rm -f "$TMP/ocpids.term_y"
+B4="$(grep -c '^kill TERM 202$' "$OC4/kl2.log" || true):$(grep -c '^kill KILL' "$OC4/kl2.log" || true):$(grep -cFx 'Dev: ended the OpenCode process left running by its tab (term_y, pid 202).' <<<"$O4B" || true)"
+: > "$OC4/kl.log"; O4C="$(OC_KILLLOG="$OC4/kl.log" oc_reap term_none Dev)"
+C4="$(wc -l < "$OC4/kl.log" | tr -d ' '):$([ -z "$O4C" ] && echo quiet || echo line)"
+fi
+check "opencode reap: pids of a handle: only this user's 'mini' and private 'serve --stdio' (the shared service, even with --stdio, another subcommand, another comm, another uid and the longer handles term_ab/term_ do not match); an empty handle never scans; the reap sends TERM then KILL for a pid still listed, TERM only when it goes, and nothing at all without a pid" "$FN4|$PIDS4|$AB4|$EMPTY4|$A4|$B4|$C4" "functions|110 111|120|0:0|1:1:1|1:0:1|0:quiet"
 if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json"; else rm -f "$KIT/config.json"; fi
 # mode switch: the OpenCode workers' sessions are deleted before their tabs close, their files go with them, a claude worker's does not
 # and the local coordinator's MCP file stays. A saved OpenCode worker whose tab is not open takes the same path (no close).
@@ -6226,11 +6304,17 @@ cat > "$KIT/config.json" <<'J'
   "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev", "agent": "opencode" }, "code-reviewer": { "title": "Code-Reviewer" }, "ocb": { "title": "Ocb", "agent": "opencode" } } }
 J
 cp "$KIT/config.json" "$SWG/orca-roles.config.json"
-OUT="$(cd "$SW/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$SW/bin:$PATH" ORCA_TERMINAL_HANDLE=h-LC ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$SW/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode programmer 2>&1)" && RC=0 || RC=$?
+printf '906\n' > "$TMP/ocpids.h-Dev"; printf '908\n' > "$TMP/ocpids.h-ocb"
+# the kill hook logs into the switch's own log and, like a real process, stops listing a pid once it is TERM-ed: it removes the pid file whose
+# content is the signalled pid, so Dev's reap (the saved and the restored handle of the same tab) leaves Ocb's file alone and the second scan finds nothing
+printf '#!/bin/sh\ns="$1"; shift\nprintf "kill %%s %%s\\n" "$s" "$*" >> "%s"\n[ "$s" = TERM ] || exit 0\nfor p in "$@"; do for f in "%s"/ocpids.*; do [ -f "$f" ] || continue; [ "$(cat "$f")" = "$p" ] && rm -f "$f"; done; done\nexit 0\n' "$SWLOG" "$TMP" > "$SW/oc-kill"; chmod +x "$SW/oc-kill"
+OUT="$(cd "$SW/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$SW/bin:$PATH" OC_KILLLOG="$SWLOG" ORCA_ROLES_KILL="$SW/oc-kill" ORCA_TERMINAL_HANDLE=h-LC ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$SW/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode programmer 2>&1)" && RC=0 || RC=$?
+rm -f "$TMP/ocpids.h-Dev" "$TMP/ocpids.h-ocb"
+SW4="$(grep -c '^kill TERM 906$' "$SWLOG" || true):$(grep -cFx 'Dev: ended the OpenCode process left running by its tab (h-Dev, pid 906).' <<<"$OUT" || true):$(grep -c '^kill TERM 908$' "$SWLOG" || true):$(grep -c '^kill KILL 908$' "$SWLOG" || true):$(grep -cFx 'Ocb: ended the OpenCode process left running by its tab (h-ocb, pid 908).' <<<"$OUT" || true)"
 cp "$OC/kit-config.b2" "$KIT/config.json"
 SW1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode from quick to programmer: closing Dev, Code-Reviewer;' || true):$(awk '/^delete ses_sw_1$/{d=NR} /^orca terminal close --terminal h-Dev/{c=NR} END{print (d && c && d < c) ? "before" : (d ? "after" : "missing")}' "$SWLOG"):$(grep -c '^delete ses_sw_1$' "$SWLOG" || true):$(grep -c '^delete ses_sw_2$' "$SWLOG" || true):$(grep -c '^delete ' "$SWLOG" || true):$(grep -c '^orca terminal close --terminal h-Dev --tab' "$SWLOG" || true):$(grep -c '^orca terminal close --terminal h-CR --tab' "$SWLOG" || true)"
 SW2="$([ -e "$SWG/orca-roles-opencode-dev.session" ] && echo session)$([ -e "$SWG/orca-roles-opencode-dev.json" ] && echo json)$([ -e "$SWG/orca-roles-mcp-dev.json" ] && echo mcp):$([ -e "$SWG/orca-roles-opencode-ocb.session" ] && echo session)$([ -e "$SWG/orca-roles-opencode-ocb.json" ] && echo json)$([ -e "$SWG/orca-roles-mcp-ocb.json" ] && echo mcp):$([ -e "$SWG/orca-roles-mcp-code-reviewer.json" ] || echo gone):$([ -e "$SWG/orca-roles-mcp-local-coordinator.json" ] && echo kept)"
-check "opencode switch: the OpenCode Dev's session is deleted before its tab closes and its session, configuration and MCP files go, a saved OpenCode worker with no open tab takes the same path without a close, the claude worker is closed but calls no opencode and loses its MCP file, and the local coordinator keeps its MCP file" "$SW1|$SW2" "0:1:before:1:1:2:1:1|::gone:kept"
+check "opencode switch: the OpenCode Dev's session is deleted before its tab closes, the OpenCode process its tab leaves behind is reaped (TERM, and its line), and its session, configuration and MCP files go, a saved OpenCode worker with no open tab takes the same path without a close and its saved handle is reaped too (once, by TERM only), the claude worker is closed but calls no opencode and loses its MCP file, and the local coordinator keeps its MCP file" "$SW1|$SW2|$SW4" "0:1:before:1:1:2:1:1|::gone:kept|1:1:1:0:1"
 }
 
 sec_prompt_paths() {

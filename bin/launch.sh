@@ -650,6 +650,7 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
             || fail "ERROR: could not close $stitle's tab ($ch); close it by hand and switch again."
         done
       fi
+      oc_reap_role "$CFG" "$srole" "$stitle" "$shandle" "$srh"
       drop_role_lines "$svar"
       ocj="$(oc_config_file "$srole" "$GITDIR")" && rm -f "$ocj"; rm -f "$GITDIR/orca-roles-mcp-$srole.json"
     done <<EOF2
@@ -857,6 +858,7 @@ for id in $ROLES; do
     orca terminal close --terminal "${!v}" --json >/dev/null 2>&1; crc=$?
     [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1; crc=$?; }
     [ "$crc" != 124 ] || close_unconfirmed "${!v}" "$t" || true
+    oc_reap_role "$CFG" "$id" "$t" "${!v}"
   elif [ "$st" = 2 ]; then
     sid="$(oc_saved_id "$id")"
     if [ -n "$sid" ]; then
@@ -865,6 +867,7 @@ for id in $ROLES; do
       RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
     fi
     orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "${!v}" "$t" || true; }
+    oc_reap_role "$CFG" "$id" "$t" "${!v}"
   elif [ -n "${!v:-}" ]; then
     p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "$v")")"
     if [ -n "$rh" ]; then
@@ -897,6 +900,7 @@ for id in $ROLES; do
       fi
       [ "$id" != "$FRONT" ] || planner_history_add "$GITDIR" "$rh"   # the restored tab joins the history: a Run Orca's own resume bound to it is an old one for kickoff
       orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "$rh" "$t" || true; }
+      oc_reap_role "$CFG" "$id" "$t" "${!v}" "$rh"
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
       else
@@ -909,6 +913,7 @@ for id in $ROLES; do
       else
         RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
       fi
+      oc_reap_role "$CFG" "$id" "$t" "${!v}"
     fi
   fi
   tp=""

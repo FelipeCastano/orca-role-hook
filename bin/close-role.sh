@@ -50,6 +50,7 @@ for x in "$@"; do
   else
     echo "$t: its tab ($h) was already gone."
   fi
+  oc_reap_role "$CFG" "$id" "$t" "$h"
   TMPS="$(mktemp)"; grep -v "^$v=" "$STATE" > "$TMPS" || true; cat "$TMPS" > "$STATE"; rm -f "$TMPS"
   PTYF="$(dirname "$STATE")/orca-roles.pty"; [ -f "$PTYF" ] && { grep -v "^$v=" "$PTYF" > "$PTYF.tmp" || true; mv "$PTYF.tmp" "$PTYF"; }
   TABSF="$(dirname "$STATE")/orca-roles.tabs"; [ -f "$TABSF" ] && { grep -v "^$v=" "$TABSF" > "$TABSF.tmp" || true; mv "$TABSF.tmp" "$TABSF"; }
