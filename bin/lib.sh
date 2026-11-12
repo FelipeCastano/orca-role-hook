@@ -308,6 +308,50 @@ oc_session_delete() {
   oc_delete_id "$id"
   rm -f "$f"; return 0
 }
+# The pids of this user's OpenCode processes of a role's tab whose ORCA_TERMINAL_HANDLE is <handle>, one per line: its 'opencode mini' and the private
+# 'opencode serve --stdio' child, never the shared 'opencode serve --service' nor any other subcommand. Test hook: ORCA_ROLES_OC_PIDS (a command called with the handle).  oc_pids_of_handle <handle>
+oc_pids_of_handle() {
+  [ -n "${1:-}" ] || return 0
+  [ -n "${ORCA_ROLES_OC_PIDS:-}" ] && { "$ORCA_ROLES_OC_PIDS" "$1"; return 0; }   # test hook
+  local pid env me args; me="$(id -u)"
+  for pid in $(ps -axo pid=,uid=,comm= 2>/dev/null | awk -v u="$me" '$2 == u && $3 ~ /(^|\/)opencode$/ {print $1}'); do
+    args=" $(ps -o args= -p "$pid" 2>/dev/null) "
+    case "$args" in *" --service "*) continue;; esac   # the user's shared OpenCode service: never
+    case "$(printf '%s\n' "$args" | awk '{print $2}')" in
+      mini) ;;
+      serve) case "$args" in *" --stdio "*) ;; *) continue;; esac;;
+      *) continue;;
+    esac
+    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
+    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" && echo "$pid"
+  done
+  return 0
+}
+# Sends a signal to pids, quietly. Test hook: ORCA_ROLES_KILL (a command called with the signal name and the pids).  oc_kill <TERM|KILL> <pid>...
+oc_kill() { local s="$1"; shift; if [ -n "${ORCA_ROLES_KILL:-}" ]; then "$ORCA_ROLES_KILL" "$s" "$@"; else kill -s "$s" "$@" 2>/dev/null; fi; return 0; }
+# Ends the OpenCode processes that still carry the handle of a tab the kit closed, found gone or replaced (closing a tab does not always end them):
+# TERM, then KILL for those still there after ORCA_ROLES_REAP_WAIT seconds (default 5, checked every second). Prints one line when it ended any.  oc_reap <handle> <title>
+oc_reap() {
+  local pids left i=0 w="${ORCA_ROLES_REAP_WAIT:-5}"
+  case "$w" in ''|*[!0-9]*) w=5;; esac
+  pids="$(oc_pids_of_handle "$1" | tr '\n' ' ')"; pids="${pids% }"
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086
+  oc_kill TERM $pids
+  left="$pids"
+  while [ -n "$left" ] && [ "$i" -lt "$w" ]; do sleep 1; i=$((i + 1)); left="$(oc_pids_of_handle "$1" | tr '\n' ' ')"; left="${left% }"; done
+  # shellcheck disable=SC2086
+  [ -z "$left" ] || oc_kill KILL $left
+  echo "$2: ended the OpenCode process left running by its tab ($1, pid $pids)."
+  return 0
+}
+# oc_reap for each non-empty handle, only when the role's agent is opencode in <config>.  oc_reap_role <config> <role> <title> <handle>...
+oc_reap_role() {
+  local cfg="$1" role="$2" title="$3" h; shift 3
+  [ "$(rstr "$cfg" "$role" agent)" = opencode ] || return 0
+  for h in "$@"; do [ -z "$h" ] || oc_reap "$h" "$title"; done
+  return 0
+}
 
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
@@ -1061,10 +1105,10 @@ planner_msg() {
   if [ "$(mode_of --saved "$cfg")" = programmer ] && oracle_enabled "$cfg"; then   # settings.oracle (see README, Optional oracle); off = byte-identical message
     msg="$msg Oracle: every Dev task spec gets a section \`## Acceptance command\` with a fenced block of commands from the allowlist (pytest, ruff, mypy, npm/pnpm/yarn test|lint|build|typecheck, vitest, jest, tsc, eslint, playwright test, make, go test|vet|build, cargo test|check|clippy|build, bash <file>.sh; joined only with &&, no pipes or redirections). Write each Dev spec to a file in your scratchDir first, compute \`shasum -a 256 <file>\`, create the Orca task with a line \`spec-sha256: <hex>\` in its --spec, then rename the file to spec-<task_id>.md and never edit it afterwards (a changed spec is a new task); after each Dev worker_done, before briefing the Tester, run \`$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file> --base <the step's base ref: the previous step's last checkpoint ref, or HEAD for the first step of the set>\`: pass or pass_flaky means go on to the Tester (a non-empty runner_config_changed in its integrity goes into the Tester's brief as state); fail, a cheat, command_not_allowed, env_not_runnable or no_acceptance_command means back to Dev with the oracle's output (a rejected round). If the oracle answers spec_tampered, stop the step and tell the user (a worker changed the spec file). If it reports spec_check unverified, run it once more; still unverified: stop the step and tell the user in one line with its reason. The Tester's VERDICT stays, but the oracle decides whether the step's code is accepted."
   fi
-  # OpenCode workers run with a private OpenCode server in their tab (agent.sh, --standalone): closing the tab ends their turn. What Orca
-  # itself supervises for them is not verified, and dispatch.sh skips its start check for them.
+  # OpenCode workers run with a private OpenCode server in their tab (agent.sh, --standalone): closing the tab ends their turn; Orca's worker-stop does not
+  # (it only marks the dispatch stopped). dispatch.sh skips its start check for them.
   oc=""; for id in $team; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
-  [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): each runs with its own OpenCode server inside its tab, so closing the tab ends its turn; to stop one, run \`$(kit_env)$KIT/bin/close-role.sh <id>\`. Whether Orca's worker-show, worker-stop and worker-abandon act on them is not verified, and dispatch.sh does not check that their tasks started; their worker_done reaches you as usual."
+  [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): each runs with its own OpenCode server inside its tab, so closing the tab ends its turn; to stop one, run \`$(kit_env)$KIT/bin/close-role.sh <id>\`: Orca's worker-stop only marks the dispatch stopped and the turn keeps running. Whether worker-show and worker-abandon act on them is not verified, and dispatch.sh does not check that their tasks started; their worker_done reaches you as usual."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the front role asking in the tab
   if cr="$(coordinator_run "$state")"; then
@@ -1220,9 +1264,9 @@ kit_deny_rules() {
   local k="${KIT#/}" d
   while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done < <(kit_protected_paths)
 }
-# A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
+# A worker's message when its tab was reopened with its previous conversation (after a restart, or after its tab or its agent was lost).  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
-  printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
+  printf '%s' "You are back in a new tab with your previous conversation (your previous tab or its agent was lost, for example in a restart of the computer or of Orca); your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
 }
 # A role's common-rules file: its "common" field (accepts ~, {kit}, {home}) if the file exists (else a warning), else the mode's common-workers.md
 common_of() {

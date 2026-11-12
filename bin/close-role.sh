@@ -50,10 +50,13 @@ for x in "$@"; do
   else
     echo "$t: its tab ($h) was already gone."
   fi
+  oc_reap_role "$CFG" "$id" "$t" "$h"
   TMPS="$(mktemp)"; grep -v "^$v=" "$STATE" > "$TMPS" || true; cat "$TMPS" > "$STATE"; rm -f "$TMPS"
   PTYF="$(dirname "$STATE")/orca-roles.pty"; [ -f "$PTYF" ] && { grep -v "^$v=" "$PTYF" > "$PTYF.tmp" || true; mv "$PTYF.tmp" "$PTYF"; }
   TABSF="$(dirname "$STATE")/orca-roles.tabs"; [ -f "$TABSF" ] && { grep -v "^$v=" "$TABSF" > "$TABSF.tmp" || true; mv "$TABSF.tmp" "$TABSF"; }
   TREESF="$(dirname "$STATE")/orca-roles.trees"; [ -f "$TREESF" ] && { grep -v "^$v=" "$TREESF" > "$TREESF.tmp" || true; mv "$TREESF.tmp" "$TREESF"; }
+  ocj="$(oc_config_file "$id" "$GITDIR")" && rm -f "$ocj"   # the role's OpenCode configuration goes with its tab (agent.sh writes it again at the next start)
+  rm -f "$GITDIR/orca-roles-mcp-$id.json"                    # so does its MCP file
   b="$(instance_base "$CFG" "$id")"
   if [ -n "$b" ]; then
     TMPC="$(mktemp "$CFG.XXXXXX")"

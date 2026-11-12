@@ -105,20 +105,24 @@ SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has c
 # Whether a role's tab is still working: 0 alive, 1 no tab (no handle, or Orca says the handle is stale), 2 the tab exists but its agent
 # is gone (e.g. after Ctrl+C), 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned"),
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
-# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex); for custom agents only the tab counts.
+# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex). An OpenCode role is checked by its 'opencode mini' process instead (Orca sets agentIdentity only after mini's first message); for custom agents only the tab counts.
 # An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
 # A live claude or codex process for the handle counts as alive even when Orca flags the tab orphaned (it also does for tabs it has not
 # bound yet) or shows no agent identity (idle Claude often does); an orphaned one sets ROLE_DETACHED=1 so the caller can say it kept it.
-# The pid of the claude or codex process whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
+# An orphaned OpenCode tab is state 3 even with a live 'opencode mini': roles replaces it with its conversation.
+# The pid of the claude, codex or 'opencode mini' process (not mini's private 'opencode serve' child) whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
 agent_pid_of_handle() {
   [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
-  local pid env
-  for pid in $(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)(claude|codex)$/ {print $1}'); do
+  local pid comm env
+  while read -r pid comm; do
+    case "$comm" in
+      opencode|*/opencode) [ "$(ps -o args= -p "$pid" 2>/dev/null | awk '{print $2}')" = mini ] || continue;;
+    esac
     if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
     printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
     echo "$pid"
     return 0
-  done
+  done < <(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)(claude|codex|opencode)$/ {print $1, $2}')
   return 0
 }
 agent_in()   { local js rc; js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"; rc=$?; printf '%s' "$js" | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; return "$rc"; }
@@ -136,7 +140,16 @@ role_alive() {  # role_alive <role> <handle>
     case "$ag" in claude|codex|"") [ -z "$(agent_pid_of_handle "$2")" ] || { ROLE_DETACHED=1; return 0; };; esac
     return 3
   fi
-  case "$ag" in claude|codex|"") ;; *) return 0;; esac   # opencode: the tab counts; Orca sets agentIdentity only after mini's first message
+  case "$ag" in
+    claude|codex|"") ;;
+    opencode)   # Orca sets agentIdentity only after mini's first message: the tab's 'opencode mini' process decides, checked a few times while it starts
+      local j; for j in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
+        [ -z "$(agent_pid_of_handle "$2")" ] || return 0
+        [ "$j" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
+      done
+      return 2;;
+    *) return 0;;   # custom agents: the tab counts
+  esac
   local i ai; for i in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
     ai="$(agent_in "$2")" || { ROLE_ALIVE_CODE=no-response; return 4; }
     if [ -n "$ai" ]; then
@@ -626,6 +639,7 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
     fi
     while IFS='|' read -r svar srole sopen src shandle srh stitle; do
       [ -n "$svar" ] && [ "$srole" != "$FRONT" ] || continue
+      [ "$(rstr "$CFG" "$srole" agent)" != opencode ] || oc_session_delete "$srole" "$GITDIR"   # closed on purpose: its OpenCode session goes, before its tab closes (as close-role.sh)
       if [ "$sopen" = 1 ]; then
         chs=""; case "$src" in 0|2|3) chs="$shandle";; esac
         [ -z "$srh" ] || [ "$srh" = "$chs" ] || chs="$chs $srh"
@@ -636,7 +650,9 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
             || fail "ERROR: could not close $stitle's tab ($ch); close it by hand and switch again."
         done
       fi
+      oc_reap_role "$CFG" "$srole" "$stitle" "$shandle" "$srh"
       drop_role_lines "$svar"
+      ocj="$(oc_config_file "$srole" "$GITDIR")" && rm -f "$ocj"; rm -f "$GITDIR/orca-roles-mcp-$srole.json"
     done <<EOF2
 $SW_RECORDS
 EOF2
@@ -792,7 +808,15 @@ kickoff_of() {  # kickoff_of <role>: prints the pid of a live kickoff that will 
   done
   return 1
 }
-oc_forget() { [ "$(rstr "$CFG" "$1" agent)" = opencode ] && oc_session_delete "$1" "$GITDIR"; return 0; }   # an OpenCode role replaced without memory: its saved session goes
+# The saved OpenCode session id of a role (line 1 of its session file, written by agent.sh) when it is a valid id: launch.sh reopens the role with it. Empty otherwise.  oc_saved_id <role>
+oc_saved_id() {
+  local f s
+  [ "$(rstr "$CFG" "$1" agent)" = opencode ] || return 0
+  f="$(oc_session_file "$1" "$GITDIR")" && [ -f "$f" ] || return 0
+  s="$(head -1 "$f" 2>/dev/null)"
+  printf '%s\n' "$s" | LC_ALL=C grep -Eqx 'ses_[A-Za-z0-9_-]+' || return 0   # C locale: the ranges are ASCII only (a bracket range in a UTF-8 locale can match accented letters)
+  printf '%s' "$s"
+}
 NEW=""; REUSED=""; RESUMED=""; REMEMBERED=""   # RESUMED: roles reopened without memory (the front role recovers the state); REMEMBERED: reopened with their conversation
 SELF_RELAUNCH=0; SELF_HANDLE=""; PLANNER_KEEP_PTY=""; PLANNER_BUSY=0; SELF_NO_SESSION=0   # the front role's restored tab runs this launch: it is reopened later by its relauncher; its saved ptyId is kept
 FRONT_SELF_REOPEN=0   # this launch runs in the local coordinator's own tab, which must be reopened: it opens nothing; the relauncher runs the launch once this turn ends
@@ -825,15 +849,25 @@ for id in $ROLES; do
     continue
   fi
   if [ "$st" = 3 ]; then
-    RESUMED="$RESUMED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one."
-    oc_forget "$id"
+    sid="$(oc_saved_id "$id")"
+    if [ -n "$sid" ]; then
+      REMEMBERED="$REMEMBERED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one with its conversation ($sid)."
+    else
+      RESUMED="$RESUMED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one."
+    fi
     orca terminal close --terminal "${!v}" --json >/dev/null 2>&1; crc=$?
     [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1; crc=$?; }
     [ "$crc" != 124 ] || close_unconfirmed "${!v}" "$t" || true
+    oc_reap_role "$CFG" "$id" "$t" "${!v}"
   elif [ "$st" = 2 ]; then
-    RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
-    oc_forget "$id"
+    sid="$(oc_saved_id "$id")"
+    if [ -n "$sid" ]; then
+      REMEMBERED="$REMEMBERED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one with its conversation ($sid)."
+    else
+      RESUMED="$RESUMED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one."
+    fi
     orca terminal close --terminal "${!v}" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "${!v}" "$t" || true; }
+    oc_reap_role "$CFG" "$id" "$t" "${!v}"
   elif [ -n "${!v:-}" ]; then
     p="$(saved_pty "$v")"; rh=""; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "$v")")"
     if [ -n "$rh" ]; then
@@ -852,7 +886,7 @@ for id in $ROLES; do
       fi
       case "$(rstr "$CFG" "$id" agent)" in
         claude|"") sid="$(session_of_handle "$rh")";;
-        opencode) ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] && sid="$(head -1 "$ocf")";;   # the id agent.sh saved: --session continues it
+        opencode) sid="$(oc_saved_id "$id")";;   # the id agent.sh saved: --session continues it
       esac
       if [ "$id" = "$FRONT" ] && [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && [ -z "$sid" ]; then
         PLANNER_KEEP_PTY="$p"
@@ -866,14 +900,20 @@ for id in $ROLES; do
       fi
       [ "$id" != "$FRONT" ] || planner_history_add "$GITDIR" "$rh"   # the restored tab joins the history: a Run Orca's own resume bound to it is an old one for kickoff
       orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "$rh" "$t" || true; }
+      oc_reap_role "$CFG" "$id" "$t" "${!v}" "$rh"
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
       else
         RESUMED="$RESUMED $id"; echo "Orca restored the tab of $t after a restart ($rh), but its session could not be read; closing it and opening a new one."
       fi
     else
-      RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
-      oc_forget "$id"
+      sid="$(oc_saved_id "$id")"
+      if [ -n "$sid" ]; then
+        REMEMBERED="$REMEMBERED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one with its conversation ($sid)."
+      else
+        RESUMED="$RESUMED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one."
+      fi
+      oc_reap_role "$CFG" "$id" "$t" "${!v}"
     fi
   fi
   tp=""
@@ -992,7 +1032,7 @@ if [ -z "$NEW" ]; then
   else echo "All roles are already open."; start_relauncher; fi
   exit 0
 fi
-[ -n "$REMEMBERED" ] && echo "Resuming workspace:$REMEMBERED keep their conversation from before the restart."
+[ -n "$REMEMBERED" ] && echo "Resuming workspace:$REMEMBERED keep their conversation."
 [ -n "$RESUMED" ] && echo "Resuming workspace:$RESUMED start without memory; $FL will recover the previous state and give you a summary."
 case " $NEW " in *" $FRONT "*) ;; *) [ "$SELF_RELAUNCH" = 1 ] || [ "$SELF_NO_SESSION" = 1 ] || [ "$PLANNER_BUSY" = 1 ] || [ "${ORCA_TERMINAL_HANDLE:-}" = "${!FRONTV:-}" ] || echo "$FLC kept its tab: it is told the new handles by a message (\"Role handles changed\"); if it does not pick them up, ask it to read its messages.";; esac
 KLOG="$GITDIR/orca-roles-kickoff.log"
