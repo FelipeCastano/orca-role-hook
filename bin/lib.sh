@@ -1220,9 +1220,9 @@ kit_deny_rules() {
   local k="${KIT#/}" d
   while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done < <(kit_protected_paths)
 }
-# A worker's message when its tab was reopened with its previous conversation after a restart.  worker_back_msg <config> <role> <handle>
+# A worker's message when its tab was reopened with its previous conversation (after a restart, or after its tab or its agent was lost).  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
-  printf '%s' "You are back after a restart of the computer or of Orca, with your previous conversation; your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
+  printf '%s' "You are back in a new tab with your previous conversation (your previous tab or its agent was lost, for example in a restart of the computer or of Orca); your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
 }
 # A role's common-rules file: its "common" field (accepts ~, {kit}, {home}) if the file exists (else a warning), else the mode's common-workers.md
 common_of() {
