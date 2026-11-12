@@ -91,7 +91,9 @@ uses_opencode() {
 }
 if command -v opencode >/dev/null 2>&1 && uses_opencode; then
   MLIM="${ORCA_ROLES_METRICS_TIMEOUT:-30}"
-  if bounded_run --quiet "$MLIM" "opencode stats" opencode stats --json --cost --project . > "$OUTF.o" 2>/dev/null < /dev/null && jq -e . "$OUTF.o" >/dev/null 2>&1; then
+  OCS=(opencode stats --json --cost --project .)
+  if [ "$(trust_of "$CFG")" = never ]; then OCS=(env OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode stats --json --cost --project . --standalone); fi
+  if bounded_run --quiet "$MLIM" "opencode stats" "${OCS[@]}" > "$OUTF.o" 2>/dev/null < /dev/null && jq -e . "$OUTF.o" >/dev/null 2>&1; then
     jq -nc --slurpfile raw "$OUTF.o" '{agent: "opencode", role: null, raw: $raw[0]}' >> "$OUTF"
   elif [ "$BOUNDED_TIMED" = 1 ]; then
     echo "metrics.sh: warning: $(bounded_msg "opencode stats" "$MLIM") No OpenCode line." >&2

@@ -229,8 +229,9 @@ git_here() {
   esac
 }
 
-# OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id in the worktree's git dir; the kit
-# deletes that session when the role is closed or replaced (a closed `mini` tab does not stop the turn: it runs in OpenCode's service).
+# OpenCode role sessions. agent.sh starts an OpenCode role with `--session <id>` and saves the id, and the folder it runs in, in the team's git
+# dir; the kit deletes that session when the role is closed or replaced (closing the tab ends a turn of the role's private server; the
+# session stays in OpenCode's store until it is deleted).
 # File with a role's saved session id.  oc_session_file <role> [<git dir>]  (default: the git dir of the current directory)
 oc_session_file() {
   local gd="${2:-}"
@@ -238,12 +239,29 @@ oc_session_file() {
   gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
   printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
 }
+# File with a role's OpenCode configuration (opencode-prepare.sh writes it, agent.sh passes it as OPENCODE_CONFIG).  oc_config_file <role> [<git dir>]
+oc_config_file() {
+  local gd="${2:-}"
+  [ -n "$gd" ] || gd="$(team_git_dir)" || return 1
+  gd="$(cd "$gd" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/orca-roles-opencode-%s.json' "$gd" "$1"
+}
+# Whether the kit's opencode calls must keep the project's own OpenCode configuration and plugins off: settings.trust "never" in
+# $ORCA_ROLES_CONFIG (when it is a file), else in the team's saved configuration. Only a private server honours the switch.  oc_untrusted
+oc_untrusted() {
+  local c="${ORCA_ROLES_CONFIG:-}" gd
+  if [ -z "$c" ] || [ ! -f "$c" ]; then gd="$(team_git_dir)" || return 1; c="$gd/orca-roles.config.json"; [ -f "$c" ] || return 1; fi
+  [ "$(trust_of "$c" 2>/dev/null)" = never ]
+}
 # Runs `opencode <args>` in the current worktree (OpenCode scopes sessions to the directory), stdin closed, output in <file>, cut after
 # <seconds>.  oc_bounded <seconds> <file> <args...>   Sets OC_RC (124 when it was cut); returns 0.
+# Under settings.trust "never" (oc_untrusted) it runs with a private server and OPENCODE_DISABLE_PROJECT_CONFIG=1.
 oc_bounded() {
   local to="$1" out="$2" wt; shift 2
   wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
-  OC_RC=0; bounded_run --quiet --cd "$wt" "$to" opencode opencode "$@" > "$out" 2>&1 < /dev/null || OC_RC=$?
+  OC_RC=0
+  if oc_untrusted; then bounded_run --quiet --cd "$wt" "$to" opencode env OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode "$@" --standalone > "$out" 2>&1 < /dev/null || OC_RC=$?
+  else bounded_run --quiet --cd "$wt" "$to" opencode opencode "$@" > "$out" 2>&1 < /dev/null || OC_RC=$?; fi
   return 0
 }
 # Best-effort delete of one OpenCode session of this worktree (it interrupts a running turn).  oc_delete_id <id>
@@ -259,14 +277,15 @@ oc_delete_id() {
   elif [ "$OC_RC" != 0 ]; then echo "Could not delete OpenCode session $1: opencode exited with $OC_RC."; fi
   rm -f "$tmp"; return 0
 }
-# After /new in an OpenCode tab: saves the newest session of this worktree created since <ms epoch> as the role's session and deletes the
+# After /new in an OpenCode tab: saves the newest session of the role's folder (line 2 of its session file, else this worktree) created since <ms epoch> as the role's session and deletes the
 # old one; with none found it says so and deletes the old one anyway.  oc_retrack <role> <since ms> [<git dir>]
 oc_retrack() {
-  local f old new tmp wt
+  local f old new tmp wt dir
   f="$(oc_session_file "$1" "${3:-}")" || return 0
   [ -f "$f" ] || return 0
-  old="$(head -1 "$f" 2>/dev/null)"; new=""
-  wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"
+  old="$(head -1 "$f" 2>/dev/null)"; new=""; dir="$(sed -n 2p "$f" 2>/dev/null)"
+  if [ -n "$dir" ]; then wt="$dir"
+  else wt="$(git_here toplevel)" && wt="$(cd "$wt" 2>/dev/null && pwd -P)" || wt="$(pwd -P)"; fi
   if command -v opencode >/dev/null 2>&1 && tmp="$(mktemp)"; then
     oc_bounded 20 "$tmp" session list --format json
     [ "$OC_RC" != 0 ] || new="$(jq -r --arg d "$wt" --argjson s "$2" '[.[]? | select(.directory == $d and (.created // 0) >= $s)] | sort_by(.created) | reverse | .[0].id // empty' "$tmp" 2>/dev/null)"
@@ -277,7 +296,7 @@ oc_retrack() {
     oc_session_delete "$1" "${3:-}"; return 0
   fi
   [ "$new" != "$old" ] || return 0
-  printf '%s\n' "$new" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+  { printf '%s\n' "$new"; [ -z "$dir" ] || printf '%s\n' "$dir"; } > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
   oc_delete_id "$old"; return 0
 }
 # Deletes the session saved for a role and forgets the file.  oc_session_delete <role> [<git dir>]
@@ -396,11 +415,11 @@ open_of() {
     *) printf start;;
   esac
 }
-# max_instances <config> <id>: the role's effective maxInstances (1 unless its open is per-task or per-batch and its agent claude or codex)
+# max_instances <config> <id>: the role's effective maxInstances (1 unless its open is per-task or per-batch and its agent claude, codex or opencode)
 max_instances() {
   jq -r --arg r "$2" '.roles[$r] as $x | if ($x | type) != "object" or ($x | has("instanceOf")) or (($x.maxInstances? // null) | type) != "number" or $x.maxInstances != ($x.maxInstances | floor) then 1
     else (($x.open // .defaults.open // "start") as $o | ($x.agent // .defaults.agent // "claude") as $a
-      | if ($o | IN("per-task", "per-batch")) and ($a | IN("claude", "codex")) then $x.maxInstances else 1 end) end' "$1" 2>/dev/null || echo 1
+      | if ($o | IN("per-task", "per-batch")) and ($a | IN("claude", "codex", "opencode")) then $x.maxInstances else 1 end) end' "$1" 2>/dev/null || echo 1
 }
 # The role an instance belongs to (nothing for a role).  instance_base <config> <id>
 instance_base() { jq -r --arg i "$2" '.roles[$i].instanceOf // empty' "$1" 2>/dev/null; }
@@ -1042,10 +1061,10 @@ planner_msg() {
   if [ "$(mode_of --saved "$cfg")" = programmer ] && oracle_enabled "$cfg"; then   # settings.oracle (see README, Optional oracle); off = byte-identical message
     msg="$msg Oracle: every Dev task spec gets a section \`## Acceptance command\` with a fenced block of commands from the allowlist (pytest, ruff, mypy, npm/pnpm/yarn test|lint|build|typecheck, vitest, jest, tsc, eslint, playwright test, make, go test|vet|build, cargo test|check|clippy|build, bash <file>.sh; joined only with &&, no pipes or redirections). Write each Dev spec to a file in your scratchDir first, compute \`shasum -a 256 <file>\`, create the Orca task with a line \`spec-sha256: <hex>\` in its --spec, then rename the file to spec-<task_id>.md and never edit it afterwards (a changed spec is a new task); after each Dev worker_done, before briefing the Tester, run \`$(kit_env)$KIT/bin/oracle.sh --task <task_id> --spec-file <that file> --base <the step's base ref: the previous step's last checkpoint ref, or HEAD for the first step of the set>\`: pass or pass_flaky means go on to the Tester (a non-empty runner_config_changed in its integrity goes into the Tester's brief as state); fail, a cheat, command_not_allowed, env_not_runnable or no_acceptance_command means back to Dev with the oracle's output (a rejected round). If the oracle answers spec_tampered, stop the step and tell the user (a worker changed the spec file). If it reports spec_check unverified, run it once more; still unverified: stop the step and tell the user in one line with its reason. The Tester's VERDICT stays, but the oracle decides whether the step's code is accepted."
   fi
-  # Orca's worker-start --terminal never sees an `opencode mini` tab as ready (its agent_readiness stage times out, seen with Orca 1.4.218):
-  # those roles get their tasks through dispatch --inject, which Orca documents for processes an operator started
+  # OpenCode workers run with a private OpenCode server in their tab (agent.sh, --standalone): closing the tab ends their turn. What Orca
+  # itself supervises for them is not verified, and dispatch.sh skips its start check for them.
   oc=""; for id in $team; do [ "$(rstr "$cfg" "$id" agent)" = opencode ] && oc="${oc:+$oc, }$(title_of "$cfg" "$id")"; done
-  [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): Orca's worker-start --terminal times out on their tabs, so dispatch their tasks with \`orca orchestration dispatch --task <task_id> --to <handle> --inject --json\` instead (create the task first, as for worker-start). They are unsupervised for Orca: worker-show, worker-stop and worker-abandon do not apply to them; their worker_done reaches you as usual."
+  [ -n "$oc" ] && msg="$msg OpenCode workers ($oc): each runs with its own OpenCode server inside its tab, so closing the tab ends its turn; to stop one, run \`$(kit_env)$KIT/bin/close-role.sh <id>\`. Whether Orca's worker-show, worker-stop and worker-abandon act on them is not verified, and dispatch.sh does not check that their tasks started; their worker_done reaches you as usual."
   [ -n "$key" ] && msg="$msg This worktree is linked to the Jira ticket $key${url:+ ($url)}: read it with Jira and use it as the starting point for planning."
   # a coordinator reads its Run's mailbox, never this tab: without this a task it typed here leaves the front role asking in the tab
   if cr="$(coordinator_run "$state")"; then
@@ -1161,6 +1180,8 @@ link_ignored_entries() {
   local top="$1" dest="$2" p parent
   while IFS= read -r p; do
     p="${p%/}"; [ -n "$p" ] || continue
+    # .opencode (OpenCode's per-checkout agents, plugins and their dependencies, and an older kit's agent files) is never linked: OpenCode in the tree would load or write the worktree's
+    case "/$p/" in */.opencode/*) continue;; esac
     case "/$p" in */__pycache__|*/.pytest_cache|*/.mypy_cache|*/.ruff_cache|*/.DS_Store|*/dist|*/build|*/out|*/coverage|*/htmlcov|*/target|*/.tox|*/.nox|*/.nyc_output|*/.next|*/.nuxt|*/.svelte-kit|*/.turbo|*/.parcel-cache|*/.gradle|*/.eggs) continue;; esac
     parent="$(dirname "$p")"
     [ -d "$dest/$parent" ] && [ ! -e "$dest/$p" ] && [ ! -L "$dest/$p" ] || continue
@@ -1299,6 +1320,16 @@ codex_mcp_overrides() {
       (if .command and .args then "mcp_servers.\($n).args=\(.args | @json)" else empty end),
       (if .url then "mcp_servers.\($n).url=\(.url | @json)" else empty end),
       (if .env then "mcp_servers.\($n).env={" + ([.env | to_entries[] | "\(.key) = \(.value | @json)"] | join(", ")) + "}" else empty end)' "$1"
+}
+# The same servers in OpenCode's format, as one JSON object {"<name>": {...}} for its "mcp": {"servers": ...}: a server with a url is
+# {"type": "remote", "url", "headers"?}, one with a command {"type": "local", "command": [command, args...], "environment"?}; any other is
+# left out (as codex_mcp_overrides does).  opencode_mcp_servers <mcp file>
+opencode_mcp_servers() {
+  jq -c '(.mcpServers // {}) | with_entries(.value |= (
+      if (.url | type) == "string" then {type: "remote", url: .url} + (if (.headers | type) == "object" then {headers: .headers} else {} end)
+      elif (.command | type) == "string" then {type: "local", command: ([.command] + (if (.args | type) == "array" then .args | map(tostring) else [] end))}
+        + (if (.env | type) == "object" then {environment: .env} else {} end)
+      else null end)) | with_entries(select(.value != null))' "$1"
 }
 # Project name: the main repo's folder (not the worktree's); if it is not a repo, the given folder.  project_name <folder>
 project_name() {

@@ -5,7 +5,7 @@
 # opencode's). The role's own model comes first.
 # With --check it runs one minimal probe per candidate, in parallel, and prints "<model><TAB>ok<TAB><resolved id>",
 # "<model><TAB>unavailable" or "<model><TAB>unknown<TAB><reason>" (the probe could not tell: not logged in, offline, timed out...).
-# An opencode probe (no models.probe) only checks that the model is in `opencode models`: it costs nothing.
+# An opencode probe (no models.probe) checks that the model is in `opencode models`; for the role's own model, or the model given with --model, it then sends one minimal request ("Reply with the single word ok.") with a private OpenCode server and deletes the session it created: one small request per check, never one per listed model.
 # A claude probe costs nothing for a model that does not exist and at most about 0.012 USD the first time for one that does.
 # --model <m> replaces the candidates with exactly <m>, to test or print only that one.
 # Nothing is written outside a temporary folder except the agents' own logs (Codex keeps its logs even for ephemeral runs), and no agent
@@ -53,7 +53,7 @@ case "$AGENT" in claude|codex|opencode|custom) ;; *) echo "Unknown agent for $RO
   custom|opencode)
     emit "$MODEL"
     LIST="$(mopt list)"; PARSE="$(mopt parse)"; PARSE="${PARSE:-lines}"
-    [ -n "$LIST" ] || [ "$AGENT" != opencode ] || LIST="opencode models"   # one provider/model per line
+    [ -n "$LIST" ] || [ "$AGENT" != opencode ] || { LIST="opencode models"; [ "$(trust_of "$CFG")" != never ] || LIST="env OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode models --standalone"; }   # one provider/model per line
     if [ -z "$LIST" ]; then echo "$ROLE has no models.list in its configuration" >&2
     elif bounded list bash -c "$LIST"; [ "$TIMED" = 1 ]; then bounded_msg models.list "$TO" >&2
     elif [ "$RC" != 0 ]; then echo "models.list failed: $(first_line < "$T/list.err")" >&2
@@ -83,19 +83,34 @@ codex_why() {
   printf '%s\n' "$w" | first_line
 }
 probe_codex() { codex exec --ephemeral --json --skip-git-repo-check -m "$1" "Reply ok."; }
-# opencode: the role's models.probe if it has one, else the model is in `opencode models` (exit 97: the list itself could not be read)
+# opencode: the role's models.probe if it has one; else the model must be in `opencode models` (exit 97: the list could not be read; 1: not
+# listed). When one() sets OC_REQ=1 (the role's own model, or the model given with --model) it then sends one minimal request with a private
+# server (--standalone: a probe killed by its timeout stops its turn) as the session OC_SID (exit 98: the request failed or did not answer ok).
+# one() deletes that session afterwards, also after a timeout.
 probe_opencode() {
-  local l
+  local l out rc=0
   if [ -n "$PROBE" ]; then probe_custom "$1"; return; fi
   l="$(opencode models 2>/dev/null)" || return 97
-  grep -qxF -- "${1%%#*}" <<<"$l"  # a variant suffix (provider/model#variant) is not part of the listed name
+  grep -qxF -- "${1%%#*}" <<<"$l" || return 1   # a variant suffix (provider/model#variant) is not part of the listed name
+  [ "${OC_REQ:-0}" = 1 ] || return 0
+  out="$(opencode run --standalone --model "$1" --session "$OC_SID" "Reply with the single word ok." < /dev/null)" || rc=$?
+  printf '%s\n' "$out"                           # the reply goes to the probe's output, as for the other agents
+  [ "$rc" = 0 ] || return 98
+  grep -qiw ok <<<"$out" || return 98
 }
 probe_custom() { bash -c "${PROBE//\{model\}/$(printf '%q' "$1")}"; }
 one() {  # <i> <model> → writes $T/<i>.res
   local i="$1" m="$2" why res
   mkdir -p "$T/wd.$i"; cd "$T/wd.$i" || return
   if [ "$AGENT" = custom ] && [ -z "$PROBE" ]; then printf '%s\tunknown\tno models.probe\n' "$m" > "$T/$i.res"; return; fi
+  # opencode without models.probe: a real request only for the role's own model or the one given with --model (OC_REQ), as a session id
+  # of its own (the index keeps it unique: $RANDOM repeats across these subshells in bash 3.2)
+  OC_REQ=0; OC_SID=""
+  if [ "$AGENT" = opencode ] && [ -z "$PROBE" ] && { [ -n "$ONLY" ] || [ "$m" = "$MODEL" ]; }; then
+    OC_REQ=1; OC_SID="ses_orca_check_$(date +%s)$$${RANDOM}$i"
+  fi
   bounded "$i" "probe_$AGENT" "$m"
+  [ -z "$OC_SID" ] || oc_delete_id "$OC_SID" >/dev/null   # also after a timeout (the probe was killed before it could)
   if [ "$TIMED" = 1 ]; then res="unknown	timed out"
   else case "$AGENT" in
     claude)
@@ -112,8 +127,13 @@ one() {  # <i> <model> → writes $T/<i>.res
       else why="$(codex_why "$i")"; [ -n "$why" ] || why="exit $RC"; res="unknown	${why:0:80}"; fi;;
     custom) if [ "$RC" = 0 ]; then res="ok	-"; else res="unavailable"; fi;;
     opencode)
-      if [ "$RC" = 0 ]; then res="ok	-"
+      if [ "$RC" = 0 ] && [ "$OC_REQ" = 1 ]; then res="ok	-"
+      elif [ "$RC" = 0 ] && [ -z "$PROBE" ]; then res="ok	listed (no request)"
+      elif [ "$RC" = 0 ]; then res="ok	-"
       elif [ "$RC" = 97 ] && [ -z "$PROBE" ]; then res="unknown	opencode models failed"
+      elif [ "$RC" = 98 ] && [ -z "$PROBE" ]; then
+        why="$(grep -m1 -v '^[[:space:]]*$' "$T/$i.err" | first_line)"; [ -n "$why" ] || why="$(grep -m1 -v '^[[:space:]]*$' "$T/$i.out" | first_line)"
+        [ -n "$why" ] || why="no answer ok"; res="unknown	request failed: ${why:0:70}"
       else res="unavailable"; fi;;
   esac; fi
   printf '%s\t%s\n' "$m" "$res" > "$T/$i.res"

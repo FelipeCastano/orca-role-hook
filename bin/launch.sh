@@ -394,7 +394,7 @@ if [ -n "$ADD_REQ" ]; then
     raw="$(jq -r --arg r "$r" '.roles[$r].maxInstances // 1' "$NEWCFG" 2>/dev/null)"
     if [ "${raw:-1}" -gt 1 ] 2>/dev/null && [ "$max" = 1 ]; then
       ao="$(jq -r --arg r "$r" '.roles[$r].open // .defaults.open // "start"' "$NEWCFG")"; aa="$(jq -r --arg r "$r" '.roles[$r].agent // .defaults.agent // "claude"' "$NEWCFG")"
-      refuse "$AT: it cannot have instances: its open is \"$ao\" and its agent is \"$aa\" (instances need open \"per-task\" or \"per-batch\" and agent \"claude\" or \"codex\"); no instance was opened."
+      refuse "$AT: it cannot have instances: its open is \"$ao\" and its agent is \"$aa\" (instances need open \"per-task\" or \"per-batch\" and agent \"claude\", \"codex\" or \"opencode\"); no instance was opened."
     fi
     refuse "$AT: it has $k tab(s) open and its maxInstances is $max; no instance was opened."
   fi
@@ -414,11 +414,13 @@ if [ -n "$ADD_REQ" ]; then
     else
       echo "Note: the load check was skipped: the load or the number of cores could not be read on this system."
     fi
+    need="$mm"; oc=""
+    if [ "$(rstr "$NEWCFG" "$r" agent)" = opencode ]; then need="$(awk -v m="$mm" 'BEGIN { print m + 500 }')"; oc=" plus 500 MB for its private OpenCode server"; fi
     if awk -v m="$mm" 'BEGIN { exit !(m > 0) }'; then
       case "${hmem:--}" in
         ''|*[!0-9]*) echo "Note: the memory check was skipped: the available memory could not be read on this system.";;
-        *) if awk -v a="$hmem" -v m="$mm" 'BEGIN { exit !(a < m) }'; then
-             refuse "$AT: $hmem MB of memory available, under settings.scaling.minFreeMemoryMB $mm; no instance was opened."
+        *) if awk -v a="$hmem" -v m="$need" 'BEGIN { exit !(a < m) }'; then
+             refuse "$AT: $hmem MB of memory available, under settings.scaling.minFreeMemoryMB $mm$oc; no instance was opened."
            fi;;
       esac
     fi

@@ -1000,7 +1000,7 @@ UC() { printf '%s' "$1" > "$TMP/uc.json"; upgrade_config "$D" "$TMP/uc.json" > "
 UCO='[.roles.researcher.open, .roles.dev.open, .roles.tester.open, .roles["e2e-tester"].open, .roles.deployer.open]'
 UCN() { UC "$1" '[.roles.researcher, .roles.dev, .roles.tester, .roles["e2e-tester"] | has("open")]'; }
 UCB() { printf '%s' "$1" > "$TMP/uc.json"; upgrade_config "$D" "$TMP/uc.json" > "$TMP/uc-out.json"; ( pk_setup; cp "$TMP/uc-out.json" "$PK/config.json"; printf '%s' '{"id":"ucb","description":"d","prompt":"# x\n## Report\n"}' > "$TMP/uc-role.json"; cd "$TMP" && HOME="$PH" "$PKL/bin/new-role.sh" --from-json "$TMP/uc-role.json" > /dev/null 2>&1; printf "%s" "$?" ); printf ':%s:%s' "$(check_config "$TMP/uc-out.json" | wc -l | tr -d ' ')" "$(max_instances "$TMP/uc-out.json" researcher)"; }
-check "upgrade_config: no defaults.open takes the kit's open for researcher and dev, a user's own first-use on a kit role moves to the kit's open (dev) or is dropped (deployer), a team-wide defaults.open of the user's gives dev, tester, e2e-tester and researcher no open of their own, a user's own role-level open stays (also first-use with defaults.open present), and an upgraded config with a team-wide start or an opencode researcher passes check_config and takes a new role" "$(UC '{}' "$UCO"):$(UC '{"roles":{"dev":{"open":"first-use"},"deployer":{"open":"first-use"}}}' '[.roles.dev.open, (.roles.deployer | has("open"))]'):$(UCN '{"defaults":{"open":"start"}}'):$(UC '{"defaults":{"open":"first-use"},"roles":{"dev":{"open":"start"}}}' '[.roles.dev.open, .roles.tester.open]'):$(UC '{"defaults":{"open":"start"},"roles":{"dev":{"open":"first-use"},"tester":{"open":"per-task"}}}' '[.roles.dev.open, .roles.tester.open, (.roles["e2e-tester"] | has("open"))]'):$(UCB '{"defaults":{"open":"start"}}'):$(UCB '{"roles":{"researcher":{"agent":"opencode"}}}')" '["per-task","per-batch","per-batch","per-batch",null]:["per-batch",false]:[false,false,false,false]:["start","per-batch"]:["first-use","per-task",false]:0:0:1:0:0:1'
+check "upgrade_config: no defaults.open takes the kit's open for researcher and dev, a user's own first-use on a kit role moves to the kit's open (dev) or is dropped (deployer), a team-wide defaults.open of the user's gives dev, tester, e2e-tester and researcher no open of their own, a user's own role-level open stays (also first-use with defaults.open present), and an upgraded config with a team-wide start or an opencode researcher passes check_config and takes a new role" "$(UC '{}' "$UCO"):$(UC '{"roles":{"dev":{"open":"first-use"},"deployer":{"open":"first-use"}}}' '[.roles.dev.open, (.roles.deployer | has("open"))]'):$(UCN '{"defaults":{"open":"start"}}'):$(UC '{"defaults":{"open":"first-use"},"roles":{"dev":{"open":"start"}}}' '[.roles.dev.open, .roles.tester.open]'):$(UC '{"defaults":{"open":"start"},"roles":{"dev":{"open":"first-use"},"tester":{"open":"per-task"}}}' '[.roles.dev.open, .roles.tester.open, (.roles["e2e-tester"] | has("open"))]'):$(UCB '{"defaults":{"open":"start"}}'):$(UCB '{"roles":{"researcher":{"agent":"opencode"}}}')" '["per-task","per-batch","per-batch","per-batch",null]:["per-batch",false]:[false,false,false,false]:["start","per-batch"]:["first-use","per-task",false]:0:0:1:0:0:3'
 # settings.artifacts: an object with only plans, designs, research, deployment, each a non-empty relative path inside the worktree (no absolute, no ~, no '..' segment)
 ARV() { jq -c --argjson a "$1" '.settings.artifacts = $a' "$ROOT/config.default.json" > "$TMP/ar.json"; check_config "$TMP/ar.json" | grep -c 'settings.artifacts' || true; }
 AR1=""; for v in '{}' '{"plans":"docs/plans"}' '{"plans":"a","designs":"b/c","research":"d","deployment":"./e"}' '{"plans":"a..b/c"}' '{"plans":".hidden"}' '{"plans":"a/b/"}' '{"plans":"docs/superpowers/plans"}' '{"plans":"plans/"}' '{"plans":"docs/.gitkeep"}' '{"plans":"my.git/x"}' '{"plans":".github/plans"}' '{"plans":"a/./b"}' '{"plans":".gitx"}'; do AR1="$AR1$(ARV "$v")"; done
@@ -1054,7 +1054,7 @@ check "open_of: per-batch is per-batch in programmer, quick and academic-researc
 MIC="$TMP/mic.json"; mie() { jq -c "$1" "$ROOT/config.default.json" > "$MIC"; check_config "$MIC" | grep -c 'maxInstances' || true; }; mim() { jq -c "$1" "$ROOT/config.default.json" > "$MIC"; max_instances "$MIC" "$2"; }
 MIP="$(mie .):$(mim . researcher):$(mim '.roles.dev.maxInstances = 2' dev):$(mim '.roles.dev.maxInstances = 1' dev):$(mim '.roles.dev.maxInstances = null' dev):$(mim 'del(.roles.researcher.open) | .defaults.open = "start"' researcher):$(mim '.roles.researcher.open = "first-use"' researcher):$(mim '.roles.researcher.open = "hidden"' researcher):$(mim '.roles.researcher.agent = "opencode"' researcher):$(mim '.roles.deployer.maxInstances = 2' deployer):$(mim '.roles.researcher.agent = "codex" | .roles.researcher.maxInstances = 2' researcher):$(mim '.roles.nosuch = 1' nosuch)"
 MIE="$(for v in 0 -1 1.5 '"2"' true; do mie ".roles.dev.maxInstances = $v"; done | tr '\n' ,)$(for r in planner plan-reviewer code-reviewer local-coordinator; do mie ".roles[\"$r\"].maxInstances = 2"; done | tr '\n' ,)$(mie '.roles.planner.maxInstances = 1'),$(mie '.roles.dev.maxInstances = 2'),$(mie '.roles.deployer.maxInstances = 2'),$(mie '.roles.researcher.open = "start" | .roles.researcher.maxInstances = 3')"
-check "check_config and max_instances: maxInstances is an integer of 1 or more (0, -1, 1.5, a string and true are errors; 2 or more only on the roles that run instances), max_instances is the value only for a per-task or per-batch role on claude or codex and 1 otherwise (start, first-use, hidden, opencode, inherited start, an absent role)" "$MIP|$MIE" "0:3:2:1:1:1:1:1:1:1:2:1|1,1,1,1,1,1,1,1,1,0,0,0,0"
+check "check_config and max_instances: maxInstances is an integer of 1 or more (0, -1, 1.5, a string and true are errors; 2 or more only on the roles that run instances), max_instances is the value only for a per-task or per-batch role on claude, codex or opencode and 1 otherwise (start, first-use, hidden, inherited start, an absent role)" "$MIP|$MIE" "0:3:2:1:1:1:1:1:3:1:2:1|1,1,1,1,1,1,1,1,1,0,0,0,0"
 SCE() { jq -c ".settings.scaling = $1" "$ROOT/config.default.json" > "$MIC"; check_config "$MIC" | grep -c 'settings.scaling' || true; }
 SCP="$(SCE '{"maxExtraInstances":4,"maxLoad":0.8,"minFreeMemoryMB":2048}'),$(SCE '{"maxExtraInstances":0}'),$(SCE '{"minFreeMemoryMB":0}'),$(SCE '{}'),$(SCE '{"maxLoad":0.01}'),$(SCE '{"maxLoad":2}')"
 SCF="$(for v in 3 '"x"' '[]' '{"maxExtraInstances":-1}' '{"maxExtraInstances":1.5}' '{"maxExtraInstances":"2"}' '{"maxLoad":0}' '{"maxLoad":-0.5}' '{"maxLoad":"0.8"}' '{"minFreeMemoryMB":100.5}' '{"minFreeMemoryMB":-1}' '{"maxTabs":2}'; do SCE "$v"; done | tr '\n' ,)"
@@ -1114,11 +1114,11 @@ LZ2="$(planner_msg "$TMP/lz2.json" "planner dev deployer cross-dev" "$TMP/state-
 jq '.roles.researcher = {title: "Researcher", description: "does research", maxInstances: 3, open: "per-task"} | .roles["researcher-2"] = {title: "Researcher 2", description: "does research", instanceOf: "researcher", open: "per-task"}' "$TMP/lz0.json" > "$TMP/lz4.json"; printf 'PLANNER=t1\nDEV=t2\nDEPLOYER=t3\nCROSS_DEV=t4\nRESEARCHER=t5\nRESEARCHER_2=t6\n' > "$TMP/state-lz4.env"
 LZ4="$(planner_msg "$TMP/lz4.json" "planner dev deployer cross-dev researcher researcher-2" "$TMP/state-lz4.env" "" "" 0 2>/dev/null)"; LZ4H="$(printf '%s' "$LZ4" | sed 's/Active roles in this workspace: [^.]*\.//; s/ Handles: [^.]*\.//')"
 check "planner_msg: first-use, per-task (also while open) and per-batch roles in their sentences, the instances sentence for a per-task role with maxInstances above 1 and none when its open is start, cross-check sentence with a first-use cross-dev, byte-identical with every role at start, and an instance named in none of those lists or in the descriptions (its role is named once in the instances sentence) while the Handles list has it" "$(apc "$LZ1" 'Roles opened per batch (see "The team" in your prompt): Tester (tester).'):$(apc "$LZ1" 'Roles that can run several instances at once (see "The team" in your prompt): Deployer (deployer, up to 2).'):$(apc "$LZ2" 'several instances'):$(apc "$LZ1" 'Roles opened on first use, not open yet (see "The team" in your prompt): Dev (dev), Cross-Dev (cross-dev).'):$(apc "$LZ1" 'Roles opened per task (see "The team" in your prompt): Deployer (deployer).'):$(apc "$LZ3" 'Roles opened per task (see "The team" in your prompt): Deployer (deployer).'):$(apc "$LZ1" 'the cross-check is on: follow your section "Cross-check" with Cross-Dev.'):$([ "$(planner_msg "$TMP/lz2.json" "planner dev deployer cross-dev" "$TMP/state-lz.env" "" "" 0 2>/dev/null)" = "$(planner_msg "$TMP/lz0.json" "planner dev deployer cross-dev" "$TMP/state-lz.env" "" "" 0 2>/dev/null)" ] && echo same):$(apc "$LZ4" 'Researcher 2=t6'):$(apc "$LZ4" 'Researcher (researcher, up to 3)'):$(apc "$LZ4H" 'Researcher 2'):$(apc "$LZ4H" 'researcher-2')" "1:1:0:1:1:1:1:same:1:1:0:0"
-# OpenCode workers: the Planner is told to dispatch them with --inject (Orca's worker-start --terminal times out on an opencode mini tab)
+# OpenCode workers: the coordinator is told how to stop them (close-role.sh) and that Orca's supervision of them is not verified; no --inject
 jq '.roles.dev.agent = "opencode"' "$KIT/config.json" > "$TMP/oc-pm.json"
 MO="$(planner_msg "$TMP/oc-pm.json" "planner dev sec" "$TMP/state.env" "" "" 0)"
-check "planner_msg: an opencode worker -> one --inject sentence naming only it" "$(printf '%s' "$MO" | grep -o 'OpenCode workers ([^)]*)' ) $(printf '%s' "$MO" | grep -c 'orca orchestration dispatch --task <task_id> --to <handle> --inject --json')" "OpenCode workers (Dev) 1"
-check "planner_msg: no opencode worker -> no --inject sentence" "$(printf '%s' "$M1" | grep -c 'inject')" "0"
+check "planner_msg: an opencode worker -> one supervision sentence naming only it" "$(printf '%s' "$MO" | grep -o 'OpenCode workers ([^)]*)') $(printf '%s' "$MO" | grep -c 'bin/close-role.sh <id>') $(printf '%s' "$MO" | grep -c -- '--inject' || true)" "OpenCode workers (Dev) 1 0"
+check "planner_msg: no opencode worker -> no OpenCode sentence" "$(printf '%s' "$M1" | grep -c 'OpenCode workers' || true)" "0"
 # A coordinator's marker for this worktree (prompts/coordinator.md): the fresh Planner waits for its dispatch; other worktrees' markers and the resume modes change nothing
 CW="$TMP/cw"; rm -rf "$CW"; mkdir -p "$CW"; git -C "$CW" init -q; mkdir -p "$CW/.git/orca-roles.coordinated"
 cpm() { (cd "$CW" && planner_msg "$KIT/config.json" "planner dev" "$TMP/state.env" "" "" "$1"); }
@@ -1828,6 +1828,19 @@ check "mcp_file filters by name" "$(mcp_file "$C" cx | jq -c '.mcpServers | keys
 check "mcp_file empty" "$(mcp_file "$C" cua | jq -c .)" '{"mcpServers":{}}'
 mcp_file "$C" cx > "$TMP/mcp.json"
 check "codex overrides" "$(codex_mcp_overrides "$TMP/mcp.json" | tr '\n' '|')" 'mcp_servers.ctx.url="http://ctx"|mcp_servers.pw.command="npx"|mcp_servers.pw.args=["-y","@playwright/mcp@latest"]|mcp_servers.pw.env={A = "1"}|'
+cat > "$TMP/mcp-oc.json" <<'J'
+{ "mcpServers": {
+    "r1": { "type": "http", "url": "https://h/x", "headers": { "A": "b" } },
+    "r2": { "url": "https://h/y" },
+    "r3": { "url": "https://h/z", "headers": "no" },
+    "l1": { "command": "x", "args": [1, "y"], "env": { "K": "V" } },
+    "l2": { "command": "x" },
+    "l3": { "command": "x", "args": "nope", "env": ["no"] },
+    "n1": { "type": "http" },
+    "b1": { "url": "https://h/b", "command": "x", "args": ["a"], "env": { "K": "V" } },
+    "u1": { "url": 5, "command": "x" } } }
+J
+check "opencode_mcp_servers: remote with and without headers, local with args, env, without args, non-array args, both, neither" "$(opencode_mcp_servers "$TMP/mcp-oc.json")" '{"r1":{"type":"remote","url":"https://h/x","headers":{"A":"b"}},"r2":{"type":"remote","url":"https://h/y"},"r3":{"type":"remote","url":"https://h/z"},"l1":{"type":"local","command":["x","1","y"],"environment":{"K":"V"}},"l2":{"type":"local","command":["x"]},"l3":{"type":"local","command":["x"]},"b1":{"type":"remote","url":"https://h/b"},"u1":{"type":"local","command":["x"]}}'
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/codex"
 cp "$TMP/fakebin/codex" "$TMP/fakebin/claude"
 fake_bash
@@ -3190,7 +3203,7 @@ check "launch --add: the instance opens as Researcher 2 (claude) running agent.s
 lareset; try lal; try lal --add researcher; try lal --add researcher; try lal --add researcher; C0="$RC"; S0="$(lasum)"; N0="$(lacre)"; : > "$LA/hook.calls"
 try lal --add researcher; C1="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Researcher: it has 3 tab(s) open and its maxInstances is 3; no instance was opened\.' || true)"
 try lal --add dev; C2="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Dev: it has 1 tab(s) open and its maxInstances is 1; no instance was opened\.' || true)"
-try lal --add scout; C3="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Scout: it cannot have instances: its open is "start" and its agent is "claude" (instances need open "per-task" or "per-batch" and agent "claude" or "codex"); no instance was opened\.' || true)"
+try lal --add scout; C3="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Scout: it cannot have instances: its open is "start" and its agent is "claude" (instances need open "per-task" or "per-batch" and agent "claude", "codex" or "opencode"); no instance was opened\.' || true)"
 CS="$([ "$(lasum)" = "$S0" ] && echo same):$([ "$(lacre)" = "$N0" ] && echo same)"
 cp "$KIT/config.json" "$LA/cfg.keep"; jq '.settings.scaling.maxExtraInstances = 1' "$LA/cfg.keep" > "$KIT/config.json"; lagive RESEARCHER_3; S2="$(lasum)"; N2="$(lacre)"
 try lal --add researcher; C4="$RC:$(printf '%s\n' "$OUT" | grep -cx 'REFUSED: Researcher: 1 extra instance(s) are open in this worktree and settings.scaling.maxExtraInstances is 1; no instance was opened\.' || true):$([ "$(lasum)" = "$S2" ] && echo same):$([ "$(lacre)" = "$N2" ] && echo same)"
@@ -3210,6 +3223,10 @@ hw '- - -'; W8="$HWR"; W8N="$(printf '%s\n' "$OUT" | grep -cxF -e 'Note: the loa
 hw '- 8 9000'; W9="$HWR"; W9N="$(printf '%s\n' "$OUT" | grep -c '^Note: the load check was skipped' || true):$(printf '%s\n' "$OUT" | grep -c '^Note: the memory check' || true)"
 hw '1.00 8 -'; W10="$HWR"; W10N="$(printf '%s\n' "$OUT" | grep -c '^Note: the memory check was skipped' || true)"
 check "launch --add: the hardware check refuses at load >= maxLoad x cores (6.39 opens, 6.40 and 7.20 refuse) and under minFreeMemoryMB (2048 opens, 2047 refuses; 0 disables it), with the exact lines, nothing changed on a refusal, the load first; unreadable values print a Note and never refuse" "$W1|$W2:$W2L|$W3:$W3L|$W4|$W5:$W5L|$W6:$W6L|$W7:$W7N|$W8:$W8N|$W9:$W9N|$W10:$W10N" "0:1:changed|3:0:same:1|3:0:same:1|0:1:changed|3:0:same:1|3:0:same:0|0:1:changed:0|0:1:changed:2|0:1:changed:1:0|0:1:changed:1"
+cp "$KIT/config.json" "$LA/cfg.keep3"; jq '.roles.researcher.agent = "opencode"' "$LA/cfg.keep3" > "$KIT/config.json"
+hw '1.00 8 2548'; O1="$HWR"; hw '1.00 8 2547'; O2="$HWR"; O2L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2547 MB of memory available, under settings.scaling.minFreeMemoryMB 2048 plus 500 MB for its private OpenCode server; no instance was opened.' || true)"
+cp "$LA/cfg.keep3" "$KIT/config.json"
+check "launch --add: an OpenCode role needs minFreeMemoryMB plus 500 MB for its private server (2548 opens, 2547 refuses with the exact line); a Claude role still opens at 2048" "$O1|$O2:$O2L|$W4" "0:1:changed|3:0:same:1|0:1:changed"
 # instances survive later launches and --reopen
 lareset; try lal; try lal --add researcher; try lal --add researcher
 R0="$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true)"; try lal; R1="$RC:$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true):$(jq -r '.roles["researcher-2"].instanceOf // "none"' "$LAG/orca-roles.config.json")"
@@ -3496,9 +3513,11 @@ try mx --save; check "metrics: --save appends again" "$(wc -l < "$MG/orca-roles.
 try mx -h; check "metrics: -h prints the header" "$RC:$(printf '%s' "$OUT" | grep -c -e '^# Usage' -e '^#   --since' -e '^#   --save' -e '^#   --summary' -e '^# `stats` output')" "0:5"
 try mx --bogus; check "metrics: an unknown option fails" "$RC" "1"
 # OpenCode: only with the binary on the PATH and a role that runs it
-printf '#!/bin/sh\n[ "$1" = stats ] && { echo "{\\"sessions\\": 3, \\"args\\": \\"$*\\"}"; exit 0; }\nexit 1\n' > "$MB/opencode"; chmod +x "$MB/opencode"
+printf '#!/bin/sh\n[ "$1" = stats ] && { echo "{\\"sessions\\": 3, \\"args\\": \\"$*\\", \\"dpc\\": \\"${OPENCODE_DISABLE_PROJECT_CONFIG-unset}\\"}"; exit 0; }\nexit 1\n' > "$MB/opencode"; chmod +x "$MB/opencode"
 try mx
 check "metrics: one opencode line with its raw stats (not split per role)" "$(printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | [.role, .raw.sessions, .raw.args] | map(tostring) | join("|")'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "null|3|stats --json --cost --project .:4"
+MCFG0="$MCFG"; jq '.settings.trust = "never"' "$MCFG0" > "$MCFG0.never"; MCFG="$MCFG0.never"; try mx; MCFG="$MCFG0"
+check "metrics: under trust never the opencode stats call has --standalone and OPENCODE_DISABLE_PROJECT_CONFIG=1 (the default call has neither)" "$(printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | [.raw.args, .raw.dpc] | join("|")'):$(try mx; printf '%s\n' "$OUT" | jq -r 'select(.agent == "opencode") | .raw.dpc')" "stats --json --cost --project . --standalone|1:unset"
 try mx --summary; check "metrics: --summary leaves the opencode line out" "$RC:$(printf '%s\n' "$OUT" | grep -c opencode):$(printf '%s\n' "$OUT" | jq -r .role | tail -1)" "0:0:total"
 jq 'del(.roles.oc)' "$MCFG" > "$MCFG.x" && mv "$MCFG.x" "$MCFG"
 try mx; check "metrics: no opencode line when no role runs opencode" "$(printf '%s\n' "$OUT" | grep -c opencode)" "0"
@@ -5802,21 +5821,25 @@ check "custom trust: filter that turns non-object on the retry -> untouched (as 
 }
 
 sec_opencode() {
-# agent: "opencode": opencode-prepare.sh writes the agent file, agent.sh runs `opencode mini --agent orca-<role>`; stub opencode only
+# agent: "opencode": opencode-prepare.sh writes the role's configuration file, agent.sh runs `opencode mini --standalone --agent orca-<role>` with it as OPENCODE_CONFIG; stub opencode only
 OC="$TMP/oc"; rm -rf "$OC"; mkdir -p "$OC/bin" "$OC/real/wt"; ln -sfn "$OC/real" "$OC/link"
 cat > "$OC/bin/opencode" <<'EOS'
 #!/bin/bash
 case "$1" in
   --version) echo "opencode 9.9.9"; exit 0;;
-  models) echo "p/m"; echo "p/other"; exit 0;;
+  models) echo "$* DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}" >> "$(dirname "$0")/models.log"; echo "p/m"; echo "p/other"; exit 0;;
+  run) echo "run $*" >> "${OC_DELLOG:-/dev/null}"   # models.sh --check's request: ok, or a failure, a reply without ok, a hang
+    case "${OC_RUNMODE:-}" in fail) echo "Error: forbidden (403)" >&2; exit 1;; noword) echo "I cannot help"; exit 0;; hang) exec sleep 30;; esac
+    echo ok; exit 0;;
 esac
 case "$1 $2" in   # OpenCode sessions: list prints the JSON in $OC_LIST; delete logs the id (and the directory it ran in) and can fail or hang
   "session list") cat "${OC_LIST:-/dev/null}" 2>/dev/null || echo '[]'; exit 0;;
-  "session delete") echo "delete $3 PWD=$PWD" >> "$OC_DELLOG"
+  "session delete") sa=n; case " $* " in *" --standalone "*) sa=y;; esac
+    echo "delete $3 PWD=$PWD SA=$sa DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}" >> "$OC_DELLOG"
     case "${OC_DELMODE:-}" in fail) exit 3;; hang) echo $$ > "$OC_DELLOG.pid"; exec sleep 30;; esac
     exit 0;;
 esac
-{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; } > "$OC_OUT"
+{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; echo "OPENCODE_CONFIG=${OPENCODE_CONFIG-}"; echo "DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}"; } > "$OC_OUT"
 EOS
 chmod +x "$OC/bin/opencode"
 git -C "$OC/real/wt" init -q; OCW="$OC/link/wt"; OCWP="$(cd "$OC/real/wt" && pwd -P)"; KITP="$(cd "$KIT" && pwd -P)"
@@ -5838,9 +5861,12 @@ exit 0
 EOS
 chmod +x "$OC/bin/orca"
 ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
-FILE="$OCW/.opencode/agents/orca-dev.md"
+ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }   # a role's configuration file (physical git dir)
+ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
+FILE="$(ocf dev)"
 try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
-check "opencode: argv is mini --agent orca-dev --model p/m + extraArgs + --session <own id>; PWD is the physical path" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "mini
+check "opencode: argv is mini --standalone --agent orca-dev --model p/m + extraArgs + --session <own id>; PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "mini
+--standalone
 --agent
 orca-dev
 --model
@@ -5849,74 +5875,100 @@ p/m
 y z
 --session
 ses_orca_dev_N
-PWD=$OCWP"
-check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,4p "$OC/out" | tr '\n' ' ')" "mini --agent orca-tester --session "
-check "opencode: the agent file is written in the worktree" "$([ -f "$FILE" ] && echo yes)" "yes"
-FM="$(awk 'NR==1 && $0=="---"{f=1;next} f&&$0=="---"{exit} f' "$FILE")"
-EXPECT_FM="description: \"orca-roles Dev role\"
-mode: \"primary\"
-model: \"p/m\"
-steps: 5
-permissions:
-  - {\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
-  - {\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"allow\"}
-  - {\"action\":\"question\",\"resource\":\"*\",\"effect\":\"deny\"}
-  - {\"action\":\"shell\",\"resource\":\"git push*\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/roles/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/plugins/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/shim/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/pw/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/mcp/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/browsers/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/browser/**\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/trusted.list\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/.manifest\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/.installed\",\"effect\":\"deny\"}
-  - {\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}"
-check "opencode: frontmatter is exactly the expected text (allow first, the role's valid items, then the kit's denies last)" "$FM" "$EXPECT_FM"
+PWD=$OCWP
+OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json
+DPC=unset"
+check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,5p "$OC/out" | tr '\n' ' ')" "mini --standalone --agent orca-tester --session "
+jq '.settings.trust = "never"' "$OC/cfg.json" > "$OC/cfg-never.json"; jq '.settings.trust = "bogus"' "$OC/cfg.json" > "$OC/cfg-bogus.json"; jq '.settings.trust = "worktree"' "$OC/cfg.json" > "$OC/cfg-wt.json"
+oc_flags() { OCCFG="$1" ocrun agent.sh dev >/dev/null; echo "$(grep -cx -e '--standalone' "$OC/out") $(grep '^DPC=' "$OC/out")"; }
+check "opencode trust: agent.sh sets OPENCODE_DISABLE_PROJECT_CONFIG=1 under never and under an invalid value (private server both times), leaves it alone under worktree and with no setting" "$(oc_flags "$OC/cfg-never.json"):$(oc_flags "$OC/cfg-bogus.json"):$(oc_flags "$OC/cfg-wt.json"):$(oc_flags "$OC/cfg.json")" "1 DPC=1:1 DPC=1:1 DPC=unset:1 DPC=unset"
+check "opencode: the configuration file is written in the git dir and the worktree has no .opencode" "$([ -f "$FILE" ] && echo yes):$([ -e "$OC/real/wt/.opencode" ] && echo yes || echo no)" "yes:no"
+FM="$(ocperms dev)"
+EXPECT_FM="{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
+{\"action\":\"shell\",\"resource\":\"rm *\",\"effect\":\"ask\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"allow\"}
+{\"action\":\"question\",\"resource\":\"*\",\"effect\":\"deny\"}
+{\"action\":\"shell\",\"resource\":\"git push*\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/prompts/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/roles/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/bin/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/plugin/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/plugins/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/shim/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/pw/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/mcp/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/browsers/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/browser/**\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/config.json\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/config.default.json\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/trusted.list\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/.manifest\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/.installed\",\"effect\":\"deny\"}
+{\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}"
+check "opencode: the agent is exactly the expected JSON without system (allow first, the role's valid items, then the kit's denies last)" "$(jq -c '.agents["orca-dev"] | del(.system)' "$FILE")" "$(jq -nc --argjson p "$(printf '%s\n' "$EXPECT_FM" | jq -sc .)" '{description: "orca-roles Dev role", mode: "primary", model: "p/m", steps: 5, permissions: $p}')"
 check "opencode: the kit's deny on its prompts comes after a role item that allows them (the last matching rule wins)" "$([ "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"deny\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" -gt "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"allow\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" ] && echo after)" "after"
-check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | sed 's/^  - //' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
-OCA="$OCW/.opencode/agents/orca-code-reviewer.md"; try ocrun opencode-prepare.sh code-reviewer
-check "opencode: the code-reviewer's subagent deny comes right after the question deny" "$(grep -A1 -F '"action":"question"' "$OCA" | tail -1)" '  - {"action":"subagent","resource":"*","effect":"deny"}'
+check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
+try ocrun opencode-prepare.sh code-reviewer
+check "opencode: the code-reviewer's subagent deny comes right after the question deny" "$(ocperms code-reviewer | grep -A1 -F '"action":"question"' | tail -1)" '{"action":"subagent","resource":"*","effect":"deny"}'
 jq '.roles["code-reviewer"] = {"title": "Code-Reviewer", "agent": "opencode", "opencode": {"permissions": [{"action": "subagent", "resource": "*", "effect": "allow"}]}}' "$OC/cfg.json" > "$OC/cfg-aud.json"; OCCFG="$OC/cfg-aud.json" try ocrun opencode-prepare.sh code-reviewer
-check "opencode: the code-reviewer's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(grep -nF '"action":"subagent"' "$OCA" | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
-RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(grep -c '"action":"subagent","resource":"\*","effect":"deny"' "$OCW/.opencode/agents/orca-$r.md" || true)"; done
-check "opencode: the plan-reviewer's and the verifier's files carry the subagent deny" "$RV" "11"
-check "opencode: a dev role's file has no subagent line" "$(grep -c '"action":"subagent"' "$FILE" || true)" "0"
-if python3 -c 'import yaml' 2>/dev/null; then
-  check "opencode: the frontmatter parses as YAML" "$(printf '%s\n' "$FM" | python3 -c 'import sys,yaml; d=yaml.safe_load(sys.stdin); print(d["mode"], d["steps"], d["permissions"][0]["effect"], len(d["permissions"]))')" "primary 5 allow 21"
-else echo "ok   opencode: PyYAML not installed, the frontmatter was checked as exact text only"; fi
+check "opencode: the code-reviewer's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(ocperms code-reviewer | grep -nF '"action":"subagent"' | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
+RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(ocperms "$r" | grep -c '"action":"subagent","resource":"\*","effect":"deny"' || true)"; done
+check "opencode: the plan-reviewer's and the verifier's configuration carry the subagent deny" "$RV" "11"
+check "opencode: a dev role's permissions have no subagent item" "$(ocperms dev | grep -c '"action":"subagent"' || true)" "0"
+check "opencode: the file's only top-level key is agents, its agent keys are in order, 21 permissions" "$(jq -c '[keys, (.agents | keys), (.agents["orca-dev"] | keys_unsorted), (.agents["orca-dev"].permissions | length), (.agents["orca-dev"].steps | type)]' "$FILE")" '[["agents"],["orca-dev"],["description","mode","model","steps","system","permissions"],21,"number"]'
 check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
-BODY="$(awk 'NR==1{next} f{print;next} $0=="---"{f=1}' "$FILE")"
+BODY="$(jq -r '.agents["orca-dev"].system' "$FILE")"
 ANC="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$OC/cfg.json" dev)"
 check "opencode: body = anchor, blank, the role's common file, blank, the role's prompt" "$BODY" "$ANC
 
 $(cat "$KIT/prompts/programmer/common-peon.md")
 
 $(cat "$KIT/prompts/programmer/dev.md")"
-OCT="$OCW/.opencode/agents/orca-tester.md"
-check "opencode: without role common the body uses common-workers.md" "$(grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")" "$OCT"):$(grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" "$OCT" || true)" "1:0"
+OCT="$(ocf tester)"; ocsys() { jq -r '.agents | to_entries[0].value.system' "$1"; }
+check "opencode: without role common the system prompt uses common-workers.md" "$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")"):$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" || true)" "1:0"
 # steps: role value, settings.flow default, invalid role value (left out with a warning), nothing
-check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(grep '^steps:' "$OCT")" "steps: 77"
-try ocrun opencode-prepare.sh e2e-tester; check "opencode: an invalid role steps is reported and left out" "$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(grep -c '^steps:' "$OCW/.opencode/agents/orca-e2e-tester.md" || true)" "0:1:0"
+check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(jq -r '.agents["orca-tester"].steps' "$OCT")" "77"
+try ocrun opencode-prepare.sh e2e-tester; R1="$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-e2e-tester"] | has("steps")' "$(ocf e2e-tester)"):$(grep -c '{env:' <<<"$OUT")$(ocrun opencode-prepare.sh dev | grep -c '{env:' || true)"
+printf 'common {env:HOME} and {file:/x}\n' > "$OC/common-env.md"; jq --arg c "$OC/common-env.md" '.roles["e2e-tester"].common = $c' "$OC/cfg.json" > "$OC/cfg-env.json"; OCCFG="$OC/cfg-env.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
+WARN="opencode-prepare.sh: warning: the system prompt of e2e-tester contains {env: or {file:, which OpenCode replaces with an environment variable or a file's content when it loads the role's configuration."
+check "opencode: an invalid role steps is reported and left out; a {env: in the system prompt warns once (the kit's prompts never do) and the file is still written" "$R1:$RC:$(grep -cxF -- "$WARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].system' "$(ocf e2e-tester)" | grep -c '{env:HOME}')" "0:1:false:00:0:1:1"
 jq 'del(.settings.flow)' "$OC/cfg.json" > "$OC/cfg-nf.json"; OCCFG="$OC/cfg-nf.json" ocrun opencode-prepare.sh tester >/dev/null
-check "opencode: no steps anywhere, no steps line" "$(grep -c '^steps:' "$OCT" || true)" "0"
+check "opencode: no steps anywhere, no steps key" "$(jq '.agents["orca-tester"] | has("steps")' "$OCT")" "false"
 jq '.settings.flow.maxStepsPerWorker = "x"' "$OC/cfg.json" > "$OC/cfg-bf.json"; OCCFG="$OC/cfg-bf.json"; try ocrun opencode-prepare.sh tester
-check "opencode: an invalid flow default is reported and left out" "$RC:$(grep -c 'maxStepsPerWorker must be a positive integer' <<<"$OUT"):$(grep -c '^steps:' "$OCT" || true)" "0:1:0"
+check "opencode: an invalid flow default is reported and left out" "$RC:$(grep -c 'maxStepsPerWorker must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-tester"] | has("steps")' "$OCT")" "0:1:false"
 OCCFG=""
-# the exclude pattern goes in once, in info/exclude; no .gitignore is created
+# nothing is written in the worktree: no .opencode, nothing in info/exclude, no .gitignore, status unchanged
 ocrun opencode-prepare.sh dev >/dev/null; ocrun opencode-prepare.sh dev >/dev/null
-check "opencode: the exclude pattern is added once and no .gitignore is touched" "$(grep -cxF '/.opencode/agents/orca-*.md' "$OC/real/wt/.git/info/exclude"):$(ls "$OC/real/wt/.gitignore" 2>/dev/null | wc -l | tr -d ' '):$(git -C "$OC/real/wt" status --short | wc -l | tr -d ' ')" "1:0:0"
-check "opencode: no temp file left in the agents folder" "$(find "$OCW/.opencode/agents" -mindepth 1 -maxdepth 1 ! -name 'orca-*' | wc -l | tr -d ' ')" "0"
-# the MCP servers are not passed: a role with an mcp list gets one warning and no file
-try ocrun agent.sh tester; check "opencode: a role with an mcp list gets the MCP warning, no MCP file" "$RC:$(grep -c 'does not get the kit.s MCP servers' <<<"$OUT"):$(find "$OC/real/wt/.git" -mindepth 1 -maxdepth 1 -name '*orca-roles-mcp*' | wc -l | tr -d ' ')" "0:1:0"
-try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning" "$(grep -c 'MCP servers' <<<"$OUT")" "0"
+check "opencode: the worktree gets nothing: no exclude line, no .gitignore, no .opencode, status unchanged" "$(grep -c 'opencode' "$OC/real/wt/.git/info/exclude" || true):$(ls "$OC/real/wt/.gitignore" 2>/dev/null | wc -l | tr -d ' '):$([ -e "$OC/real/wt/.opencode" ] && echo yes || echo no):$(git -C "$OC/real/wt" status --short | wc -l | tr -d ' ')" "0:0:no:0"
+check "opencode: no temp file left in the git dir" "$(find "$OC/real/wt/.git" -mindepth 1 -maxdepth 1 -name 'orca-roles-opencode-*.tmp.*' | wc -l | tr -d ' ')" "0"
+# an agent file left by an older kit: an untracked one goes (with the folders it leaves empty), another role's and a tracked one stay,
+# nothing is removed behind a symbolic link (a pair tree of an older kit links .opencode)
+OCR="$OC/real/wt"; mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; : > "$OCR/.opencode/agents/orca-tester.md"
+ocrun opencode-prepare.sh dev >/dev/null; ST1="$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone):$([ -e "$OCR/.opencode/agents/orca-tester.md" ] && echo kept || echo gone)"
+rm -f "$OCR/.opencode/agents/orca-tester.md"; : > "$OCR/.opencode/agents/orca-dev.md"; ocrun opencode-prepare.sh dev >/dev/null; ST2="$([ -e "$OCR/.opencode" ] && echo kept || echo gone)"
+mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; git -C "$OCR" add -f .opencode/agents/orca-dev.md; ocrun opencode-prepare.sh dev >/dev/null
+ST3="$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone)"; git -C "$OCR" rm -q --cached -f .opencode/agents/orca-dev.md; rm -rf "$OCR/.opencode"
+mkdir -p "$OC/pair"; git -C "$OC/pair" init -q; mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; ln -sfn "$OCR/.opencode" "$OC/pair/.opencode"
+OCW="$OC/pair"; try ocrun opencode-prepare.sh dev; ST4="$RC:$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone)"; rm -f "$OC/pair/.opencode"; rm -rf "$OCR/.opencode"; OCW="$OC/link/wt"
+mkdir -p "$OCR/.opencode/agents"; : > "$OCR/.opencode/agents/orca-dev.md"; : > "$OCR/.opencode/other"; ocrun opencode-prepare.sh dev >/dev/null
+ST5="$([ -e "$OCR/.opencode/agents" ] && echo agents || echo noagents):$([ -e "$OCR/.opencode/other" ] && echo kept || echo gone):$([ -e "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone)"; rm -rf "$OCR/.opencode"
+mkdir -p "$OCR/.opencode/agents" "$OC/target"; : > "$OC/target/keep"; ln -s "$OC/target/keep" "$OCR/.opencode/agents/orca-dev.md"; ocrun opencode-prepare.sh dev >/dev/null
+ST6="$([ -L "$OCR/.opencode/agents/orca-dev.md" ] && echo kept || echo gone):$([ -e "$OC/target/keep" ] && echo kept || echo gone):$([ -e "$OCR/.opencode" ] && echo kept || echo gone)"; rm -rf "$OCR/.opencode"
+mkdir -p "$OCR/.opencode" "$OC/tagents"; : > "$OC/tagents/orca-dev.md"; ln -sfn "$OC/tagents" "$OCR/.opencode/agents"; ocrun opencode-prepare.sh dev >/dev/null
+ST7="$([ -e "$OC/tagents/orca-dev.md" ] && echo kept || echo gone)"; rm -rf "$OCR/.opencode"
+check "opencode: a stale untracked agent file is deleted (with the empty folders), another role's, a tracked one and one behind a link stay" "$ST1 $ST2 $ST3 $ST4 $ST5 $ST6 $ST7" "gone:kept gone kept 0:kept noagents:kept:gone gone:kept:gone kept"
+# the role's MCP servers go into its configuration file
+try ocrun agent.sh tester; check "opencode: a role with an mcp list gets its servers in its configuration file and no warning" "$RC:$(grep -c 'MCP servers' <<<"$OUT"):$(jq -c '.mcp.servers' "$(ocf tester)"):$([ -f "$OC/real/wt/.git/orca-roles-mcp-tester.json" ] && echo file)" '0:0:{"pw":{"type":"local","command":["x"]}}:file'
+try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning and no mcp key" "$(grep -c 'MCP servers' <<<"$OUT"):$(jq 'has("mcp")' "$FILE")" "0:false"
+# extraArgs: --standalone is not repeated; --server is refused with nothing started, written or saved
+OCG0="$OC/real/wt/.git"; jq '.roles.dev.extraArgs = ["--x", "--standalone", "y z"]' "$OC/cfg.json" > "$OC/cfg-sa.json"; rm -f "$OC/out"; OCCFG="$OC/cfg-sa.json" try ocrun agent.sh dev
+SA1="$RC:$(tr '\n' ' ' < "$OC/out" | sed 's/ses_orca_dev_[0-9]* /ses_N /')"
+SV=""; for sv in '["--server", "http://127.0.0.1:1"]' '["--server=http://127.0.0.1:1"]' '["--x", "--server"]'; do
+  jq --argjson a "$sv" '.roles.dev.extraArgs = $a' "$OC/cfg.json" > "$OC/cfg-sv.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json" "$OCG0/orca-roles-opencode-dev.session"
+  OCCFG="$OC/cfg-sv.json" try ocrun agent.sh dev
+  SV="$SV $RC:$(grep -cxF -- "agent.sh: dev (opencode): --server in extraArgs is not supported: the kit gives the role its agent, MCP servers and trust settings through a private server (--standalone). Remove it from roles.dev.extraArgs." <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
+done
+check "opencode: extraArgs --standalone is passed once at its position; --server (both forms) exits 1 with the message, nothing started, no JSON, no session" "$SA1$SV" "0:mini --agent orca-dev --model p/m --x --standalone y z --session ses_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset  1:1:1: 1:1:1: 1:1:1:"
 check "opencode: provenance records the opencode version" "$(tail -1 "$OC/real/wt/.git/orca-roles.provenance.jsonl" | jq -r '[.agent, .cliVersion] | join(" ")')" "opencode opencode 9.9.9"
 # failures: outside a repo, and agent.sh stops when the preparation fails
 mkdir -p "$OC/norepo"; OCW="$OC/norepo"; try ocrun opencode-prepare.sh dev; check "opencode: outside a git repo prepare exits 1 with a message" "$RC:$(grep -c 'not inside a git repository' <<<"$OUT")" "1:1"
@@ -5933,10 +5985,22 @@ check "opencode: clear_command is /new, a clearCommand wins, claude and codex un
 jq '.roles.dev.modelError = "bad model {model}"' "$OC/cfg.json" > "$OC/cfg-me.json"
 check "opencode: model_error_regex is the role's modelError (none built in)" "$(model_error_regex "$OC/cfg-me.json" dev p/m):$(model_error_regex "$OC/cfg.json" dev p/m)" "bad model p/m:"
 # models.sh: `opencode models` by default; the probe is membership in that list
-ocm() { (cd "$PROJ" && PATH="$OC/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$OC/cfg.json" "$KIT/bin/models.sh" "$@" 2>&1 | tr '\t\n' '|;'); }
-check "opencode: models.sh lists the role's model first, then opencode models, deduplicated" "$(ocm dev)" "p/m;p/other;"
-check "opencode: models.sh --check: in the list ok, not in it unavailable" "$(ocm dev --check --model p/other);$(ocm dev --check --model q/zzz)" "p/other|ok|-;;q/zzz|unavailable;"
-check "opencode: models.sh --check: a #variant is looked up without it (listed model available, unlisted unavailable)" "$(ocm dev --check --model p/other#high);$(ocm dev --check --model q/zzz#high)" "p/other#high|ok|-;;q/zzz#high|unavailable;"
+ocm() { (cd "$PROJ" && PATH="$OC/bin:$PATH" HOME="$TMP/home" OC_DELLOG="${OCMLOG:-/dev/null}" OC_RUNMODE="${OCRUN:-}" ORCA_ROLES_PROBE_TIMEOUT="${OCPT:-90}" ORCA_ROLES_CONFIG="$OC/cfg.json" "$KIT/bin/models.sh" "$@" 2>&1 | tr '\t\n' '|;'); }
+ocm_never() { (cd "$PROJ" && PATH="$OC/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$OC/cfg-never.json" "$KIT/bin/models.sh" "$@" 2>&1 | tr '\t\n' '|;'); }
+ocm_never() { (cd "$PROJ" && PATH="$OC/bin:$PATH" HOME="$TMP/home" ORCA_ROLES_CONFIG="$OC/cfg-never.json" "$KIT/bin/models.sh" "$@" 2>&1 | tr '\t\n' '|;'); }
+rm -f "$OC/bin/models.log"; M1="$(ocm dev)"; L1="$(cat "$OC/bin/models.log")"; rm -f "$OC/bin/models.log"; M2="$(ocm_never dev)"; L2="$(cat "$OC/bin/models.log")"
+check "opencode: models.sh lists the role's model first, then opencode models, deduplicated; under trust never the same list, asked with --standalone and the project's configuration off" "$M1|$M2|$L1|$L2" "p/m;p/other;|p/m;p/other;|models DPC=unset|models --standalone DPC=1"
+OCMLOG="$OC/mcheck.log"; : > "$OCMLOG"; R1="$(ocm dev --check --model p/other);$(ocm dev --check --model q/zzz)"
+check "opencode: models.sh --check --model: listed answers ok with one standalone request, unlisted unavailable with no request" "$R1|$(grep -c '^run ' "$OCMLOG"):$(grep '^run ' "$OCMLOG" | grep -c -- '--standalone --model p/other '):$(grep -c 'q/zzz' "$OCMLOG")" "p/other|ok|-;;q/zzz|unavailable;|1:1:0"
+: > "$OCMLOG"; R1="$(ocm dev --check --model p/other#high);$(ocm dev --check --model q/zzz#high)"
+check "opencode: models.sh --check --model: a #variant is looked up without it and sent with it, unlisted unavailable with no request" "$R1|$(grep -c '^run ' "$OCMLOG"):$(grep '^run ' "$OCMLOG" | grep -c -- '--model p/other#high '):$(grep -c 'q/zzz' "$OCMLOG")" "p/other#high|ok|-;;q/zzz#high|unavailable;|1:1:0"
+: > "$OCMLOG"; R1="$(ocm dev --check)"; RID="$(sed -n 's/^run .*--session \(ses_orca_check_[^ ]*\) .*/\1/p' "$OCMLOG")"
+check "opencode: models.sh --check without --model: only the role's model gets a request, and its session is deleted" "$R1|$(grep -c '^run ' "$OCMLOG"):$(grep '^run ' "$OCMLOG" | grep -c -- '--model p/m --standalone\|--standalone --model p/m '):$(grep -c "^delete $RID " "$OCMLOG"):$(grep -c '^delete ' "$OCMLOG")" "p/m|ok|-;p/other|ok|listed (no request);|1:1:1:1"
+R2=""; for md in fail noword hang; do
+  : > "$OCMLOG"; T0="$(date +%s)"; R1="$(OCRUN=$md OCPT=$([ $md = hang ] && echo 1 || echo 90) ocm dev --check --model p/m)"; RID="$(sed -n 's/^run .*--session \(ses_orca_check_[^ ]*\) .*/\1/p' "$OCMLOG")"
+  R2="$R2$R1/$(grep -c "^delete $RID " "$OCMLOG")/$(grep -c '^delete ' "$OCMLOG")/$([ $(( $(date +%s) - T0 )) -le 15 ] && echo fast);"
+done
+check "opencode: models.sh --check: a requested model that fails, answers without ok or times out is unknown and its session is deleted once" "$R2" "p/m|unknown|request failed: Error: forbidden (403);/1/1/fast;p/m|unknown|request failed: I cannot help;/1/1/fast;p/m|unknown|timed out;/1/1/fast;"
 # new-role.sh accepts the agent and the opencode field; an unknown agent is refused
 printf '%s' '{"id":"oc-role","description":"x","agent":"opencode","model":"p/m","opencode":{"steps":9,"permissions":[]},"prompt":"# x\n## Report\n"}' > "$OC/role.json"
 try newrole "$OC/role.json"; check "from-json: accepts agent opencode and keeps its opencode object" "$RC $(jq -c '.roles["oc-role"] | [.agent, .opencode]' "$KIT/config.json")" '0 ["opencode",{"steps":9,"permissions":[]}]'
@@ -5951,9 +6015,9 @@ check "cross-dev.md: works only in crosscheck copies of the base ref and never t
 # sessions: the role gets its own id, saved in the git dir; --resume continues it; a session flag in extraArgs leaves the sessions to the user
 OCG="$OC/real/wt/.git"; SF="$OCG/orca-roles-opencode-dev.session"
 rm -f "$SF"; ocrun agent.sh dev >/dev/null
-check "opencode session: argv has --session with the saved id; it is ses_orca_dev_<digits>" "$(grep -x -A1 -e '--session' "$OC/out" | tail -1 | cmp -s - "$SF" && echo same):$(grep -Ec '^ses_orca_dev_[0-9]{10,}$' "$SF"):$(wc -l < "$SF" | tr -d ' ')" "same:1:1"
+check "opencode session: argv has --session with the saved id; it is ses_orca_dev_<digits>" "$(grep -x -A1 -e '--session' "$OC/out" | tail -1 | cmp -s - <(head -1 "$SF") && echo same):$(grep -Ec '^ses_orca_dev_[0-9]{10,}$' "$SF"):$(wc -l < "$SF" | tr -d ' '):$(sed -n 2p "$SF")" "same:1:2:$OCWP"
 check "opencode session: no temp file left in the git dir" "$(find "$OCG" -maxdepth 1 -name 'orca-roles-opencode-*.tmp*' | wc -l | tr -d ' ')" "0"
-try ocrun agent.sh dev --resume ses_given_42; check "opencode session: --resume X passes --session X, saves X, prints no note" "$RC:$(grep -x -A1 -e '--session' "$OC/out" | tail -1):$(cat "$SF"):$(grep -c 'only applies' <<<"$OUT")" "0:ses_given_42:ses_given_42:0"
+try ocrun agent.sh dev --resume ses_given_42; check "opencode session: --resume X passes --session X, saves X, prints no note" "$RC:$(grep -x -A1 -e '--session' "$OC/out" | tail -1):$(head -1 "$SF"):$(grep -c 'only applies' <<<"$OUT")" "0:ses_given_42:ses_given_42:0"
 for fl in --continue -c -s --fork "--session=ses_mine"; do
   jq --arg f "$fl" '.roles.dev.extraArgs = [$f]' "$OC/cfg.json" > "$OC/cfg-own.json"; rm -f "$SF"; OCCFG="$OC/cfg-own.json" ocrun agent.sh dev >/dev/null
   check "opencode session: extraArgs $fl: no --session added, no file" "$(grep -c -x -e '--session' "$OC/out" || true):$([ -e "$SF" ] && echo file)" "0:"
@@ -5968,7 +6032,7 @@ OCCFG=""
 OCSTATE="$OC/state.env"; OCLOG="$OC/seq.log"
 oc_close_setup() { printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_saved_1\n' > "$SF"; : > "$OCLOG"; rm -f "$OCLOG.pid"; }
 oc_close_setup; try ocrun close-role.sh dev
-check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT|orca terminal close --terminal h-dev --tab --json|"
+check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT SA=n DPC=unset|orca terminal close --terminal h-dev --tab --json|"
 check "opencode close-role: the session file is gone and the role's line left the state" "$([ -e "$SF" ] && echo file):$(cat "$OCSTATE")" ":CL=h-cl"
 oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
 check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
@@ -5979,6 +6043,12 @@ oc_close_setup; try ocrun close-role.sh cl
 check "opencode close-role: a claude role calls no opencode and leaves the file alone" "$RC:$(grep -c '^delete' "$OCLOG" || true):$(cat "$SF")" "0:0:ses_saved_1"
 oc_close_setup; rm -f "$SF"; try ocrun close-role.sh dev
 check "opencode close-role: no saved session (user-owned), no delete" "$RC:$(grep -c '^delete' "$OCLOG" || true)" "0:0"
+oc_del_line() { oc_close_setup; rm -f "$OC/gone"; "$@" >/dev/null 2>&1 || true; { grep '^delete ses_saved_1' "$OCLOG" || true; } | sed "s#PWD=$OCWP#PWD=WT#"; }
+oc_close_as() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$1" "$TMP/home/.orca-roles/bin/close-role.sh" dev); }
+oc_close_saved() { cp "$1" "$OCG/orca-roles.config.json"; oc_del_line oc_close_as "$2"; }
+D_NEVER="$(oc_del_line oc_close_as "$OC/cfg-never.json")"; D_SAVED="$(oc_close_saved "$OC/cfg-never.json" "")"
+D_WT="$(oc_close_saved "$OC/cfg-wt.json" "")"; rm -f "$OCG/orca-roles.config.json"
+check "opencode trust: close-role's delete under never ends SA=y DPC=1 with the trust from ORCA_ROLES_CONFIG, from the team's saved config (variable unset); worktree in the saved config gives SA=n DPC=unset" "$D_NEVER|$D_SAVED|$D_WT" "delete ses_saved_1 PWD=WT SA=y DPC=1|delete ses_saved_1 PWD=WT SA=y DPC=1|delete ses_saved_1 PWD=WT SA=n DPC=unset"
 # clean.sh: /new, then the newest session of THIS worktree created after /new becomes the role's session; the old one is deleted
 printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_old\n' > "$SF"; : > "$OCLOG"
 cat > "$OC/list.json" <<J
@@ -5990,6 +6060,14 @@ J
 try ocrun clean.sh dev
 check "opencode clean: role resent, then the newest session of the worktree is saved and the old one deleted" "$RC:$(cat "$SF"):$(grep '^delete' "$OCLOG" | sed "s#PWD=.*##" | tr '\n' '|')" "0:ses_new_b:delete ses_old |"
 check "opencode clean: sends /new first" "$(grep -c '^orca terminal send --terminal h-dev --text /new --enter' "$OCLOG")" "1"
+printf 'ses_old\n%s\n' "$OC/tree" > "$SF"; : > "$OCLOG"
+cat > "$OC/list.json" <<J
+[{"id":"ses_wt_newer","created":9999999999999,"updated":1,"directory":"$OCWP"},
+ {"id":"ses_tree_stale","created":1,"updated":1,"directory":"$OC/tree"},
+ {"id":"ses_tree_new","created":9999999999990,"updated":1,"directory":"$OC/tree"}]
+J
+try ocrun clean.sh dev
+check "opencode clean: line 2 of the session file is the folder searched (a pair tree): its newest new session is saved, line 2 is kept, the old one is deleted, a newer session of the worktree is ignored" "$RC:$(tr '\n' '|' < "$SF"):$(grep '^delete' "$OCLOG" | sed "s#PWD=.*##" | tr '\n' '|')" "0:ses_tree_new|$OC/tree|:delete ses_old |"
 printf 'ses_old\n' > "$SF"; : > "$OCLOG"; printf '[{"id":"ses_x","created":1,"directory":"%s"},{"id":"ses_y","created":9999999999999,"directory":"/nowhere"}]' "$OCWP" > "$OC/list.json"
 try ocrun clean.sh dev
 check "opencode clean: no new session of this worktree: one line, the old one deleted, no file" "$RC:$(grep -c 'Could not track the new OpenCode session of dev' <<<"$OUT"):$(grep -c '^delete ses_old' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
@@ -7008,6 +7086,7 @@ pg init -q -b main; pg config user.email t@example.com; pg config user.name test
 printf 'node_modules/\ndist/\n.venv/\n' > "$PW/.gitignore"; printf 'a\n' > "$PW/a.txt"; printf 'b\n' > "$PW/b.txt"; seq 1 30 > "$PW/shared.txt"
 pg add -A; pg commit -q -m init; PS0="$(pg rev-parse HEAD)"
 mkdir -p "$PW/node_modules" "$PW/dist"; printf 'dep\n' > "$PW/node_modules/m.js"; printf 'out\n' > "$PW/dist/o.js"
+mkdir -p "$PW/.opencode/agents" "$PW/.git/info"; printf 'agent\n' > "$PW/.opencode/agents/orca-dev.md"; printf '/.opencode/agents/orca-*.md\n' >> "$PW/.git/info/exclude"
 ptr() { PTRC=0; PTOUT="$(cd "$PW" && KIT="$PTK" HOME="$PTD/home" bash "$PTK/bin/pair-tree.sh" "$@" 2>"$TMP/pt.err")" || PTRC=$?; PTERR="$(cat "$TMP/pt.err")"; }
 ptstate() { ( cd "$PW" && git rev-parse HEAD; git status --porcelain -uall; git diff | shasum; git worktree list | wc -l; cat "$(git rev-parse --absolute-git-dir)/orca-roles.pairs" 2>/dev/null; find "$PTK/tmp" -mindepth 2 -maxdepth 3 2>/dev/null | LC_ALL=C sort ) | shasum; }
 PGD="$(pg rev-parse --absolute-git-dir)"; PREG="$PGD/orca-roles.pairs"
@@ -7018,7 +7097,7 @@ sedl() { sed -i.bak "$2" "$1" && rm "$1.bak"; }
 ptr create b1 "$PS0"; PT1="$PTOUT"
 check "pair-tree create: exit 0, the last stdout line is the tree, <batch>-1 under the kit's pairs folder" "$PTRC:$(basename "$PT1"):$([ "$(dirname "$PT1")" = "$(cd "$PTK" && pwd -P)/tmp/$(basename "$(dirname "$(dirname "$PT1")")")/pairs" ] && echo in)" "0:b1-1:in"
 check "pair-tree create: the tree is detached at the ref, its status is clean and no branch was made" "$(git -C "$PT1" rev-parse HEAD):$(git -C "$PT1" symbolic-ref -q HEAD || echo detached):$(git -C "$PT1" status --porcelain | wc -l | tr -d ' '):$(pg branch --list | wc -l | tr -d ' ')" "$PS0:detached:0:1"
-check "pair-tree create: ignored node_modules is a link to the worktree's, ignored dist is not linked" "$(readlink "$PT1/node_modules"):$([ -e "$PT1/dist" ] || [ -L "$PT1/dist" ] && echo linked || echo none)" "$(cd "$PW" && pwd -P)/node_modules:none"
+check "pair-tree create: ignored node_modules is a link to the worktree's, ignored dist is not linked, an ignored .opencode is never linked" "$(readlink "$PT1/node_modules"):$([ -e "$PT1/dist" ] || [ -L "$PT1/dist" ] && echo linked || echo none):$([ -e "$PT1/.opencode" ] || [ -L "$PT1/.opencode" ] && echo linked || echo none)" "$(cd "$PW" && pwd -P)/node_modules:none:none"
 check "pair-tree create: info/exclude has /node_modules once, the line is open with the start, the marker holds the worktree's git dir" "$(grep -cx '/node_modules' "$PGD/info/exclude"):$(cut -f1,2,4,6 "$PREG" | tr '\t' ' '):$(cat "$(git -C "$PT1" rev-parse --absolute-git-dir)/orca-roles.pair")" "1:b1 1 $PS0 open:$PGD"
 # T2: refusals
 PTS="$(ptstate)"
