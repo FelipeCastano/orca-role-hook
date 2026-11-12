@@ -639,6 +639,7 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
     fi
     while IFS='|' read -r svar srole sopen src shandle srh stitle; do
       [ -n "$svar" ] && [ "$srole" != "$FRONT" ] || continue
+      [ "$(rstr "$CFG" "$srole" agent)" != opencode ] || oc_session_delete "$srole" "$GITDIR"   # closed on purpose: its OpenCode session goes, before its tab closes (as close-role.sh)
       if [ "$sopen" = 1 ]; then
         chs=""; case "$src" in 0|2|3) chs="$shandle";; esac
         [ -z "$srh" ] || [ "$srh" = "$chs" ] || chs="$chs $srh"
@@ -650,6 +651,7 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
         done
       fi
       drop_role_lines "$svar"
+      ocj="$(oc_config_file "$srole" "$GITDIR")" && rm -f "$ocj"; rm -f "$GITDIR/orca-roles-mcp-$srole.json"
     done <<EOF2
 $SW_RECORDS
 EOF2

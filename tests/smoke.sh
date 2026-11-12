@@ -6031,9 +6031,25 @@ OCCFG=""
 # close-role.sh: deletes the saved session BEFORE closing the tab, then forgets the file; a claude role never calls opencode
 OCSTATE="$OC/state.env"; OCLOG="$OC/seq.log"
 oc_close_setup() { printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_saved_1\n' > "$SF"; : > "$OCLOG"; rm -f "$OCLOG.pid"; }
-oc_close_setup; try ocrun close-role.sh dev
+oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"; try ocrun close-role.sh dev
 check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT SA=n DPC=unset|orca terminal close --terminal h-dev --tab --json|"
-check "opencode close-role: the session file is gone and the role's line left the state" "$([ -e "$SF" ] && echo file):$(cat "$OCSTATE")" ":CL=h-cl"
+CE1="$RC:$([ -e "$SF" ] && echo file):$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo mcp):$(cat "$OCSTATE")"
+# a Claude role's own close removes its leftover OpenCode configuration and its MCP file, calls no opencode, and leaves Dev's MCP file alone
+oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-cl.json"; printf '{}' > "$OCG/orca-roles-mcp-cl.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"; try ocrun close-role.sh cl
+CE2="$RC:$([ -e "$OCG/orca-roles-opencode-cl.json" ] && echo json):$([ -e "$OCG/orca-roles-mcp-cl.json" ] && echo mcp):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo devmcp):$(grep -c '^delete' "$OCLOG" || true)"
+# an instance (launch.sh --add writes DEV_2= in the state and .roles["dev-2"] in the saved config) goes with its own files; Dev's stay
+jq '.roles["dev-2"] = ((.roles.dev | del(.maxInstances)) + {title: "Dev 2", instanceOf: "dev"})' "$OC/cfg.json" > "$OC/cfg-inst.json"
+printf 'DEV_2=h-dev2\n' > "$OCSTATE"; printf 'ses_saved_1\n' > "$SF"; printf 'ses_inst_2\n' > "$OCG/orca-roles-opencode-dev-2.session"; : > "$OCLOG"
+printf '{}' > "$OCG/orca-roles-opencode-dev-2.json"; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"
+OCCFG="$OC/cfg-inst.json" try ocrun close-role.sh dev-2
+CE3="$RC:$([ -e "$OCG/orca-roles-opencode-dev-2.json" ] && echo json):$([ -e "$OCG/orca-roles-opencode-dev-2.session" ] && echo session):$(jq -r '(.roles["dev-2"] == null) and (.roles.dev != null)' "$OC/cfg-inst.json"):$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo devjson):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo devmcp):$(head -1 "$SF")"
+OCCFG=""
+# a tab Orca reports as stale (it was already gone): no close is tried, and the role's files go the same way
+oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"; mkdir -p "$OC/stbin"
+printf '#!/bin/sh\necho "orca $*" >> "%s"\ncase "$1 $2" in "terminal show") echo %s; exit 1;; esac\nexit 0\n' "$OCLOG" "'{\"ok\":false,\"error\":{\"code\":\"terminal_handle_stale\"}}'" > "$OC/stbin/orca"; chmod +x "$OC/stbin/orca"
+(cd "$OCW" && HOME="$TMP/home" PATH="$OC/stbin:$OC/bin:$PATH" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$OC/cfg.json" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1); CE4=$?
+CE4="$CE4:$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo mcp):$([ -e "$SF" ] && echo session):$(grep -c '^orca terminal close' "$OCLOG" || true):$(cat "$OCSTATE")"
+check "opencode close-role: the session file, the role's OpenCode configuration and its MCP file are gone and the role's line left the state (also when Orca reports the tab stale: no close tried); a Claude role's close removes its own two files (no opencode call, Dev's MCP file kept); an instance's close removes its own files and its configuration entry, leaving Dev's files and session untouched" "$CE1|$CE2|$CE3|$CE4" "0::::CL=h-cl|0:::devmcp:0|0:::true:devjson:devmcp:ses_saved_1|0::::0:CL=h-cl"
 oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
 check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
 oc_close_setup; OCDELMODE=hang; OCTO=1; T0=$(date +%s); try ocrun close-role.sh dev; T1=$(date +%s); OCDELMODE=""; OCTO=""
@@ -6180,6 +6196,41 @@ ST2="$(cd "$LP" && env -u ORCA_ROLES_AGENT_PID HOME="$TMP/home" PATH="$PSB:$OC/l
 cp "$OC/kit-config.b1" "$KIT/config.json"
 check "opencode status: with no pid hook and a fake ps, a 'mini' behind the handle is alive (a longer handle with it as a prefix does not match, 'serve' and 'run' do not count), a handle carried only by them is agent gone, a claude and a codex process are still found" "$ST2" "cl-tab=alive live-dev=alive tst-serve=agent gone cx-tab=alive "
 if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json"; else rm -f "$KIT/config.json"; fi
+# mode switch: the OpenCode workers' sessions are deleted before their tabs close, their files go with them, a claude worker's does not
+# and the local coordinator's MCP file stays. A saved OpenCode worker whose tab is not open takes the same path (no close).
+SW="$OC/sw"; rm -rf "$SW"; mkdir -p "$SW/bin" "$SW/proj"; git -C "$SW/proj" init -q -b main; SWG="$SW/proj/.git"; SWLOG="$SW/seq.log"; : > "$SWLOG"
+cat > "$SW/bin/opencode" <<EOS
+#!/bin/sh
+case "\$1 \$2" in "session delete") echo "delete \$3" >> "$SWLOG"; exit 0;; esac
+exit 0
+EOS
+cat > "$SW/bin/orca" <<EOS
+#!/bin/sh
+echo "orca \$*" >> "$SWLOG"
+case "\$1 \$2" in
+  "terminal list") echo '{"terminals":[{"handle":"h-LC","ptyId":"pty-LC"},{"handle":"h-Dev","ptyId":"pty-Dev"},{"handle":"h-CR","ptyId":"pty-CR"}]}';;
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
+  "terminal show") case "\$*" in *h-ocb*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *h-Dev*) echo '{"result":{"terminal":{"ptyId":"pty-Dev","agentIdentity":"opencode","orphaned":false}}}';; *h-CR*) echo '{"result":{"terminal":{"ptyId":"pty-CR","agentIdentity":"claude","orphaned":false}}}';; *) echo '{"result":{"terminal":{"ptyId":"pty-LC","agentIdentity":"claude","orphaned":false}}}';; esac;;
+esac
+exit 0
+EOS
+printf '#!/bin/sh\nexit 0\n' > "$SW/bin/kickoff"; chmod +x "$SW/bin/orca" "$SW/bin/opencode" "$SW/bin/kickoff"
+printf 'LOCAL_COORDINATOR=h-LC\nDEV=h-Dev\nCODE_REVIEWER=h-CR\nOCB=h-ocb\n' | tee "$SWG/orca-roles.env" > "$SWG/orca-roles.kicked"
+printf 'LOCAL_COORDINATOR=pty-LC\nDEV=pty-Dev\nCODE_REVIEWER=pty-CR\n' > "$SWG/orca-roles.pty"
+printf 'ses_sw_1\n%s\n' "$SW/proj" > "$SWG/orca-roles-opencode-dev.session"; printf 'ses_sw_2\n' > "$SWG/orca-roles-opencode-ocb.session"
+for f in orca-roles-opencode-dev.json orca-roles-mcp-dev.json orca-roles-opencode-code-reviewer.json orca-roles-mcp-code-reviewer.json orca-roles-opencode-ocb.json orca-roles-mcp-ocb.json orca-roles-mcp-local-coordinator.json; do printf '{}' > "$SWG/$f"; done
+cp "$KIT/config.json" "$OC/kit-config.b2"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "mode": "quick" },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev", "agent": "opencode" }, "code-reviewer": { "title": "Code-Reviewer" }, "ocb": { "title": "Ocb", "agent": "opencode" } } }
+J
+cp "$KIT/config.json" "$SWG/orca-roles.config.json"
+OUT="$(cd "$SW/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$SW/bin:$PATH" ORCA_TERMINAL_HANDLE=h-LC ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$SW/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --mode programmer 2>&1)" && RC=0 || RC=$?
+cp "$OC/kit-config.b2" "$KIT/config.json"
+SW1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Switching mode from quick to programmer: closing Dev, Code-Reviewer;' || true):$(awk '/^delete ses_sw_1$/{d=NR} /^orca terminal close --terminal h-Dev/{c=NR} END{print (d && c && d < c) ? "before" : (d ? "after" : "missing")}' "$SWLOG"):$(grep -c '^delete ses_sw_1$' "$SWLOG" || true):$(grep -c '^delete ses_sw_2$' "$SWLOG" || true):$(grep -c '^delete ' "$SWLOG" || true):$(grep -c '^orca terminal close --terminal h-Dev --tab' "$SWLOG" || true):$(grep -c '^orca terminal close --terminal h-CR --tab' "$SWLOG" || true)"
+SW2="$([ -e "$SWG/orca-roles-opencode-dev.session" ] && echo session)$([ -e "$SWG/orca-roles-opencode-dev.json" ] && echo json)$([ -e "$SWG/orca-roles-mcp-dev.json" ] && echo mcp):$([ -e "$SWG/orca-roles-opencode-ocb.session" ] && echo session)$([ -e "$SWG/orca-roles-opencode-ocb.json" ] && echo json)$([ -e "$SWG/orca-roles-mcp-ocb.json" ] && echo mcp):$([ -e "$SWG/orca-roles-mcp-code-reviewer.json" ] || echo gone):$([ -e "$SWG/orca-roles-mcp-local-coordinator.json" ] && echo kept)"
+check "opencode switch: the OpenCode Dev's session is deleted before its tab closes and its session, configuration and MCP files go, a saved OpenCode worker with no open tab takes the same path without a close, the claude worker is closed but calls no opencode and loses its MCP file, and the local coordinator keeps its MCP file" "$SW1|$SW2" "0:1:before:1:1:2:1:1|::gone:kept"
 }
 
 sec_prompt_paths() {
