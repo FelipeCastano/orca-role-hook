@@ -105,18 +105,18 @@ SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has c
 # Whether a role's tab is still working: 0 alive, 1 no tab (no handle, or Orca says the handle is stale), 2 the tab exists but its agent
 # is gone (e.g. after Ctrl+C), 3 its tab was closed with the X but Orca kept the session running without a tab ("orphaned"),
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
-# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex). An OpenCode role is checked by its 'opencode mini' process instead (Orca sets agentIdentity only after mini's first message); for custom agents only the tab counts.
+# Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex). An OpenCode role is checked by its OpenCode TUI process instead (oc_tui_args: the full TUI, or 'opencode mini' of a tab an older kit opened); for custom agents only the tab counts.
 # An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
 # A live claude or codex process for the handle counts as alive even when Orca flags the tab orphaned (it also does for tabs it has not
 # bound yet) or shows no agent identity (idle Claude often does); an orphaned one sets ROLE_DETACHED=1 so the caller can say it kept it.
-# An orphaned OpenCode tab is state 3 even with a live 'opencode mini': roles replaces it with its conversation.
-# The pid of the claude, codex or 'opencode mini' process (not mini's private 'opencode serve' child) whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
+# An orphaned OpenCode tab is state 3 even with a live OpenCode TUI: roles replaces it with its conversation.
+# The pid of the claude, codex or OpenCode TUI process (not its private 'opencode serve' child) whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
 agent_pid_of_handle() {
   [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
   local pid comm env
   while read -r pid comm; do
     case "$comm" in
-      opencode|*/opencode) [ "$(ps -o args= -p "$pid" 2>/dev/null | awk '{print $2}')" = mini ] || continue;;
+      opencode|*/opencode) oc_tui_args "$(ps -o args= -p "$pid" 2>/dev/null)" || continue;;
     esac
     if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
     printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
@@ -142,7 +142,7 @@ role_alive() {  # role_alive <role> <handle>
   fi
   case "$ag" in
     claude|codex|"") ;;
-    opencode)   # Orca sets agentIdentity only after mini's first message: the tab's 'opencode mini' process decides, checked a few times while it starts
+    opencode) # the tab's OpenCode TUI process decides (it works for both the full TUI and an older kit's 'opencode mini'), checked a few times while it starts
       local j; for j in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
         [ -z "$(agent_pid_of_handle "$2")" ] || return 0
         [ "$j" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
@@ -937,10 +937,9 @@ for id in $ROLES; do
     if [ "$crc" = 124 ]; then
       # The list is read once, so a tab Orca opens after it is missed (N2).
       NL="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" || NL=""
-      for c in $(printf '%s' "$NL" | jq -r --arg t "$(tab_title_of "$CFG" "$id")" '[.. | objects | select(has("handle") and .title == $t) | .handle] | .[]' 2>/dev/null); do
-        printf '%s' "$LIST" | grep -qF "\"$c\"" && continue
-        h="$c"; echo "Orca was slow to answer while opening the tab of $t; using the tab it opened ($h)."; break
-      done
+      taken=""; for o in $ROLES; do [ "$o" = "$id" ] && continue; ov="$(var_of "$o")"; taken="$taken ${!ov:-}"; done
+      c="$(adopt_tab "$NL" "$LIST" "$(tab_title_of "$CFG" "$id")" "$(rstr "$CFG" "$id" agent)" "$taken")"
+      if [ -n "$c" ]; then h="$c"; echo "Orca was slow to answer while opening the tab of $t; using the tab it opened ($h)."; fi
     fi
     [ -n "$h" ] && break
     echo "Retrying $t ($try/3)..."; pace 2

@@ -19,6 +19,17 @@ CHECK_PIDS=""; FRONT_MAIL=0
 trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
+# OpenCode: text typed before its TUI has painted goes to the tab's shell, and orca terminal send still reports it accepted. For a tab this
+# launch opened, wait until the screen shows the TUI (its footer's "ctrl+p" or its composer's "Ask anything"), once a second, at most
+# kickoffTimeoutSeconds and never more than 30 s; then send anyway, with one line.  oc_wait_screen <handle> <role>
+oc_wait_screen() {
+  local cap n=0; cap=$(( TIMEOUT_MS / 1000 )); [ "$cap" -le 30 ] || cap=30
+  while ! { screen_of "$1" || true; } | grep -qE 'ctrl\+p|Ask anything'; do
+    if [ "$n" -ge "$cap" ]; then echo "$(title_of "$CFG" "$2"): its OpenCode screen showed no prompt after $cap s; sending its role anyway."; return 0; fi
+    sleep "${ORCA_ROLES_SCREEN_POLL:-1}"; n=$((n + 1))
+  done
+  return 0
+}
 press_enter() { orca terminal send --terminal "$1" --enter --json >/dev/null 2>&1 || orca terminal send --terminal "$1" --text "" --enter --json >/dev/null 2>&1; }
 front_err_code() {  # $1 output of a failed orca call: its .error.code, or nothing
   printf '%s' "$1" | jq -r '.error.code // empty' 2>/dev/null | head -n 1 || true
@@ -118,7 +129,7 @@ check_model() {  # $1 handle, $2 role, $3 model errors on screen before the mess
   text="$(screen_of "$1" | tr -s ' \n\t' ' ' | grep -oE "$4" | tail -n 1 | cut -c1-200 | sed 's/^ *//; s/ *$//')"
   model_failed "$2" "$model" "$text"
 }
-# `opencode mini` prints nothing for a model that does not exist, so for OpenCode the model is looked up in `opencode models`, run in
+# OpenCode prints nothing for a model that does not exist, so for OpenCode the model is looked up in `opencode models`, run in
 # the worktree (oc_bounded runs it at the top of the current one; $WT is an Orca selector, not a path). The first call after OpenCode's
 # service starts can omit models while it warms up: one retry after a pause.
 # Prints present, missing or unknown (the list could not be read twice).  oc_model_state <model, with or without #variant>
@@ -192,6 +203,7 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
     ocm="$(oc_model_state "$model")"
     [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
   fi
+  if [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then case " $REUSED " in *" $2 "*) ;; *) oc_wait_screen "$1" "$2";; esac; fi
   [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
   if orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null; then
     echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != "$FRONT" ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0

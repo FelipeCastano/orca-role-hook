@@ -3100,6 +3100,7 @@ cat > "$LN/bin/orca" <<EOS
 echo "\$*" >> "$LN/orca.log"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; b="\${t% (*}"
+    [ ! -f "$LN/rec2-\$b" ] || printf '{"terminals":[{"handle":"h-%s","title":"OpenCode"}]}' "\$b" > "$LN/list.json"
     if [ -f "$LN/slow-\$b" ]; then [ ! -f "$LN/rec-\$b" ] || printf '{"terminals":[{"handle":"h-%s","title":"%s"}]}' "\$b" "\$t" > "$LN/list.json"; sleep 31; fi
     echo "{\"handle\":\"h-\$b\"}";;
   "terminal list") cat "$LN/list.json";;
@@ -3113,12 +3114,39 @@ exit 0
 EOS
 chmod +x "$LN/bin/orca"
 lnl() { (cd "$LN/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LN/bin:$PATH" ORCA_ROLES_KICKOFF="$LN/bin/kickoff" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
-lnreset() { rm -rf "$LNG"/orca-roles.* "$LN"/slow-* "$LN"/rec-* "$LN"/seen.* "$LN"/nopty "$LN"/nopty1; echo '{"terminals":[]}' > "$LN/list.json"; : > "$LN/orca.log"; }
+lnreset() { rm -rf "$LNG"/orca-roles.* "$LN"/slow-* "$LN"/rec-* "$LN"/rec2-* "$LN"/seen.* "$LN"/nopty "$LN"/nopty1; echo '{"terminals":[]}' > "$LN/list.json"; : > "$LN/orca.log"; }
 lncnt() { grep -cE "^terminal create .*--title $1 " "$LN/orca.log" || true; }
 lnreset; : > "$LN/slow-Dev"; : > "$LN/rec-Dev"; try lnl
 check "launch: terminal create past its limit adopts the tab Orca opened (same title, not in the list read at the start) instead of opening another" "$RC:$(lncnt 'Dev'):$(printf '%s\n' "$OUT" | grep -c '^Orca was slow to answer while opening the tab of Dev; using the tab it opened (h-Dev)\.$'):$(grep '^DEV=' "$LNG/orca-roles.env")" "0:1:1:DEV=h-Dev"
+AT_NOW='{"terminals":[{"handle":"s1","title":"Dev (claude)"},{"handle":"h2","title":"OpenCode"},{"handle":"h3","title":"OC | Fix tests"},{"handle":"h4","title":"Dev (opencode)"},{"handle":"h5","title":"OC|x"}]}'
+AT_START='{"terminals":[{"handle":"s1","title":"Dev (claude)"}]}'
+AT="$(adopt_tab "$AT_NOW" "$AT_START" "Dev (claude)" claude "")|$(adopt_tab "$AT_NOW" "$AT_START" "Dev (opencode)" opencode "")|$(adopt_tab "$AT_NOW" "$AT_START" "Tester (opencode)" opencode "")|$(adopt_tab "$AT_NOW" "$AT_START" "Tester (opencode)" opencode "h3")|$(adopt_tab "$AT_NOW" "$AT_START" "Tester (opencode)" claude "h3")|$(adopt_tab 'not json' "$AT_START" "Dev (claude)" claude "")"
+check "launch: adopt_tab: a new tab with the kit's title wins; an opencode role also takes the only new 'OpenCode' or 'OC | …' tab not held by another role (two: none; 'OC|x' never); a claude role never; a tab in the start list never; bad JSON gives none" "$AT" "|h4||h2||"
+ttv() { oc_tui_args "$1" && printf '0' || printf '1'; }
+TT=""; for tta in 'opencode --standalone --session s' '/opt/homebrew/bin/opencode --standalone --session s' 'opencode --log-level=info --session s --standalone' 'opencode mini --standalone --agent orca-a --session s' 'opencode' 'opencode --session s' 'opencode mini --agent a' 'opencode serve --stdio --port 0' 'opencode serve --stdio --service' 'opencode serve --service' 'opencode run --standalone x' 'opencode session list' 'opencode --standalone --service' 'node /x/bin/opencode --standalone' ' opencode --standalone --session s ' ' opencode mini --standalone '; do TT="$TT$(ttv "$tta")"; done
+check "launch: oc_tui_args: the full TUI or an older kit's 'mini' is a role's TUI only with --standalone and without --service: the spec's truth table, also with the args padded as oc_pids_of_handle passes them" "$TT" "0000111111111100"
+atb() { local o r=0; o="$(adopt_tab "$@")" || r=$?; printf '%s:%s' "$o" "$r"; }
+ATB=""
+ATB="$ATB|$(atb '' '{"terminals":[]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb '{}' '{"terminals":[]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb 'not json' '{"terminals":[]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb '{"terminals":[{"handle":"h1","title":"opencode"}]}' '{"terminals":[]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb '{"terminals":[{"handle":"h1","title":"OC |"}]}' '{"terminals":[]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb '{"terminals":[{"handle":"h1","title":"OC | x"}]}' '{"terminals":[]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb '{"terminals":[{"handle":"h1","title":"OC | x"},{"handle":"h2","title":"OpenCode"}]}' '{"terminals":[{"handle":"h1","title":"OC | x"}]}' 'Dev (opencode)' opencode '')"
+ATB="$ATB|$(atb '{"terminals":[{"handle":"h1","title":"OpenCode"}]}' '{"terminals":[]}' 'Dev (opencode)' opencode 'h1')"
+ATB="$ATB|$(atb '{"terminals":[{"handle":"h1","title":"OpenCode"}]}' '{"terminals":[]}' 'Dev (opencode)' opencode 'h1x')"
+check "launch: adopt_tab edges: an empty or non-JSON list gives nothing with status 0; a lowercase 'opencode' or a bare 'OC |' is no candidate; a candidate that is in the start list does not count as a second one; a taken handle is skipped, and a handle that only starts with it is not" "$ATB" "|:0|:0|:0|:0|:0|h1:0|h2:0|:0|h1:0"
 lnreset; : > "$LN/slow-Dev"; echo '{"terminals":[{"handle":"old-Dev","title":"Dev (claude)"}]}' > "$LN/list.json"; try lnl
 check "launch: a tab with the role's title that was already in the list at the start is not adopted; the create is retried 3 times and the launch stops" "$RC:$(lncnt 'Dev'):$(printf '%s\n' "$OUT" | grep -c 'using the tab it opened'):$(grep -c '^DEV=' "$LNG/orca-roles.env" || true)" "1:3:0:0"
+# the launch hands adopt_tab the other roles' handles: an opencode role adopts the OpenCode-titled tab Orca opened for it, never one another role of this launch holds
+cp "$KIT/config.json" "$KIT/config.at.bak"; jq '.roles.tester.enabled = true | .roles.tester.agent = "opencode" | .roles.dev.agent = "opencode"' "$KIT/config.at.bak" > "$KIT/config.json"
+lnreset; : > "$LN/slow-Tester"; : > "$LN/rec2-Tester"; try lnl
+LAT1="$RC:$(lncnt 'Tester'):$(printf '%s\n' "$OUT" | grep -c '^Orca was slow to answer while opening the tab of Tester; using the tab it opened (h-Tester)\.$'):$(grep '^TESTER=' "$LNG/orca-roles.env" 2>/dev/null || true)"
+lnreset; : > "$LN/slow-Tester"; : > "$LN/rec2-Dev"; try lnl
+LAT2="$RC:$(lncnt 'Tester'):$(printf '%s\n' "$OUT" | grep -c 'using the tab it opened'):$(grep '^TESTER=' "$LNG/orca-roles.env" 2>/dev/null || true):$(grep '^DEV=' "$LNG/orca-roles.env" 2>/dev/null || true)"
+cp "$KIT/config.at.bak" "$KIT/config.json"; rm -f "$KIT/config.at.bak"
+check "launch: an opencode role adopts the 'OpenCode'-titled tab Orca opened for it (its title is not the kit's) though other roles opened first, and never the tab another role of this launch holds (that create is retried 3 times and the launch stops)" "$LAT1|$LAT2" "0:1:1:TESTER=h-Tester|1:3:0::DEV=h-Dev"
 lnreset; lnseed; try lnl --status; R1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Dev	d1	unknown (no-response)	')"; rm -f "$LN/seen.d1"; : > "$LN/orca.log"; B="$(lnsum)"; try lnl
 check "launch: terminal show failing while the agent is looked for is 'unknown (no-response)' in --status and stops a launch with 'Orca is not ready', nothing closed or opened, state unchanged" "$R1:$RC:$(printf '%s\n' "$OUT" | grep -c 'ERROR: Orca is not ready (no-response) for Dev: no tab was closed or opened'):$(grep -cE '^terminal (create|close)' "$LN/orca.log" || true):$([ "$(lnsum)" = "$B" ] && echo same || echo CHANGED)" "0:1:1:1:0:same"
 lnreset; : > "$LN/nopty"; try lnl; R1="$RC:$(printf '%s\n' "$OUT" | grep -c '^Could not read the ptyId of the tab of [A-Za-z]*; after a restart it may open without memory\.$')"
@@ -5823,7 +5851,7 @@ check "custom trust: filter that turns non-object on the retry -> untouched (as 
 }
 
 sec_opencode() {
-# agent: "opencode": opencode-prepare.sh writes the role's configuration file, agent.sh runs `opencode mini --standalone --agent orca-<role>` with it as OPENCODE_CONFIG; stub opencode only
+# agent: "opencode": opencode-prepare.sh writes the role's configuration file, agent.sh runs `opencode --standalone` (the full TUI; its agent is the file's default_agent) with it as OPENCODE_CONFIG; stub opencode only
 OC="$TMP/oc"; rm -rf "$OC"; mkdir -p "$OC/bin" "$OC/real/wt"; ln -sfn "$OC/real" "$OC/link"
 cat > "$OC/bin/opencode" <<'EOS'
 #!/bin/bash
@@ -5867,12 +5895,7 @@ ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }
 ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
 FILE="$(ocf dev)"
 try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
-check "opencode: argv is mini --standalone --agent orca-dev --model p/m + extraArgs + --session <own id>; PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "mini
---standalone
---agent
-orca-dev
---model
-p/m
+check "opencode: argv is --standalone + extraArgs + --session <own id> (no mini, --agent or --model); PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "--standalone
 --x
 y z
 --session
@@ -5880,7 +5903,7 @@ ses_orca_dev_N
 PWD=$OCWP
 OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json
 DPC=unset"
-check "opencode: no model, no --model" "$(ocrun agent.sh tester >/dev/null; sed -n 1,5p "$OC/out" | tr '\n' ' ')" "mini --standalone --agent orca-tester --session "
+check "opencode: a role with no model starts --standalone --session" "$(ocrun agent.sh tester >/dev/null; sed -n 1,2p "$OC/out" | tr '\n' ' ')" "--standalone --session "
 jq '.settings.trust = "never"' "$OC/cfg.json" > "$OC/cfg-never.json"; jq '.settings.trust = "bogus"' "$OC/cfg.json" > "$OC/cfg-bogus.json"; jq '.settings.trust = "worktree"' "$OC/cfg.json" > "$OC/cfg-wt.json"
 oc_flags() { OCCFG="$1" ocrun agent.sh dev >/dev/null; echo "$(grep -cx -e '--standalone' "$OC/out") $(grep '^DPC=' "$OC/out")"; }
 check "opencode trust: agent.sh sets OPENCODE_DISABLE_PROJECT_CONFIG=1 under never and under an invalid value (private server both times), leaves it alone under worktree and with no setting" "$(oc_flags "$OC/cfg-never.json"):$(oc_flags "$OC/cfg-bogus.json"):$(oc_flags "$OC/cfg-wt.json"):$(oc_flags "$OC/cfg.json")" "1 DPC=1:1 DPC=1:1 DPC=unset:1 DPC=unset"
@@ -5917,7 +5940,7 @@ check "opencode: the code-reviewer's subagent deny comes after a role item that 
 RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(ocperms "$r" | grep -c '"action":"subagent","resource":"\*","effect":"deny"' || true)"; done
 check "opencode: the plan-reviewer's and the verifier's configuration carry the subagent deny" "$RV" "11"
 check "opencode: a dev role's permissions have no subagent item" "$(ocperms dev | grep -c '"action":"subagent"' || true)" "0"
-check "opencode: the file's only top-level key is agents, its agent keys are in order, 21 permissions" "$(jq -c '[keys, (.agents | keys), (.agents["orca-dev"] | keys_unsorted), (.agents["orca-dev"].permissions | length), (.agents["orca-dev"].steps | type)]' "$FILE")" '[["agents"],["orca-dev"],["description","mode","model","steps","system","permissions"],21,"number"]'
+check "opencode: the file's top-level keys are agents and default_agent (orca-dev), its agent keys are in order, 21 permissions" "$(jq -c '[keys, .default_agent, (.agents | keys), (.agents["orca-dev"] | keys_unsorted), (.agents["orca-dev"].permissions | length), (.agents["orca-dev"].steps | type)]' "$FILE")" '[["agents","default_agent"],"orca-dev",["orca-dev"],["description","mode","model","steps","system","permissions"],21,"number"]'
 check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
 BODY="$(jq -r '.agents["orca-dev"].system' "$FILE")"
 ANC="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$OC/cfg.json" dev)"
@@ -5962,16 +5985,46 @@ check "opencode: a stale untracked agent file is deleted (with the empty folders
 # the role's MCP servers go into its configuration file
 try ocrun agent.sh tester; check "opencode: a role with an mcp list gets its servers in its configuration file and no warning" "$RC:$(grep -c 'MCP servers' <<<"$OUT"):$(jq -c '.mcp.servers' "$(ocf tester)"):$([ -f "$OC/real/wt/.git/orca-roles-mcp-tester.json" ] && echo file)" '0:0:{"pw":{"type":"local","command":["x"]}}:file'
 try ocrun agent.sh dev; check "opencode: mcp \"all\" gets no warning and no mcp key" "$(grep -c 'MCP servers' <<<"$OUT"):$(jq 'has("mcp")' "$FILE")" "0:false"
-# extraArgs: --standalone is not repeated; --server is refused with nothing started, written or saved
+# extraArgs: --standalone is not repeated; --server is refused, and so are --agent and --model, with nothing started, written or saved
 OCG0="$OC/real/wt/.git"; jq '.roles.dev.extraArgs = ["--x", "--standalone", "y z"]' "$OC/cfg.json" > "$OC/cfg-sa.json"; rm -f "$OC/out"; OCCFG="$OC/cfg-sa.json" try ocrun agent.sh dev
 SA1="$RC:$(tr '\n' ' ' < "$OC/out" | sed 's/ses_orca_dev_[0-9]* /ses_N /')"
-SV=""; for sv in '["--server", "http://127.0.0.1:1"]' '["--server=http://127.0.0.1:1"]' '["--x", "--server"]'; do
-  jq --argjson a "$sv" '.roles.dev.extraArgs = $a' "$OC/cfg.json" > "$OC/cfg-sv.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json" "$OCG0/orca-roles-opencode-dev.session"
+SV=""; for sv in '["--server", "http://127.0.0.1:1"]|--server' '["--server=http://127.0.0.1:1"]|--server' '["--x", "--server"]|--server' '["--agent", "orca-x"]|--agent' '["--x", "--model=p/q"]|--model'; do
+  sva="${sv%|*}"; svf="${sv##*|}"
+  if [ "$svf" = --server ]; then svm="agent.sh: dev (opencode): --server in extraArgs is not supported: the kit gives the role its agent, MCP servers and trust settings through a private server (--standalone). Remove it from roles.dev.extraArgs."
+  else svm="agent.sh: dev (opencode): $svf in extraArgs is not supported: the kit sets the role's agent and model in its OpenCode configuration (roles.dev.model). Remove it from roles.dev.extraArgs."; fi
+  jq --argjson a "$sva" '.roles.dev.extraArgs = $a' "$OC/cfg.json" > "$OC/cfg-sv.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json" "$OCG0/orca-roles-opencode-dev.session"
   OCCFG="$OC/cfg-sv.json" try ocrun agent.sh dev
-  SV="$SV $RC:$(grep -cxF -- "agent.sh: dev (opencode): --server in extraArgs is not supported: the kit gives the role its agent, MCP servers and trust settings through a private server (--standalone). Remove it from roles.dev.extraArgs." <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
+  SV="$SV $RC:$(grep -cxF -- "$svm" <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
 done
-check "opencode: extraArgs --standalone is passed once at its position; --server (both forms) exits 1 with the message, nothing started, no JSON, no session" "$SA1$SV" "0:mini --agent orca-dev --model p/m --x --standalone y z --session ses_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset  1:1:1: 1:1:1: 1:1:1:"
+check "opencode: extraArgs --standalone is passed once at its position; --server (both forms), --agent and --model=… exit 1 with their message, nothing started, no JSON, no session" "$SA1$SV" "0:--x --standalone y z --session ses_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset  1:1:1: 1:1:1: 1:1:1: 1:1:1: 1:1:1:"
+printf '{"default_agent": "build"}\n' > "$OCW/opencode.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json"; try ocrun agent.sh dev
+DA1="$RC:$(grep -cxF "agent.sh: dev (opencode): opencode.json sets default_agent, which would replace the role's agent orca-dev. Remove it, or set settings.trust to \"never\" to ignore the project's OpenCode configuration." <<<"$OUT"):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)"
+rm -f "$OC/out"; OCCFG="$OC/cfg-never.json" try ocrun agent.sh dev; DA2="$RC:$([ -e "$OC/out" ] && echo started || true)"; rm -f "$OCW/opencode.json"
+check "opencode: a project opencode.json that sets default_agent stops the role with its message, nothing started or written; under trust never it starts" "$DA1|$DA2" "1:1:|0:started"
 check "opencode: provenance records the opencode version" "$(tail -1 "$OC/real/wt/.git/orca-roles.provenance.jsonl" | jq -r '[.agent, .cliVersion] | join(" ")')" "opencode opencode 9.9.9"
+# C3: default_agent is the file's first key and the agent's model keeps its #variant
+jq '.roles.dev.model = "p/m#high"' "$OC/cfg.json" > "$OC/cfg-var.json"; OCCFG="$OC/cfg-var.json" try ocrun agent.sh dev
+check "opencode: the file's default_agent is its first key and the agent's model keeps its #variant (p/m#high stays p/m#high)" "$(jq -c '[keys_unsorted, .default_agent, .agents["orca-dev"].model]' "$FILE")" '[["default_agent","agents"],"orca-dev","p/m#high"]'
+# C3b (E3): every project file that ranks above OPENCODE_CONFIG stops the role, naming that file, before its configuration is written;
+# a file without the key starts, and so does an invalid trust (treated as never: the project's configuration is off)
+DAP=""
+for dpf in opencode.json opencode.jsonc .opencode/opencode.json .opencode/opencode.jsonc; do
+  mkdir -p "$(dirname "$OCW/$dpf")"; printf '{"default_agent": "build"}\n' > "$OCW/$dpf"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json"; try ocrun agent.sh dev
+  DAP="$DAP $RC:$(grep -cxF "agent.sh: dev (opencode): $dpf sets default_agent, which would replace the role's agent orca-dev. Remove it, or set settings.trust to \"never\" to ignore the project's OpenCode configuration." <<<"$OUT"):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)"
+  rm -f "$OCW/$dpf"; rmdir "$OCW/.opencode" 2>/dev/null || true
+done
+printf '{"default_agents": "build"}\n' > "$OCW/opencode.json"; rm -f "$OC/out"; try ocrun agent.sh dev; DAP="$DAP $RC:$([ -e "$OC/out" ] && echo started || true)"
+printf '{"default_agent": "build"}\n' > "$OCW/opencode.json"; rm -f "$OC/out"; OCCFG="$OC/cfg-bogus.json" try ocrun agent.sh dev; DAP="$DAP $RC:$([ -e "$OC/out" ] && echo started || true)"; rm -f "$OCW/opencode.json"
+check "opencode: any of the four project files that sets default_agent stops the role with its message naming that file, nothing started or written; a file without the key and an invalid trust (the project's configuration is off) start" "$DAP" " 1:1: 1:1: 1:1: 1:1: 0:started 0:started"
+# C2: the equals and space forms of --agent and --model are refused with the flag alone, wherever they sit; other extraArgs still start
+SV2=""; for sv2 in '["--agent=orca-x"]|--agent' '["--model", "p/q"]|--model' '["--prompt", "x", "--agent", "y"]|--agent'; do
+  sv2a="${sv2%|*}"; sv2f="${sv2##*|}"
+  jq --argjson a "$sv2a" '.roles.dev.extraArgs = $a' "$OC/cfg.json" > "$OC/cfg-sv2.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json" "$OCG0/orca-roles-opencode-dev.session"
+  OCCFG="$OC/cfg-sv2.json" try ocrun agent.sh dev
+  SV2="$SV2 $RC:$(grep -cxF "agent.sh: dev (opencode): $sv2f in extraArgs is not supported: the kit sets the role's agent and model in its OpenCode configuration (roles.dev.model). Remove it from roles.dev.extraArgs." <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
+done
+jq '.roles.dev.extraArgs = ["--log-level=info", "--prompt", "x"]' "$OC/cfg.json" > "$OC/cfg-ok.json"; rm -f "$OC/out"; OCCFG="$OC/cfg-ok.json" try ocrun agent.sh dev
+check "opencode: extraArgs --agent=…, --model … and --agent after another flag exit 1 with the flag alone, nothing started, written or saved; --log-level=info and --prompt x still start" "$SV2|$RC:$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out" | tr '\n' ' ')" " 1:1:1: 1:1:1: 1:1:1:|0:--standalone --log-level=info --prompt x --session ses_orca_dev_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset "
 # failures: outside a repo, and agent.sh stops when the preparation fails
 mkdir -p "$OC/norepo"; OCW="$OC/norepo"; try ocrun opencode-prepare.sh dev; check "opencode: outside a git repo prepare exits 1 with a message" "$RC:$(grep -c 'not inside a git repository' <<<"$OUT")" "1:1"
 rm -f "$OC/out"; try ocrun agent.sh dev; check "opencode: agent.sh exits 1 and never starts opencode when prepare fails" "$RC:$([ -e "$OC/out" ] && echo started):$(grep -c 'could not prepare' <<<"$OUT")" "1::1"
@@ -6175,7 +6228,7 @@ check "opencode launch: the fake orca drops the tab-title suffix, so the handle 
 printf '904\n' > "$TMP/ocpids.orph-dev"
 oc_launch orph-dev '{"terminals":[]}'
 rm -f "$TMP/ocpids.orph-dev"
-check "opencode launch: a closed tab whose session Orca kept running: it is reopened with its conversation, nothing deleted, its handle reaped before the new tab; a live 'opencode mini' does not keep the orphaned tab" "$RC:$(grep -c 'was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT"):$(grep -c 'as detached but its agent is running' <<<"$OUT" || true):$(grep -c 'terminal close --terminal orph-dev' "$LLOG"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$(ocorder "$LLOG" 904)" "0:1:0:1:1:0:ses_saved_abc:before"
+check "opencode launch: a closed tab whose session Orca kept running: it is reopened with its conversation, nothing deleted, its handle reaped before the new tab; a live OpenCode TUI does not keep the orphaned tab" "$RC:$(grep -c 'was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT"):$(grep -c 'as detached but its agent is running' <<<"$OUT" || true):$(grep -c 'terminal close --terminal orph-dev' "$LLOG"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$(ocorder "$LLOG" 904)" "0:1:0:1:1:0:ses_saved_abc:before"
 # a live OpenCode tab whose 'opencode mini' runs is reused; without a pid its agent is gone (state 2): the tab is closed and
 # a new one opens with its conversation (nothing is deleted)
 oc_live() {  # <env dev handle> <terminal list json> [pid hook (default the suite's)] [ORCA_ROLES_AGENT_CHECKS (default 1)]
@@ -6195,17 +6248,18 @@ LV2="$RC:$(grep -cFx 'The agent in the tab of Dev (live-dev) is gone; closing th
 printf '#!/bin/sh\nif [ "$1" = live-dev ]; then f="%s/cnt.live-dev"; n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$f"; [ "$n" -ge 2 ] || exit 0; fi\necho 4242\n' "$TMP" > "$TMP/agent-pid2"; chmod +x "$TMP/agent-pid2"
 rm -f "$TMP/cnt.live-dev"; oc_live live-dev "$LIVELIST" "$TMP/agent-pid2" 2; rm -f "$TMP/cnt.live-dev"
 LV3="$RC:$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true):$(grep -c 'terminal close --terminal live-dev' "$LLOG" || true):$(grep -c "agent.sh' dev " "$LLOG" || true)"
-check "opencode launch: a live tab with a 'mini' behind its handle is reused (nothing closed, opened or deleted), also when the pid only appears on the second check; without a pid the agent is gone, the tab is closed and a new one opens with its conversation and the 'keep their conversation.' line, nothing deleted" "$LV1|$LV2|$LV3" "0:1:0:0:0|0:1:1:1:0:ses_saved_abc:1:before|0:1:0:0"
-# --status with no pid hook and a fake ps first on the PATH (the real ps of the machine is never reached): a 'mini' behind the
+check "opencode launch: a live tab with an OpenCode TUI behind its handle is reused (nothing closed, opened or deleted), also when the pid only appears on the second check; without a pid the agent is gone, the tab is closed and a new one opens with its conversation and the 'keep their conversation.' line, nothing deleted" "$LV1|$LV2|$LV3" "0:1:0:0:0|0:1:1:1:0:ses_saved_abc:1:before|0:1:0:0"
+# --status with no pid hook and a fake ps first on the PATH (the real ps of the machine is never reached): an OpenCode TUI (full or 'mini') behind the
 # handle is alive, a handle carried only by 'opencode serve' or 'opencode run' is agent gone, a claude process still counts
 PSB="$OC/psbin"; mkdir -p "$PSB"
 cat > "$PSB/ps" <<'EOS'
 #!/bin/bash
 echo "$*" >> "$(dirname "$0")/calls.log"
 case "$*" in
-  "-axo pid=,comm=") printf '106 opencode\n103 opencode\n101 opencode\n102 /usr/local/bin/opencode\n104 opencode\n105 claude\n107 codex\n';;
-  "-axo pid=,uid=,comm=") me="$(id -u)"; o=$((me + 1)); printf '110 %s opencode\n111 %s opencode\n112 %s /x/bin/opencode\n113 %s opencode\n114 %s opencode\n115 %s opencode\n116 %s opencode\n117 %s claude\n118 %s node\n119 %s opencode\n120 %s opencode\n121 %s opencode\n122 %s opencode\n' "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$o" "$me" "$me" "$me";;
-  "eww -p 110"|"eww -p 111"|"eww -p 112"|"eww -p 113"|"eww -p 114"|"eww -p 115"|"eww -p 116"|"eww -p 117"|"eww -p 118"|"eww -p 119") echo "$3 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_a";;
+  "-axo pid=,comm=") printf '106 opencode\n103 opencode\n101 opencode\n102 /usr/local/bin/opencode\n104 opencode\n105 claude\n107 codex\n108 opencode\n';;
+  "-axo pid=,uid=,comm=") me="$(id -u)"; o=$((me + 1)); printf '110 %s opencode\n111 %s opencode\n112 %s /x/bin/opencode\n113 %s opencode\n114 %s opencode\n115 %s opencode\n116 %s opencode\n117 %s claude\n118 %s node\n119 %s opencode\n120 %s opencode\n121 %s opencode\n122 %s opencode\n123 %s opencode\n124 %s /x/bin/opencode\n125 %s opencode\n126 %s opencode\n' "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$me" "$o" "$me" "$me" "$me" "$me" "$me" "$me" "$me";;
+  "eww -p 108") echo '108 ? S 0:00.01 opencode ORCA_TERMINAL_HANDLE=oc-full';;
+  "eww -p 110"|"eww -p 111"|"eww -p 112"|"eww -p 113"|"eww -p 114"|"eww -p 115"|"eww -p 116"|"eww -p 117"|"eww -p 118"|"eww -p 119"|"eww -p 123"|"eww -p 124"|"eww -p 125"|"eww -p 126") echo "$3 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_a";;
   "eww -p 120") echo '120 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_ab';;
   "eww -p 121") echo '121 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_';;
   "eww -p 122") echo '122 ? S 0:00.01 x ORCA_TERMINAL_HANDLE=term_a';;
@@ -6235,7 +6289,12 @@ case "$*" in
   "-o args= -p 104") echo 'opencode run --agent orca-dev';;
   "-o args= -p 105") echo '/usr/local/bin/claude --resume 11111111-2222-3333-4444-555555555555';;
   "-o args= -p 107") echo '/usr/local/bin/codex --yolo';;
+  "-o args= -p 108") echo 'opencode --standalone --session ses_full';;
   "-o args= -p 106") echo 'opencode mini --standalone --agent orca-other --session ses_third';;
+  "-o args= -p 123") echo 'opencode --standalone --session ses_a';;
+  "-o args= -p 124") echo '/x/bin/opencode --log-level=info --session ses_a --standalone';;
+  "-o args= -p 125") echo 'opencode --session ses_a';;
+  "-o args= -p 126") echo 'opencode run --standalone x';;
   *) exit 0;;
 esac
 EOS
@@ -6244,14 +6303,14 @@ cp "$KIT/config.json" "$OC/kit-config.b1"
 cat > "$KIT/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "modes": ["academic-research"] }, "dev": { "title": "Dev", "agent": "opencode" }, "tester": { "title": "Tester", "agent": "opencode" }, "cxs": { "title": "Codex", "agent": "codex" } } }
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "modes": ["academic-research"] }, "dev": { "title": "Dev", "agent": "opencode" }, "tester": { "title": "Tester", "agent": "opencode" }, "cxs": { "title": "Codex", "agent": "codex" }, "ocfull": { "title": "Full", "agent": "opencode" } } }
 J
-printf 'LOCAL_COORDINATOR=cl-tab\nDEV=live-dev\nTESTER=tst-serve\nCXS=cx-tab\n' > "$LP/.git/orca-roles.env"; rm -f "$LP/.git/orca-roles.config.json"
-ST2="$(cd "$LP" && env -u ORCA_ROLES_AGENT_PID HOME="$TMP/home" PATH="$PSB:$OC/lbin:$OC/bin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" --status 2>&1 | awk -F'\t' '$2 ~ /^(cl-tab|live-dev|tst-serve|cx-tab)$/ {printf "%s=%s ", $2, $3}')"
+printf 'LOCAL_COORDINATOR=cl-tab\nDEV=live-dev\nTESTER=tst-serve\nCXS=cx-tab\nOCFULL=oc-full\n' > "$LP/.git/orca-roles.env"; rm -f "$LP/.git/orca-roles.config.json"
+ST2="$(cd "$LP" && env -u ORCA_ROLES_AGENT_PID HOME="$TMP/home" PATH="$PSB:$OC/lbin:$OC/bin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" --status 2>&1 | awk -F'\t' '$2 ~ /^(cl-tab|live-dev|tst-serve|cx-tab|oc-full)$/ {printf "%s=%s ", $2, $3}')"
 cp "$OC/kit-config.b1" "$KIT/config.json"
-check "opencode status: with no pid hook and a fake ps, a 'mini' behind the handle is alive (a longer handle with it as a prefix does not match, 'serve' and 'run' do not count), a handle carried only by them is agent gone, a claude and a codex process are still found" "$ST2" "cl-tab=alive live-dev=alive tst-serve=agent gone cx-tab=alive "
-# which OpenCode processes of a tab are ended. Real scan (ORCA_ROLES_OC_PIDS unset) with the fake ps: only this user's 'mini' and private
-# 'serve --stdio' of the exact handle; the shared service, another subcommand, another comm, another uid and a longer handle never match;
+check "opencode status: with no pid hook and a fake ps, an OpenCode TUI behind the handle is alive, both an older kit's 'mini --standalone' and the full TUI (a longer handle with it as a prefix does not match, 'serve' and 'run' do not count), a handle carried only by them is agent gone, a claude and a codex process are still found" "$ST2" "cl-tab=alive live-dev=alive tst-serve=agent gone cx-tab=alive oc-full=alive "
+# which OpenCode processes of a tab are ended. Real scan (ORCA_ROLES_OC_PIDS unset) with the fake ps: only this user's OpenCode TUI (full or 'mini')
+# and private 'serve --stdio' of the exact handle; the shared service, another subcommand, another comm, another uid and a longer handle never match;
 # an empty handle never scans. The reap sends TERM, then KILL only for a pid still listed, and every signal goes through the ORCA_ROLES_KILL hook.
 OC4="$OC/reap"; rm -rf "$OC4"; mkdir -p "$OC4"
 # guarded so an older tree without the functions reports a FAIL here instead of aborting the section (bash 3.2: declare -F)
@@ -6272,7 +6331,7 @@ B4="$(grep -c '^kill TERM 202$' "$OC4/kl2.log" || true):$(grep -c '^kill KILL' "
 : > "$OC4/kl.log"; O4C="$(OC_KILLLOG="$OC4/kl.log" oc_reap term_none Dev)"
 C4="$(wc -l < "$OC4/kl.log" | tr -d ' '):$([ -z "$O4C" ] && echo quiet || echo line)"
 fi
-check "opencode reap: pids of a handle: only this user's 'mini' and private 'serve --stdio' (the shared service, even with --stdio, another subcommand, another comm, another uid and the longer handles term_ab/term_ do not match); an empty handle never scans; the reap sends TERM then KILL for a pid still listed, TERM only when it goes, and nothing at all without a pid" "$FN4|$PIDS4|$AB4|$EMPTY4|$A4|$B4|$C4" "functions|110 111|120|0:0|1:1:1|1:0:1|0:quiet"
+check "opencode reap: pids of a handle: only this user's OpenCode TUI (full or 'mini', with --standalone) and private 'serve --stdio' (the shared service, even with --stdio, a TUI without --standalone, 'run --standalone', another subcommand, another comm, another uid and the longer handles term_ab/term_ do not match); an empty handle never scans; the reap sends TERM then KILL for a pid still listed, TERM only when it goes, and nothing at all without a pid" "$FN4|$PIDS4|$AB4|$EMPTY4|$A4|$B4|$C4" "functions|110 111 123 124|120|0:0|1:1:1|1:0:1|0:quiet"
 if [ -f "$OC/kit-config.bak" ]; then cp "$OC/kit-config.bak" "$KIT/config.json"; else rm -f "$KIT/config.json"; fi
 # mode switch: the OpenCode workers' sessions are deleted before their tabs close, their files go with them, a claude worker's does not
 # and the local coordinator's MCP file stays. A saved OpenCode worker whose tab is not open takes the same path (no close).
@@ -7414,6 +7473,7 @@ echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
 mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE NOSENDER FAILOUT
   local KK="${MAILKIT:-$KIT}"; printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; rm -f "$MF"/text.* "$MF/rl.n" "$MF/orch.log" "$MF/mail.log"; [ -n "${HIST:-}" ] || rm -f "$MF/gd/orca-roles.planner-handles"; [ -z "${HIST:-}" ] || printf '%b' "$HIST" > "$MF/gd/orca-roles.planner-handles"
   rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/nosender" "$MF/failout" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
+  [ -z "${OCSCREEN:-}" ] || printf '%s\n' "$OCSCREEN" > "$MF/hist.hd"
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
   [ -z "${FAILSEND:-}" ] || : > "$MF/failsend"; [ -z "${FAILHND:-}" ] || : > "$MF/failhnd"; [ -z "${NOSENDER:-}" ] || : > "$MF/nosender"; [ -z "${FAILOUT:-}" ] || { if [ "$FAILOUT" = - ]; then : > "$MF/failout"; else printf '%s' "$FAILOUT" > "$MF/failout"; fi; }; [ -z "${PRE:-}" ] || printf '%s' "$PRE" > "$MF/gd/orca-roles.models"; printf 'LOCAL_COORDINATOR=hp\nPLANNER=hq\nDEV=hd\nTESTER=ht\nCODE_REVIEWER=ha\n' > "$MF/gd/orca-roles.env"
@@ -7683,7 +7743,7 @@ EOS
 chmod +x "$MF/bin/opencode"
 ocm_run() {  # <role json fields> <models lines> <mode>
   rm -f "$MF/oc.log"; printf '%s\n' "$2" > "$MF/oc.models"; printf '%s' "$3" > "$MF/oc.mode"
-  ORCA_ROLES_OC_MODELS_RETRY=0 mf "$(mfc "$1")" clean "dev"
+  ORCA_ROLES_OC_MODELS_RETRY=0 OCSCREEN="${OCSCREEN-  ctrl+p commands}" mf "$(mfc "$1")" clean "dev"
 }
 OCD='"title": "Dev", "agent": "opencode", "model": "p/m"'
 OCMSG="ESC hp|Dev model unavailable|Dev did not start: its model p/m is not available (not in opencode models). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
@@ -7709,6 +7769,15 @@ ocm_run '"title": "Dev", "agent": "opencode"' "p/other" ""
 check "opencode model: an opencode role with no model is not checked" "$(test -f "$MF/oc.log" && echo called || echo no):$(models):$(nesc)" "no::0"
 ocm_run "$OCD, \"modelError\": \"no such {model}\"" "p/m" ""
 check "opencode model: listed model with a modelError of its own, screen check still records" "$(models):$(nesc)" "DEV=p/m :0"
+OCSCREEN='' ocm_run "$OCD" "p/m" ""; G1="$(grep -c '^Dev: its OpenCode screen showed no prompt after 1 s; sending its role anyway\.$' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true):$(grep -e 'showed no prompt' -e '^Prompt sent to hd' "$MF/out.log" | head -1 | grep -c 'showed no prompt' || true)"
+ocm_run "$OCD" "p/m" ""; G2="$(grep -c 'showed no prompt' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true)"
+OCSCREEN='' REUSED=dev ocm_run "$OCD" "p/m" ""; G3="$(grep -c 'showed no prompt' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true)"
+check "opencode start-up: an OpenCode tab this launch opened gets its role only once its screen shows the TUI: an empty screen gives one line after the cap (kickoffTimeoutSeconds 1) and the role is still sent after it; a ready screen gives no line; a reused tab is not gated" "$G1|$G2|$G3" "1:1:1|0:1|0:1"
+TK0=$SECONDS; OCSCREEN='' ORCA_ROLES_SCREEN_POLL=0 mf "$(mfc "$OCD" | jq -c '.settings.kickoffTimeoutSeconds = 3600')" clean "dev"
+G4="$(grep -c '^Dev: its OpenCode screen showed no prompt after 30 s; sending its role anyway\.$' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true):$([ $(( SECONDS - TK0 )) -lt 10 ] && echo quick || echo slow)"
+OCSCREEN='' mf "$(mfc "$DEVOK")" clean "dev"
+G5="$(grep -c 'showed no prompt' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true)"
+check "opencode start-up: the cap is min(kickoffTimeoutSeconds, 30): a kickoffTimeoutSeconds of 3600 gives one line after 30 s (not 3600) and the role is still sent at once past it; a Claude role is never gated" "$G4|$G5" "1:1:quick|0:1"
 rm -f "$MF/oc.mode" "$MF/oc.models" "$MF/oc.log"
 # defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
 CUD='"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"'

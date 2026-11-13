@@ -177,15 +177,23 @@ case "$AGENT" in
     exec "${RUN[@]+"${RUN[@]}"}" codex ${ARGS[@]+"${ARGS[@]}"}   # safe form for an empty list in bash 3.2 (macOS)
     ;;
   opencode)
-    # OpenCode 2.x: `opencode mini` takes --agent and --model (the main TUI takes neither). The role's agent is in a configuration file the kit
+    # OpenCode 2.x: the full TUI (opencode, no subcommand) takes neither --agent nor --model: the role's agent is default_agent in a configuration file the kit
     # writes in the git dir (opencode-prepare.sh), passed as OPENCODE_CONFIG, which only a private server reads: --standalone. PWD is the physical path.
     SA=1
     while IFS= read -r o; do
       case "$o" in
         --standalone) SA=0;;
         --server|--server=*) echo "agent.sh: $ROLE (opencode): --server in extraArgs is not supported: the kit gives the role its agent, MCP servers and trust settings through a private server (--standalone). Remove it from roles.$ROLE.extraArgs." >&2; exit 1;;
+        --agent|--agent=*|--model|--model=*) echo "agent.sh: $ROLE (opencode): ${o%%=*} in extraArgs is not supported: the kit sets the role's agent and model in its OpenCode configuration (roles.$ROLE.model). Remove it from roles.$ROLE.extraArgs." >&2; exit 1;;
       esac
     done < <(rcfg "$CFG" "$ROLE" extraArgs | jq -r '.[]?' 2>/dev/null)
+    # The project's opencode.json ranks above OPENCODE_CONFIG (measured with 2.2.5): a default_agent there would replace the role's agent,
+    # without its prompt or the kit's denies. Under settings.trust "never" the project's configuration is off, so it cannot.
+    if [ "$(trust_of "$CFG")" != never ]; then
+      for f in opencode.json opencode.jsonc .opencode/opencode.json .opencode/opencode.jsonc; do
+        if [ -f "$f" ] && grep -q '"default_agent"' "$f"; then echo "agent.sh: $ROLE (opencode): $f sets default_agent, which would replace the role's agent orca-$ROLE. Remove it, or set settings.trust to \"never\" to ignore the project's OpenCode configuration." >&2; exit 1; fi
+      done
+    fi
     OCCFG="$(ORCA_ROLES_MCP="$MCPFILE" ORCA_ROLES_CONFIG="$CFG" "$KIT/bin/opencode-prepare.sh" "$ROLE")" && [ -n "$OCCFG" ] || { echo "agent.sh: could not prepare the OpenCode agent for $ROLE" >&2; exit 1; }
     if [ -n "${OPENCODE_CONFIG:-}" ] && [ "$OPENCODE_CONFIG" != "$OCCFG" ]; then
       echo "agent.sh: $ROLE (opencode): OPENCODE_CONFIG ($OPENCODE_CONFIG) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." >&2
@@ -194,10 +202,7 @@ case "$AGENT" in
     # settings.trust "never": the project's opencode.json, .opencode/ and AGENTS.md stay off (honoured by the private server, --standalone)
     if [ "$(trust_of "$CFG")" = never ]; then export OPENCODE_DISABLE_PROJECT_CONFIG=1; fi
     cd "$(pwd -P)"; PWD="$(pwd -P)"; export PWD
-    ARGS+=(mini)
     if [ "$SA" = 1 ]; then ARGS+=(--standalone); fi
-    ARGS+=(--agent "orca-$ROLE")
-    [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
     N0=${#ARGS[@]}; add_list extraArgs
     # Own session id, saved in the git dir, so close-role.sh/launch.sh/clean.sh can delete or continue the role's session. A session flag in
     # extraArgs means the user owns the sessions: nothing is added or saved. --resume <id> (from launch.sh) continues that session.
@@ -214,7 +219,7 @@ case "$AGENT" in
       ARGS+=(--session "$OCID")
     fi
     record_provenance opencode || true
-    exec "${RUN[@]+"${RUN[@]}"}" opencode "${ARGS[@]}"
+    exec "${RUN[@]+"${RUN[@]}"}" opencode ${ARGS[@]+"${ARGS[@]}"}
     ;;
   custom)
     # The command runs in a login shell (your profile's PATH). Placeholders:

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Writes the OpenCode configuration of a role.  Usage (from the role's worktree or pair tree): opencode-prepare.sh <role>
-# agent.sh runs it before `opencode mini --standalone --agent orca-<role>` and passes the file as OPENCODE_CONFIG. The file is
+# agent.sh runs it before the full TUI (opencode --standalone), which runs the agent default_agent names (orca-<role>), and passes the file as OPENCODE_CONFIG. The file is
 # <team git dir>/orca-roles-opencode-<role>.json (oc_config_file), rewritten on every start (temp file + mv); its path is printed on stdout.
+#   default_agent: "orca-<role>", the agent the full TUI starts with (it takes no --agent flag).
 #   agents.orca-<role>: description, mode, model, steps (roles.<r>.opencode.steps, else settings.flow.maxStepsPerWorker, else none),
 #     system (the role anchor, the role's common rules, the role's prompt) and permissions: allow everything first (a call that matches no
 #     rule would wait for an answer that nobody gives in the tab), then roles.<r>.opencode.permissions as written, then the kit's denies
@@ -61,7 +62,7 @@ TMPF="$OUT.tmp.$$"
 # undone by the role's list (as for Claude roles).
 jq -n --arg title "$(title_of "$CFG" "$ROLE")" --arg model "$MODEL" --arg steps "$STEPS" --arg kit "$KITP" --arg role "$ROLE" --arg paths "$(kit_protected_paths)" \
   --slurpfile extra "$EXTRA_OK" --arg id "orca-$ROLE" --rawfile system "$W/system" --argjson servers "$SERVERS" '
-  {agents: {($id): ({description: "orca-roles \($title) role", mode: "primary"}
+  {default_agent: $id, agents: {($id): ({description: "orca-roles \($title) role", mode: "primary"}
     + (if $model != "" then {model: $model} else {} end)
     + (if $steps != "" then {steps: ($steps | tonumber)} else {} end)
     + {system: $system, permissions:
