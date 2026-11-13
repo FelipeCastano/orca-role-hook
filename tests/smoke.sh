@@ -160,6 +160,7 @@ export ORCA_ROLES_PACE=0.05   # the kit's fixed retry and poll waits, shortened;
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
+mkdir -p "$TMP/pacebin"; printf '#!/bin/sh\ncase "$1" in 1|2) echo "sleep $1" >> "$PACE_LOG"; exit 0;; esac\nexec /bin/sleep "$@"\n' > "$TMP/pacebin/sleep"; chmod +x "$TMP/pacebin/sleep"   # pace's sleep of 1 or 2 s, logged and skipped, in runs with ORCA_ROLES_PACE='' and this folder on PATH
 export ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$TMP/scheduler.log"   # install.sh never touches the real launchctl or crontab from the suite
 SECTION=""; ERR_AT=""
 on_exit() {
@@ -1700,7 +1701,8 @@ check "clear_command custom undefined" "$(clear_command "$C" cu)" ""
 check "clear_command explicit" "$(clear_command "$C" cc)" "/reset"
 try run_clean dev
 check "clean.sh dev: result" "$RC:$OUT" "0:Dev: context cleaned (/clear) and role resent."
-check "clean.sh dev: sends /clear, waits and resends the role" "$(grep -c -E 'terminal send --terminal t2 --text /clear --enter|terminal wait --terminal t2 --for tui-idle|terminal send --terminal t2 --text Read .*dev.md.*a=1, scratchDir=.*\. --enter' "$LOGF")" "3"
+cseq() { grep -E -e '^terminal (send --terminal t[12] --text (/clear|Read )|wait --terminal t[12] )' -e '^sleep 2$' "$LOGF" | sed -E -e 's#^terminal send --terminal (t[12]) --text /clear.*#C\1#' -e 's#^terminal wait --terminal (t[12]) .*#W\1#' -e 's#^terminal send --terminal t2 --text Read .*dev\.md.*a=1, scratchDir=.*\. --enter.*#Rt2#' -e 's#^terminal send --terminal t1 --text Read .*planner\.md.*#Rt1#' -e 's#^sleep 2$#P#' | paste -sd' ' -; }   # the clear, wait and role sends of t1 (planner) and t2 (dev), in order, and the pause before their waits
+S1="$(cseq)"; : > "$LOGF"; PACE_LOG="$LOGF" ORCA_ROLES_PACE='' PATH="$TMP/pacebin:$PATH" run_clean dev planner >/dev/null; S1="$S1|$(cseq)"; check "clean.sh: sends /clear, waits, resends the role, and waits for the answers only once every target's role is sent, behind one 2 s pause (dev; dev and planner)" "$S1" "Ct2 Wt2 Rt2 Wt2|Ct2 Wt2 Rt2 Ct1 Wt1 Rt1 P Wt2 Wt1"
 try run_clean Codex; check "clean.sh by title and dead tab" "$RC:$OUT" "1:Codex: its tab (t3) does not respond."
 check "clean.sh by handle" "$(run_clean t2)" "Dev: context cleaned (/clear) and role resent."
 try run_clean planner; check "clean.sh cleans the planner in programmer (it is a worker there)" "$RC:$OUT" "0:Planner: context cleaned (/clear) and role resent."
@@ -1712,6 +1714,11 @@ check "clean.sh --msg planner (programmer) is its worker message" "$(run_clean -
 jq '.roles.researcher = {title: "Researcher"} | .roles["researcher-2"] = {title: "Researcher 2", instanceOf: "researcher"}' "$C" > "$TMP/clean-inst.json"; printf 'PLANNER=t1\nDEV=t2\nRESEARCHER_2=t7\n' > "$TMP/state-inst.env"; : > "$LOGF"
 try env HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state-inst.env" ORCA_ROLES_CONFIG="$TMP/clean-inst.json" "$TMP/home/.orca-roles/bin/clean.sh" researcher-2
 check "clean.sh of an instance: resends its worker message, naming the role's prompt and the instance's own scratchDir" "$RC:$OUT:$(grep 'terminal send --terminal t7 --text Read ' "$LOGF" | grep -c "prompts/programmer/researcher.md.*scratchDir=[^ ,]*/researcher-2\. --enter" || true)" "0:Researcher 2: context cleaned (/clear) and role resent.:1"
+# an OpenCode Planner keeps exactly today's wait, right after its role message inside the loop; a custom worker gets no wait after its role message
+jq '.roles.planner.agent = "opencode" | .roles.cc.clearCommand = "/reset"' "$C" > "$TMP/clean-c2.json"; printf 'PLANNER=t1\nDEV=t2\nCC=t6\n' > "$TMP/state-c2.env"; : > "$LOGF"
+try env HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state-c2.env" ORCA_ROLES_CONFIG="$TMP/clean-c2.json" "$TMP/home/.orca-roles/bin/clean.sh" dev cc planner
+c2seq() { grep -E '^terminal (send --terminal t[126] --text .* --enter |wait --terminal t[126] )' "$LOGF" | sed -E -e 's#^terminal send --terminal (t[126]) --text /[a-z]+ .*#C\1#' -e 's#^terminal wait --terminal (t[126]) .*#W\1#' -e 's#^terminal send --terminal (t[126]) --text .*#R\1#' | paste -sd' ' -; }
+check "clean.sh: an OpenCode Planner keeps its one wait after its role message inside the loop, a custom worker gets none there, and a claude worker's answer is waited out after the loop" "$RC:$(printf '%s' "$OUT" | tr '\n' '/'):$(c2seq)" "0:Dev: context cleaned (/clear) and role resent./Custom2: context cleaned (/reset) and role resent./Planner: context cleaned (/new) and role resent.:Ct2 Wt2 Rt2 Ct6 Wt6 Rt6 Ct1 Wt1 Rt1 Wt1 Wt2"
 OUT="$(run_clean --msg local-coordinator)"
 case "$OUT" in (*"Handles: Planner=t1, Dev=t2, Codex=t3, Custom=t4."*"conversation was cleared"*) echo "ok   clean.sh --msg local-coordinator: cleared message with the current handles";; (*) echo "FAIL clean.sh --msg local-coordinator: $OUT"; FAIL=1;; esac
 mkdir -p "$TMP/fakebin-jira"; printf '#!/bin/sh\necho "$*" >> "%s"\n[ "$1 $2" = "worktree show" ] && echo '"'"'{"linkedWorkItem":{"provider":"jira","jiraIdentifier":"ABC-9","url":"https://x.atlassian.net/browse/ABC-9"}}'"'"'\nexit 0\n' "$TMP/orca-jira.log" > "$TMP/fakebin-jira/orca"; chmod +x "$TMP/fakebin-jira/orca"
@@ -5607,7 +5614,11 @@ check "trust_of: no setting, programmer or no mode -> worktree" "$(tof '{"settin
 check "trust_of: no setting, academic-research and pr-reviewer -> worktree too" "$(tof '{"settings":{"mode":"academic-research"}}')$(tof '{"settings":{"mode":"pr-reviewer"}}')" "worktree|worktree|"
 check "trust_of: an explicit value beats the mode" "$(tof '{"settings":{"mode":"pr-reviewer","trust":"worktree"}}')$(tof '{"settings":{"trust":"never"}}')" "worktree|never|"
 check "trust_of: invalid value (string, number, list) -> warning and never" "$(tof '{"settings":{"trust":"always"}}' | grep -c '^Warning.*never') $(tof '{"settings":{"trust":3}}' | grep -c Warning) $(tof '{"settings":{"trust":["worktree"]}}' | grep -c Warning)" "1 1 1"
-check "trust_of: null counts as unset" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}')" "worktree|"
+git init -q "$TF/ou"; ouq() { if (cd "$TF/ou" && ORCA_ROLES_CONFIG="${1:-}" oc_untrusted); then echo never; else echo trusted; fi; }
+OU="$(ouq):$(ouq "$TF/ou-missing.json")"; echo '{"settings":{"trust":"never"}}' > "$TF/ou/.git/orca-roles.config.json"; OU="$OU:$(ouq)"
+check "trust_of: null counts as unset; oc_untrusted with no configuration file (none in the git dir, and ORCA_ROLES_CONFIG naming a missing file) is not untrusted, and with the git dir's trust never it is" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}'):$OU" "worktree|:trusted:trusted:never"
+printf '{"settings":{"trust":"worktree"}}' > "$TF/ou-wt.json"; printf '{"settings":{"trust":"never"}}' > "$TF/ou-never.json"
+check "trust_of: oc_untrusted takes ORCA_ROLES_CONFIG when it is a file (worktree -> trusted, never -> untrusted) and, naming a missing file while the git dir's configuration says never, falls back to that one (untrusted)" "$(ouq "$TF/ou-wt.json"):$(ouq "$TF/ou-never.json"):$(ouq "$TF/ou-missing.json")" "trusted:never:never"
 # trust_folder records the folder it marked once, and only when it changed ~/.claude.json
 H="$TF/h-rec"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; rm -f "$TF/kit/trusted.list"; tf_run "$H"; tf_run "$H"
 check "trust_folder: the marked folder is recorded once in trusted.list" "$(cat "$TF/kit/trusted.list" 2>/dev/null)" "$TFD"
@@ -5894,7 +5905,8 @@ ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" O
 ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }   # a role's configuration file (physical git dir)
 ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
 FILE="$(ocf dev)"
-try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
+export OPENCODE_CONFIG="$OC/inherited.json"; try ocrun agent.sh dev; unset OPENCODE_CONFIG
+check "opencode: agent.sh starts the stub (exit 0); an inherited OPENCODE_CONFIG gets one warning naming it" "$RC:$(grep -cxF -- "agent.sh: dev (opencode): OPENCODE_CONFIG ($OC/inherited.json) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." <<<"$OUT")" "0:1"
 check "opencode: argv is --standalone + extraArgs + --session <own id> (no mini, --agent or --model); PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "--standalone
 --x
 y z
@@ -5953,10 +5965,18 @@ OCT="$(ocf tester)"; ocsys() { jq -r '.agents | to_entries[0].value.system' "$1"
 check "opencode: without role common the system prompt uses common-workers.md" "$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")"):$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" || true)" "1:0"
 # steps: role value, settings.flow default, invalid role value (left out with a warning), nothing
 check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(jq -r '.agents["orca-tester"].steps' "$OCT")" "77"
-try ocrun opencode-prepare.sh e2e-tester; R1="$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-e2e-tester"] | has("steps")' "$(ocf e2e-tester)"):$(grep -c '{env:' <<<"$OUT")$(ocrun opencode-prepare.sh dev | grep -c '{env:' || true)"
-printf 'common {env:HOME} and {file:/x}\n' > "$OC/common-env.md"; jq --arg c "$OC/common-env.md" '.roles["e2e-tester"].common = $c' "$OC/cfg.json" > "$OC/cfg-env.json"; OCCFG="$OC/cfg-env.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
+try ocrun opencode-prepare.sh e2e-tester; R1="$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-e2e-tester"] | has("steps")' "$(ocf e2e-tester)"):$(grep -c -e '{env:' -e 'has no provider' <<<"$OUT")$(ocrun opencode-prepare.sh dev | grep -c -e '{env:' -e 'has no provider' || true)"
+printf 'common {env:HOME} and {file:/x}\n' > "$OC/common-env.md"; jq --arg c "$OC/common-env.md" '.roles["e2e-tester"].common = $c | .roles["e2e-tester"].model = "claude-x"' "$OC/cfg.json" > "$OC/cfg-env.json"; OCCFG="$OC/cfg-env.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
 WARN="opencode-prepare.sh: warning: the system prompt of e2e-tester contains {env: or {file:, which OpenCode replaces with an environment variable or a file's content when it loads the role's configuration."
-check "opencode: an invalid role steps is reported and left out; a {env: in the system prompt warns once (the kit's prompts never do) and the file is still written" "$R1:$RC:$(grep -cxF -- "$WARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].system' "$(ocf e2e-tester)" | grep -c '{env:HOME}')" "0:1:false:00:0:1:1"
+MWARN="opencode-prepare.sh: warning: the model of e2e-tester (claude-x) has no provider: OpenCode expects provider/model (for example anthropic/claude-x) and leaves out an agent whose model it cannot find; models.sh e2e-tester lists the valid ones."
+check "opencode: an invalid role steps is reported and left out; a {env: in the system prompt warns once (the kit's prompts never do) and the file is still written; a model without a provider warns once and is still written as given" "$R1:$RC:$(grep -cxF -- "$WARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].system' "$(ocf e2e-tester)" | grep -c '{env:HOME}'):$(grep -cxF -- "$MWARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].model' "$(ocf e2e-tester)")" "0:1:false:00:0:1:1:1:claude-x"
+mm() {  # mm <model|none>: prepare e2e-tester with that model; rc, the exact warning line, any provider warning, the model written
+  jq --arg m "$1" 'if $m == "none" then .roles["e2e-tester"] |= del(.model) else .roles["e2e-tester"].model = $m end' "$OC/cfg.json" > "$OC/cfg-mm.json"
+  OCCFG="$OC/cfg-mm.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
+  local w="opencode-prepare.sh: warning: the model of e2e-tester ($1) has no provider: OpenCode expects provider/model (for example anthropic/$1) and leaves out an agent whose model it cannot find; models.sh e2e-tester lists the valid ones."
+  printf '%s:%s:%s:%s|' "$RC" "$(grep -cxF -- "$w" <<<"$OUT")" "$(grep -c 'has no provider' <<<"$OUT")" "$(jq -r '.agents["orca-e2e-tester"].model // "-"' "$(ocf e2e-tester)")"
+}
+check "opencode: a model without a provider warns once with the line naming it for every form (a plain name, digits, a variant with none) and never for an empty model or any model with a slash (provider/model, a variant, several slashes, a trailing or a leading one), the file keeping it as given and exit 0" "$(for m in claude-x gpt-5 'model#low' none p/m 'anthropic/claude-x#low' a/b/c a/ /x /; do mm "$m"; done)" "0:1:1:claude-x|0:1:1:gpt-5|0:1:1:model#low|0:0:0:-|0:0:0:p/m|0:0:0:anthropic/claude-x#low|0:0:0:a/b/c|0:0:0:a/|0:0:0:/x|0:0:0:/|"
 jq 'del(.settings.flow)' "$OC/cfg.json" > "$OC/cfg-nf.json"; OCCFG="$OC/cfg-nf.json" ocrun opencode-prepare.sh tester >/dev/null
 check "opencode: no steps anywhere, no steps key" "$(jq '.agents["orca-tester"] | has("steps")' "$OCT")" "false"
 jq '.settings.flow.maxStepsPerWorker = "x"' "$OC/cfg.json" > "$OC/cfg-bf.json"; OCCFG="$OC/cfg-bf.json"; try ocrun opencode-prepare.sh tester
@@ -6152,7 +6172,7 @@ W1="$(grep -c '^orca terminal wait --terminal h-dev --for tui-idle --timeout-ms 
 W2="$RC:$(grep -c '^orca terminal wait --terminal h-dev --for tui-idle --timeout-ms 7000 --json$' "$OCLOG" || true)"
 : > "$OCLOG"; try ocrun clean.sh cl
 W3="$RC:$(grep -c '^orca terminal wait --terminal h-cl --for tui-idle --timeout-ms 180000 --json$' "$OCLOG" || true)"
-check "opencode clean: sends /new first; an OpenCode role's waits last at most 30 s (kickoffTimeoutSeconds 180: both waits 30000 and no other; 7: 7000), a claude role keeps kickoffTimeoutSeconds (180000)" "$N1|$W1|$W2|$W3" "1|2:0|0:2|0:1"
+check "opencode clean: sends /new first; an OpenCode role's waits last at most 30 s (kickoffTimeoutSeconds 180: both waits 30000 and no other; 7: 7000), a claude role keeps kickoffTimeoutSeconds (180000) at both its waits (after the clear command and after the role message)" "$N1|$W1|$W2|$W3" "1|2:0|0:2|0:2"
 printf 'ses_old\n%s\n' "$OC/tree" > "$SF"; : > "$OCLOG"
 cat > "$OC/list.json" <<J
 [{"id":"ses_wt_newer","created":9999999999999,"updated":1,"directory":"$OCWP"},
@@ -9458,7 +9478,23 @@ tsr --run run_1 --json; RB="$RB:$(printf '%s' "$OUT" | jq -r '[.[] | select(.tit
 check "team-status --run: a working role with an open dispatch is not a candidate; the 7th field report is ok for a role whose last worker_done of the Run starts with Done, missing for one that does not, - without a report (other Runs and types ignored) or a tab, in text and --json; with the inbox failing every report is - and the exit code stays 0" "$RA|$RB" "working|Dev=ok Tester=missing dep=- :0:ok,missing,-:0:-,"
 S0="$(cat "$TSG"/orca-roles.* | cksum)"; : > "$TSL"; tsr --run run_1 >/dev/null; check "team-status is read-only: it writes nothing in the git dir and calls only worktree ps, inbox, worker-list and terminal show" "$([ "$(cat "$TSG"/orca-roles.* | cksum)" = "$S0" ] && echo unchanged):$(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')" "unchanged:orchestration inbox,orchestration worker-list,terminal show,worktree ps,"
 ln -s "$TS/proj" "$TS/link"; tsr "$TS/link"; X1="$RC:$(tsl | wc -l | tr -d ' ')"; TSD="$TS" tsr proj; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"; mkdir -p "$TS/proj/sub"; TSD="$TS/proj/sub" tsr; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"
-check "team-status: the worktree folder is found by its physical path whether it is the current folder, a relative or symlinked argument, or a subfolder" "$X1" "0:19:0:19:0:19"
+jq -c '.roles.planner.title = "Planner Alt"' "$TSG/orca-roles.config.json" > "$TS/cfg-alt.json"
+export ORCA_ROLES_CONFIG="$TS/cfg-alt.json"; tsr; X2="$RC:$(tsl | sed -n '1p' | cut -d'|' -f1)"
+unset ORCA_ROLES_CONFIG; mv "$TSG/orca-roles.config.json" "$TS/cfg.moved"; tsr; M0="$RC:$(tsl)"; mv "$TS/cfg.moved" "$TSG/orca-roles.config.json"
+export ORCA_ROLES_CONFIG="$TS/cfg-missing.json"; tsr; X2="$X2:$RC:$(tsl | wc -l | tr -d ' '):$(wc -l < "$TS/err" | tr -d ' '):$(if [ "$RC:$(tsl)" = "$M0" ]; then echo same; else echo diff; fi)"
+ORCA_ROLES_CONFIG="$TS/cfg-alt.json"; tsr "$TS/link"; X2="$X2:$RC:$(tsl | sed -n '1p' | cut -d'|' -f1)"; unset ORCA_ROLES_CONFIG
+check "team-status: without a folder argument ORCA_ROLES_CONFIG names the team's configuration and its titles are used, a missing one behaves as a missing configuration (exactly the lines of a git dir without one, exit 0, no stderr), and a folder argument ignores it" "$X2" "0:Planner Alt:0:19:0:same:0:Planner"
+jq -c '.roles.deployer = {"title": "Deployer", "agent": "claude", "open": "hidden"}' "$TSG/orca-roles.config.json" > "$TS/cfg-hid.json"
+mkdir -p "$TS/team3"; mv "$TSG/orca-roles.env" "$TSG/orca-roles.tabs" "$TS/team3/"; cp "$TS/cfg-hid.json" "$TS/team3/orca-roles.config.json"
+mkdir -p "$TSG/orca-roles-hidden"; echo "starting - - - t" > "$TSG/orca-roles-hidden/deployer.pid"
+export ORCA_ROLES_STATE="$TS/team3/orca-roles.env"; export ORCA_ROLES_CONFIG="$TS/team3/orca-roles.config.json"
+tsr; X3="$RC:$(tsl | awk -F'|' '$1 == "Deployer" {print $2}')"
+mkdir -p "$TS/team3/orca-roles-hidden"; echo "starting - - - t" > "$TS/team3/orca-roles-hidden/deployer.pid"
+tsr; X3="$X3:$RC:$(tsl | awk -F'|' '$1 == "Deployer" {print $2}')"
+unset ORCA_ROLES_STATE ORCA_ROLES_CONFIG; mv "$TS/team3/orca-roles.env" "$TS/team3/orca-roles.tabs" "$TSG/"; rm -rf "$TS/team3" "$TSG/orca-roles-hidden" "$TS/cfg-hid.json"
+check "team-status: without a folder argument the hidden roles' folder is the one next to the state file: a pid file in the git dir gives not-opened, the same file next to the state file hidden-running" "$X3" "0:not-opened:0:hidden-running"
+tsr; TB="$(tsl)"; mkdir -p "$TS/team2"; mv "$TSG/orca-roles.env" "$TSG/orca-roles.tabs" "$TS/team2/"; export ORCA_ROLES_STATE="$TS/team2/orca-roles.env"; tsr; X1="$X1:$RC:$([ "$(tsl)" = "$TB" ] && echo same)"; tsr "$TS/link"; X1="$X1:$RC"; unset ORCA_ROLES_STATE; mv "$TS/team2/orca-roles.env" "$TS/team2/orca-roles.tabs" "$TSG/"
+check "team-status: the worktree folder is found by its physical path whether it is the current folder, a relative or symlinked argument, or a subfolder; without a folder argument ORCA_ROLES_STATE names another team, whose tabs file is read next to its state file (the same lines), and with one it is ignored" "$X1" "0:19:0:19:0:19:0:same:2"
 tsr; : > "$TSL"
 E2=""
 mkdir -p "$TS/nowt"; git -C "$TS/nowt" init -q -b main; tsr "$TS/nowt"; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' '):$(wc -c < "$TS/err" | tr -d ' ' | sed 's/^[1-9][0-9]*$/err/'):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"
@@ -9499,6 +9535,7 @@ case "\$1 \$2" in
   "worktree ps") [ ! -e "$DS/ps.mail" ] || { cat "$DS/ps.mail"; exit 0; }; n=\$(( \$(cat "$DS/pscount" 2>/dev/null || echo 0) + 1 )); echo \$n > "$DS/pscount"; mode="\$(cat "$DS/mode")"
     if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$DS/entered" ]; } || { [ "\$mode" = lateenter ] && [ -e "$DS/entered" ] && [ \$n -ge \$(( \$(cat "$DS/entered") + 3 )) ]; }; then cat "$DS/ps.started"; else cat "$DS/ps.idle"; fi;;
   "terminal show") cat "$DS/show.json";;
+  "terminal wait") exit "\$(cat "$DS/twait.rc" 2>/dev/null || echo 0)";;
   "terminal send") cat "$DS/pscount" > "$DS/entered"; exit "\$(cat "$DS/tsend.rc" 2>/dev/null || echo 0)";;
   "orchestration send") exit "\$(cat "$DS/send.rc")";;
   "orchestration inbox") case " \$* " in *" --full "*) cat "$DS/inbox.json";; *) jq -c '.result.messages |= map({id, type, subject})' "$DS/inbox.json";; esac;;
@@ -9529,9 +9566,10 @@ dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the sc
 dsc() { grep -c -- "$1" "$DSL" || true; }
 dslog() { sed 's/^[0-9-]* [0-9:]* //' "$DSG/orca-roles-dispatch.log" 2>/dev/null | tr '\n' '/'; }
 EXP_JSON="$(cat "$DS/dispatch.json")"
-rm -f "$DSG/orca-roles-mail.log"; dsrun early plain --task task_abc123 --to h-w --run run_1; mend run_1
+rm -f "$DSG/orca-roles-mail.log"; PACE_LOG="$DSL" ORCA_ROLES_PACE='' PATH="$TMP/pacebin:$PATH" dsrun early plain --task task_abc123 --to h-w --run run_1; mend run_1
 A="$RC:$([ "$OUT" = "$EXP_JSON" ] && echo same):$(dsc 'orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json'):$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog):$(mailog):$(wc -l < "$DS/err" | tr -d ' ')"
-check "dispatch.sh: the same JSON and exit status as orca's dispatch (--run passed on), the worker started within the first polls -> nothing sent and one log line; --run also starts the Run's mail watcher, which ends with no open dispatch; nothing on stderr" "$A" "0:same:1:0:0:h-w: task_abc123 started/:run_1: started/run_1: ended: no task in flight/:0"
+A="$A:$(sed -n 1,3p "$DSL" | paste -sd'|' -)"
+check "dispatch.sh: a 2 s pause, then one tui-idle wait of 60 s on the worker's tab, then the dispatch; the same JSON and exit status as orca's dispatch (--run passed on), the worker started within the first polls -> nothing sent and one log line; --run also starts the Run's mail watcher, which ends with no open dispatch; nothing on stderr" "$A" "0:same:1:0:0:h-w: task_abc123 started/:run_1: started/run_1: ended: no task in flight/:0:sleep 2|terminal wait --terminal h-w --for tui-idle --timeout-ms 60000 --json|orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json"
 dsrun enter pasted --task task_abc123 --to h-w
 B="$RC:$(dsc 'orchestration dispatch'):$(dsc 'terminal send --terminal h-w --enter'):$(dsc 'orchestration send'):$(dslog)"
 check "dispatch.sh: a brief left unsent ('[Pasted text' in the preview) gets exactly one Enter, and when the worker starts then no message is sent" "$B" "0:1:1:0:h-w: task_abc123 unsent in its composer; Enter re-sent/h-w: Enter re-sent, task started/"
@@ -9543,7 +9581,7 @@ D="$RC:$(dsc 'terminal send'):$(dsc 'orchestration send --to h-planner --type st
 check "dispatch.sh: not started and nothing pasted in the composer -> no Enter, one status" "$D" "0:0:1:1:h-w: task_abc123 not started (Enter re-sent: no); told h-planner/"
 echo 1 > "$DS/dispatch.rc"; printf '{"ok":false,"error":{"code":"dispatch_failed"}}' > "$DS/dispatch.json"; FJ="$(cat "$DS/dispatch.json")"
 DNOCHECKER=1 dsrun early plain --task task_abc123 --to h-w
-E="$RC:$([ "$OUT" = "$FJ" ] && echo same):$(dsc 'worktree ps'):$(dsc 'terminal'):$(dsc 'orchestration send'):$([ -e "$DSG/orca-roles-dispatch.log" ] && echo log || echo nolog)"
+E="$RC:$([ "$OUT" = "$FJ" ] && echo same):$(dsc 'worktree ps'):$(grep -v '^terminal wait ' "$DSL" | grep -c '^terminal' || true):$(dsc 'orchestration send'):$([ -e "$DSG/orca-roles-dispatch.log" ] && echo log || echo nolog)"
 check "dispatch.sh: a failed dispatch keeps orca's output and exit status and starts no checker" "$E" "1:same:0:0:0:nolog"
 echo 0 > "$DS/dispatch.rc"; printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w"}}}' > "$DS/dispatch.json"
 dsrun never plain --task task_abc123 --to h-w
@@ -9575,12 +9613,13 @@ check "dispatch.sh inside a repository: the log is in the git dir and not in \$K
 printf 'DEV=h-w\nCU=h-cu\nOC=h-oc\nCL=h-cl\nCX=h-cx\n' > "$DSG/orca-roles.env"
 printf '{"defaults":{"agent":"claude"},"roles":{"dev":{},"cu":{"agent":"custom"},"oc":{"agent":"opencode"},"cl":{"agent":"claude"},"cx":{"agent":"codex"}}}' > "$DSG/orca-roles.config.json"
 N1=""; for h in h-cu h-oc h-cl h-cx h-w h-other; do
-  DNOCHECKER=1 dsrun early plain --task task_abc123 --to "$h"; N1="$N1 $h:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog)"
+  DNOCHECKER=1 dsrun early plain --task task_abc123 --to "$h"; N1="$N1 $h:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog):$(dsc 'terminal wait --terminal '"$h"' --for tui-idle --timeout-ms 60000')"
 done
-DNOCHECKER=1 dsrun early plain --check-only --task task_abc123 --to h-cu; N1="$N1 co-cu:$RC:$(dsc 'worktree ps'):$(dslog)"
-dsrun early plain --check-only --task task_abc123 --to h-cl; N1="$N1 co-cl:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog)"
+DNOCHECKER=1 dsrun early plain --check-only --task task_abc123 --to h-cu; N1="$N1 co-cu:$RC:$(dsc 'worktree ps'):$(dslog):$(dsc 'terminal wait --terminal h-cu --for tui-idle --timeout-ms 60000')"
+dsrun early plain --check-only --task task_abc123 --to h-cl; N1="$N1 co-cl:$RC:$(dsc 'worktree ps' | sed 's/^[1-9][0-9]*$/ps/'):$(dslog):$(dsc 'terminal wait --terminal h-cl --for tui-idle --timeout-ms 60000')"
+echo 1 > "$DS/twait.rc"; dsrun early plain --task task_abc123 --to h-cl; N1="$N1 fail:$RC:$([ "$OUT" = "$EXP_JSON" ] && echo same):$(dsc 'orchestration dispatch'):$(dslog)"; rm -f "$DS/twait.rc"
 rm -f "$DSG/orca-roles.env" "$DSG/orca-roles.config.json"
-check "dispatch.sh: no start check (one log line, no worktree ps) for a custom or opencode role, also with --check-only; the checker runs for claude, codex, an unset agent and a handle that is no role" "$N1" " h-cu:0:0:h-cu: no start check for agent custom/ h-oc:0:0:h-oc: no start check for agent opencode/ h-cl:0:ps:h-cl: task_abc123 started/ h-cx:0:ps:h-cx: task_abc123 started/ h-w:0:ps:h-w: task_abc123 started/ h-other:0:ps:h-other: task_abc123 started/ co-cu:0:0:h-cu: no start check for agent custom/ co-cl:0:ps:h-cl: task_abc123 started/"
+check "dispatch.sh: a claude, codex or unset role and a handle that is no role get one 60 s tui-idle wait before the dispatch, a custom or opencode role and --check-only none; a failed wait still dispatches (same JSON) with one log line; no start check (one log line, no worktree ps) for a custom or opencode role, also with --check-only; the checker runs for claude, codex, an unset agent and a handle that is no role" "$N1" " h-cu:0:0:h-cu: no start check for agent custom/:0 h-oc:0:0:h-oc: no start check for agent opencode/:0 h-cl:0:ps:h-cl: task_abc123 started/:1 h-cx:0:ps:h-cx: task_abc123 started/:1 h-w:0:ps:h-w: task_abc123 started/:1 h-other:0:ps:h-other: task_abc123 started/:1 co-cu:0:0:h-cu: no start check for agent custom/:0 co-cl:0:ps:h-cl: task_abc123 started/:0 fail:0:same:1:h-cl: not idle within 60 s (or the wait failed); dispatching task_abc123 anyway/h-cl: task_abc123 started/"
 # the mail watcher (--mail-watch, started by --run and by --mail): one notice per message Orca left unannounced, only to a Claude coordinator tab at rest with an empty composer; its ends
 mmsg() { jq -cn --arg id "$1" --argjson d "$2" --argjson r "$3" --argjson a "$4" --arg run "${5:-run_m}" '{id: $id, to_handle: ("run:" + $run), delivered_at: $d, read: $r, created_at: (now - $a | floor | todate)}'; }   # mmsg <id> <delivered_at> <read> <age s> [run]: one mailbox row
 mbox() { printf '{"ok":true,"result":{"messages":[%s]}}' "$(IFS=,; echo "$*")" > "$DS/inbox.json"; }
@@ -9602,10 +9641,12 @@ mtab claude "$EMPTY"; mbox "$(mmsg m4 null 0 0)"; mw none; M6="$MW"
 mbox "$(mmsg m1 null 0 60)"; echo 1 > "$DS/tsend.rc"; MMAX=10 mw none; M7="$MW"; rm -f "$DS/tsend.rc"
 mbox; mkdir -p "$DSG/orca-roles-hidden"; echo "starting - - - x" > "$DSG/orca-roles-hidden/dev.pid"; mw none; M8="$MW"; rm -rf "$DSG/orca-roles-hidden"; mw open; M8="$M8 $MW"
 mv "$DS/inbox.json" "$DS/inbox.off"; rm -f "$DSG"/orca-roles-mail.run_m.*; echo $(( $(date +%s) + 60 )) > "$DSG/orca-roles-mail.run_m.req"; MKEEP=1 MMAX=1 mw none; M9="$MW"; mv "$DS/inbox.off" "$DS/inbox.json"
-# one watcher per Run: a lock left by a dead watcher whose pid now names another live process does not hold it; a second --mail while the first lives starts nothing; it ends once the Run has no open dispatch, and leaves no lock
+# one watcher per Run: a lock left by a dead watcher whose pid now names another live process does not hold it; a second --mail while the first lives starts nothing, and a watcher started while it lives exits on the lock (one 'started' in the log); it ends once the Run has no open dispatch, and leaves no lock
 cp "$DS/wl.open" "$DS/wl.json"; rm -f "$DSG/orca-roles-mail.log"; rm -f "$DSG"/orca-roles-mail.run_m.*; echo "$$ not-its-start" > "$DSG/orca-roles-mail.run_m.pid"
-for _ in 1 2; do (cd "$DS/proj" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=5 "$ROOT/bin/dispatch.sh" --mail --run run_m) >/dev/null 2>&1; done
-sleep 0.5; MP="$({ pgrep -f -- "$ROOT/bin/dispatch.sh --mail-watch run_m" || true; } | wc -l | tr -d ' ')"; cp "$DS/wl.none" "$DS/wl.json"; mend run_m
+mstart() { (cd "$DS/proj" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=5 "$ROOT/bin/dispatch.sh" "$@") >/dev/null 2>&1; }   # mstart <args>: dispatch.sh in run_m's test worktree
+mstart --mail --run run_m; n=0; until grep -q 'mail run_m: started$' "$DSG/orca-roles-mail.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.1; n=$((n + 1)); done
+mstart --mail --run run_m; mstart --mail-watch run_m
+cp "$DS/wl.none" "$DS/wl.json"; mend run_m; MP="$(grep -c 'mail run_m: started$' "$DSG/orca-roles-mail.log" || true)"
 M10="$MP:$(mailog | sed 's/run_m: //g'):$([ -e "$DSG/orca-roles-mail.run_m.pid" ] && echo lock || echo nolock)"
 rm -f "$DS/ps.mail"; mbox
 check "dispatch.sh mail watcher: one notice (exact text) for a message neither delivered nor read after 20 s, to the Run's coordinator, once per message; none for delivered, read, other-Run or younger messages; only to a Claude tab at rest (also 'working' while monitoring with its main agent done) with an empty composer; three failed sends then gives up; it ends with no open dispatch and nothing pending, else at its time limit, which a later start request renews (a live hidden run or an open dispatch keeps it), or after 20 unanswered looks; a lock naming a reused pid does not hold it, and a second start while one lives starts nothing" \
