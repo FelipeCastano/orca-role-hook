@@ -160,6 +160,7 @@ export ORCA_ROLES_PACE=0.05   # the kit's fixed retry and poll waits, shortened;
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
+mkdir -p "$TMP/pacebin"; printf '#!/bin/sh\ncase "$1" in 1|2) echo "sleep $1" >> "$PACE_LOG"; exit 0;; esac\nexec /bin/sleep "$@"\n' > "$TMP/pacebin/sleep"; chmod +x "$TMP/pacebin/sleep"   # pace's sleep of 1 or 2 s, logged and skipped, in runs with ORCA_ROLES_PACE='' and this folder on PATH
 export ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$TMP/scheduler.log"   # install.sh never touches the real launchctl or crontab from the suite
 SECTION=""; ERR_AT=""
 on_exit() {
@@ -1700,8 +1701,8 @@ check "clear_command custom undefined" "$(clear_command "$C" cu)" ""
 check "clear_command explicit" "$(clear_command "$C" cc)" "/reset"
 try run_clean dev
 check "clean.sh dev: result" "$RC:$OUT" "0:Dev: context cleaned (/clear) and role resent."
-cseq() { grep -E '^terminal (send --terminal t[12] --text (/clear|Read )|wait --terminal t[12] )' "$LOGF" | sed -E -e 's#^terminal send --terminal (t[12]) --text /clear.*#C\1#' -e 's#^terminal wait --terminal (t[12]) .*#W\1#' -e 's#^terminal send --terminal t2 --text Read .*dev\.md.*a=1, scratchDir=.*\. --enter.*#Rt2#' -e 's#^terminal send --terminal t1 --text Read .*planner\.md.*#Rt1#' | paste -sd' ' -; }   # the clear, wait and role sends of t1 (planner) and t2 (dev), in order
-S1="$(cseq)"; : > "$LOGF"; run_clean dev planner >/dev/null; S1="$S1|$(cseq)"; check "clean.sh: sends /clear, waits, resends the role, and waits for the answers only once every target's role is sent (dev; dev and planner)" "$S1" "Ct2 Wt2 Rt2 Wt2|Ct2 Wt2 Rt2 Ct1 Wt1 Rt1 Wt2 Wt1"
+cseq() { grep -E -e '^terminal (send --terminal t[12] --text (/clear|Read )|wait --terminal t[12] )' -e '^sleep 2$' "$LOGF" | sed -E -e 's#^terminal send --terminal (t[12]) --text /clear.*#C\1#' -e 's#^terminal wait --terminal (t[12]) .*#W\1#' -e 's#^terminal send --terminal t2 --text Read .*dev\.md.*a=1, scratchDir=.*\. --enter.*#Rt2#' -e 's#^terminal send --terminal t1 --text Read .*planner\.md.*#Rt1#' -e 's#^sleep 2$#P#' | paste -sd' ' -; }   # the clear, wait and role sends of t1 (planner) and t2 (dev), in order, and the pause before their waits
+S1="$(cseq)"; : > "$LOGF"; PACE_LOG="$LOGF" ORCA_ROLES_PACE='' PATH="$TMP/pacebin:$PATH" run_clean dev planner >/dev/null; S1="$S1|$(cseq)"; check "clean.sh: sends /clear, waits, resends the role, and waits for the answers only once every target's role is sent, behind one 2 s pause (dev; dev and planner)" "$S1" "Ct2 Wt2 Rt2 Wt2|Ct2 Wt2 Rt2 Ct1 Wt1 Rt1 P Wt2 Wt1"
 try run_clean Codex; check "clean.sh by title and dead tab" "$RC:$OUT" "1:Codex: its tab (t3) does not respond."
 check "clean.sh by handle" "$(run_clean t2)" "Dev: context cleaned (/clear) and role resent."
 try run_clean planner; check "clean.sh cleans the planner in programmer (it is a worker there)" "$RC:$OUT" "0:Planner: context cleaned (/clear) and role resent."
@@ -9565,10 +9566,10 @@ dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the sc
 dsc() { grep -c -- "$1" "$DSL" || true; }
 dslog() { sed 's/^[0-9-]* [0-9:]* //' "$DSG/orca-roles-dispatch.log" 2>/dev/null | tr '\n' '/'; }
 EXP_JSON="$(cat "$DS/dispatch.json")"
-rm -f "$DSG/orca-roles-mail.log"; dsrun early plain --task task_abc123 --to h-w --run run_1; mend run_1
+rm -f "$DSG/orca-roles-mail.log"; PACE_LOG="$DSL" ORCA_ROLES_PACE='' PATH="$TMP/pacebin:$PATH" dsrun early plain --task task_abc123 --to h-w --run run_1; mend run_1
 A="$RC:$([ "$OUT" = "$EXP_JSON" ] && echo same):$(dsc 'orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json'):$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog):$(mailog):$(wc -l < "$DS/err" | tr -d ' ')"
-A="$A:$(sed -n 1,2p "$DSL" | paste -sd'|' -)"
-check "dispatch.sh: one tui-idle wait of 60 s on the worker's tab, then the dispatch; the same JSON and exit status as orca's dispatch (--run passed on), the worker started within the first polls -> nothing sent and one log line; --run also starts the Run's mail watcher, which ends with no open dispatch; nothing on stderr" "$A" "0:same:1:0:0:h-w: task_abc123 started/:run_1: started/run_1: ended: no task in flight/:0:terminal wait --terminal h-w --for tui-idle --timeout-ms 60000 --json|orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json"
+A="$A:$(sed -n 1,3p "$DSL" | paste -sd'|' -)"
+check "dispatch.sh: a 2 s pause, then one tui-idle wait of 60 s on the worker's tab, then the dispatch; the same JSON and exit status as orca's dispatch (--run passed on), the worker started within the first polls -> nothing sent and one log line; --run also starts the Run's mail watcher, which ends with no open dispatch; nothing on stderr" "$A" "0:same:1:0:0:h-w: task_abc123 started/:run_1: started/run_1: ended: no task in flight/:0:sleep 2|terminal wait --terminal h-w --for tui-idle --timeout-ms 60000 --json|orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json"
 dsrun enter pasted --task task_abc123 --to h-w
 B="$RC:$(dsc 'orchestration dispatch'):$(dsc 'terminal send --terminal h-w --enter'):$(dsc 'orchestration send'):$(dslog)"
 check "dispatch.sh: a brief left unsent ('[Pasted text' in the preview) gets exactly one Enter, and when the worker starts then no message is sent" "$B" "0:1:1:0:h-w: task_abc123 unsent in its composer; Enter re-sent/h-w: Enter re-sent, task started/"
