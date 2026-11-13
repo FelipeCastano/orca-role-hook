@@ -6882,6 +6882,100 @@ jq '.settings.flow = {escalation: {dev: {to: "m-big"}}, crossCheck: true}' "$RD/
 case "$(PMX "$RD/x2.json")" in *"Round log and escalation: "*"$XR"*) echo "ok   rounds --cross: asked for with escalation and crossCheck";; *) echo "FAIL rounds --cross with escalation"; FAIL=1;; esac
 jq '.settings.flow = {recordRounds: true}' "$RD/x0.json" > "$RD/x3.json"; jq '.settings.flow = {crossCheck: true}' "$RD/x0.json" > "$RD/x4.json"
 check "rounds --cross: not asked for with the round log alone or the cross-check alone" "$(PMX "$RD/x3.json" | grep -c -- '--cross' || true):$(PMX "$RD/x4.json" | grep -c -- '--cross' || true)" "0:0"
+# handoff.sh: one command after Dev's report records the checkpoint, writes the Tester brief, the ledger line and the
+# state line, creates the Tester task from the brief and dispatches it. Fake orca (task-create) and fake dispatch.sh, both logging.
+HOD="$TMP/handoff"; rm -rf "$HOD"; mkdir -p "$HOD/bin" "$HOD/dir with space"
+printf 'spec text\n' > "$HOD/spec.md"; printf 'dev report\n' > "$HOD/report.md"; printf 'spaced spec\n' > "$HOD/dir with space/spec file.md"
+: > "$HOD/orca.log"; : > "$HOD/dispatch.log"
+cat > "$HOD/bin/orca" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >> "$HOD/orca.log"
+case "\$2" in
+  task-create)
+    if [ -n "\${FAKE_TC_FAIL:-}" ]; then printf '%s\n' '{"ok":false,"error":{"code":"run_not_found","message":"x"}}'; printf '%s\n' 'error: run_not_found: x' >&2; exit 1; fi
+    if [ -n "\${FAKE_TC_EMPTY:-}" ]; then printf '%s\n' '{"ok":false,"error":{"code":"run_not_found","message":"x"}}'; exit 0; fi
+    printf '%s\n' '{"ok":true,"result":{"taskId":"task_h1","status":"ready"}}';;
+esac
+exit 0
+EOS
+chmod +x "$HOD/bin/orca"
+cat > "$HOD/dispatch" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >> "$HOD/dispatch.log"
+[ -z "\${FAKE_DS_ECHO:-}" ] || { printf 'DISPATCH-OUT\n'; printf 'DISPATCH-ERR\n' >&2; }
+exit "\${FAKE_DS_RC:-0}"
+EOS
+chmod +x "$HOD/dispatch"
+HOP="$(cd "$HOD" && pwd -P)"                       # the spec and report paths as handoff.sh writes them (folder resolved)
+HOS="$(cd "$RD" && scratch_dir local-coordinator)" # the briefs, the ledger and the state file the step uses
+hls() { ( cd "${2:-$RD}" && "$KIT/bin/checkpoint.sh" --list "$1" 2>/dev/null ); }
+hnb() { printf '%s' "$(hls "$1" "${2:-$RD}" | grep -c . || true)"; }
+hstate() { awk -F'\t' -v b="$1" '$1 == b' "$RG/orca-roles.handoff" 2>/dev/null; }
+hnst() { printf '%s' "$(hstate "$1" | wc -l | tr -d ' ')"; }
+hnl() { if [ -f "$HOS/ledger.md" ]; then grep -c . "$HOS/ledger.md" || true; else echo 0; fi; }
+ho() { ( cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$TMP/home" PATH="$HOD/bin:$PATH" KIT="$KIT" ORCA_ROLES_DISPATCH="$HOD/dispatch" FAKE_TC_FAIL="${FAKE_TC_FAIL:-}" FAKE_TC_EMPTY="${FAKE_TC_EMPTY:-}" FAKE_DS_RC="${FAKE_DS_RC:-}" FAKE_DS_ECHO="${FAKE_DS_ECHO:-}" /bin/bash "$KIT/bin/handoff.sh" "$@" 2>&1 ); }
+ho2() { ( cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$TMP/home" PATH="$HOD/bin:$PATH" KIT="$KIT" ORCA_ROLES_DISPATCH="$HOD/dispatch" FAKE_TC_FAIL="${FAKE_TC_FAIL:-}" FAKE_TC_EMPTY="${FAKE_TC_EMPTY:-}" FAKE_DS_RC="${FAKE_DS_RC:-}" FAKE_DS_ECHO="${FAKE_DS_ECHO:-}" /bin/bash "$KIT/bin/handoff.sh" "$@" > "$HOD/so" 2> "$HOD/se" ); }
+rm -f "$RD"/*.json   # the configuration copies of the checks above are not the round's change
+hnall() { printf '%s' "$(hls "" | grep -c . || true)"; }
+hmsg() { case "$1" in *"is not a directory"*) echo dir;; *"is not a readable file"*) echo file;; *"invalid batch"*) echo batch;; *'# Usage (from the worktree)'*) echo usage;; *) echo other;; esac; }
+H1V=""
+for hargs in "" "batch1" "B1 --to h --run r --spec $HOD/spec.md --report $HOD/report.md" "--bogus" "batch1 --to h --run r --spec $HOD/nope.md --report $HOD/report.md" "batch1 --to h --spec $HOD/spec.md --report $HOD/report.md" "batch1 batch2 --to h --run r --spec $HOD/spec.md --report $HOD/report.md" "batch1 --to h --run r --spec $HOD/spec.md" "batch1 --to h --run r --spec $HOD/spec.md --report $HOD/nope.md" "batch1 --to h --run r --spec $HOD/spec.md --report $HOD/report.md --tree $HOD/nope" "batch1 --to h --run r --spec $HOD/spec.md --report $HOD/report.md --tree $HOD/spec.md" "batch1 --to"; do
+  # shellcheck disable=SC2086
+  try ho $hargs; H1V="$H1V$RC:$(hnall):$(hnl):$(hmsg "$OUT")|"
+done
+try ho2 --help   # the usage block goes to stdout; the line before set -uo pipefail is the last one printed
+H1V="$H1V$RC:$(grep -c . "$HOD/so" || true):$(grep -c . "$HOD/se" || true):$(grep -c '^# Usage (from the worktree)' "$HOD/so" || true):$(grep -c 'ORCA_ROLES_DISPATCH' "$HOD/so" || true):$(grep -c '^# set -uo pipefail' "$HOD/so" || true)|"
+try ho2   # a usage error goes to stderr, nothing to stdout
+H1V="$H1V$RC:$(grep -c . "$HOD/so" || true):$(grep -c '^# Usage (from the worktree)' "$HOD/se" || true)"
+check "handoff: usage errors exit 1, the usage or the bad argument on stderr and nothing recorded; --help prints the header on stdout and exits 0" "$H1V" "1:0:0:usage|1:0:0:usage|1:0:0:batch|1:0:0:usage|1:0:0:file|1:0:0:usage|1:0:0:usage|1:0:0:usage|1:0:0:file|1:0:0:dir|1:0:0:dir|1:0:0:usage|0:11:0:1:1:0|1:0:1"
+hin() {  # hin <batch> <rc> <stdout> <brief path> [folder]: the fields of one successful run, its rounds counted in <folder> (the round's tree)
+  printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s' "$2" "$(hnb "$1" "${5:-$RD}")" "$(tr '\n' '~' < "$4")" "$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-)" "$(hnst "$1")" "$(hstate "$1" | tail -1 | tr '\t' ' ')" "$(tail -1 "$HOD/orca.log")" "$(tail -1 "$HOD/dispatch.log")" "$(printf '%s\n' "$3" | tail -1)" "$(printf '%s\n' "$3" | wc -l | tr -d ' ')"
+}
+HBR="$HOS/briefs"
+RHEAD="$(git -C "$RD" rev-parse HEAD)"
+: > "$HOD/orca.log"; : > "$HOD/dispatch.log"
+try ho batch1 --to h-tester --run run-1 --spec "$HOD/spec.md" --report "$HOD/report.md" --note "mind the edge"; O1="$OUT"; R1C="$RC"
+REF1="$(hls batch1 | sed -n 1p | awk '{print $1}')"
+V1="$(hin batch1 "$R1C" "$O1" "$HBR/batch1-r1.md")"
+E1="0:1:Tester round 1 of batch1.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $RHEAD~Diff to review: git diff $RHEAD $REF1~Files changed: f.txt, g.txt~Notes from the local coordinator: mind the edge~:batch1 round 1: checkpoint $REF1; Dev report $HOP/report.md; brief $HBR/batch1-r1.md; Tester task task_h1 dispatched:1:batch1 1 $REF1 $RHEAD:orchestration task-create --spec-file $HBR/batch1-r1.md --task-title Tester batch1 round 1 --run run-1 --json:--task task_h1 --to h-tester --run run-1:handoff: batch1 round 1 task task_h1 brief $HBR/batch1-r1.md:2"
+TREF="$( ( cd "$RD" && "$KIT/bin/checkpoint.sh" tester 1 2>/dev/null ) | sed -n 1p )"   # a Tester checkpoint between the rounds
+try ho batch1 --to h-tester --run run-2 --spec "$HOD/dir with space/spec file.md" --report "$HOD/report.md"; O2="$OUT"; R2C="$RC"
+REF2="$(hls batch1 | sed -n 2p | awk '{print $1}')"
+V2="$(hin batch1 "$R2C" "$O2" "$HBR/batch1-r2.md")"
+E2="0:2:Tester round 2 of batch1.~Spec: $HOP/dir with space/spec file.md~Dev's report: $HOP/report.md~Base ref (for the base check): $RHEAD~Diff to review: git diff $REF1 $REF2~Files changed: none~Earlier rounds of this batch: $HOS/ledger.md (its lines for batch1, and the Tester reports they name).~:batch1 round 2: checkpoint $REF2; Dev report $HOP/report.md; brief $HBR/batch1-r2.md; Tester task task_h1 dispatched:2:batch1 2 $REF2 $RHEAD:orchestration task-create --spec-file $HBR/batch1-r2.md --task-title Tester batch1 round 2 --run run-2 --json:--task task_h1 --to h-tester --run run-2:handoff: batch1 round 2 task task_h1 brief $HBR/batch1-r2.md:2"
+[ -z "$REF2" ] || git -C "$RD" update-ref -d "$REF2"   # a cleared checkpoint makes the batch start again at round 1
+try ho batch1 --to h-tester --run run-3 --spec "$HOD/spec.md" --report "$HOD/report.md"; O3="$OUT"; R3C="$RC"
+REF3="$(hls batch1 | sed -n 2p | awk '{print $1}')"
+V3="$(hin batch1 "$R3C" "$O3" "$HBR/batch1-r1.md")"
+E3="0:2:Tester round 1 of batch1.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $TREF~Diff to review: git diff $TREF $REF3~Files changed: none~:batch1 round 1: checkpoint $REF3; Dev report $HOP/report.md; brief $HBR/batch1-r1.md; Tester task task_h1 dispatched:1:batch1 1 $REF3 $TREF:orchestration task-create --spec-file $HBR/batch1-r1.md --task-title Tester batch1 round 1 --run run-3 --json:--task task_h1 --to h-tester --run run-3:handoff: batch1 round 1 task task_h1 brief $HBR/batch1-r1.md:2"
+# --tree: the checkpoint and the diff run in the pair tree, the brief, the ledger and the state in the current folder; the note keeps its newline
+git -C "$RD" worktree add -q -b hw-t "$TMP/handoff tree" 2>/dev/null; HTR="$(cd "$TMP/handoff tree" && pwd -P)"; HTHEAD="$(git -C "$HTR" rev-parse HEAD)"
+try ho2 batch4 --to h-tester --run run-4 --spec "$HOD/spec.md" --report "$HOD/report.md" --tree "$TMP/handoff tree" --note "line one
+line two"; O4="$(cat "$HOD/so")"; R4C="$RC"
+REF4="$( ( cd "$HTR" && "$KIT/bin/checkpoint.sh" --list batch4 2>/dev/null ) | sed -n 1p | awk '{print $1}')"
+V4="$(hin batch4 "$R4C" "$O4" "$HBR/batch4-r1.md" "$HTR")"
+E4="0:1:Tester round 1 of batch4.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $HTHEAD~Diff to review: git diff $HTHEAD $REF4~Files changed: none~Tree: $HTR~Notes from the local coordinator: line one~line two~:batch4 round 1: checkpoint $REF4; Dev report $HOP/report.md; brief $HBR/batch4-r1.md; Tester task task_h1 dispatched:1:batch4 1 $REF4 $HTHEAD:orchestration task-create --spec-file $HBR/batch4-r1.md --task-title Tester batch4 round 1 --run run-4 --json:--task task_h1 --to h-tester --run run-4:handoff: batch4 round 1 task task_h1 brief $HBR/batch4-r1.md:2"
+# dispatch's own output goes to handoff's stderr, never to its stdout; the checkpoint's namespace is the pair tree's
+S4="$(FAKE_DS_ECHO=1 try ho2 batch4 --to h-tester --run run-5 --spec "$HOD/spec.md" --report "$HOD/report.md" --tree "$TMP/handoff tree"; printf '%s:%s:%s:%s:%s:%s' "$RC" "$(grep -c . "$HOD/so" || true)" "$(grep -c '^DISPATCH-OUT$' "$HOD/so" || true)" "$(grep -c '^DISPATCH-OUT$' "$HOD/se" || true)" "$(grep -c '^DISPATCH-ERR$' "$HOD/se" || true)" "$(sed -n 's/^Base ref (for the base check): //p' "$HBR/batch4-r2.md" || true)")"
+# a batch named set gets checkpoint.sh's "Whole set since the branch base (HEAD)" line: its HEAD is the base ref too
+try ho set --to h-tester --run run-6 --spec "$HOD/spec.md" --report "$HOD/report.md"; O6="$OUT"; R6C="$RC"
+REF6="$(hls set | sed -n 1p | awk '{print $1}')"
+V6="$(hin set "$R6C" "$O6" "$HBR/set-r1.md")"
+E6="0:1:Tester round 1 of set.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $RHEAD~Diff to review: git diff $RHEAD $REF6~Files changed: f.txt, g.txt~:set round 1: checkpoint $REF6; Dev report $HOP/report.md; brief $HBR/set-r1.md; Tester task task_h1 dispatched:1:set 1 $REF6 $RHEAD:orchestration task-create --spec-file $HBR/set-r1.md --task-title Tester set round 1 --run run-6 --json:--task task_h1 --to h-tester --run run-6:handoff: set round 1 task task_h1 brief $HBR/set-r1.md:2"
+check "handoff: round 1, round 2, --tree and a batch named set: checkpoints, brief lines, ledger and state lines, task-create and dispatch arguments, last line, dispatch output on stderr" "$V1|$V2|$V3|$V4|$S4|$V6|$(awk '$2 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ { n++ } END { print n + 0 }' "$HOS/ledger.md")" "$E1|$E2|$E3|$E4|0:2:0:1:1:$HTHEAD|$E6|6"
+: > "$HOD/orca.log"; : > "$HOD/dispatch.log"
+FAKE_TC_FAIL=1 try ho batch2 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md"; C1C="$RC"; CREF="$(hls batch2 | tail -1 | awk '{print $1}')"
+V5="$C1C:$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-):$(hnst batch2):$(grep -c . "$HOD/dispatch.log" || true)"
+FAKE_TC_EMPTY=1 try ho batch5 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md"; C3C="$RC"; C3REF="$(hls batch5 | tail -1 | awk '{print $1}')"
+V6="$C3C:$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-):$(hnst batch5):$(grep -c . "$HOD/dispatch.log" || true)"
+: > "$HOD/dispatch.log"
+FAKE_DS_RC=7 try ho batch3 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md"; C2C="$RC"; C2REF="$(hls batch3 | tail -1 | awk '{print $1}')"
+V7="$C2C:$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-):$(hnst batch3):$(grep -c . "$HOD/dispatch.log" || true)"
+# a failed checkpoint: exit 3, the checkpoint's own error and the handoff line, no brief, no ledger line, no state line, nothing dispatched
+mkdir -p "$TMP/handoff-plain"; : > "$HOD/dispatch.log"; LN="$(grep -c . "$HOS/ledger.md" || true)"
+try ho batch6 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md" --tree "$TMP/handoff-plain"; C4C="$RC"
+V8="$C4C:$(printf '%s\n' "$OUT" | grep -c 'checkpoint.sh: run this from inside the worktree' || true):$(printf '%s\n' "$OUT" | grep -c 'handoff.sh: checkpoint failed; nothing recorded, nothing dispatched' || true):$(( $(grep -c . "$HOS/ledger.md" || true) - LN )):$(hnst batch6):$(hnb batch6):$(grep -c . "$HOD/dispatch.log" || true)"
+check "handoff: a failed task-create, an ok:false answer with exit 0, a failed dispatch or a failed checkpoint: exit 4, 4, 5 or 3, the ledger says so, no state line, nothing dispatched" "$V5|$V6|$V7|$V8" "4:batch2 round 1: checkpoint $CREF; Dev report $HOP/report.md; brief $HBR/batch2-r1.md; Tester task not created (exit 1):0:0|4:batch5 round 1: checkpoint $C3REF; Dev report $HOP/report.md; brief $HBR/batch5-r1.md; Tester task not created (exit 0):0:0|5:batch3 round 1: checkpoint $C2REF; Dev report $HOP/report.md; brief $HBR/batch3-r1.md; Tester task task_h1 not dispatched (exit 7):0:1|3:1:1:0:0:0:0"
 }
 
 sec_kit_path() {

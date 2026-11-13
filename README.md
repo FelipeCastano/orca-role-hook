@@ -858,6 +858,8 @@ Each call appends one JSON line to `orca-roles.rounds.jsonl` in the repository's
 
 The point is data: which tasks each model gets right on the first round. Read it with `jq -s` (e.g. the acceptance rate per model), alongside the tokens per role that `metrics.sh` reports. The file is local and never leaves the worktree.
 
+**Routine handoff.** After Dev reports on a batch, the local coordinator hands the round to the Tester with one command, run from the worktree: `~/.orca-roles/bin/handoff.sh <batch> --to <tester handle> --run <run_id> --spec <spec path> --report <Dev's report path> [--tree <pair tree path>] [--note <text>]`. It records a checkpoint of the worktree (the batch's first round against its base, a later round against the previous round's checkpoint), writes the Tester brief with the spec and report paths, that base, the diff command and the changed files, appends the set's ledger line, creates the Tester task from the brief and dispatches it to the Tester's tab; it prints `handoff: checkpoint <ref>` and then `handoff: <batch> round <k> task <task_id> brief <brief path>`, and any other exit means nothing was dispatched, 1 being a usage error, 3 a failed checkpoint, 4 a failed task-create and 5 a failed dispatch, with stderr saying what was recorded. The briefs (`briefs/<batch>-r<k>.md`) and the ledger are in the local coordinator's scratch folder, and `<gitdir>/orca-roles.handoff` holds the round lines `<batch> <k> <ref> <base>` that give the next round its diff and its base.
+
 ### Escalation
 
 Start a worker on a cheaper model and move it to a stronger one only when its work fails a check:
