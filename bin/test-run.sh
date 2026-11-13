@@ -9,6 +9,7 @@
 # Log file: $ORCA_ROLES_TEST_LOG when set and not "off"; unset or empty: ${XDG_CACHE_HOME:-$HOME/.cache}/orca-roles/test-runs.jsonl;
 # "off": nothing is written. A file over 5 MB is moved to <file>.1 first. Needs jq for the record (without it the command still runs).
 # Environment assignments go before test-run.sh, not after --.
+# With --role tester, a vitest, jest, pytest or tests/smoke.sh call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer's.
 # The exit code is the command's; 2 is a usage error (nothing is run or logged).
 set -uo pipefail
 
@@ -59,7 +60,7 @@ finish() {
 }
 
 case "${1:-}" in
-  -h|--help) sed -n 2,12p "$0"; exit 0 ;;
+  -h|--help) sed -n 2,13p "$0"; exit 0 ;;
   --path) log_path; exit 0 ;;
 esac
 
@@ -84,6 +85,58 @@ done
 [ "$HAVE_SEP" = 1 ] || usage "missing -- before the command"
 [ $# -gt 0 ] || usage "no command after --"
 if [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then usage "put environment assignments before test-run.sh, not after --"; fi
+
+# With --role tester, a known runner with no selection runs the whole suite: refuse it here.
+if [ "$ROLE" = tester ]; then
+  ARGS=("$@"); N=${#ARGS[@]}; i=0
+  arg() { [ "$1" -lt "$N" ] && printf '%s' "${ARGS[$1]}"; return 0; }
+  while [ "$i" -lt "$N" ]; do
+    case "${ARGS[i]##*/}" in
+      npx|bunx|yarn) i=$((i + 1)) ;;
+      pnpm) i=$((i + 1)); [ "$(arg "$i")" = exec ] && i=$((i + 1)) ;;
+      uv|poetry) if [ "$(arg $((i + 1)))" = run ]; then i=$((i + 2)); else break; fi ;;
+      python|python3) if [ "$(arg $((i + 1)))" = -m ]; then i=$((i + 2)); else break; fi ;;
+      timeout|gtimeout)
+        i=$((i + 1))
+        while [ "$i" -lt "$N" ] && [ "${ARGS[i]:0:1}" = - ]; do
+          case "${ARGS[i]}" in
+            -k|-s|--kill-after|--signal) i=$((i + 2)) ;;
+            *) i=$((i + 1)) ;;
+          esac
+        done
+        i=$((i + 1)) ;;
+      env)
+        i=$((i + 1))
+        while [ "$i" -lt "$N" ] && [[ "${ARGS[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done ;;
+      bash|sh)
+        i=$((i + 1))
+        while [ "$i" -lt "$N" ] && [ "${ARGS[i]:0:1}" = - ]; do i=$((i + 1)); done ;;
+      *) break ;;
+    esac
+  done
+  RUN=""
+  [ "$i" -lt "$N" ] && RUN="${ARGS[i]##*/}"
+  case "$RUN" in
+    vitest|jest|pytest|py.test|smoke.sh)
+      i=$((i + 1))
+      if [ "$RUN" = vitest ] && [ "$i" -lt "$N" ]; then
+        case "${ARGS[i]}" in run|related) i=$((i + 1)) ;; esac
+      fi
+      SEL=0
+      while [ "$i" -lt "$N" ]; do
+        case "${ARGS[i]}" in
+          -h|--help|--version|--list) SEL=1 ;;
+          -*) ;;
+          *) case "${ARGS[i]}" in *[!0-9]*) SEL=1 ;; esac ;;
+        esac
+        i=$((i + 1))
+      done
+      if [ "$SEL" = 0 ]; then
+        echo "test-run.sh: refused for the Tester: $RUN with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>. The full suite is the Code-Reviewer's." >&2
+        exit 2
+      fi ;;
+  esac
+fi
 
 CMD="$*"
 T0=$SECONDS TS="" L0="" WT="" HEAD12="" DIRTY=0 NCPU=1

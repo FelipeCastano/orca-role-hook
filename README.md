@@ -1192,7 +1192,7 @@ Sections run as separate processes at the same time; those in `SMOKE_SERIAL` (in
 
 Every run writes a timing log (tab-separated: a header with the date, commit, jobs, bash and system; one line per section with its seconds and result; the checks that took `SMOKE_SLOW_CHECK` seconds or more; a `held` line with the seconds new sections waited for the load, when that wait applied; the total) and prints its path on stderr; CI uploads it as the `smoke-timings-<os>` artifact. The times are only reported: no duration fails or limits a run. In a parallel run a section's time includes the load of the other sections. A check's time runs from the previous result of the same process, so a result printed without `check` adds its time to the next one.
 
-`bin/test-run.sh` keeps one more log, one JSON line per wrapped command, with the role, the commit, the load before and after and the seconds, in `~/.cache/orca-roles/test-runs.jsonl` (`ORCA_ROLES_TEST_LOG`: another path, or `off`; `bin/test-run.sh --path` prints it). A wrapped `tests/smoke.sh` also writes its own timing log.
+`bin/test-run.sh` keeps one more log, one JSON line per wrapped command, with the role, the commit, the load before and after and the seconds, in `~/.cache/orca-roles/test-runs.jsonl` (`ORCA_ROLES_TEST_LOG`: another path, or `off`; `bin/test-run.sh --path` prints it). A wrapped `tests/smoke.sh` also writes its own timing log. With `--role tester` it refuses a vitest, jest, pytest or `tests/smoke.sh` call that names no test, pattern or section (exit 2): the Tester never runs the full suite.
 
 ## Troubleshooting
 

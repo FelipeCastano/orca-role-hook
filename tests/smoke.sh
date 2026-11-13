@@ -9896,6 +9896,101 @@ for TRA in "" "--" "--bogus x --" "--role --" "--role a --role b -- true" "-- X=
 done
 trc "test-run: usage errors exit 2, log nothing and run nothing" "$TRBAD:$(wc -c < "$TRL" | tr -d ' '):$([ -e "$TR/marker" ] && echo marker):$(grep -c 'put environment assignments before test-run.sh' "$TR/eu")" "0:0::1"
 trc "test-run: an assignment before the wrapper reaches the command" "$(X=1 tr_run -- sh -c 'echo "$X"' 2>/dev/null)" "1"
+# a fake PATH and a fake tests/smoke.sh, each touching the marker when run: refused calls leave the log empty and the marker absent
+TRKB="$TR/tkb"; rm -rf "$TRKB"; mkdir -p "$TRKB/bin" "$TRKB/tests"; TRKM="$TRKB/ran"
+for TRA in vitest jest pytest; do printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/bin/$TRA"; chmod +x "$TRKB/bin/$TRA"; done
+printf '#!/bin/sh\ntouch %s\nexec "$@"\n' "$TRKM" > "$TRKB/bin/npx"; chmod +x "$TRKB/bin/npx"
+printf '#!/bin/sh\ntouch %s\nexec "$@"\n' "$TRKM" > "$TRKB/bin/yarn"; chmod +x "$TRKB/bin/yarn"
+printf '#!/bin/sh\ntouch %s\nexec "$@"\n' "$TRKM" > "$TRKB/bin/bunx"; chmod +x "$TRKB/bin/bunx"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = exec ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/pnpm"; chmod +x "$TRKB/bin/pnpm"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = run ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/uv"; chmod +x "$TRKB/bin/uv"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = run ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/poetry"; chmod +x "$TRKB/bin/poetry"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = -m ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/python3"; chmod +x "$TRKB/bin/python3"
+printf '#!/bin/sh\ntouch %s\nwhile [ $# -gt 0 ]; do case "$1" in -k|-s|--kill-after|--signal) shift 2 ;; -*) shift ;; *) break ;; esac; done\nshift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/timeout"; chmod +x "$TRKB/bin/timeout"
+cp "$TRKB/bin/timeout" "$TRKB/bin/gtimeout"; chmod +x "$TRKB/bin/gtimeout"
+printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/tests/smoke.sh"; chmod +x "$TRKB/tests/smoke.sh"
+trk_run() { ( cd "$TRKB" && export PATH="$TRKB/bin:$PATH" && ORCA_ROLES_TEST_LOG="$TRL" "$TRS" "$@" ); }
+# the C1 family, one form per line so that the other-role check below reuses the same list
+TRQS="tests/smoke.sh
+./tests/smoke.sh
+bash tests/smoke.sh
+npx vitest
+npx vitest run
+npx vitest run --maxWorkers=2
+pnpm exec vitest run
+yarn jest --maxWorkers=2
+pytest -n 2
+python3 -m pytest -q
+timeout 600 tests/smoke.sh
+timeout -k 5 600 pytest
+timeout --kill-after=5 600 pytest -q
+gtimeout -s TERM 600 npx vitest run
+env SMOKE_JOBS=1 tests/smoke.sh
+uv run pytest -x"
+# boundaries of the same family: nested wrappers, a wrapper named by its path, the other timeout option forms, a numeric-only selection
+TRQB="$TRQS
+env A=1 timeout 600 npx vitest run
+bash -e tests/smoke.sh
+uv run timeout 600 pytest -x
+/usr/bin/env A=1 pytest
+/usr/local/bin/npx vitest
+py.test
+pnpm exec pytest -n 2
+timeout --signal=TERM 600 pytest
+timeout -k5 600 pytest
+timeout --kill-after 5 600 npx vitest run
+bunx vitest
+poetry run pytest
+pytest 2"
+TRR=0; TRW=0; TRN=0; TRS1=0
+while IFS= read -r TRA; do
+  : > "$TRL"; rm -f "$TRKM"
+  # shellcheck disable=SC2086
+  try trk_run --role tester -- $TRA 2> "$TR/fx"
+  [ "$RC" = 2 ] || TRR=1
+  [ -s "$TRL" ] && TRW=1
+  [ -e "$TRKM" ] && TRN=1
+  grep -q 'refused for the Tester' "$TR/fx" || TRS1=1
+done <<< "$TRQB"
+trc "test-run: the Tester's whole-suite runner calls are refused (exit 2), log nothing and run nothing" "$TRR:$TRW:$TRN:$TRS1" "0:0:0:0"
+: > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- npx vitest run 2> "$TR/ff"
+trc "test-run: the refusal names the runner and the related-tests options" "$RC:$(cat "$TR/ff")" "2:test-run.sh: refused for the Tester: vitest with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>. The full suite is the Code-Reviewer's."
+TRS2=""
+# the C2 family: every accepted call runs, writes one log line and leaves the marker
+TRQOK="tests/smoke.sh rules prompts
+tests/smoke.sh --list
+npx vitest related src/a.ts --run
+npx vitest run src/a.test.ts
+npx jest --findRelatedTests src/a.ts
+pytest tests/test_a.py
+pytest -k name
+pytest --help
+npx vitest --version
+tests/smoke.sh -h
+timeout 600 tests/smoke.sh dispatch"
+while IFS= read -r TRA; do
+  : > "$TRL"; rm -f "$TRKM"
+  # shellcheck disable=SC2086
+  try trk_run --role tester -- $TRA 2> "$TR/fa"
+  TRS2="$TRS2$([ "$RC" = 0 ] && [ "$(wc -l < "$TRL" | tr -d ' ')" = 1 ] && [ -e "$TRKM" ] && echo y || echo n)"
+done <<< "$TRQOK"
+: > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- sh -c 'exit 0' 2>/dev/null
+TRS2="$TRS2:$([ ! -e "$TRKM" ] && echo ok):$RC:$(wc -l < "$TRL" | tr -d ' ')"
+trc "test-run: targeted runner calls, other commands and other roles run as before" "$TRS2" "yyyyyyyyyyy:ok:0:1"
+# C3: the C1 family without the Tester role still runs and logs, with no role and with --role code-reviewer
+TRS3=0
+while IFS= read -r TRA; do
+  for TRRL in none code-reviewer; do
+    : > "$TRL"; rm -f "$TRKM"
+    # shellcheck disable=SC2086
+    if [ "$TRRL" = none ]; then try trk_run -- $TRA 2>/dev/null; else try trk_run --role "$TRRL" -- $TRA 2>/dev/null; fi
+    { [ "$RC" = 0 ] && [ "$(wc -l < "$TRL" | tr -d ' ')" = 1 ] && [ -e "$TRKM" ]; } || TRS3=1
+  done
+done <<< "$TRQS"
+trc "test-run: without --role tester (no role, code-reviewer) the whole-suite runner calls run and log as before" "$TRS3" "0"
+# C4: --help prints the header from its first line through the exit-code line, the new refusal line included
+try "$TRS" --help
+trc "test-run: --help prints the header through the exit-code line, the new refusal line included" "$RC:$(printf '%s\n' "$OUT" | head -1):$(printf '%s\n' "$OUT" | tail -1):$(printf '%s\n' "$OUT" | grep -cF -- '# With --role tester, a vitest, jest, pytest or tests/smoke.sh call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer' || true):$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -vc '^#' || true)" "0:# test-run.sh: runs a test command and adds the run to the kit's test log.:# The exit code is the command's; 2 is a usage error (nothing is run or logged).:1:12:0"
 check "test-run: usage" "$TRF" ""
 TRF=""
 TRC="$TR/c"; unset TRX; TRX="$(env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" --path)"; env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" -- true 2>/dev/null
