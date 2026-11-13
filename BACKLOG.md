@@ -11,6 +11,7 @@ Known pending work for the kit. Each entry says what to do and why; remove it wh
 - **Windows-side processes of an `orca` call the kit killed at its time limit** (WSL). Whether any stays running is not verified.
 - **Cost figures from Orca's cost state** are 12-22 % above the sums of the transcripts, and unknown after `--resume`; find out which is right before relying on them.
 - **The oracle's spec file is writable by workers.** The Planner saves each Dev spec under its scratch folder in `~/.orca-roles/tmp/`, which workers may write (only the kit's own files are protected, and Edit-only for Claude); a Dev could change the acceptance command before the oracle reads it. Keep the spec outside workers' reach or check its hash against the dispatched task's spec.
+- **Test the OpenCode pass's state drop and deadline** (usage_metrics). PR8 set audit, low: opencode_sessions drops from state.json the ids no longer in OpenCode's store and stops at the pass deadline, but no smoke check covers either (a mutant that removes the drop passes usage-metrics).
 
 ## Pending verification
 
@@ -21,6 +22,13 @@ Known pending work for the kit. Each entry says what to do and why; remove it wh
 - **OpenCode roles on Windows + WSL.** Not run there.
 - **OpenCode role tabs after an Orca restart.** The kit wakes asleep Claude and Codex tabs only; an OpenCode role's tab after a restart is not verified (its session is kept by `--session`).
 - **Asleep tabs on Linux.** Whether Orca keeps tabs asleep after a restart there, and whether the internal call can be reached, is unverified; `roles` treats them as closed and opens new tabs. On Orca for Windows with WSL terminals the kit wakes them (R1 of the live checks).
+
+## Experiments
+
+Changes kept on trial; judge each one week after it is merged with its measure (`bin/usage-metrics.sh --report --json`, the round log and the transcripts), then keep it, tune it or revert it.
+
+- **Compact the Planner only above 200,000 tokens.** The local coordinator runs `compact-role.sh planner --if-above 200000` after each Planner report instead of compacting every time. Measure: Planner compactions per set, cache-write cost per set and the context of the first request of each Planner task. Revert: drop `--if-above` from the coordinator's rule.
+- **The Tester tests the contract first.** The Tester writes and runs the tests the spec's contract calls for before it reads Dev's diff (`tester.md`, item 3). Measure: the Tester's and the Code-Reviewer's rejection rates and the Code-Reviewer's findings by owner; if the Tester's findings rise on `aitire/coder`, try the Tester on Claude next. Revert: item 3 back to writing tests after reading the spec and the diff.
 
 ## Revert when Orca fixes it
 
