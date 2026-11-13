@@ -7396,6 +7396,41 @@ fmreset; printf '❯ draft\n' > "$FM/preview"; runh; Z1="$(nsent):$(grep -c 'the
 fmreset; echo $(( $(date +%s) + 2 )) > "$FM/empty_after"; runh; sleep 2.2; Z2="$(nsent):$(grep -c 'the then line' "$FM/calls.log" || true):$(grep -c 'was in use' "$LOGF")"
 fmreset; printf '#!/bin/sh\nprintf "❯ typed meanwhile\\n" > "%s/preview"\n' "$FM" > "$FM/send.sh"; runh; Z3="$(grep -c -- '--text /model m1' "$FM/calls.log"):$(grep -c 'the then line' "$FM/calls.log" || true):$(grep -c 'this line was not sent' "$LOGF")"
 check "front-model.sh --run: the --then text is never sent while the composer has text, when the switch was given up on, or when the composer fills after it" "$Z1 $Z2 $Z3" "0:0 0:0:1 1:0:1"
+# restart-coordinator.sh: refusals; the scheduled clear and role message after the turn; --workers cleans first; a busy composer gets nothing
+RK="$FM/rk"; rm -rf "$RK"; mkdir -p "$RK/bin"; ln -s "$ROOT/bin/lib.sh" "$RK/bin/lib.sh"
+cat > "$RK/bin/clean.sh" <<'FAKE'
+#!/bin/sh
+R="$(dirname "$0")/.."
+echo "clean.sh $*" >> "$R/../calls.log"
+case "$1" in
+  --msg) echo "The kit was updated: your conversation was cleared and this is your role message."; exit 0;;
+  --all) exit "${FAKE_CLEAN_RC:-0}";;
+esac
+exit 0
+FAKE
+chmod +x "$RK/bin/clean.sh"
+RLOG="$WT/.git/orca-roles-restart.log"
+rkreset() { rm -f "$FM/calls.log" "$FM/wait.rc" "$FM/show.n" "$FM/send.sh" "$FM/empty_after" "$FM"/preview "$FM"/preview.* "$RLOG" "$WT/.git/orca-roles.mode-pending"; printf '❯ \n' > "$FM/preview"; : > "$FM/calls.log"; }
+rkc() { RKC=0; RKOUT="$(cd "$WT" && PATH="$FM/bin:$PATH" FAKE_CLEAN_RC="${FCRC:-0}" ORCA_ROLES_PACE=0 ORCA_ROLES_FRONT_MODEL_SETTLE=0 ORCA_ROLES_FRONT_MODEL_RETRY=0 ORCA_TERMINAL_HANDLE="${RKH:-hLC}" KIT="$RK" bash "$ROOT/bin/restart-coordinator.sh" "$@" 2>&1)" || RKC=$?; }
+rkcalls() { sed -e '/^clean\.sh --msg/d' -e 's/^terminal send --terminal [^ ]* --text \/clear --enter --json$/clear/' -e 's/^terminal send --terminal [^ ]* --text .*your conversation was cleared.* --enter --json$/role/' -e 's/^terminal wait --terminal [^ ]* --for tui-idle --timeout-ms [0-9]* --json$/wait/' -e 's/^terminal show --terminal [^ ]* --json$/show/' -e 's/^clean\.sh \(.*\)/clean:\1/' "$FM/calls.log" | tr '\n' ','; }
+rkline() { printf '%s\n' "$RKOUT" | tail -1 | grep -cF "Your conversation is cleared and your role message resent once this turn ends (log: $RLOG). End your turn now." || true; }
+printf '{"settings":{"kickoffTimeoutSeconds":2},"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"}}}\n' > "$CFG_F"
+rkreset; rkc; A1="$(rkline)"; fast_poll grep -q 'Cleared (/clear)' "$RLOG"; A1="$A1:$(rkcalls):$(grep -c '^clean\.sh --all' "$FM/calls.log" || true)"
+rkreset; rkc --workers; A2="$(rkline)"; fast_poll grep -q 'Cleared (/clear)' "$RLOG"; A2="$A2:$(rkcalls)"
+rkreset; FCRC=1 rkc --workers; A3="$RKC:$(printf '%s' "$RKOUT" | grep -c 'your conversation was not cleared'):$([ -e "$RLOG" ] && echo log || echo nolog):$(grep -c '^clean\.sh --all' "$FM/calls.log" || true)"; FCRC=0
+rkmsg() { printf '%s' "$RKOUT" | grep -cF "$1" || true; }
+rkreset; RKH=other rkc; RKH=hLC; X1="$RKC:$(rkmsg "run it from the local coordinator's own tab.")"
+printf '{"roles":{"local-coordinator":{"agent":"codex"}}}\n' > "$CFG_F"; rkc; X1="$X1 $RKC:$(rkmsg 'the local coordinator runs codex, not Claude Code')"
+printf '{"settings":{"kickoffTimeoutSeconds":2},"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"}}}\n' > "$CFG_F"
+: > "$WT/.git/orca-roles.mode-pending"; rkc; X1="$X1 $RKC:$(rkmsg 'no mode is chosen yet')"
+RKH=other rkc; RKH=hLC; X1="$X1 $RKC:$(rkmsg 'no mode is chosen yet')"
+rm -f "$WT/.git/orca-roles.mode-pending"
+mv "$STATE_F" "$STATE_F.x"; rkc; X1="$X1 $RKC:$(rkmsg 'run it from the worktree where the roles were opened.')"; mv "$STATE_F.x" "$STATE_F"
+rkc --bogus; X1="$X1 $RKC:$(rkmsg 'Usage: restart-coordinator.sh [--workers]')"; rkc --workers --workers; X1="$X1 $RKC:$(rkmsg 'Usage: restart-coordinator.sh [--workers]')"
+X2="$([ -e "$RLOG" ] && echo log || echo nolog):$(wc -l < "$FM/calls.log" | tr -d ' ')"
+printf '{"settings":{"kickoffTimeoutSeconds":1},"roles":{"local-coordinator":{"agent":"claude"}}}\n' > "$CFG_F"
+rkreset; echo $(( $(date +%s) + 2 )) > "$FM/empty_after"; rkc; sleep 1.5; A4="$RKC:$(grep -c 'terminal send' "$FM/calls.log" || true):$(grep -c 'was in use or not idle; nothing was sent' "$RLOG" || true)"
+check "restart-coordinator.sh: refusals (another tab, a non-claude coordinator, the mode-pending marker before the tab, a missing STATE, bad usage) with their messages and nothing run; the scheduled clear and role message after the turn; --workers cleans before any send; a failing clean; a busy composer gets nothing" "$X1:$X2|$A1|$A2|$A3|$A4" "2:1 2:1 2:1 2:1 2:1 2:1 2:1:nolog:0|1:wait,show,clear,wait,role,:0|1:clean:--all,wait,show,clear,wait,role,|1:1:nolog:1|0:0:1"
 echo "ok   front-model"
 }
 
@@ -10428,8 +10463,22 @@ IWNP=""; IFS=: read -r -a IWDIRS <<< "$PATH"; for d in "${IWDIRS[@]}"; do [ -x "
 iwhome() { IH="$IW/h"; rm -rf "$IH"; mkdir -p "$IH/.orca-roles/metrics"; cp "$UH/.orca-roles/config.json" "$IH/.orca-roles/config.json"; printf '%s\n' "$(IWP D)" > "$IH/.orca-roles/trusted.list"; printf '%s\n' "{\"ts\":\"2026-10-01T00:00:00Z\",\"path\":\"$IW/E\",\"physical\":\"$(IWP E)\",\"project\":\"E\",\"task\":\"old\"}" > "$IH/.orca-roles/metrics/worktrees.jsonl"; }
 iwinst() { if (cd "$UM" && HOME="$IH" PATH="$1" FO_MODE="$2" bash "$ROOT/install.sh" </dev/null >"$IW/out" 2>&1); then IWRC=0; else IWRC=$?; fi; }
 iwj() { jq -r '[.project, .task] | join("/")' "$IH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort | tr '\n' ' '; }
-iwhome; : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; V1="$IWRC:$(iwj)"; L1="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; iwinst "$IW/fo:$PATH" ok; V2="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; V3="$(sort -u "$IW/fo/calls.log" | tr '\n' '|')"
-check "install: Orca's worktrees with orca-roles.env and not mapped are mapped once (project, task from the worktree's configuration or its folder name); listed in trusted.list too, already mapped, with no orca-roles.env, not a directory or a non-string path -> no line; a second install adds nothing; only 'worktree list --limit 1000 --json' is called" "$V1:$L1:$V2:$V3" "0:A/ta D/D E/old F/F :4:4:worktree list --limit 1000 --json|"
+iwhome; : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; V1="$IWRC:$(iwj)"; L1="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; M0="$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)"; iwinst "$IW/fo:$PATH" ok; V2="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; V3="$(sort -u "$IW/fo/calls.log" | tr '\n' '|')"; M1="$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)"
+I5E="orca-roles was updated and its prompts changed: these worktrees have a kit team, and one that is still open runs the old prompts. Before its next set, tell its local coordinator that the kit was updated, so it runs restart-coordinator.sh --workers: $(IWP D), $IW/A, $IW/E, $IW/F"
+iwi5() { printf '%s:%s:%s' "$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)" "$([ "$(grep '^orca-roles was updated and its prompts changed:' "$IW/out" || true)" = "$I5E" ] && echo i5 || echo other)" "$(grep -c '^worktree list --limit 1000 --json$' "$IW/fo/calls.log" || true)"; }
+awk '!d && /  prompts\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok
+M2="$(iwi5):$([ "$(tail -1 "$IW/out")" = "$I5E" ] && echo last || echo notlast)"
+awk '!d && /  bin\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M3="$(iwi5)"
+awk '!d && /  prompts\// { d=1; next } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M4="$(iwi5)"
+{ cat "$IH/.orca-roles/.manifest"; printf '%s  %s\n' 0000000000000000000000000000000000000000 prompts/added-later.md; } > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M5="$(iwi5)"
+iwhome; jq '.settings.metrics.enabled = false' "$IH/.orca-roles/config.json" > "$IW/c.json"; cp "$IW/c.json" "$IH/.orca-roles/config.json"; iwinst "$IW/fo:$PATH" ok
+awk '!d && /  prompts\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M6="$(iwi5):$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"
+check "install: Orca's worktrees with orca-roles.env and not mapped are mapped once (project, task from the worktree's configuration or its folder name); listed in trusted.list too, already mapped, with no orca-roles.env, not a directory or a non-string path -> no line; a second install adds nothing; only 'worktree list --limit 1000 --json' is called; a first install and one with no prompt change print no I5 line; an update that changed a prompts/ file prints it once, as the last line, trusted.list's worktrees first then Orca's, no folder twice, and still asks 'worktree list' once; only a bin/ change prints no line; a prompts/ file the update added or removed prints it again; with metrics off it still prints and maps nothing" "$V1:$L1:$V2:$V3:$M0:$M1:$M2:$M3:$M4:$M5:$M6:$IWRC:$(grep -c '^worktree list --limit 1000 --json$' "$IW/fo/calls.log" || true)" "0:A/ta D/D E/old F/F :4:4:worktree list --limit 1000 --json|:0:0:1:i5:1:last:0:other:1:1:i5:1:1:i5:1:1:i5:1:1:0:1"
 iwhome; iwinst "$IW/fo:$PATH" fail; W1="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
 iwhome; iwinst "$IW/fo:$PATH" junk; W2="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
 iwhome; iwinst "$IWNP" ok; W3="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
