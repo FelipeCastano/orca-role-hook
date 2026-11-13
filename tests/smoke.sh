@@ -5613,7 +5613,11 @@ check "trust_of: no setting, programmer or no mode -> worktree" "$(tof '{"settin
 check "trust_of: no setting, academic-research and pr-reviewer -> worktree too" "$(tof '{"settings":{"mode":"academic-research"}}')$(tof '{"settings":{"mode":"pr-reviewer"}}')" "worktree|worktree|"
 check "trust_of: an explicit value beats the mode" "$(tof '{"settings":{"mode":"pr-reviewer","trust":"worktree"}}')$(tof '{"settings":{"trust":"never"}}')" "worktree|never|"
 check "trust_of: invalid value (string, number, list) -> warning and never" "$(tof '{"settings":{"trust":"always"}}' | grep -c '^Warning.*never') $(tof '{"settings":{"trust":3}}' | grep -c Warning) $(tof '{"settings":{"trust":["worktree"]}}' | grep -c Warning)" "1 1 1"
-check "trust_of: null counts as unset" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}')" "worktree|"
+git init -q "$TF/ou"; ouq() { if (cd "$TF/ou" && ORCA_ROLES_CONFIG="${1:-}" oc_untrusted); then echo never; else echo trusted; fi; }
+OU="$(ouq):$(ouq "$TF/ou-missing.json")"; echo '{"settings":{"trust":"never"}}' > "$TF/ou/.git/orca-roles.config.json"; OU="$OU:$(ouq)"
+check "trust_of: null counts as unset; oc_untrusted with no configuration file (none in the git dir, and ORCA_ROLES_CONFIG naming a missing file) is not untrusted, and with the git dir's trust never it is" "$(tof '{"settings":{"trust":null,"mode":"pr-reviewer"}}'):$OU" "worktree|:trusted:trusted:never"
+printf '{"settings":{"trust":"worktree"}}' > "$TF/ou-wt.json"; printf '{"settings":{"trust":"never"}}' > "$TF/ou-never.json"
+check "trust_of: oc_untrusted takes ORCA_ROLES_CONFIG when it is a file (worktree -> trusted, never -> untrusted) and, naming a missing file while the git dir's configuration says never, falls back to that one (untrusted)" "$(ouq "$TF/ou-wt.json"):$(ouq "$TF/ou-never.json"):$(ouq "$TF/ou-missing.json")" "trusted:never:never"
 # trust_folder records the folder it marked once, and only when it changed ~/.claude.json
 H="$TF/h-rec"; mkdir -p "$H"; echo "$TFJ" > "$H/.claude.json"; rm -f "$TF/kit/trusted.list"; tf_run "$H"; tf_run "$H"
 check "trust_folder: the marked folder is recorded once in trusted.list" "$(cat "$TF/kit/trusted.list" 2>/dev/null)" "$TFD"
@@ -5900,7 +5904,8 @@ ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" O
 ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }   # a role's configuration file (physical git dir)
 ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
 FILE="$(ocf dev)"
-try ocrun agent.sh dev; check "opencode: agent.sh starts the stub (exit 0)" "$RC" "0"
+export OPENCODE_CONFIG="$OC/inherited.json"; try ocrun agent.sh dev; unset OPENCODE_CONFIG
+check "opencode: agent.sh starts the stub (exit 0); an inherited OPENCODE_CONFIG gets one warning naming it" "$RC:$(grep -cxF -- "agent.sh: dev (opencode): OPENCODE_CONFIG ($OC/inherited.json) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." <<<"$OUT")" "0:1"
 check "opencode: argv is --standalone + extraArgs + --session <own id> (no mini, --agent or --model); PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "--standalone
 --x
 y z
@@ -5959,10 +5964,18 @@ OCT="$(ocf tester)"; ocsys() { jq -r '.agents | to_entries[0].value.system' "$1"
 check "opencode: without role common the system prompt uses common-workers.md" "$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-workers.md")"):$(ocsys "$OCT" | grep -cxF -- "$(head -1 "$KIT/prompts/programmer/common-peon.md")" || true)" "1:0"
 # steps: role value, settings.flow default, invalid role value (left out with a warning), nothing
 check "opencode: steps from settings.flow.maxStepsPerWorker when the role has none" "$(jq -r '.agents["orca-tester"].steps' "$OCT")" "77"
-try ocrun opencode-prepare.sh e2e-tester; R1="$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-e2e-tester"] | has("steps")' "$(ocf e2e-tester)"):$(grep -c '{env:' <<<"$OUT")$(ocrun opencode-prepare.sh dev | grep -c '{env:' || true)"
-printf 'common {env:HOME} and {file:/x}\n' > "$OC/common-env.md"; jq --arg c "$OC/common-env.md" '.roles["e2e-tester"].common = $c' "$OC/cfg.json" > "$OC/cfg-env.json"; OCCFG="$OC/cfg-env.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
+try ocrun opencode-prepare.sh e2e-tester; R1="$RC:$(grep -c 'must be a positive integer' <<<"$OUT"):$(jq '.agents["orca-e2e-tester"] | has("steps")' "$(ocf e2e-tester)"):$(grep -c -e '{env:' -e 'has no provider' <<<"$OUT")$(ocrun opencode-prepare.sh dev | grep -c -e '{env:' -e 'has no provider' || true)"
+printf 'common {env:HOME} and {file:/x}\n' > "$OC/common-env.md"; jq --arg c "$OC/common-env.md" '.roles["e2e-tester"].common = $c | .roles["e2e-tester"].model = "claude-x"' "$OC/cfg.json" > "$OC/cfg-env.json"; OCCFG="$OC/cfg-env.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
 WARN="opencode-prepare.sh: warning: the system prompt of e2e-tester contains {env: or {file:, which OpenCode replaces with an environment variable or a file's content when it loads the role's configuration."
-check "opencode: an invalid role steps is reported and left out; a {env: in the system prompt warns once (the kit's prompts never do) and the file is still written" "$R1:$RC:$(grep -cxF -- "$WARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].system' "$(ocf e2e-tester)" | grep -c '{env:HOME}')" "0:1:false:00:0:1:1"
+MWARN="opencode-prepare.sh: warning: the model of e2e-tester (claude-x) has no provider: OpenCode expects provider/model (for example anthropic/claude-x) and leaves out an agent whose model it cannot find; models.sh e2e-tester lists the valid ones."
+check "opencode: an invalid role steps is reported and left out; a {env: in the system prompt warns once (the kit's prompts never do) and the file is still written; a model without a provider warns once and is still written as given" "$R1:$RC:$(grep -cxF -- "$WARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].system' "$(ocf e2e-tester)" | grep -c '{env:HOME}'):$(grep -cxF -- "$MWARN" <<<"$OUT"):$(jq -r '.agents["orca-e2e-tester"].model' "$(ocf e2e-tester)")" "0:1:false:00:0:1:1:1:claude-x"
+mm() {  # mm <model|none>: prepare e2e-tester with that model; rc, the exact warning line, any provider warning, the model written
+  jq --arg m "$1" 'if $m == "none" then .roles["e2e-tester"] |= del(.model) else .roles["e2e-tester"].model = $m end' "$OC/cfg.json" > "$OC/cfg-mm.json"
+  OCCFG="$OC/cfg-mm.json" try ocrun opencode-prepare.sh e2e-tester; OCCFG=""
+  local w="opencode-prepare.sh: warning: the model of e2e-tester ($1) has no provider: OpenCode expects provider/model (for example anthropic/$1) and leaves out an agent whose model it cannot find; models.sh e2e-tester lists the valid ones."
+  printf '%s:%s:%s:%s|' "$RC" "$(grep -cxF -- "$w" <<<"$OUT")" "$(grep -c 'has no provider' <<<"$OUT")" "$(jq -r '.agents["orca-e2e-tester"].model // "-"' "$(ocf e2e-tester)")"
+}
+check "opencode: a model without a provider warns once with the line naming it for every form (a plain name, digits, a variant with none) and never for an empty model or any model with a slash (provider/model, a variant, several slashes, a trailing or a leading one), the file keeping it as given and exit 0" "$(for m in claude-x gpt-5 'model#low' none p/m 'anthropic/claude-x#low' a/b/c a/ /x /; do mm "$m"; done)" "0:1:1:claude-x|0:1:1:gpt-5|0:1:1:model#low|0:0:0:-|0:0:0:p/m|0:0:0:anthropic/claude-x#low|0:0:0:a/b/c|0:0:0:a/|0:0:0:/x|0:0:0:/|"
 jq 'del(.settings.flow)' "$OC/cfg.json" > "$OC/cfg-nf.json"; OCCFG="$OC/cfg-nf.json" ocrun opencode-prepare.sh tester >/dev/null
 check "opencode: no steps anywhere, no steps key" "$(jq '.agents["orca-tester"] | has("steps")' "$OCT")" "false"
 jq '.settings.flow.maxStepsPerWorker = "x"' "$OC/cfg.json" > "$OC/cfg-bf.json"; OCCFG="$OC/cfg-bf.json"; try ocrun opencode-prepare.sh tester
@@ -9464,7 +9477,23 @@ tsr --run run_1 --json; RB="$RB:$(printf '%s' "$OUT" | jq -r '[.[] | select(.tit
 check "team-status --run: a working role with an open dispatch is not a candidate; the 7th field report is ok for a role whose last worker_done of the Run starts with Done, missing for one that does not, - without a report (other Runs and types ignored) or a tab, in text and --json; with the inbox failing every report is - and the exit code stays 0" "$RA|$RB" "working|Dev=ok Tester=missing dep=- :0:ok,missing,-:0:-,"
 S0="$(cat "$TSG"/orca-roles.* | cksum)"; : > "$TSL"; tsr --run run_1 >/dev/null; check "team-status is read-only: it writes nothing in the git dir and calls only worktree ps, inbox, worker-list and terminal show" "$([ "$(cat "$TSG"/orca-roles.* | cksum)" = "$S0" ] && echo unchanged):$(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')" "unchanged:orchestration inbox,orchestration worker-list,terminal show,worktree ps,"
 ln -s "$TS/proj" "$TS/link"; tsr "$TS/link"; X1="$RC:$(tsl | wc -l | tr -d ' ')"; TSD="$TS" tsr proj; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"; mkdir -p "$TS/proj/sub"; TSD="$TS/proj/sub" tsr; X1="$X1:$RC:$(tsl | wc -l | tr -d ' ')"
-check "team-status: the worktree folder is found by its physical path whether it is the current folder, a relative or symlinked argument, or a subfolder" "$X1" "0:19:0:19:0:19"
+jq -c '.roles.planner.title = "Planner Alt"' "$TSG/orca-roles.config.json" > "$TS/cfg-alt.json"
+export ORCA_ROLES_CONFIG="$TS/cfg-alt.json"; tsr; X2="$RC:$(tsl | sed -n '1p' | cut -d'|' -f1)"
+unset ORCA_ROLES_CONFIG; mv "$TSG/orca-roles.config.json" "$TS/cfg.moved"; tsr; M0="$RC:$(tsl)"; mv "$TS/cfg.moved" "$TSG/orca-roles.config.json"
+export ORCA_ROLES_CONFIG="$TS/cfg-missing.json"; tsr; X2="$X2:$RC:$(tsl | wc -l | tr -d ' '):$(wc -l < "$TS/err" | tr -d ' '):$(if [ "$RC:$(tsl)" = "$M0" ]; then echo same; else echo diff; fi)"
+ORCA_ROLES_CONFIG="$TS/cfg-alt.json"; tsr "$TS/link"; X2="$X2:$RC:$(tsl | sed -n '1p' | cut -d'|' -f1)"; unset ORCA_ROLES_CONFIG
+check "team-status: without a folder argument ORCA_ROLES_CONFIG names the team's configuration and its titles are used, a missing one behaves as a missing configuration (exactly the lines of a git dir without one, exit 0, no stderr), and a folder argument ignores it" "$X2" "0:Planner Alt:0:19:0:same:0:Planner"
+jq -c '.roles.deployer = {"title": "Deployer", "agent": "claude", "open": "hidden"}' "$TSG/orca-roles.config.json" > "$TS/cfg-hid.json"
+mkdir -p "$TS/team3"; mv "$TSG/orca-roles.env" "$TSG/orca-roles.tabs" "$TS/team3/"; cp "$TS/cfg-hid.json" "$TS/team3/orca-roles.config.json"
+mkdir -p "$TSG/orca-roles-hidden"; echo "starting - - - t" > "$TSG/orca-roles-hidden/deployer.pid"
+export ORCA_ROLES_STATE="$TS/team3/orca-roles.env"; export ORCA_ROLES_CONFIG="$TS/team3/orca-roles.config.json"
+tsr; X3="$RC:$(tsl | awk -F'|' '$1 == "Deployer" {print $2}')"
+mkdir -p "$TS/team3/orca-roles-hidden"; echo "starting - - - t" > "$TS/team3/orca-roles-hidden/deployer.pid"
+tsr; X3="$X3:$RC:$(tsl | awk -F'|' '$1 == "Deployer" {print $2}')"
+unset ORCA_ROLES_STATE ORCA_ROLES_CONFIG; mv "$TS/team3/orca-roles.env" "$TS/team3/orca-roles.tabs" "$TSG/"; rm -rf "$TS/team3" "$TSG/orca-roles-hidden" "$TS/cfg-hid.json"
+check "team-status: without a folder argument the hidden roles' folder is the one next to the state file: a pid file in the git dir gives not-opened, the same file next to the state file hidden-running" "$X3" "0:not-opened:0:hidden-running"
+tsr; TB="$(tsl)"; mkdir -p "$TS/team2"; mv "$TSG/orca-roles.env" "$TSG/orca-roles.tabs" "$TS/team2/"; export ORCA_ROLES_STATE="$TS/team2/orca-roles.env"; tsr; X1="$X1:$RC:$([ "$(tsl)" = "$TB" ] && echo same)"; tsr "$TS/link"; X1="$X1:$RC"; unset ORCA_ROLES_STATE; mv "$TS/team2/orca-roles.env" "$TS/team2/orca-roles.tabs" "$TSG/"
+check "team-status: the worktree folder is found by its physical path whether it is the current folder, a relative or symlinked argument, or a subfolder; without a folder argument ORCA_ROLES_STATE names another team, whose tabs file is read next to its state file (the same lines), and with one it is ignored" "$X1" "0:19:0:19:0:19:0:same:2"
 tsr; : > "$TSL"
 E2=""
 mkdir -p "$TS/nowt"; git -C "$TS/nowt" init -q -b main; tsr "$TS/nowt"; E2="$E2 $RC:$(wc -l < "$TS/err" | tr -d ' '):$(wc -c < "$TS/err" | tr -d ' ' | sed 's/^[1-9][0-9]*$/err/'):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"

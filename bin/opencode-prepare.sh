@@ -11,7 +11,8 @@
 # Nothing is written in the worktree. An untracked <toplevel>/.opencode/agents/orca-<role>.md left by an older kit is deleted: OpenCode
 # ranks the project's agents above OPENCODE_CONFIG, so it would replace the kit's agent; nothing is removed when <toplevel>/.opencode or
 # <toplevel>/.opencode/agents is a symbolic link (an older kit's pair tree links them to the worktree's). A system prompt containing {env: or
-# {file: gets a warning: OpenCode replaces those with a variable or a file's content when it loads the file.
+# {file: gets a warning: OpenCode replaces those with a variable or a file's content when it loads the file. A model without a provider (no "/")
+# gets a warning too.
 set -euo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 ROLE="${1:-}"; [ -n "$ROLE" ] || { sed -n 2,2p "$0" >&2; exit 1; }
@@ -26,6 +27,8 @@ PROMPT="$(prompt_of "$CFG" "$ROLE")"
 COMMON="$(common_of "$CFG" "$ROLE")"
 [ -f "$COMMON" ] || { echo "opencode-prepare.sh: the common file of $ROLE does not exist ($COMMON)" >&2; exit 1; }
 MODEL="$(role_model "$CFG" "$ROLE")"
+# OpenCode names models provider/model and leaves out, without an error, an agent whose model it cannot find
+case "$MODEL" in ''|*/*) ;; *) echo "opencode-prepare.sh: warning: the model of $ROLE ($MODEL) has no provider: OpenCode expects provider/model (for example anthropic/$MODEL) and leaves out an agent whose model it cannot find; models.sh $ROLE lists the valid ones." >&2;; esac
 
 # steps: the role's own value, else the flow default; a role value that is not a positive integer is dropped with a warning
 STEPS="$(jq -r --arg r "$ROLE" '(.roles[$r].opencode? | objects | .steps?) // empty | if type == "number" and . == floor and . > 0 then "ok \(.)" else "bad \(tojson)" end' "$CFG" 2>/dev/null)"

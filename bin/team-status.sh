@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # What each role of a worktree's team is doing, from what Orca tracks (no agent is asked).  Read-only.
 # Usage:  team-status.sh [--json] [--run <run_id>] [<worktree folder>]     (default folder: the current directory)
+#   Without a folder argument it honours ORCA_ROLES_STATE / ORCA_ROLES_CONFIG (as clean.sh does), and reads that team's orca-roles.tabs and
+#   orca-roles-hidden/ from the state file's folder.
 #   One line per role, tab-separated: Title, state, since, task, tool, summary.
 #   state: working | waiting (waiting for an answer or a permission) | done | interrupted | failed | no-status (Orca has no row for
 #          the tab) | no-tab (no tab saved) | not-opened (a role that opens on first use or per task and has no tab yet) | hidden-running (a hidden role with a run in flight) | undelivered (--run only: done, and a dispatch of the run is open but never started and its
@@ -23,11 +25,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+OWN=""; [ -n "$DIR" ] || OWN=1   # no folder argument: ORCA_ROLES_STATE and ORCA_ROLES_CONFIG apply, as in clean.sh
 DIR="${DIR:-.}"
 TOP="$(cd "$DIR" 2>/dev/null && pwd -P)" || { echo "team-status: $DIR is not a folder" >&2; exit 2; }
 GITDIR="$(git -C "$TOP" rev-parse --absolute-git-dir 2>/dev/null)" || GITDIR=""
-[ -n "$GITDIR" ] && [ -s "$GITDIR/orca-roles.env" ] || { echo "team-status: $DIR has no orca-roles team" >&2; exit 2; }
-CFG="$GITDIR/orca-roles.config.json"; [ -f "$CFG" ] || CFG=/dev/null
+STATE="$GITDIR/orca-roles.env"; CFG="$GITDIR/orca-roles.config.json"
+[ -z "$OWN" ] || { STATE="${ORCA_ROLES_STATE:-$STATE}"; CFG="${ORCA_ROLES_CONFIG:-$CFG}"; }
+[ -n "$GITDIR" ] && [ -s "$STATE" ] || { echo "team-status: $DIR has no orca-roles team" >&2; exit 2; }
+[ -f "$CFG" ] || CFG=/dev/null
+TD="$(dirname "$STATE")"   # the team's folder: its tabs file and hidden roles sit next to its state file (the git dir, unless ORCA_ROLES_STATE names another)
 TOP="$(git -C "$TOP" rev-parse --show-toplevel 2>/dev/null || echo "$TOP")"; TOP="$(cd "$TOP" && pwd -P)"
 
 PS="$(orca worktree ps --json 2>/dev/null)" && printf '%s' "$PS" | jq -e '.result.worktrees' >/dev/null 2>&1 || { echo "team-status: Orca did not answer 'worktree ps'" >&2; exit 2; }
@@ -45,17 +51,17 @@ ROLES="[]"
 while IFS='=' read -r var handle; do
   [ -n "$var" ] || continue
   id="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
-  tabs="$(grep "^$var=" "$GITDIR/orca-roles.tabs" 2>/dev/null | head -1 | cut -d= -f2-)"
+  tabs="$(grep "^$var=" "$TD/orca-roles.tabs" 2>/dev/null | head -1 | cut -d= -f2-)"
   read -r tab leaf _ <<< "$tabs"
   pane=""; [ -z "$tab" ] || [ -z "$leaf" ] || pane="$tab:$leaf"
   ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" --arg h "$handle" --arg p "$pane" '. + [{role: $r, title: $t, handle: $h, paneKey: $p}]')"
-done < "$GITDIR/orca-roles.env"
+done < "$STATE"
 if [ "$CFG" != /dev/null ]; then   # roles that open on first use or per task and have no tab yet
   for id in $(launchable_roles "$CFG" 2>/dev/null); do
-    grep -q "^$(var_of "$id")=" "$GITDIR/orca-roles.env" && continue
+    grep -q "^$(var_of "$id")=" "$STATE" && continue
     [ -z "$(instance_base "$CFG" "$id")" ] || continue
     [ "$(open_of "$CFG" "$id")" != start ] || continue
-    HR=0; hidden_live "$GITDIR" "$id" && HR=1
+    HR=0; hidden_live "$TD" "$id" && HR=1
     ROLES="$(printf '%s' "$ROLES" | jq -c --arg r "$id" --arg hr "$HR" --arg t "$(title_of "$CFG" "$id" 2>/dev/null || echo "$id")" '. + [{role: $r, title: $t, handle: "", paneKey: "", notOpened: true}] | if $hr == "1" then (.[-1].hiddenRun = true) else . end')"
   done
 fi
