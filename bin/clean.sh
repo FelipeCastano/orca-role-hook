@@ -54,16 +54,18 @@ for id in "${TARGETS[@]}"; do
   cmd="$(clear_command "$CFG" "$id")"
   [ -n "$cmd" ] || { echo "$t: its agent has no cleanup command; define 'clearCommand' in its role in config.json."; RC=1; continue; }
   ocf=""; [ "$(rstr "$CFG" "$id" agent)" = opencode ] && { ocf="$(oc_session_file "$id" "$GITDIR")" && [ -f "$ocf" ] || ocf=""; }
+  # OpenCode: Orca never reports an 'opencode mini' tab (opened by an older kit) idle after its first turn, so a wait there lasts its whole timeout; the full TUI answers in seconds
+  wms="$TIMEOUT_MS"; if [ "$(rstr "$CFG" "$id" agent)" = opencode ] && [ "$wms" -gt 30000 ]; then wms=30000; fi
   since=$(( $(date +%s) * 1000 ))   # OpenCode: /new makes the tab switch to a session created after this moment
   orca terminal send --terminal "$h" --text $'\e' --json >/dev/null 2>&1; pace 1
   orca terminal send --terminal "$h" --text "$cmd" --enter --json >/dev/null || { echo "$t: could not send $cmd."; RC=1; continue; }
-  orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+  orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
     echo "$t: context cleaned ($cmd) and role resent."
-    [ "$id" = planner ] && { orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true; }
+    [ "$id" = planner ] && { orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true; }
     # OpenCode: /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
     if [ -n "$ocf" ]; then
-      orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true
+      orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true
       oc_retrack "$id" "$since" "$GITDIR"
     fi
   else

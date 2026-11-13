@@ -308,7 +308,16 @@ oc_session_delete() {
   oc_delete_id "$id"
   rm -f "$f"; return 0
 }
-# The pids of this user's OpenCode processes of a role's tab whose ORCA_TERMINAL_HANDLE is <handle>, one per line: its 'opencode mini' and the private
+# Whether a `ps -o args=` line is a role's OpenCode TUI: it has the word --standalone (the kit always starts one; the user's own TUI on the
+# shared service has none), not the word --service, and its word 2 is mini (a tab started by an older kit) or a flag (the full TUI: no
+# subcommand). The private 'serve --stdio' child is not the TUI.  oc_tui_args "<args>"
+oc_tui_args() {
+  case " $1 " in *" --service "*) return 1;; esac
+  case " $1 " in *" --standalone "*) ;; *) return 1;; esac
+  case "$(printf '%s\n' "$1" | awk '{print $2}')" in mini|-*) return 0;; esac
+  return 1
+}
+# The pids of this user's OpenCode processes of a role's tab whose ORCA_TERMINAL_HANDLE is <handle>, one per line: its OpenCode TUI (oc_tui_args: the full TUI, or 'opencode mini' of an older kit's tab) and the private
 # 'opencode serve --stdio' child, never the shared 'opencode serve --service' nor any other subcommand. Test hook: ORCA_ROLES_OC_PIDS (a command called with the handle).  oc_pids_of_handle <handle>
 oc_pids_of_handle() {
   [ -n "${1:-}" ] || return 0
@@ -318,9 +327,8 @@ oc_pids_of_handle() {
     args=" $(ps -o args= -p "$pid" 2>/dev/null) "
     case "$args" in *" --service "*) continue;; esac   # the user's shared OpenCode service: never
     case "$(printf '%s\n' "$args" | awk '{print $2}')" in
-      mini) ;;
       serve) case "$args" in *" --stdio "*) ;; *) continue;; esac;;
-      *) continue;;
+      *) oc_tui_args "$args" || continue;;
     esac
     if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
     printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" && echo "$pid"
@@ -352,6 +360,22 @@ oc_reap_role() {
   for h in "$@"; do [ -z "$h" ] || oc_reap "$h" "$title"; done
   return 0
 }
+# After a terminal create that got no answer: the tab to adopt from <now> (orca terminal list --json), one that is not in <start> (the list
+# read at the launch's start) and is not one of <taken> (the handles of the other roles). The first whose title is <title>; else, for an
+# opencode role only, the only one titled "OpenCode" or starting with "OC | " (OpenCode renames its tab as soon as it starts); two or
+# more of those: none.  adopt_tab <now JSON> <start JSON> <title> <agent> <taken handles>
+adopt_tab() {
+  local h t oc="" n=0
+  while IFS="$(printf '\t')" read -r h t; do
+    [ -n "$h" ] || continue
+    printf '%s' "$2" | grep -qF "\"$h\"" && continue
+    case " $5 " in *" $h "*) continue;; esac
+    if [ "$t" = "$3" ]; then printf '%s\n' "$h"; return 0; fi
+    if [ "$4" = opencode ]; then case "$t" in OpenCode|"OC | "*) oc="$h"; n=$((n + 1));; esac; fi
+  done < <(printf '%s' "$1" | jq -r '.. | objects | select(has("handle")) | [.handle, (.title // "")] | @tsv' 2>/dev/null)
+  [ "$n" = 1 ] && printf '%s\n' "$oc"
+  return 0
+}
 
 # Effective config: ~/.orca-roles/config.json (or the default one) + the project's .orca-roles.json, if any.
 # .orca-roles.json is looked up at the worktree root and, if missing (e.g. not committed), at the main checkout root.
@@ -379,7 +403,7 @@ rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) //
 role_model() { local m="${3:-}"; [ -n "$m" ] || m="$(mode_of --saved "$1" 2>/dev/null)" || m=programmer; jq -r --arg r "$2" --arg m "$m" '(.roles[$r].modelByMode // null) as $b | if ($b | type) == "object" and ($b[$m] | type) == "string" and $b[$m] != "" then $b[$m] else ((.roles[$r].model) // (.defaults.model) // empty) end' "$1"; }
 # The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
 # claude: Claude Code's own texts; codex: the API error naming the model; custom and opencode: the role's modelError with {model} as the
-# escaped model id. For opencode the screen check only runs with the role's own modelError: `mini` prints nothing for a missing model,
+# escaped model id. For opencode the screen check only runs with the role's own modelError: `opencode mini` printed nothing for a missing model,
 # so the kickoff looks the model up in `opencode models` instead (see oc_model_state in kickoff.sh).
 model_error_regex() {
   local agent esc; [ -n "$3" ] || return 0
@@ -1252,6 +1276,7 @@ link_back_reason() {
   return 0
 }
 # The kit's own files a worker must not edit (paths relative to $KIT), one per line; tmp/ and backup/ stay writable.
+# Every directory entry must end in /**: OpenCode matches an edit deny on a bare directory path against nothing (measured with 2.2.5), so the kit's guard would silently not apply.
 kit_protected_paths() {
   printf '%s\n' 'prompts/**' 'roles/**' 'bin/**' 'plugin/**' 'plugins/**' 'shim/**' 'pw/**' 'mcp/**' 'browsers/**' 'browser/**' \
     config.json config.default.json trusted.list .manifest .installed VERSION
