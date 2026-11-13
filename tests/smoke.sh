@@ -562,17 +562,17 @@ for m in programmer pr-reviewer academic-research quick; do
   rule R18 "$PL" 'the exceptions, which need no confirmation, are `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$PL" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/local-coordinator.md uses --types without --wait"; FAIL=1; }
 done
-# R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into Dev's spec (Phase 2 point 2), and passes 16-18 of the plan review
+# R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into the batch's spec, and passes 16-18 of the plan review
 PP="$ROOT/prompts/programmer/planner.md"
 r23() { local f="$1" frag="$2" lp="$3"; grep -qF -- "$frag" <<<"$(grep -E -- "$lp" <<<"$f" || true)" || { echo "FAIL rules R23: programmer/planner.md lost '$frag'"; FAIL=1; }; }
 R23PLAN="$(awk '/^## The plan$/{s=1;next} /^## /{s=0} s' "$PP")"
-R23SPEC="$(awk '/^## Dev specs$/{s=1;next} /^## /{s=0} s' "$PP")"
+R23SPEC="$(awk '/^## Specs$/{s=1;next} /^## /{s=0} s' "$PP")"
 R23PASS="$(awk '/^### Passes \(in this order\)/{s=1;next} /^### /{s=0} s' "$PP")"
-r23 "$R23PLAN" '**Interfaces between steps.** When a step produces something another step uses (a function, a command-line option, a file format, an environment variable, a message that another step matches), the step has an "Interfaces" line: what it produces and what it consumes from other steps or from existing code, with the exact names, signatures or formats. Dev'"'"'s spec carries its step'"'"'s line verbatim.' '^   - \*\*Interfaces between steps\.\*\*'
-r23 "$R23SPEC" '(backward compatibility, other callers), and its step'"'"'s "Interfaces" line verbatim when it has one. Open design questions' '^Each step.s spec is the file'
+r23 "$R23PLAN" '**Interfaces between steps.** When a step produces something another step uses (a function, a command-line option, a file format, an environment variable, a message that another step matches), the step has an "Interfaces" line: what it produces and what it consumes from other steps or from existing code, with the exact names, signatures or formats. The batch'"'"'s spec carries each step'"'"'s line verbatim.' '^   - \*\*Interfaces between steps\.\*\*'
+r23 "$R23SPEC" 'with the step'"'"'s "Interfaces" line verbatim; the behavior, edge cases and error paths included;' '^Each batch.s spec is the file'
 r23 "$R23PASS" '**Interfaces.** For each pair of steps that share a file or an interface, and for each step that consumes existing code, check that names, signatures, formats and messages match on both sides, as the "Interfaces" lines state them and as the code has them today. A mismatch is fixed in the plan.' '^16\. \*\*Interfaces\.\*\*'
 r23 "$R23PASS" '**Review focus.** List up to 5 kinds of input or situation that a reasonable user of the change would expect to work and that no criterion covers (for example an empty value, a path with spaces, a second run, a missing optional file). Each one becomes a criterion of its step, with pass/fail examples, when the request already implies it; otherwise it goes to the out-of-scope proposals list for the user.' '^17\. \*\*Review focus\.\*\*'
-r23 "$R23PASS" '**Lines that decide nothing.** Read each step'"'"'s text in the plan, and each Dev spec before you send it, looking for text that leaves the decision to Dev: "TBD", "handle edge cases", "appropriate validation", "as needed", "or similar", "if necessary", "etc.". Replace each one with the decision; if you cannot take it, resolve it with the Researcher or the user (`needs:`) before returning the plan or the spec.' '^18\. \*\*Lines that decide nothing\.\*\*'
+r23 "$R23PASS" '**Lines that decide nothing.** Read each step'"'"'s text in the plan, and each spec before you send it, looking for text that leaves the decision to Dev: "TBD", "handle edge cases", "appropriate validation", "as needed", "or similar", "if necessary", "etc.". Replace each one with the decision; if you cannot take it, resolve it with the Researcher or the user (`needs:`) before returning the plan or the spec.' '^18\. \*\*Lines that decide nothing\.\*\*'
 r23 "$R23PASS" '**Project rules.**' '^15\. '
 [ "$(grep -oE '^[0-9]+\. ' <<<"$R23PASS" | tr -d '. ' | tr '\n' ' ')" = "$(seq 1 "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" | tr '\n' ' ')" ] && [ "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" -ge 18 ] || { echo "FAIL rules R23: the passes are not numbered 1 to N in order with N at least 18"; FAIL=1; }
 # R24 programmer rulings: the Ledger bullet ends with the Ruling rule; the Set audit bullet shows "Rulings I made" right after the below-medium sentence, before the full run and the commit list
@@ -908,7 +908,7 @@ rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh
 rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the Researcher'
 rule E6 "$AD/local-coordinator-team.md" 'The Dev fix and Tester rounds of one Review round count as one batch'
 rule E6 "$PD/planner.md" 'write one brief per question, each its own `needs: research:` item'
-rule E6 "$PD/planner.md" 'Name only steps that come earlier in plan order.'
+rule E6 "$PD/planner.md" 'Name only batches that come earlier in plan order.'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
