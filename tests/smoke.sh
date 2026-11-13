@@ -162,9 +162,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
 mkdir -p "$TMP/pacebin"; printf '#!/bin/sh\ncase "$1" in 1|2) echo "sleep $1" >> "$PACE_LOG"; exit 0;; esac\nexec /bin/sleep "$@"\n' > "$TMP/pacebin/sleep"; chmod +x "$TMP/pacebin/sleep"   # pace's sleep of 1 or 2 s, logged and skipped, in runs with ORCA_ROLES_PACE='' and this folder on PATH
 export ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$TMP/scheduler.log"   # install.sh never touches the real launchctl or crontab from the suite
-SECTION=""; ERR_AT=""
+SECTION=""; ERR_AT=""; SMK_REAP_HOOK=""
 on_exit() {
   local rc=$?
+  [ -z "${SMK_REAP_HOOK:-}" ] || "$SMK_REAP_HOOK" 2>/dev/null || true
   if [ -n "$SMK_TLOG" ]; then
     if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then { printf 'section\t%s\t%s\taborted\n' "$SECTION" "$((SECONDS - SMK_T0))" >> "$SMK_TLOG"; } 2>/dev/null || true; fi
     if [ "$DONE" != 1 ]; then smk_finish aborted; elif [ "$FAIL" = 0 ]; then smk_finish ok; else smk_finish FAIL; fi
@@ -9720,6 +9721,8 @@ check "REPORT_MARK_RE: marks Done./done:/blank-led/DONE/Hecho. bodies and none o
 sec_dispatch() {
 # dispatch.sh: dispatches like orca does and checks in the background that the worker started (fake orca; the checker's waits are shortened with ORCA_ROLES_DISPATCH_TICK / _POLLS)
 DS="$TMP/disp"; rm -rf "$DS"; mkdir -p "$DS/bin" "$DS/proj"; git -C "$DS/proj" init -q -b main; DSG="$DS/proj/.git"; DSL="$DS/orca.log"
+DSP="$(cd "$DS" && pwd -P)"   # the physical folder the section's detached dispatch.sh processes run in (or under): that is how it tells them from another worktree's
+SMK_REAP_HOOK=ds_reap
 cat > "$DS/bin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$DSL"
@@ -9753,11 +9756,28 @@ dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the sc
   t0=$SECONDS; if OUT="$(cd "${DDIR:-$DS/proj}" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=2 "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
   local n=0; if [ -z "${DNOCHECKER:-}" ]; then   # the checker ends with one closing line in the log (a pgrep could run before it has even started)
     until grep -qE 'started$|told |could not tell|not checked' "$DSG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.2; n=$((n + 1)); done
-    n=0; while pgrep -f -- "--watch task_abc123" >/dev/null 2>&1 && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    n=0; while [ -n "$(ds_pids watch)" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
   else sleep 1; fi
 }
 dsc() { grep -c -- "$1" "$DSL" || true; }
 dslog() { sed 's/^[0-9-]* [0-9:]* //' "$DSG/orca-roles-dispatch.log" 2>/dev/null | tr '\n' '/'; }
+ds_pids() {  # ds_pids <watch|all>: the pids of this section's dispatch.sh processes, told apart by their working directory
+  local re cwd p
+  if [ "$1" = watch ]; then re='dispatch\.sh --watch '; else re='dispatch\.sh --(watch|mail-watch) '; fi
+  for p in $(pgrep -f -- "$re" 2>/dev/null); do
+    if [ -e "/proc/$p/cwd" ]; then cwd="$(readlink "/proc/$p/cwd" 2>/dev/null)" || cwd=""
+    else cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"; fi
+    case "$cwd" in "$DSP"|"$DSP"/*) printf '%s\n' "$p";; esac
+  done
+  return 0
+}
+ds_reap() {  # ds_reap: TERM this section's dispatch.sh processes, then KILL the ones still there after 2 s
+  local p n=0
+  for p in $(ds_pids all); do kill -TERM "$p" 2>/dev/null || true; done
+  while [ -n "$(ds_pids all)" ] && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
+  for p in $(ds_pids all); do kill -KILL "$p" 2>/dev/null || true; done
+  return 0
+}
 EXP_JSON="$(cat "$DS/dispatch.json")"
 rm -f "$DSG/orca-roles-mail.log"; PACE_LOG="$DSL" ORCA_ROLES_PACE='' PATH="$TMP/pacebin:$PATH" dsrun early plain --task task_abc123 --to h-w --run run_1; mend run_1
 A="$RC:$([ "$OUT" = "$EXP_JSON" ] && echo same):$(dsc 'orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json'):$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog):$(mailog):$(wc -l < "$DS/err" | tr -d ' ')"
@@ -9841,10 +9861,11 @@ mstart --mail --run run_m; n=0; until grep -q 'mail run_m: started$' "$DSG/orca-
 mstart --mail --run run_m; mstart --mail-watch run_m
 cp "$DS/wl.none" "$DS/wl.json"; mend run_m; MP="$(grep -c 'mail run_m: started$' "$DSG/orca-roles-mail.log" || true)"
 M10="$MP:$(mailog | sed 's/run_m: //g'):$([ -e "$DSG/orca-roles-mail.run_m.pid" ] && echo lock || echo nolock)"
+DSLEFT="$(ds_pids all | wc -l | tr -d ' ')"
 rm -f "$DS/ps.mail"; mbox
-check "dispatch.sh mail watcher: one notice (exact text) for a message neither delivered nor read after 20 s, to the Run's coordinator, once per message; none for delivered, read, other-Run or younger messages; only to a Claude tab at rest (also 'working' while monitoring with its main agent done) with an empty composer; three failed sends then gives up; it ends with no open dispatch and nothing pending, else at its time limit, which a later start request renews (a live hidden run or an open dispatch keeps it), or after 20 unanswered looks; a lock naming a reused pid does not hold it, and a second start while one lives starts nothing" \
-  "$M1|$MN|$M2|$M3|$M4|$M5|$M6|$M7|$M8|$M9|$M10" \
-  "1:started/noticed 1 (m1) to h-co/ended: no task in flight/|1|0:started/ended: no task in flight/|1:started/noticed 1 (m1) to h-co/ended: no task in flight/| 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/|0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: not a Claude tab/ended: time limit/|0:started/ended: time limit/|3:started/notice to h-co failed (1)/notice to h-co failed (2)/notice to h-co failed (3)/gave up on m1/ended: no task in flight/|0:started/ended: time limit/ 0:started/ended: time limit/|0:started/ended: Orca did not answer 20 times/|1:started/ended: no task in flight/:nolock"
+check "dispatch.sh mail watcher: one notice (exact text) for a message neither delivered nor read after 20 s, to the Run's coordinator, once per message; none for delivered, read, other-Run or younger messages; only to a Claude tab at rest (also 'working' while monitoring with its main agent done) with an empty composer; three failed sends then gives up; it ends with no open dispatch and nothing pending, else at its time limit, which a later start request renews (a live hidden run or an open dispatch keeps it), or after 20 unanswered looks; a lock naming a reused pid does not hold it, and a second start while one lives starts nothing; no dispatch.sh process of the section is left once its watchers ended" \
+  "$M1|$MN|$M2|$M3|$M4|$M5|$M6|$M7|$M8|$M9|$M10|left:$DSLEFT" \
+  "1:started/noticed 1 (m1) to h-co/ended: no task in flight/|1|0:started/ended: no task in flight/|1:started/noticed 1 (m1) to h-co/ended: no task in flight/| 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/|0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: not a Claude tab/ended: time limit/|0:started/ended: time limit/|3:started/notice to h-co failed (1)/notice to h-co failed (2)/notice to h-co failed (3)/gave up on m1/ended: no task in flight/|0:started/ended: time limit/ 0:started/ended: time limit/|0:started/ended: Orca did not answer 20 times/|1:started/ended: no task in flight/:nolock|left:0"
 # the four local coordinator prompts carry the same assign line and silent-worker bullet
 PM=""; for m in programmer academic-research pr-reviewer quick; do f="$ROOT/prompts/$m/local-coordinator.md"
   PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`\( (the Planner.s tasks too)\)\{0,1\}: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
@@ -9860,6 +9881,7 @@ check "local coordinator prompts: the assign line and the silent-worker bullet a
 SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer,quick}/local-coordinator.md | tr '\n' ' ')"
 check "local coordinator prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the four modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/local-coordinator.md:1 %s/prompts/pr-reviewer/local-coordinator.md:1 %s/prompts/quick/local-coordinator.md:1 ' "$ROOT" "$ROOT" "$ROOT" "$ROOT")"
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too; the README describes the mail watcher (its paragraph and the troubleshooting row)" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'gets one notice typed into the Run.s coordinator tab' "$ROOT/README.md") $(grep -c 'the kit.s mail watcher types the notice itself when the tab is idle' "$ROOT/README.md")" "1 1 1 1 1 1 1 1"
+ds_reap; SMK_REAP_HOOK=""
 }
 
 sec_hidden() {
