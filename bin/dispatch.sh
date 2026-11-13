@@ -5,6 +5,8 @@
 # The first form runs `orca orchestration dispatch --task <t> --to <h> [--run <id>] --inject --json`, prints Orca's JSON unchanged and exits
 # with its status at once; when it succeeded, a checker is started detached. --check-only starts only the checker (for a task delivered
 # another way; the message goes to $ORCA_TERMINAL_HANDLE).
+# Before it dispatches to a role whose agent is claude or codex (or unset, or a handle that is no role), it pauses 2 s and waits up to 60 s for the tab to be idle (orca terminal
+# wait --for tui-idle), so the brief does not land in the worker's answer to its role message; past that it dispatches anyway and logs one line.
 # The checker (about 95 s at most, nothing printed in the caller's terminal, notes in <git dir>/orca-roles-dispatch.log): Orca's dispatch
 # result cannot tell whether the turn began (the brief may stay typed but unsent in the composer), so it polls `orca worktree ps` for
 # a row of the worker's pane whose prompt names the task (none for a role whose agent is neither claude nor codex): every 3 s for 45 s. If it has not started it sends Enter once, only when the
@@ -213,6 +215,11 @@ if [ "$ONLY" = 1 ]; then
   exit 0
 fi
 
+# A brief typed while the worker is still answering (its role message, just resent by clean.sh or launch.sh) arrives in that turn; Orca reads the turn's end as the worker stopping without reporting
+if ! other_agent_of "$TO" >/dev/null; then
+  pace 2   # a role message typed just before has begun its turn, so the wait does not read the tab as idle before it (as kickoff.sh's check_model does)
+  orca terminal wait --terminal "$TO" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1 || log "$TO: not idle within 60 s (or the wait failed); dispatching $TASK anyway"
+fi
 args=(orchestration dispatch --task "$TASK" --to "$TO")
 [ -z "$RUN" ] || args+=(--run "$RUN")
 OUT="$(orca "${args[@]}" --inject --json)"; rc=$?

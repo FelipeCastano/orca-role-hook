@@ -45,7 +45,7 @@ else
 fi
 
 [ ${#TARGETS[@]} -gt 0 ] || { echo "There are no workers to clean in this workspace."; exit 0; }
-RC=0
+RC=0; ANS=()   # tabs whose answer to the role message is waited out after the loop
 for id in "${TARGETS[@]}"; do
   t="$(title_of "$CFG" "$id")"
   [ "$id" = local-coordinator ] && { echo "$t: the local coordinator does not clean itself."; RC=1; continue; }
@@ -62,7 +62,11 @@ for id in "${TARGETS[@]}"; do
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true
   if orca terminal send --terminal "$h" --text "$(worker_msg "$CFG" "$id")" --enter --json >/dev/null; then
     echo "$t: context cleaned ($cmd) and role resent."
-    [ "$id" = planner ] && { orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true; }
+    # claude/codex: the answer to the role message is waited out after the loop, or a task dispatched right after lands in it and Orca reports the worker stopped without reporting
+    case "$(rstr "$CFG" "$id" agent)" in
+      claude|codex|"") ANS+=("$h");;
+      *) if [ "$id" = planner ]; then orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true; fi;;
+    esac
     # OpenCode: /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
     if [ -n "$ocf" ]; then
       orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true
@@ -72,4 +76,9 @@ for id in "${TARGETS[@]}"; do
     echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($(kit_env)$KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
   fi
 done
+# one pass for every claude/codex answer: the tabs answer at the same time, so it lasts about the slowest one; pace 2 lets the last one begin its turn
+if [ ${#ANS[@]} -gt 0 ]; then
+  pace 2
+  for h in "${ANS[@]}"; do orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$TIMEOUT_MS" --json >/dev/null || true; done
+fi
 exit $RC
