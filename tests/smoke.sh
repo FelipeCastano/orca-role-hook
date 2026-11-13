@@ -6146,7 +6146,13 @@ cat > "$OC/list.json" <<J
 J
 try ocrun clean.sh dev
 check "opencode clean: role resent, then the newest session of the worktree is saved and the old one deleted" "$RC:$(cat "$SF"):$(grep '^delete' "$OCLOG" | sed "s#PWD=.*##" | tr '\n' '|')" "0:ses_new_b:delete ses_old |"
-check "opencode clean: sends /new first" "$(grep -c '^orca terminal send --terminal h-dev --text /new --enter' "$OCLOG")" "1"
+N1="$(grep -c '^orca terminal send --terminal h-dev --text /new --enter' "$OCLOG")"
+W1="$(grep -c '^orca terminal wait --terminal h-dev --for tui-idle --timeout-ms 30000 --json$' "$OCLOG" || true):$(grep '^orca terminal wait --terminal h-dev' "$OCLOG" | grep -vc -- '--timeout-ms 30000 ' || true)"
+: > "$OCLOG"; jq '.settings.kickoffTimeoutSeconds = 7' "$OC/cfg.json" > "$OC/cfg-k7.json"; OCCFG="$OC/cfg-k7.json" try ocrun clean.sh dev
+W2="$RC:$(grep -c '^orca terminal wait --terminal h-dev --for tui-idle --timeout-ms 7000 --json$' "$OCLOG" || true)"
+: > "$OCLOG"; try ocrun clean.sh cl
+W3="$RC:$(grep -c '^orca terminal wait --terminal h-cl --for tui-idle --timeout-ms 180000 --json$' "$OCLOG" || true)"
+check "opencode clean: sends /new first; an OpenCode role's waits last at most 30 s (kickoffTimeoutSeconds 180: both waits 30000 and no other; 7: 7000), a claude role keeps kickoffTimeoutSeconds (180000)" "$N1|$W1|$W2|$W3" "1|2:0|0:2|0:1"
 printf 'ses_old\n%s\n' "$OC/tree" > "$SF"; : > "$OCLOG"
 cat > "$OC/list.json" <<J
 [{"id":"ses_wt_newer","created":9999999999999,"updated":1,"directory":"$OCWP"},
