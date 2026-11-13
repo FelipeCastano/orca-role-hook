@@ -1729,8 +1729,11 @@ check "clean.sh --all excludes the local coordinator" "$(grep -c 'terminal show 
 check "clean.sh --all goes through the workers, the planner included" "$(grep -c 'terminal show' "$LOGF")" "4"
 check "clean.sh --msg" "$(run_clean --msg dev | sed "s#$TMP/home/.orca-roles#$KIT#g")" "$(cd "$TMP" && worker_msg "$C" dev)"
 # compact-role.sh (fake orca; FAKE_WAIT_FAIL makes the waits time out)
-cr_run() { local s="$1"; shift; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
+cr_run() { local s="$1"; shift; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" ORCA_ROLES_CLAUDE_PROJECTS="$CRP" ORCA_ROLES_SESSION_HANDLES="$CRH" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
 sent() { grep -c -F -e "$1" "$LOGF" || true; }
+# a Claude Code projects folder and the SessionStart hook's records for the --if-above gate: the folder of $TMP's physical path, one record holding the Planner's handle
+CRP="$TMP/crprojects"; CRH="$TMP/crhandles"; CRSD="$CRP/$(cd "$TMP" && pwd -P | tr '/.' '--')"
+mkdir -p "$CRSD" "$CRH"; printf 't1\n' > "$CRH/s1"
 cat > "$TMP/fakebin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$LOGF"
@@ -1740,10 +1743,71 @@ exit 0
 EOS
 : > "$LOGF"; try cr_run compact-role.sh planner; A="$RC:$OUT:$(sent 'terminal send --terminal t1 --text /compact --enter'):$(sent 'adopt that role'):$(awk '/--text \x1b/{e=NR} /--text \/compact/{c=NR} END{print (e && c>e)}' "$LOGF")"
 : > "$LOGF"; try cr_run compact-role.sh planner --instructions "keep the plan"; A="$A|$RC:$(sent '--text /compact keep the plan --enter')"
-cp "$TMP/state.env" "$TMP/state.bak"; echo 'CC=t6' >> "$TMP/state.env"; : > "$LOGF"; try cr_run compact-role.sh cc; B="$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact')"; mv "$TMP/state.bak" "$TMP/state.env"
+cp "$TMP/state.env" "$TMP/state.bak"; echo 'CC=t6' >> "$TMP/state.env"; : > "$LOGF"; try cr_run compact-role.sh cc; B="$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact')"; : > "$LOGF"; try cr_run compact-role.sh cc --if-above 5; B="$B|$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact'):$(printf '%s\n' "$OUT" | grep -c '^compact-role:' || true)"; mv "$TMP/state.bak" "$TMP/state.env"
 try cr_run compact-role.sh cx; B="$B|$RC"; try cr_run compact-role.sh nobody; B="$B$RC"; try cr_run compact-role.sh local-coordinator; B="$B$RC"
 : > "$LOGF"; export FAKE_WAIT_FAIL=1; try cr_run compact-role.sh planner; unset FAKE_WAIT_FAIL; B="$B:$RC:$(sent 'terminal send')"
-check "compact-role.sh: Esc then /compact [instructions], no role message; a role that is not claude is cleaned instead (its clearCommand sent, no /compact, the message printed once, a dead tab exits 1 as clean.sh does); unknown and local coordinator exit 2; a wait timeout exits 1 and sends nothing" "$A|$B" "0:compacted planner (t1):1:0:1|0:1|0:1:1:0|122:1:0"
+crt() { printf '%s\n' "$@" > "$CRSD/s1.jsonl"; }
+cr_line() { printf '{"type":"assistant","message":{"model":"%s","usage":{"input_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}}}\n' "$1" "$2" "$3" "$4"; }
+cr_err() { printf '{"type":"assistant","%s":true,"message":{"model":"%s","usage":{"input_tokens":1,"cache_read_input_tokens":999999,"cache_creation_input_tokens":0}}}\n' "$1" "$2"; }
+cr_gate() { local o; : > "$LOGF"; try cr_run compact-role.sh planner "$@"; o="$(printf '%s\n' "$OUT" | sed -n 1p | sed 's/^compact-role: planner //')"; printf '%s:%s:%s' "$RC" "$o" "$(grep -c 'terminal send' "$LOGF" || true)"; }
+crt "$(cr_line claude-x 1 199999 1)"; CG="$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 0 199999 1)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 11999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 199999 1)" '{"type":"system","subtype":"compact_boundary"}'; CG="$CG|$(cr_gate --if-above 200000)"
+mv "$CRH/s1" "$TMP/crh.off"; CG="$CG|$(cr_gate --if-above 200000)"; mv "$TMP/crh.off" "$CRH/s1"
+rm -f "$CRSD/s1.jsonl"; CG="$CG|$(cr_gate --if-above 200000)"
+crt '{"type":"user","message":{"content":"hi"}}'; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 299999 0)" "$(cr_line claude-x 1 49999 0)" "$(cr_err isApiErrorMessage claude-x)" "$(cr_err isSidechain claude-x)" "$(cr_line '<synthetic>' 1 999999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 11999 0)"
+CG="$CG|$(cr_gate --if-above 0)|$(cr_gate --if-above abc)|$(cr_gate --if-above)|$(cr_gate --if-above 1 --if-above 2)"
+CG="$CG|$(cr_gate --instructions x --if-above 5)|$(cr_gate --if-above 5 --instructions x)"
+# a compaction before the last answer does not make the later answer "compacted since", and a usage without cache fields counts them as 0
+crt '{"type":"system","subtype":"compact_boundary"}' "$(cr_line claude-x 1 49999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt '{"type":"assistant","message":{"model":"claude-x","usage":{"input_tokens":5}}}'; CG="$CG|$(cr_gate --if-above 200000)"
+# a compact_boundary after the last answer, with another answer of 300000 tokens before it, is later than that answer: not compacted
+crt '{"type":"system","subtype":"compact_boundary"}' "$(cr_line claude-x 1 299999 0)" '{"type":"system","subtype":"compact_boundary"}'; CG="$CG|$(cr_gate --if-above 200000)"
+# two records hold the Planner's handle: the newest one has no transcript, so the older one's transcript is read
+touch -t 202001010000 "$CRH/s1"; printf 't1\n' > "$CRH/s2"
+crt "$(cr_line claude-x 1 11999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+rm -f "$CRH/s2"
+# a transcript larger than the 1 MiB window whose last answer lies before it: found on the larger retry
+{ cr_line claude-x 1 299999 0; head -c 1300000 /dev/zero | tr '\0' 'x'; printf '\n'; } > "$CRSD/s1.jsonl"; CG="$CG|$(cr_gate --if-above 200000)"
+# a projects folder named by the second slug rule (every non-alphanumeric replaced) is read when the first rule's folder is absent
+mkdir -p "$TMP/cr_wt"; CRW="$(cd "$TMP/cr_wt" && pwd -P)"; CRP2="$TMP/crprojects2"; CRSD2="$CRP2/$(printf '%s' "$CRW" | tr -c 'A-Za-z0-9\n' '-')"; mkdir -p "$CRSD2"
+printf 't1\n' > "$CRH/s3"; printf '%s\n' "$(cr_line claude-x 1 11999 0)" > "$CRSD2/s3.jsonl"
+cr_run_at() { local d="$1" p="$2" s="$3"; shift 3; (cd "$d" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" ORCA_ROLES_CLAUDE_PROJECTS="$p" ORCA_ROLES_SESSION_HANDLES="$CRH" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
+cr_gate_at() { local o; : > "$LOGF"; try cr_run_at "$TMP/cr_wt" "$CRP2" compact-role.sh planner "$@"; o="$(printf '%s\n' "$OUT" | sed -n 1p | sed 's/^compact-role: planner //')"; printf '%s:%s:%s' "$RC" "$o" "$(grep -c 'terminal send' "$LOGF" || true)"; }
+CG="$CG|$(cr_gate_at --if-above 200000)"
+# the value must match ^[1-9][0-9]*$ and each option appears at most once
+crt "$(cr_line claude-x 1 11999 0)"
+CG="$CG|$(cr_gate --if-above 01)|$(cr_gate --if-above 1.0)|$(cr_gate --if-above ' 1')|$(cr_gate --if-above -1)|$(cr_gate --instructions x --instructions y)"
+check "compact-role.sh: Esc then /compact [instructions], no role message; a role that is not claude is cleaned instead (its clearCommand sent, no /compact, the message printed once, with --if-above too, a dead tab exits 1 as clean.sh does); unknown and local coordinator exit 2; a wait timeout exits 1 and sends nothing; --if-above reads the last answer's context (compacts above it, not at or below it, not after a compaction and not when the size is unknown), ignores API-error, sidechain and synthetic lines, reads a compaction before the answer and a usage without cache fields, the newest record whose transcript exists, a transcript past the 1 MiB window and the second projects-folder rule, and refuses a bad, missing or repeated value" "$A|$B|$CG" "0:compacted planner (t1):1:0:1|0:1|0:1:1:0|0:1:1:0:1|122:1:0|0:context 200001 tokens, above 200000: compacting:2|0:context 200000 tokens, at most 200000: not compacted:0|0:context 12000 tokens, at most 200000: not compacted:0|0:was compacted since its last answer: not compacted:0|0:context size unknown: not compacted:0|0:context size unknown: not compacted:0|0:context size unknown: not compacted:0|0:context 50000 tokens, at most 200000: not compacted:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: unexpected argument: --if-above:0|0:context 12000 tokens, above 5: compacting:2|0:context 12000 tokens, above 5: compacting:2|0:context 50000 tokens, at most 200000: not compacted:0|0:context 5 tokens, at most 200000: not compacted:0|0:was compacted since its last answer: not compacted:0|0:context 12000 tokens, at most 200000: not compacted:0|0:context 300000 tokens, above 200000: compacting:2|0:context 12000 tokens, at most 200000: not compacted:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: unexpected argument: --instructions:0"
+# interrupt-role.sh (its own fake orca: the show preview comes from a file the check writes, a failed wait from FAKE_WAIT_FAIL, a failed show from ir-fail-show)
+cat > "$TMP/fakebin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LOGF"
+if [ "\$2" = show ]; then
+  [ -e "$TMP/ir-fail-show" ] && exit 1
+  [ -f "$TMP/ir-show" ] && cat "$TMP/ir-show"
+  exit 0
+fi
+[ -n "\$FAKE_WAIT_FAIL" ] && [ "\$2" = wait ] && exit 1
+exit 0
+EOS
+chmod +x "$TMP/fakebin/orca"
+ir_calls() { awk '/terminal show --terminal t1/{s++} /terminal send --terminal t1 --text \x1b/{e++} /terminal send .*--enter/{n++} /terminal wait --terminal t1 --for tui-idle --timeout-ms 30000/{w++} END{printf "%d:%d:%d:%d", e+0, n+0, w+0, s+0}' "$LOGF"; }
+ir_order() { awk '/terminal show --terminal t1/{s=NR} /terminal send --terminal t1 --text \x1b/{e=NR} /terminal wait --terminal t1 --for tui-idle/{w=NR} END{print (e && w) ? ((s && e > s && w > e) ? "ordered" : "bad") : "-"}' "$LOGF"; }
+ir_chk() { local o; : > "$LOGF"; try cr_run interrupt-role.sh "$@"; o="$(printf '%s\n' "$OUT" | sed -n 1p | sed 's/^interrupt-role: //')"; printf '%s:%s:%s:%s' "$RC" "$o" "$(ir_calls)" "$(ir_order)"; }
+rm -f "$TMP/ir-show" "$TMP/ir-fail-show"; X="$(ir_chk planner)"
+export FAKE_WAIT_FAIL=1; X="$X|$(ir_chk planner)"; unset FAKE_WAIT_FAIL
+printf '{"ok":true,"result":{"terminal":{"preview":"[Pasted text #1 +3 lines]"}}}\n' > "$TMP/ir-show"; X="$X|$(ir_chk planner)"
+rm -f "$TMP/ir-show"; : > "$TMP/ir-fail-show"; X="$X|$(ir_chk planner)"; rm -f "$TMP/ir-fail-show"
+# a composer at rest (no pasted text) is still interrupted
+printf '{"ok":true,"result":{"terminal":{"preview":"❯ "}}}\n' > "$TMP/ir-show"; X="$X|$(ir_chk planner)"; rm -f "$TMP/ir-show"
+cp "$TMP/state.env" "$TMP/state.ir"; printf 'CC=t6\nOCODE=t7\n' >> "$TMP/state.env"
+X="$X|$(ir_chk local-coordinator)|$(ir_chk nobody)|$(ir_chk cc)|$(ir_chk ocode)|$(ir_chk)|$(ir_chk planner dev)|$(ir_chk -h)|$(ir_chk --help)"
+mv "$TMP/state.ir" "$TMP/state.env"
+check "interrupt-role.sh: one Esc without Enter, then the idle wait; a composer without pasted text is interrupted; refusals and failures send nothing" "$X" "0:planner (t1) stopped:1:0:1:1:ordered|1:interrupt-role.sh: planner (t1) did not stop within 30 s; do not dispatch to it.:1:0:1:1:ordered|1:interrupt-role.sh: planner's composer holds pasted text; nothing was sent.:0:0:0:1:-|1:interrupt-role.sh: planner's tab (t1) does not respond; nothing was sent.:0:0:0:1:-|0:planner (t1) stopped:1:0:1:1:ordered|2:interrupt-role.sh: the local coordinator is not interrupted by the kit.:0:0:0:0:-|2:interrupt-role.sh: unknown role or no handle for 'nobody'.:0:0:0:0:-|2:interrupt-role.sh: cc runs custom: only Claude tabs are interrupted; close it with close-role.sh to end its turn.:0:0:0:0:-|2:interrupt-role.sh: ocode runs opencode: only Claude tabs are interrupted; close it with close-role.sh to end its turn.:0:0:0:0:-|2:# Usage (from the worktree):  interrupt-role.sh <role>:0:0:0:0:-|2:# Usage (from the worktree):  interrupt-role.sh <role>:0:0:0:0:-|0:# Stops the current turn of a Claude role (one Escape, as Claude Code's Esc) and waits until its turn has ended; the tab and its conversation stay.:0:0:0:0:-|0:# Stops the current turn of a Claude role (one Escape, as Claude Code's Esc) and waits until its turn has ended; the tab and its conversation stay.:0:0:0:0:-"
 V=""; for v in '"x"' 1 true '{}' null '"clear"' '"compact"'; do jq ".settings.flow.plannerReset=$v" "$C" > "$TMP/rp.json"; V="$V$(check_config "$TMP/rp.json" 2>&1 | wc -c | tr -d ' ')"; done
 check "check_config: flow.plannerReset, removed in this version, is accepted and ignored for any value (no output)" "$V" "0000000"
 }
