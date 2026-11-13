@@ -10356,6 +10356,7 @@ check "load throttle: not applied with SMOKE_JOBS set, SMOKE_MAX_LOAD=0 (under a
 sec_usage_metrics() {
 # settings.metrics and the kit's writers for the metrics pass: validation, worktrees.jsonl and events.jsonl from launch.sh and dispatch.sh, install.sh's mapping, enabled=false, a failing write
 UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
 umcv() { jq -c --argjson v "$2" "$1 = \$v" "$ROOT/config.default.json" > "$UM/cv.json"; check_config "$UM/cv.json" | tr '\n' '/'; }
 umbad() { [ "$(umcv "$1" "$2")" = "ERROR: invalid configuration: $3/" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
 umok() { [ -z "$(umcv "$1" "$2")" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
@@ -10657,6 +10658,76 @@ jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/
 jq '.settings.metrics.retentionDays = "30"' "$HC" > "$PK/config.json"; echo '{}' > "$PM/sessions-$(umday 100).jsonl"; echo '{}' > "$PM/sessions-$(umday 31).jsonl"
 jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; umpass; R4="$([ -e "$PM/sessions-$(umday 100).jsonl" ] && echo kept || echo gone):$([ -e "$PM/sessions-$(umday 31).jsonl" ] && echo kept || echo gone)"
 check "usage parse: rotation on the first pass of a UTC day removes the daily files older than retentionDays (the day exactly retentionDays old stays) and nothing else (state.json, worktrees.jsonl, events.jsonl, a file that is not a daily file); a second pass the same day removes nothing more; an invalid retentionDays falls back to 90" "$R1|$R2|$R3|$R4" "3:0:b30:decoy:{\"ts\":\"x\"}:wt:state|kept|gone:b29|gone:kept"
+ # OpenCode sessions of the kit: read-only from OpenCode's store into the same daily files, marked "agent": "opencode"
+ umpk; W="/w/a/devgd-300/src"; kses cl1 "$W" "hello"; OCDB="$UM/oc.db"; OCL="$PM/usage-metrics.log"
+ ocn() { jq -c 'select(.agent == "opencode")' "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' '; }
+ ocnid() { jq -c --arg s "$1" 'select(.session_id == $s)' "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' '; }
+ oclog() { cat "$OCL" 2>/dev/null | grep -c 'opencode store:' || true; }
+ OCMISS="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-missing.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ : > "$UM/oc-empty.db"
+ OCEMPTY="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-empty.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("create table foo (x)"); c.commit(); c.close()' "$UM/oc-noschema.db"
+ OCNOSCH="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-noschema.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ printf 'not a database\n' > "$UM/oc-text.db"
+ OCNOTDB="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-text.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ OCLR="$(usf cl1 '[.turns, .tokens.input, (.agent // "-")] | join("|")')"
+ python3 -I -c '
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+c.execute("create table session_message (session_id text, seq integer, type text, time_created integer, data text)")
+
+def msg(sid, seq, typ, t, data):
+    c.execute("insert into session_message values (?,?,?,?,?)", (sid, seq, typ, t, json.dumps(data)))
+
+def sess(sid, directory, t, u):
+    c.execute("insert into session_v2 values (?,?,?,?)", (sid, directory, t, u))
+
+def turn(sid, seq, t, cost, inp, out, read, write, tools):
+    tokens = {"input": inp, "output": out, "reasoning": inp // 100, "cache": {"read": read, "write": write}}
+    msg(sid, seq, "assistant", t, {"model": {"id": "gpt-5", "providerID": "openai"}, "cost": cost, "tokens": tokens, "content": tools})
+
+dev, res, t3 = "ses_orca_dev_17945747508474019665", "ses_orca_researcher-2_1794577043", "ses_orca_tester-3_1794574760"
+sess(dev, "/w/a/devgd-300", 1794574750000, 1794574800000)
+sess(res, "/unmapped/x", 1794577043000, 1794577100000)
+sess(t3, "/w/a/devgd-300", 1794574760000, 1794574800000)
+sess("ses_abc", "/w/a/devgd-300", 1794574750000, 1794574800001)
+sess("ses_orca_re3_f1-final-check_179", "/w/a/devgd-300", 1794574750000, 1794574800002)
+sess("ses_orca_Dev_179", "/w/a/devgd-300", 1794574750000, 1794574800003)
+sess("ses_orca_dev_179x", "/w/a/devgd-300", 1794574750000, 1794574800004)
+sess("ses_orca__179", "/w/a/devgd-300", 1794574750000, 1794574800005)
+msg(dev, 1, "user", 1794574750000, {"text": "Your task ID is: task_0123abcd"})
+turn(dev, 2, 1794574752000, 0.01, 1000, 100, 200, 50, [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "ls"}}, "time": {"ran": 1000, "completed": 1500}}])
+turn(dev, 3, 1794574754000, 0.02, 2000, 200, 400, 100, [{"type": "tool", "name": "edit", "state": {"status": "error", "input": {}}, "time": {"ran": 2000, "completed": 2100}}, {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject \"ACCEPTED\" --task-id task_0123abcd"}}, "time": {"ran": 3000, "completed": 5000}}])
+msg(res, 1, "user", 1794577043000, {"text": "Your task ID is: task_0123abcd"})
+turn(res, 2, 1794577045000, 0.005, 10, 2, 0, 0, [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "pwd"}}, "time": {"ran": 0, "completed": 100}}])
+turn(res, 3, 1794577047000, 0.015, 20, 3, 0, 0, [])
+msg(t3, 1, "user", 1794574760000, {"text": "Your task ID is: task_beefbeef"})
+msg(t3, 2, "assistant", 1794574762000, {"cost": "9", "tokens": {"input": 10, "output": 1}, "content": [
+  {"type": "text", "text": "x"},
+  {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "echo hi"}}, "time": {"ran": 5000, "completed": 1000}},
+  {"type": "tool", "name": "read", "state": {"status": "error"}}]})
+msg(t3, 3, "assistant", 1794574764000, {"content": [
+  {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject REJECTED --task-id task_ffffffff"}}, "time": {"ran": 0, "completed": 250}}]})
+c.execute("insert into session_message values (?,?,?,?,?)", (t3, 4, "assistant", 1794574763000, "{not json"))
+msg(t3, 5, "idle", 1794574766000, {})
+msg(t3, 6, "user", 1794574767000, {"text": "plain"})
+c.commit()
+c.close()
+' "$OCDB"
+ OC0="$(cksum < "$OCDB")"
+ ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC1="$UPRC:$(ocn):$(ocnid ses_orca_dev_17945747508474019665):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
+ OCDEV="$(usf ses_orca_dev_17945747508474019665 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.cacheRead, .tokens.cacheCreation, .tokens.thinking, .maxContext, .costState, .cost, (.unpriced | join(",")), .models["openai/gpt-5"].turns, .tools.bash.calls, .tools.bash.seconds, .tools.edit.calls, .tools.edit.errors, .tools.edit.seconds, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
+ OCRES="$(usf ses_orca_researcher-2_1794577043 '[.agent, .orca_roles_role, .task, .project, .turns, .tokens.input, .tokens.output, .costState, .maxContext, .tools.bash.calls, .tools.bash.seconds, (.workerDone | length)] | join("|")')"
+ OCT3="$(usf ses_orca_tester-3_1794574760 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.thinking, .maxContext, (.costState // "null"), .cost, (.unpriced | join(",")), (.models | keys | join(",")), .tools.bash.calls, .tools.bash.seconds, .tools.read.calls, .tools.read.errors, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
+ OCN="$(usf ses_abc .session_id)$(usf ses_orca_re3_f1-final-check_179 .session_id)"
+ OCX="$(for s in ses_orca_Dev_179 ses_orca_dev_179x ses_orca__179; do o="$(usf "$s" .session_id)"; printf '%s,' "${o:-none}"; done)"
+ ON0="$(ocn)"
+ ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC2="$UPRC:$(( $(ocn) - ON0 ))"
+ python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("update session_v2 set time_updated = time_updated + 1000 where id like ?", ("ses_orca_dev_%",)); c.commit(); c.close()' "$OCDB"
+ OC0="$(cksum < "$OCDB")"
+ ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC3="$UPRC:$(( $(ocn) - ON0 )):$(ocnid ses_orca_dev_17945747508474019665):$(ocnid ses_orca_researcher-2_1794577043):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
+ check "usage parse: OpenCode sessions of the kit (ses_orca_<role>_<digits>) are read from OpenCode's store read-only into the same daily file marked \"agent\":\"opencode\": a mapped worktree gives the task, the role comes from the id, the token sums, two turns, max context, the tool calls/errors/seconds, the worker_done verdict with the seconds from the task prompt, the first and last message times and OpenCode's cost estimate as costState; a model without provider or id is \"unknown\", listed once as unpriced, an assistant without tokens is no turn (its tools still count), a tool whose completed time is before its ran time has no seconds, a cost that is not a number is not summed (no estimate: costState null), a bad JSON row and an idle row are skipped, a worker_done whose task id no prompt names has no seconds, and first/last are the message times; the non-kit id ses_abc and the kit-shaped ids that are not the pattern (ses_orca_re3_f1-final-check_179, ses_orca_Dev_179, ses_orca_dev_179x, ses_orca__179) give no row; a store missing, empty, without session_v2 or not a database logs one line for a bad store and none for a missing one, exits 0 and leaves the Claude rows as they were; a second pass with nothing changed writes no row, a new time_updated writes one row for that session only; the store bytes never change" "$OCMISS|$OCEMPTY|$OCNOSCH|$OCNOTDB|$OCLR|$OCDEV|$OCRES|$OCT3|$OCN|$OCX|$OC1|$OC2|$OC3" "0:0:0|0:0:1|0:0:2|0:0:3|1|1000000|-|opencode|dev|devgd-292|2|3000|300|600|150|30|2500|0.03|0.03|openai/gpt-5|2|2|2.5|1|1|0.1|ACCEPTED:4|2026-11-13T12:59:10.000Z|2026-11-13T12:59:14.000Z|opencode|researcher-2|||2|30|5|0.02|20|1|0.1|0|opencode|tester-3|devgd-292|1|10|1|0|10|null|0|unknown|unknown|2|0.25|1|1|REJECTED:null|2026-11-13T12:59:20.000Z|2026-11-13T12:59:27.000Z||none,none,none,|0:3:1:same|0:0|0:1:2:1:same"
 # --report: the latest line of each session, totals = sums by task, role and model, --task and --since filters, text and --json; and the same tokens and cost as bin/metrics.sh on one transcript
 umpk; W="/w/a/devgd-300/src"; RD="Read /k/prompts/programmer/dev.md and adopt that role."; RT="Read /k/prompts/programmer/tester.md and adopt that role."
 F6="$PD/r1.jsonl"; pu "$F6" 2026-10-27T10:00:00.000Z "$W" "$RD"; pa "$F6" 2026-10-27T10:00:01.000Z "$W" r1a claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'

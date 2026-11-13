@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Usage metrics of the kit's Claude Code sessions, read from the transcripts. Run through usage-metrics.sh (python3 >= 3.9, stdlib only, -I).
+"""Usage metrics of the kit's Claude Code sessions, read from the transcripts, and of its OpenCode sessions, read from OpenCode's store. Run through usage-metrics.sh (python3 >= 3.9, stdlib only, -I).
 
   usage_metrics.py --once
   usage_metrics.py --report [--task <t>] [--since <YYYY-MM-DD>] [--json]
 
-One pass reads ONLY <claude projects>/*/*.jsonl (and <session>/subagents/*.jsonl) and $KIT/metrics/*; it runs no other program. The transcripts root is
+One pass reads ONLY <claude projects>/*/*.jsonl (and <session>/subagents/*.jsonl), OpenCode's store (read-only, see oc_db) and $KIT/metrics/*; it runs no other program. The transcripts root is
 $ORCA_ROLES_CLAUDE_PROJECTS, else ${CLAUDE_CONFIG_DIR:-~/.claude}/projects. The store never holds prompts, tool inputs or tool outputs: only counts,
 tool names, durations, verdict words and line counts.
 
@@ -71,6 +71,7 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -722,6 +723,130 @@ def store(state, changed, wts, ts):  # wts: the worktrees map
             S = state["sessions"][sid]
             task, project = session_labels(wts, S)
             f.write(json.dumps(snapshot(S, ts, task, project), separators=(",", ":")) + "\n")
+
+
+# ---------------------------------------------------------------- OpenCode sessions
+def oc_db():
+    """The path of OpenCode's own session store: $ORCA_ROLES_OPENCODE_DB, else <XDG_DATA_HOME or ~/.local/share>/opencode/opencode.db."""
+    p = os.environ.get("ORCA_ROLES_OPENCODE_DB")
+    if p:
+        return p
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share"), "opencode", "opencode.db")
+
+
+def opencode_sessions(state, deadline):
+    """-> {sid: S} of the kit's OpenCode sessions that changed since the last pass, read from OpenCode's store (read-only)."""
+    path = oc_db()
+    if not os.path.exists(path):
+        return {}
+    seen = state.setdefault("opencode", {})
+    try:
+        con = sqlite3.connect("file:" + urllib.parse.quote(path) + "?mode=ro", uri=True, timeout=1)
+        try:
+            rows = con.execute("select id, directory, time_updated from session_v2 where id like 'ses\\_orca\\_%' escape '\\'").fetchall()
+            live = {r[0] for r in rows if isinstance(r[0], str)}
+            for sid in [k for k in seen if k not in live]:
+                del seen[sid]
+            out, read = {}, {}
+            for sid, directory, updated in rows:
+                m = re.match(r"^ses_orca_([a-z][a-z0-9-]*)_[0-9]+$", sid) if isinstance(sid, str) else None
+                if not m or (sid in seen and seen[sid] == updated):
+                    continue
+                if time.time() > deadline:
+                    break
+                S = new_session(sid)
+                S["kit"], S["role"], S["version"] = True, m.group(1), "opencode"
+                S["cwd"] = directory if isinstance(directory, str) else ""
+                cost, cost_seen, times = 0.0, False, []
+                for mtype, created, data in con.execute("select type, time_created, data from session_message where session_id = ? order by seq", (sid,)):
+                    try:
+                        d = json.loads(data)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(d, dict):
+                        continue
+                    if isinstance(created, (int, float)):
+                        times.append(created)
+                    if mtype == "user":
+                        S["userMessages"] += 1
+                        if isinstance(d.get("text"), str):
+                            for tid in PREAMBLE_TASK_RE.findall(d["text"]):
+                                if tid in S["taskPrompts"] or len(S["taskPrompts"]) < 300:
+                                    S["taskPrompts"][tid] = created / 1000.0 if isinstance(created, (int, float)) else None
+                    if mtype != "assistant":
+                        continue
+                    tk = d.get("tokens")
+                    if isinstance(tk, dict):
+                        mo = d.get("model") if isinstance(d.get("model"), dict) else {}
+                        name = "%s/%s" % (mo.get("providerID"), mo.get("id")) if isinstance(mo.get("providerID"), str) and isinstance(mo.get("id"), str) else "unknown"
+                        if S["lastModel"] and S["lastModel"] != name:
+                            S["modelChanges"] += 1
+                        S["lastModel"] = name
+                        r = model_row(S, name)
+                        inp, outp = tk.get("input") or 0, tk.get("output") or 0
+                        cache = tk.get("cache") if isinstance(tk.get("cache"), dict) else {}
+                        cr, cw = cache.get("read") or 0, cache.get("write") or 0
+                        r["input"] += inp
+                        r["output"] += outp
+                        r["thinking"] += tk.get("reasoning") or 0
+                        r["cacheRead"] += cr
+                        r["cacheCreation"] += cw
+                        r["turns"] += 1
+                        S["turns"] += 1
+                        S["maxContext"] = max(S["maxContext"], inp + cr + cw)
+                        if name not in S["unpriced"]:
+                            S["unpriced"].append(name)
+                        if isinstance(d.get("cost"), (int, float)):
+                            cost += d["cost"]
+                            cost_seen = True
+                    for b in d.get("content") if isinstance(d.get("content"), list) else []:
+                        if not isinstance(b, dict) or b.get("type") != "tool":
+                            continue
+                        tool = b.get("name") if isinstance(b.get("name"), str) else "unknown"
+                        tl = S["tools"].setdefault(tool, {"calls": 0, "errors": 0, "seconds": 0.0})
+                        tl["calls"] += 1
+                        st = b.get("state") if isinstance(b.get("state"), dict) else {}
+                        if st.get("status") == "error":
+                            tl["errors"] += 1
+                        tm = b.get("time") if isinstance(b.get("time"), dict) else {}
+                        ran, done = tm.get("ran"), tm.get("completed")
+                        if isinstance(ran, (int, float)) and isinstance(done, (int, float)) and done >= ran:
+                            tl["seconds"] += (done - ran) / 1000.0
+                        if tool == "bash" and isinstance(st.get("input"), dict) and isinstance(st["input"].get("command"), str):
+                            wd = worker_done_of(st["input"]["command"])
+                            if wd is not None:
+                                t0 = S["taskPrompts"].pop(wd[1], None)
+                                t1 = created / 1000.0 if isinstance(created, (int, float)) else None
+                                S["workerDone"].append({"verdict": wd[0], "seconds": round(t1 - t0) if t0 is not None and t1 is not None else None})
+                if cost_seen:
+                    S["cs"] = [cost, None, None]
+                if times:
+                    fmt = "%Y-%m-%dT%H:%M:%S.%f"
+                    S["first"] = datetime.datetime.fromtimestamp(min(times) / 1000.0, datetime.timezone.utc).strftime(fmt)[:-3] + "Z"
+                    S["last"] = datetime.datetime.fromtimestamp(max(times) / 1000.0, datetime.timezone.utc).strftime(fmt)[:-3] + "Z"
+                out[sid] = S
+                read[sid] = updated
+            seen.update(read)
+            return out
+        finally:
+            con.close()
+    except sqlite3.Error as ex:
+        log("opencode store: %s: %s" % (type(ex).__name__, ex))
+        return {}
+
+
+def store_opencode(sessions, wts, ts):  # wts: the worktrees map
+    """Appends the snapshot of each OpenCode session to today's daily file, marked with its agent."""
+    if not sessions:
+        return
+    path = os.path.join(MDIR, "sessions-%s.jsonl" % ts[:10])
+    with open(path, "a") as f:
+        for sid in sorted(sessions):
+            S = sessions[sid]
+            task, project = session_labels(wts, S)
+            row = snapshot(S, ts, task, project)
+            row["agent"] = "opencode"
+            f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
 def rotate(state, today, keep_days):
@@ -1693,6 +1818,10 @@ def once():
         changed = compute(state, claude_root(), deadline, wts, wt_changed)
         if changed:
             store(state, changed, wts(), ts)
+        try:
+            store_opencode(opencode_sessions(state, deadline), wts(), ts)
+        except Exception as ex:   # an OpenCode problem never fails the pass
+            log("opencode pass failed: %s: %s" % (type(ex).__name__, ex))
         try:
             push(state)
         except Exception as ex:   # a push problem never fails the pass
