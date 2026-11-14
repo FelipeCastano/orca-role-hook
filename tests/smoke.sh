@@ -162,9 +162,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
 mkdir -p "$TMP/pacebin"; printf '#!/bin/sh\ncase "$1" in 1|2) echo "sleep $1" >> "$PACE_LOG"; exit 0;; esac\nexec /bin/sleep "$@"\n' > "$TMP/pacebin/sleep"; chmod +x "$TMP/pacebin/sleep"   # pace's sleep of 1 or 2 s, logged and skipped, in runs with ORCA_ROLES_PACE='' and this folder on PATH
 export ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$TMP/scheduler.log"   # install.sh never touches the real launchctl or crontab from the suite
-SECTION=""; ERR_AT=""
+SECTION=""; ERR_AT=""; SMK_REAP_HOOK=""
 on_exit() {
   local rc=$?
+  [ -z "${SMK_REAP_HOOK:-}" ] || "$SMK_REAP_HOOK" 2>/dev/null || true
   if [ -n "$SMK_TLOG" ]; then
     if [ "$DONE" != 1 ] && [ -n "$SECTION" ]; then { printf 'section\t%s\t%s\taborted\n' "$SECTION" "$((SECONDS - SMK_T0))" >> "$SMK_TLOG"; } 2>/dev/null || true; fi
     if [ "$DONE" != 1 ]; then smk_finish aborted; elif [ "$FAIL" = 0 ]; then smk_finish ok; else smk_finish FAIL; fi
@@ -446,12 +447,12 @@ rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no co
 rule R10 "$ROOT/prompts/coordinator.md" 'Start it only when the user asks for an audit, never on your own or on a schedule'
 rule R10 "$ROOT/prompts/coordinator.md" "The one terminal you create yourself is the Auditor's tab"
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
-rule R10 "$PD/local-coordinator.md" '**Compact the Planner right after each report.** When you read a Planner `worker_done`, release its dispatch (`worker-release`), then run `~/.orca-roles/bin/compact-role.sh planner --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."` before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms' '^\*\*Compact the Planner right after each report'
-rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: do not compact after it, nor after a later Planner report that comes before the set'"'"'s commits; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
+rule R10 "$PD/local-coordinator.md" '**Compact the Planner only when its context is large.** When you read a Planner `worker_done`, release its dispatch (`worker-release`), then run `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."` before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms' '^\*\*Compact the Planner only when its context is large'
+rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: do not compact after it, nor after a later Planner report that comes before the set'"'"'s commits; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner only when its context is large'
 rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'in the foreground with a Bash timeout of 600000 ms, and wait for it to finish (about 40 s): the Planner'"'"'s cache is still warm then (for a Planner that does not run on claude, the same command cleans it instead). Never dispatch to the Planner while it runs; never compact it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
 rule R10 "$ROOT/bin/dispatch.sh" 'POLLS="${ORCA_ROLES_DISPATCH_POLLS:-15}"'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
-rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the step against the plan'
+rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the steps against the spec'
 rule R10 "$PD/plan-reviewer.md" 'It is read-only: no mutants' '^3\. Work out which kind of task'
 rule R10 "$PD/local-coordinator.md" 'run `~/.orca-roles/bin/sync-base.sh` once from the worktree, never while a code task is in flight' '^1b\. \*\*Latest base\.\*\*'
 rule R10 "$PD/local-coordinator.md" 'without offering the merge' '^1b\. \*\*Latest base\.\*\*'
@@ -520,7 +521,7 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R21 "$PL" 'anything that touches code, tests or a pinned rule goes through the Tester as usual' '\*\*Wording-only fixes need no Tester round\.\*\*'
     rule R21 "$PL" 'the Tester never runs it' '\*\*Set audit\.\*\*'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'run the sections and tests the whole set touches'
-    rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+    rule R21 "$ROOT/prompts/$m/dev.md" 'Run no tests and write none: every test run is the Tester'"'"'s'
     rule R21 "$ROOT/prompts/$m/tester.md" 'Never the full suite, not even when a brief asks for it'
     rule R21 "$ROOT/prompts/$m/tester.md" 'and the tests that depend on the changed source files' '^- \*\*Execution scope\*\*'
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'Never repeat a run that still stands'
@@ -562,17 +563,17 @@ for m in programmer pr-reviewer academic-research quick; do
   rule R18 "$PL" 'the exceptions, which need no confirmation, are `launch.sh --reopen` as "Recovering the team yourself" says' '^- Never create worktrees or terminals'
   GTY="$(grep -nE -- '--types' "$PL" || true)"; [ -n "$GTY" ] && grep -vq -- '--wait' <<<"$GTY" && { echo "FAIL rules R16: $m/local-coordinator.md uses --types without --wait"; FAIL=1; }
 done
-# R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into Dev's spec (Phase 2 point 2), and passes 16-18 of the plan review
+# R23 programmer plan checks: the Interfaces line (Phase 1 point 2, right after "Rules per step"), carried into the batch's spec, and passes 16-18 of the plan review
 PP="$ROOT/prompts/programmer/planner.md"
 r23() { local f="$1" frag="$2" lp="$3"; grep -qF -- "$frag" <<<"$(grep -E -- "$lp" <<<"$f" || true)" || { echo "FAIL rules R23: programmer/planner.md lost '$frag'"; FAIL=1; }; }
 R23PLAN="$(awk '/^## The plan$/{s=1;next} /^## /{s=0} s' "$PP")"
-R23SPEC="$(awk '/^## Dev specs$/{s=1;next} /^## /{s=0} s' "$PP")"
+R23SPEC="$(awk '/^## Specs$/{s=1;next} /^## /{s=0} s' "$PP")"
 R23PASS="$(awk '/^### Passes \(in this order\)/{s=1;next} /^### /{s=0} s' "$PP")"
-r23 "$R23PLAN" '**Interfaces between steps.** When a step produces something another step uses (a function, a command-line option, a file format, an environment variable, a message that another step matches), the step has an "Interfaces" line: what it produces and what it consumes from other steps or from existing code, with the exact names, signatures or formats. Dev'"'"'s spec carries its step'"'"'s line verbatim.' '^   - \*\*Interfaces between steps\.\*\*'
-r23 "$R23SPEC" '(backward compatibility, other callers), and its step'"'"'s "Interfaces" line verbatim when it has one. Open design questions' '^Each step.s spec is the file'
+r23 "$R23PLAN" '**Interfaces between steps.** When a step produces something another step uses (a function, a command-line option, a file format, an environment variable, a message that another step matches), the step has an "Interfaces" line: what it produces and what it consumes from other steps or from existing code, with the exact names, signatures or formats. The batch'"'"'s spec carries each step'"'"'s line verbatim.' '^   - \*\*Interfaces between steps\.\*\*'
+r23 "$R23SPEC" 'with the step'"'"'s "Interfaces" line verbatim; the behavior, edge cases and error paths included;' '^Each batch.s spec is the file'
 r23 "$R23PASS" '**Interfaces.** For each pair of steps that share a file or an interface, and for each step that consumes existing code, check that names, signatures, formats and messages match on both sides, as the "Interfaces" lines state them and as the code has them today. A mismatch is fixed in the plan.' '^16\. \*\*Interfaces\.\*\*'
 r23 "$R23PASS" '**Review focus.** List up to 5 kinds of input or situation that a reasonable user of the change would expect to work and that no criterion covers (for example an empty value, a path with spaces, a second run, a missing optional file). Each one becomes a criterion of its step, with pass/fail examples, when the request already implies it; otherwise it goes to the out-of-scope proposals list for the user.' '^17\. \*\*Review focus\.\*\*'
-r23 "$R23PASS" '**Lines that decide nothing.** Read each step'"'"'s text in the plan, and each Dev spec before you send it, looking for text that leaves the decision to Dev: "TBD", "handle edge cases", "appropriate validation", "as needed", "or similar", "if necessary", "etc.". Replace each one with the decision; if you cannot take it, resolve it with the Researcher or the user (`needs:`) before returning the plan or the spec.' '^18\. \*\*Lines that decide nothing\.\*\*'
+r23 "$R23PASS" '**Lines that decide nothing.** Read each step'"'"'s text in the plan, and each spec before you send it, looking for text that leaves the decision to Dev: "TBD", "handle edge cases", "appropriate validation", "as needed", "or similar", "if necessary", "etc.". Replace each one with the decision; if you cannot take it, resolve it with the Researcher or the user (`needs:`) before returning the plan or the spec.' '^18\. \*\*Lines that decide nothing\.\*\*'
 r23 "$R23PASS" '**Project rules.**' '^15\. '
 [ "$(grep -oE '^[0-9]+\. ' <<<"$R23PASS" | tr -d '. ' | tr '\n' ' ')" = "$(seq 1 "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" | tr '\n' ' ')" ] && [ "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" -ge 18 ] || { echo "FAIL rules R23: the passes are not numbered 1 to N in order with N at least 18"; FAIL=1; }
 # R24 programmer rulings: the Ledger bullet ends with the Ruling rule; the Set audit bullet shows "Rulings I made" right after the below-medium sentence, before the full run and the commit list
@@ -908,7 +909,7 @@ rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh
 rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the Researcher'
 rule E6 "$AD/local-coordinator-team.md" 'The Dev fix and Tester rounds of one Review round count as one batch'
 rule E6 "$PD/planner.md" 'write one brief per question, each its own `needs: research:` item'
-rule E6 "$PD/planner.md" 'Name only steps that come earlier in plan order.'
+rule E6 "$PD/planner.md" 'Name only batches that come earlier in plan order.'
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
@@ -1729,8 +1730,11 @@ check "clean.sh --all excludes the local coordinator" "$(grep -c 'terminal show 
 check "clean.sh --all goes through the workers, the planner included" "$(grep -c 'terminal show' "$LOGF")" "4"
 check "clean.sh --msg" "$(run_clean --msg dev | sed "s#$TMP/home/.orca-roles#$KIT#g")" "$(cd "$TMP" && worker_msg "$C" dev)"
 # compact-role.sh (fake orca; FAKE_WAIT_FAIL makes the waits time out)
-cr_run() { local s="$1"; shift; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
+cr_run() { local s="$1"; shift; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" ORCA_ROLES_CLAUDE_PROJECTS="$CRP" ORCA_ROLES_SESSION_HANDLES="$CRH" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
 sent() { grep -c -F -e "$1" "$LOGF" || true; }
+# a Claude Code projects folder and the SessionStart hook's records for the --if-above gate: the folder of $TMP's physical path, one record holding the Planner's handle
+CRP="$TMP/crprojects"; CRH="$TMP/crhandles"; CRSD="$CRP/$(cd "$TMP" && pwd -P | tr '/.' '--')"
+mkdir -p "$CRSD" "$CRH"; printf 't1\n' > "$CRH/s1"
 cat > "$TMP/fakebin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$LOGF"
@@ -1740,10 +1744,71 @@ exit 0
 EOS
 : > "$LOGF"; try cr_run compact-role.sh planner; A="$RC:$OUT:$(sent 'terminal send --terminal t1 --text /compact --enter'):$(sent 'adopt that role'):$(awk '/--text \x1b/{e=NR} /--text \/compact/{c=NR} END{print (e && c>e)}' "$LOGF")"
 : > "$LOGF"; try cr_run compact-role.sh planner --instructions "keep the plan"; A="$A|$RC:$(sent '--text /compact keep the plan --enter')"
-cp "$TMP/state.env" "$TMP/state.bak"; echo 'CC=t6' >> "$TMP/state.env"; : > "$LOGF"; try cr_run compact-role.sh cc; B="$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact')"; mv "$TMP/state.bak" "$TMP/state.env"
+cp "$TMP/state.env" "$TMP/state.bak"; echo 'CC=t6' >> "$TMP/state.env"; : > "$LOGF"; try cr_run compact-role.sh cc; B="$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact')"; : > "$LOGF"; try cr_run compact-role.sh cc --if-above 5; B="$B|$RC:$(printf '%s\n' "$OUT" | grep -c -F 'compact-role: cc runs custom: compacting is claude-only, cleaned it instead'):$(sent '--text /reset --enter'):$(sent '--text /compact'):$(printf '%s\n' "$OUT" | grep -c '^compact-role:' || true)"; mv "$TMP/state.bak" "$TMP/state.env"
 try cr_run compact-role.sh cx; B="$B|$RC"; try cr_run compact-role.sh nobody; B="$B$RC"; try cr_run compact-role.sh local-coordinator; B="$B$RC"
 : > "$LOGF"; export FAKE_WAIT_FAIL=1; try cr_run compact-role.sh planner; unset FAKE_WAIT_FAIL; B="$B:$RC:$(sent 'terminal send')"
-check "compact-role.sh: Esc then /compact [instructions], no role message; a role that is not claude is cleaned instead (its clearCommand sent, no /compact, the message printed once, a dead tab exits 1 as clean.sh does); unknown and local coordinator exit 2; a wait timeout exits 1 and sends nothing" "$A|$B" "0:compacted planner (t1):1:0:1|0:1|0:1:1:0|122:1:0"
+crt() { printf '%s\n' "$@" > "$CRSD/s1.jsonl"; }
+cr_line() { printf '{"type":"assistant","message":{"model":"%s","usage":{"input_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}}}\n' "$1" "$2" "$3" "$4"; }
+cr_err() { printf '{"type":"assistant","%s":true,"message":{"model":"%s","usage":{"input_tokens":1,"cache_read_input_tokens":999999,"cache_creation_input_tokens":0}}}\n' "$1" "$2"; }
+cr_gate() { local o; : > "$LOGF"; try cr_run compact-role.sh planner "$@"; o="$(printf '%s\n' "$OUT" | sed -n 1p | sed 's/^compact-role: planner //')"; printf '%s:%s:%s' "$RC" "$o" "$(grep -c 'terminal send' "$LOGF" || true)"; }
+crt "$(cr_line claude-x 1 199999 1)"; CG="$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 0 199999 1)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 11999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 199999 1)" '{"type":"system","subtype":"compact_boundary"}'; CG="$CG|$(cr_gate --if-above 200000)"
+mv "$CRH/s1" "$TMP/crh.off"; CG="$CG|$(cr_gate --if-above 200000)"; mv "$TMP/crh.off" "$CRH/s1"
+rm -f "$CRSD/s1.jsonl"; CG="$CG|$(cr_gate --if-above 200000)"
+crt '{"type":"user","message":{"content":"hi"}}'; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 299999 0)" "$(cr_line claude-x 1 49999 0)" "$(cr_err isApiErrorMessage claude-x)" "$(cr_err isSidechain claude-x)" "$(cr_line '<synthetic>' 1 999999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt "$(cr_line claude-x 1 11999 0)"
+CG="$CG|$(cr_gate --if-above 0)|$(cr_gate --if-above abc)|$(cr_gate --if-above)|$(cr_gate --if-above 1 --if-above 2)"
+CG="$CG|$(cr_gate --instructions x --if-above 5)|$(cr_gate --if-above 5 --instructions x)"
+# a compaction before the last answer does not make the later answer "compacted since", and a usage without cache fields counts them as 0
+crt '{"type":"system","subtype":"compact_boundary"}' "$(cr_line claude-x 1 49999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+crt '{"type":"assistant","message":{"model":"claude-x","usage":{"input_tokens":5}}}'; CG="$CG|$(cr_gate --if-above 200000)"
+# a compact_boundary after the last answer, with another answer of 300000 tokens before it, is later than that answer: not compacted
+crt '{"type":"system","subtype":"compact_boundary"}' "$(cr_line claude-x 1 299999 0)" '{"type":"system","subtype":"compact_boundary"}'; CG="$CG|$(cr_gate --if-above 200000)"
+# two records hold the Planner's handle: the newest one has no transcript, so the older one's transcript is read
+touch -t 202001010000 "$CRH/s1"; printf 't1\n' > "$CRH/s2"
+crt "$(cr_line claude-x 1 11999 0)"; CG="$CG|$(cr_gate --if-above 200000)"
+rm -f "$CRH/s2"
+# a transcript larger than the 1 MiB window whose last answer lies before it: found on the larger retry
+{ cr_line claude-x 1 299999 0; head -c 1300000 /dev/zero | tr '\0' 'x'; printf '\n'; } > "$CRSD/s1.jsonl"; CG="$CG|$(cr_gate --if-above 200000)"
+# a projects folder named by the second slug rule (every non-alphanumeric replaced) is read when the first rule's folder is absent
+mkdir -p "$TMP/cr_wt"; CRW="$(cd "$TMP/cr_wt" && pwd -P)"; CRP2="$TMP/crprojects2"; CRSD2="$CRP2/$(printf '%s' "$CRW" | tr -c 'A-Za-z0-9\n' '-')"; mkdir -p "$CRSD2"
+printf 't1\n' > "$CRH/s3"; printf '%s\n' "$(cr_line claude-x 1 11999 0)" > "$CRSD2/s3.jsonl"
+cr_run_at() { local d="$1" p="$2" s="$3"; shift 3; (cd "$d" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" ORCA_ROLES_CLAUDE_PROJECTS="$p" ORCA_ROLES_SESSION_HANDLES="$CRH" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
+cr_gate_at() { local o; : > "$LOGF"; try cr_run_at "$TMP/cr_wt" "$CRP2" compact-role.sh planner "$@"; o="$(printf '%s\n' "$OUT" | sed -n 1p | sed 's/^compact-role: planner //')"; printf '%s:%s:%s' "$RC" "$o" "$(grep -c 'terminal send' "$LOGF" || true)"; }
+CG="$CG|$(cr_gate_at --if-above 200000)"
+# the value must match ^[1-9][0-9]*$ and each option appears at most once
+crt "$(cr_line claude-x 1 11999 0)"
+CG="$CG|$(cr_gate --if-above 01)|$(cr_gate --if-above 1.0)|$(cr_gate --if-above ' 1')|$(cr_gate --if-above -1)|$(cr_gate --instructions x --instructions y)"
+check "compact-role.sh: Esc then /compact [instructions], no role message; a role that is not claude is cleaned instead (its clearCommand sent, no /compact, the message printed once, with --if-above too, a dead tab exits 1 as clean.sh does); unknown and local coordinator exit 2; a wait timeout exits 1 and sends nothing; --if-above reads the last answer's context (compacts above it, not at or below it, not after a compaction and not when the size is unknown), ignores API-error, sidechain and synthetic lines, reads a compaction before the answer and a usage without cache fields, the newest record whose transcript exists, a transcript past the 1 MiB window and the second projects-folder rule, and refuses a bad, missing or repeated value" "$A|$B|$CG" "0:compacted planner (t1):1:0:1|0:1|0:1:1:0|0:1:1:0:1|122:1:0|0:context 200001 tokens, above 200000: compacting:2|0:context 200000 tokens, at most 200000: not compacted:0|0:context 12000 tokens, at most 200000: not compacted:0|0:was compacted since its last answer: not compacted:0|0:context size unknown: not compacted:0|0:context size unknown: not compacted:0|0:context size unknown: not compacted:0|0:context 50000 tokens, at most 200000: not compacted:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: unexpected argument: --if-above:0|0:context 12000 tokens, above 5: compacting:2|0:context 12000 tokens, above 5: compacting:2|0:context 50000 tokens, at most 200000: not compacted:0|0:context 5 tokens, at most 200000: not compacted:0|0:was compacted since its last answer: not compacted:0|0:context 12000 tokens, at most 200000: not compacted:0|0:context 300000 tokens, above 200000: compacting:2|0:context 12000 tokens, at most 200000: not compacted:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: --if-above takes a positive whole number of tokens.:0|2:compact-role.sh: unexpected argument: --instructions:0"
+# interrupt-role.sh (its own fake orca: the show preview comes from a file the check writes, a failed wait from FAKE_WAIT_FAIL, a failed show from ir-fail-show)
+cat > "$TMP/fakebin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$LOGF"
+if [ "\$2" = show ]; then
+  [ -e "$TMP/ir-fail-show" ] && exit 1
+  [ -f "$TMP/ir-show" ] && cat "$TMP/ir-show"
+  exit 0
+fi
+[ -n "\$FAKE_WAIT_FAIL" ] && [ "\$2" = wait ] && exit 1
+exit 0
+EOS
+chmod +x "$TMP/fakebin/orca"
+ir_calls() { awk '/terminal show --terminal t1/{s++} /terminal send --terminal t1 --text \x1b/{e++} /terminal send .*--enter/{n++} /terminal wait --terminal t1 --for tui-idle --timeout-ms 30000/{w++} END{printf "%d:%d:%d:%d", e+0, n+0, w+0, s+0}' "$LOGF"; }
+ir_order() { awk '/terminal show --terminal t1/{s=NR} /terminal send --terminal t1 --text \x1b/{e=NR} /terminal wait --terminal t1 --for tui-idle/{w=NR} END{print (e && w) ? ((s && e > s && w > e) ? "ordered" : "bad") : "-"}' "$LOGF"; }
+ir_chk() { local o; : > "$LOGF"; try cr_run interrupt-role.sh "$@"; o="$(printf '%s\n' "$OUT" | sed -n 1p | sed 's/^interrupt-role: //')"; printf '%s:%s:%s:%s' "$RC" "$o" "$(ir_calls)" "$(ir_order)"; }
+rm -f "$TMP/ir-show" "$TMP/ir-fail-show"; X="$(ir_chk planner)"
+export FAKE_WAIT_FAIL=1; X="$X|$(ir_chk planner)"; unset FAKE_WAIT_FAIL
+printf '{"ok":true,"result":{"terminal":{"preview":"[Pasted text #1 +3 lines]"}}}\n' > "$TMP/ir-show"; X="$X|$(ir_chk planner)"
+rm -f "$TMP/ir-show"; : > "$TMP/ir-fail-show"; X="$X|$(ir_chk planner)"; rm -f "$TMP/ir-fail-show"
+# a composer at rest (no pasted text) is still interrupted
+printf '{"ok":true,"result":{"terminal":{"preview":"❯ "}}}\n' > "$TMP/ir-show"; X="$X|$(ir_chk planner)"; rm -f "$TMP/ir-show"
+cp "$TMP/state.env" "$TMP/state.ir"; printf 'CC=t6\nOCODE=t7\n' >> "$TMP/state.env"
+X="$X|$(ir_chk local-coordinator)|$(ir_chk nobody)|$(ir_chk cc)|$(ir_chk ocode)|$(ir_chk)|$(ir_chk planner dev)|$(ir_chk -h)|$(ir_chk --help)"
+mv "$TMP/state.ir" "$TMP/state.env"
+check "interrupt-role.sh: one Esc without Enter, then the idle wait; a composer without pasted text is interrupted; refusals and failures send nothing" "$X" "0:planner (t1) stopped:1:0:1:1:ordered|1:interrupt-role.sh: planner (t1) did not stop within 30 s; do not dispatch to it.:1:0:1:1:ordered|1:interrupt-role.sh: planner's composer holds pasted text; nothing was sent.:0:0:0:1:-|1:interrupt-role.sh: planner's tab (t1) does not respond; nothing was sent.:0:0:0:1:-|0:planner (t1) stopped:1:0:1:1:ordered|2:interrupt-role.sh: the local coordinator is not interrupted by the kit.:0:0:0:0:-|2:interrupt-role.sh: unknown role or no handle for 'nobody'.:0:0:0:0:-|2:interrupt-role.sh: cc runs custom: only Claude tabs are interrupted; close it with close-role.sh to end its turn.:0:0:0:0:-|2:interrupt-role.sh: ocode runs opencode: only Claude tabs are interrupted; close it with close-role.sh to end its turn.:0:0:0:0:-|2:# Usage (from the worktree):  interrupt-role.sh <role>:0:0:0:0:-|2:# Usage (from the worktree):  interrupt-role.sh <role>:0:0:0:0:-|0:# Stops the current turn of a Claude role (one Escape, as Claude Code's Esc) and waits until its turn has ended; the tab and its conversation stay.:0:0:0:0:-|0:# Stops the current turn of a Claude role (one Escape, as Claude Code's Esc) and waits until its turn has ended; the tab and its conversation stay.:0:0:0:0:-"
 V=""; for v in '"x"' 1 true '{}' null '"clear"' '"compact"'; do jq ".settings.flow.plannerReset=$v" "$C" > "$TMP/rp.json"; V="$V$(check_config "$TMP/rp.json" 2>&1 | wc -c | tr -d ' ')"; done
 check "check_config: flow.plannerReset, removed in this version, is accepted and ignored for any value (no output)" "$V" "0000000"
 }
@@ -6882,6 +6947,100 @@ jq '.settings.flow = {escalation: {dev: {to: "m-big"}}, crossCheck: true}' "$RD/
 case "$(PMX "$RD/x2.json")" in *"Round log and escalation: "*"$XR"*) echo "ok   rounds --cross: asked for with escalation and crossCheck";; *) echo "FAIL rounds --cross with escalation"; FAIL=1;; esac
 jq '.settings.flow = {recordRounds: true}' "$RD/x0.json" > "$RD/x3.json"; jq '.settings.flow = {crossCheck: true}' "$RD/x0.json" > "$RD/x4.json"
 check "rounds --cross: not asked for with the round log alone or the cross-check alone" "$(PMX "$RD/x3.json" | grep -c -- '--cross' || true):$(PMX "$RD/x4.json" | grep -c -- '--cross' || true)" "0:0"
+# handoff.sh: one command after Dev's report records the checkpoint, writes the Tester brief, the ledger line and the
+# state line, creates the Tester task from the brief and dispatches it. Fake orca (task-create) and fake dispatch.sh, both logging.
+HOD="$TMP/handoff"; rm -rf "$HOD"; mkdir -p "$HOD/bin" "$HOD/dir with space"
+printf 'spec text\n' > "$HOD/spec.md"; printf 'dev report\n' > "$HOD/report.md"; printf 'spaced spec\n' > "$HOD/dir with space/spec file.md"
+: > "$HOD/orca.log"; : > "$HOD/dispatch.log"
+cat > "$HOD/bin/orca" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >> "$HOD/orca.log"
+case "\$2" in
+  task-create)
+    if [ -n "\${FAKE_TC_FAIL:-}" ]; then printf '%s\n' '{"ok":false,"error":{"code":"run_not_found","message":"x"}}'; printf '%s\n' 'error: run_not_found: x' >&2; exit 1; fi
+    if [ -n "\${FAKE_TC_EMPTY:-}" ]; then printf '%s\n' '{"ok":false,"error":{"code":"run_not_found","message":"x"}}'; exit 0; fi
+    printf '%s\n' '{"ok":true,"result":{"taskId":"task_h1","status":"ready"}}';;
+esac
+exit 0
+EOS
+chmod +x "$HOD/bin/orca"
+cat > "$HOD/dispatch" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >> "$HOD/dispatch.log"
+[ -z "\${FAKE_DS_ECHO:-}" ] || { printf 'DISPATCH-OUT\n'; printf 'DISPATCH-ERR\n' >&2; }
+exit "\${FAKE_DS_RC:-0}"
+EOS
+chmod +x "$HOD/dispatch"
+HOP="$(cd "$HOD" && pwd -P)"                       # the spec and report paths as handoff.sh writes them (folder resolved)
+HOS="$(cd "$RD" && scratch_dir local-coordinator)" # the briefs, the ledger and the state file the step uses
+hls() { ( cd "${2:-$RD}" && "$KIT/bin/checkpoint.sh" --list "$1" 2>/dev/null ); }
+hnb() { printf '%s' "$(hls "$1" "${2:-$RD}" | grep -c . || true)"; }
+hstate() { awk -F'\t' -v b="$1" '$1 == b' "$RG/orca-roles.handoff" 2>/dev/null; }
+hnst() { printf '%s' "$(hstate "$1" | wc -l | tr -d ' ')"; }
+hnl() { if [ -f "$HOS/ledger.md" ]; then grep -c . "$HOS/ledger.md" || true; else echo 0; fi; }
+ho() { ( cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$TMP/home" PATH="$HOD/bin:$PATH" KIT="$KIT" ORCA_ROLES_DISPATCH="$HOD/dispatch" FAKE_TC_FAIL="${FAKE_TC_FAIL:-}" FAKE_TC_EMPTY="${FAKE_TC_EMPTY:-}" FAKE_DS_RC="${FAKE_DS_RC:-}" FAKE_DS_ECHO="${FAKE_DS_ECHO:-}" /bin/bash "$KIT/bin/handoff.sh" "$@" 2>&1 ); }
+ho2() { ( cd "$RD" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE HOME="$TMP/home" PATH="$HOD/bin:$PATH" KIT="$KIT" ORCA_ROLES_DISPATCH="$HOD/dispatch" FAKE_TC_FAIL="${FAKE_TC_FAIL:-}" FAKE_TC_EMPTY="${FAKE_TC_EMPTY:-}" FAKE_DS_RC="${FAKE_DS_RC:-}" FAKE_DS_ECHO="${FAKE_DS_ECHO:-}" /bin/bash "$KIT/bin/handoff.sh" "$@" > "$HOD/so" 2> "$HOD/se" ); }
+rm -f "$RD"/*.json   # the configuration copies of the checks above are not the round's change
+hnall() { printf '%s' "$(hls "" | grep -c . || true)"; }
+hmsg() { case "$1" in *"is not a directory"*) echo dir;; *"is not a readable file"*) echo file;; *"invalid batch"*) echo batch;; *'# Usage (from the worktree)'*) echo usage;; *) echo other;; esac; }
+H1V=""
+for hargs in "" "batch1" "B1 --to h --run r --spec $HOD/spec.md --report $HOD/report.md" "--bogus" "batch1 --to h --run r --spec $HOD/nope.md --report $HOD/report.md" "batch1 --to h --spec $HOD/spec.md --report $HOD/report.md" "batch1 batch2 --to h --run r --spec $HOD/spec.md --report $HOD/report.md" "batch1 --to h --run r --spec $HOD/spec.md" "batch1 --to h --run r --spec $HOD/spec.md --report $HOD/nope.md" "batch1 --to h --run r --spec $HOD/spec.md --report $HOD/report.md --tree $HOD/nope" "batch1 --to h --run r --spec $HOD/spec.md --report $HOD/report.md --tree $HOD/spec.md" "batch1 --to"; do
+  # shellcheck disable=SC2086
+  try ho $hargs; H1V="$H1V$RC:$(hnall):$(hnl):$(hmsg "$OUT")|"
+done
+try ho2 --help   # the usage block goes to stdout; the line before set -uo pipefail is the last one printed
+H1V="$H1V$RC:$(grep -c . "$HOD/so" || true):$(grep -c . "$HOD/se" || true):$(grep -c '^# Usage (from the worktree)' "$HOD/so" || true):$(grep -c 'ORCA_ROLES_DISPATCH' "$HOD/so" || true):$(grep -c '^# set -uo pipefail' "$HOD/so" || true)|"
+try ho2   # a usage error goes to stderr, nothing to stdout
+H1V="$H1V$RC:$(grep -c . "$HOD/so" || true):$(grep -c '^# Usage (from the worktree)' "$HOD/se" || true)"
+check "handoff: usage errors exit 1, the usage or the bad argument on stderr and nothing recorded; --help prints the header on stdout and exits 0" "$H1V" "1:0:0:usage|1:0:0:usage|1:0:0:batch|1:0:0:usage|1:0:0:file|1:0:0:usage|1:0:0:usage|1:0:0:usage|1:0:0:file|1:0:0:dir|1:0:0:dir|1:0:0:usage|0:11:0:1:1:0|1:0:1"
+hin() {  # hin <batch> <rc> <stdout> <brief path> [folder]: the fields of one successful run, its rounds counted in <folder> (the round's tree)
+  printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s' "$2" "$(hnb "$1" "${5:-$RD}")" "$(tr '\n' '~' < "$4")" "$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-)" "$(hnst "$1")" "$(hstate "$1" | tail -1 | tr '\t' ' ')" "$(tail -1 "$HOD/orca.log")" "$(tail -1 "$HOD/dispatch.log")" "$(printf '%s\n' "$3" | tail -1)" "$(printf '%s\n' "$3" | wc -l | tr -d ' ')"
+}
+HBR="$HOS/briefs"
+RHEAD="$(git -C "$RD" rev-parse HEAD)"
+: > "$HOD/orca.log"; : > "$HOD/dispatch.log"
+try ho batch1 --to h-tester --run run-1 --spec "$HOD/spec.md" --report "$HOD/report.md" --note "mind the edge"; O1="$OUT"; R1C="$RC"
+REF1="$(hls batch1 | sed -n 1p | awk '{print $1}')"
+V1="$(hin batch1 "$R1C" "$O1" "$HBR/batch1-r1.md")"
+E1="0:1:Tester round 1 of batch1.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $RHEAD~Diff to review: git diff $RHEAD $REF1~Files changed: f.txt, g.txt~Notes from the local coordinator: mind the edge~:batch1 round 1: checkpoint $REF1; Dev report $HOP/report.md; brief $HBR/batch1-r1.md; Tester task task_h1 dispatched:1:batch1 1 $REF1 $RHEAD:orchestration task-create --spec-file $HBR/batch1-r1.md --task-title Tester batch1 round 1 --run run-1 --json:--task task_h1 --to h-tester --run run-1:handoff: batch1 round 1 task task_h1 brief $HBR/batch1-r1.md:2"
+TREF="$( ( cd "$RD" && "$KIT/bin/checkpoint.sh" tester 1 2>/dev/null ) | sed -n 1p )"   # a Tester checkpoint between the rounds
+try ho batch1 --to h-tester --run run-2 --spec "$HOD/dir with space/spec file.md" --report "$HOD/report.md"; O2="$OUT"; R2C="$RC"
+REF2="$(hls batch1 | sed -n 2p | awk '{print $1}')"
+V2="$(hin batch1 "$R2C" "$O2" "$HBR/batch1-r2.md")"
+E2="0:2:Tester round 2 of batch1.~Spec: $HOP/dir with space/spec file.md~Dev's report: $HOP/report.md~Base ref (for the base check): $RHEAD~Diff to review: git diff $REF1 $REF2~Files changed: none~Earlier rounds of this batch: $HOS/ledger.md (its lines for batch1, and the Tester reports they name).~:batch1 round 2: checkpoint $REF2; Dev report $HOP/report.md; brief $HBR/batch1-r2.md; Tester task task_h1 dispatched:2:batch1 2 $REF2 $RHEAD:orchestration task-create --spec-file $HBR/batch1-r2.md --task-title Tester batch1 round 2 --run run-2 --json:--task task_h1 --to h-tester --run run-2:handoff: batch1 round 2 task task_h1 brief $HBR/batch1-r2.md:2"
+[ -z "$REF2" ] || git -C "$RD" update-ref -d "$REF2"   # a cleared checkpoint makes the batch start again at round 1
+try ho batch1 --to h-tester --run run-3 --spec "$HOD/spec.md" --report "$HOD/report.md"; O3="$OUT"; R3C="$RC"
+REF3="$(hls batch1 | sed -n 2p | awk '{print $1}')"
+V3="$(hin batch1 "$R3C" "$O3" "$HBR/batch1-r1.md")"
+E3="0:2:Tester round 1 of batch1.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $TREF~Diff to review: git diff $TREF $REF3~Files changed: none~:batch1 round 1: checkpoint $REF3; Dev report $HOP/report.md; brief $HBR/batch1-r1.md; Tester task task_h1 dispatched:1:batch1 1 $REF3 $TREF:orchestration task-create --spec-file $HBR/batch1-r1.md --task-title Tester batch1 round 1 --run run-3 --json:--task task_h1 --to h-tester --run run-3:handoff: batch1 round 1 task task_h1 brief $HBR/batch1-r1.md:2"
+# --tree: the checkpoint and the diff run in the pair tree, the brief, the ledger and the state in the current folder; the note keeps its newline
+git -C "$RD" worktree add -q -b hw-t "$TMP/handoff tree" 2>/dev/null; HTR="$(cd "$TMP/handoff tree" && pwd -P)"; HTHEAD="$(git -C "$HTR" rev-parse HEAD)"
+try ho2 batch4 --to h-tester --run run-4 --spec "$HOD/spec.md" --report "$HOD/report.md" --tree "$TMP/handoff tree" --note "line one
+line two"; O4="$(cat "$HOD/so")"; R4C="$RC"
+REF4="$( ( cd "$HTR" && "$KIT/bin/checkpoint.sh" --list batch4 2>/dev/null ) | sed -n 1p | awk '{print $1}')"
+V4="$(hin batch4 "$R4C" "$O4" "$HBR/batch4-r1.md" "$HTR")"
+E4="0:1:Tester round 1 of batch4.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $HTHEAD~Diff to review: git diff $HTHEAD $REF4~Files changed: none~Tree: $HTR~Notes from the local coordinator: line one~line two~:batch4 round 1: checkpoint $REF4; Dev report $HOP/report.md; brief $HBR/batch4-r1.md; Tester task task_h1 dispatched:1:batch4 1 $REF4 $HTHEAD:orchestration task-create --spec-file $HBR/batch4-r1.md --task-title Tester batch4 round 1 --run run-4 --json:--task task_h1 --to h-tester --run run-4:handoff: batch4 round 1 task task_h1 brief $HBR/batch4-r1.md:2"
+# dispatch's own output goes to handoff's stderr, never to its stdout; the checkpoint's namespace is the pair tree's
+S4="$(FAKE_DS_ECHO=1 try ho2 batch4 --to h-tester --run run-5 --spec "$HOD/spec.md" --report "$HOD/report.md" --tree "$TMP/handoff tree"; printf '%s:%s:%s:%s:%s:%s' "$RC" "$(grep -c . "$HOD/so" || true)" "$(grep -c '^DISPATCH-OUT$' "$HOD/so" || true)" "$(grep -c '^DISPATCH-OUT$' "$HOD/se" || true)" "$(grep -c '^DISPATCH-ERR$' "$HOD/se" || true)" "$(sed -n 's/^Base ref (for the base check): //p' "$HBR/batch4-r2.md" || true)")"
+# a batch named set gets checkpoint.sh's "Whole set since the branch base (HEAD)" line: its HEAD is the base ref too
+try ho set --to h-tester --run run-6 --spec "$HOD/spec.md" --report "$HOD/report.md"; O6="$OUT"; R6C="$RC"
+REF6="$(hls set | sed -n 1p | awk '{print $1}')"
+V6="$(hin set "$R6C" "$O6" "$HBR/set-r1.md")"
+E6="0:1:Tester round 1 of set.~Spec: $HOP/spec.md~Dev's report: $HOP/report.md~Base ref (for the base check): $RHEAD~Diff to review: git diff $RHEAD $REF6~Files changed: f.txt, g.txt~:set round 1: checkpoint $REF6; Dev report $HOP/report.md; brief $HBR/set-r1.md; Tester task task_h1 dispatched:1:set 1 $REF6 $RHEAD:orchestration task-create --spec-file $HBR/set-r1.md --task-title Tester set round 1 --run run-6 --json:--task task_h1 --to h-tester --run run-6:handoff: set round 1 task task_h1 brief $HBR/set-r1.md:2"
+check "handoff: round 1, round 2, --tree and a batch named set: checkpoints, brief lines, ledger and state lines, task-create and dispatch arguments, last line, dispatch output on stderr" "$V1|$V2|$V3|$V4|$S4|$V6|$(awk '$2 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ { n++ } END { print n + 0 }' "$HOS/ledger.md")" "$E1|$E2|$E3|$E4|0:2:0:1:1:$HTHEAD|$E6|6"
+: > "$HOD/orca.log"; : > "$HOD/dispatch.log"
+FAKE_TC_FAIL=1 try ho batch2 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md"; C1C="$RC"; CREF="$(hls batch2 | tail -1 | awk '{print $1}')"
+V5="$C1C:$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-):$(hnst batch2):$(grep -c . "$HOD/dispatch.log" || true)"
+FAKE_TC_EMPTY=1 try ho batch5 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md"; C3C="$RC"; C3REF="$(hls batch5 | tail -1 | awk '{print $1}')"
+V6="$C3C:$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-):$(hnst batch5):$(grep -c . "$HOD/dispatch.log" || true)"
+: > "$HOD/dispatch.log"
+FAKE_DS_RC=7 try ho batch3 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md"; C2C="$RC"; C2REF="$(hls batch3 | tail -1 | awk '{print $1}')"
+V7="$C2C:$(tail -1 "$HOS/ledger.md" | cut -d' ' -f3-):$(hnst batch3):$(grep -c . "$HOD/dispatch.log" || true)"
+# a failed checkpoint: exit 3, the checkpoint's own error and the handoff line, no brief, no ledger line, no state line, nothing dispatched
+mkdir -p "$TMP/handoff-plain"; : > "$HOD/dispatch.log"; LN="$(grep -c . "$HOS/ledger.md" || true)"
+try ho batch6 --to h-tester --run run-9 --spec "$HOD/spec.md" --report "$HOD/report.md" --tree "$TMP/handoff-plain"; C4C="$RC"
+V8="$C4C:$(printf '%s\n' "$OUT" | grep -c 'checkpoint.sh: run this from inside the worktree' || true):$(printf '%s\n' "$OUT" | grep -c 'handoff.sh: checkpoint failed; nothing recorded, nothing dispatched' || true):$(( $(grep -c . "$HOS/ledger.md" || true) - LN )):$(hnst batch6):$(hnb batch6):$(grep -c . "$HOD/dispatch.log" || true)"
+check "handoff: a failed task-create, an ok:false answer with exit 0, a failed dispatch or a failed checkpoint: exit 4, 4, 5 or 3, the ledger says so, no state line, nothing dispatched" "$V5|$V6|$V7|$V8" "4:batch2 round 1: checkpoint $CREF; Dev report $HOP/report.md; brief $HBR/batch2-r1.md; Tester task not created (exit 1):0:0|4:batch5 round 1: checkpoint $C3REF; Dev report $HOP/report.md; brief $HBR/batch5-r1.md; Tester task not created (exit 0):0:0|5:batch3 round 1: checkpoint $C2REF; Dev report $HOP/report.md; brief $HBR/batch3-r1.md; Tester task task_h1 not dispatched (exit 7):0:1|3:1:1:0:0:0:0"
 }
 
 sec_kit_path() {
@@ -7238,6 +7397,41 @@ fmreset; printf '❯ draft\n' > "$FM/preview"; runh; Z1="$(nsent):$(grep -c 'the
 fmreset; echo $(( $(date +%s) + 2 )) > "$FM/empty_after"; runh; sleep 2.2; Z2="$(nsent):$(grep -c 'the then line' "$FM/calls.log" || true):$(grep -c 'was in use' "$LOGF")"
 fmreset; printf '#!/bin/sh\nprintf "❯ typed meanwhile\\n" > "%s/preview"\n' "$FM" > "$FM/send.sh"; runh; Z3="$(grep -c -- '--text /model m1' "$FM/calls.log"):$(grep -c 'the then line' "$FM/calls.log" || true):$(grep -c 'this line was not sent' "$LOGF")"
 check "front-model.sh --run: the --then text is never sent while the composer has text, when the switch was given up on, or when the composer fills after it" "$Z1 $Z2 $Z3" "0:0 0:0:1 1:0:1"
+# restart-coordinator.sh: refusals; the scheduled clear and role message after the turn; --workers cleans first; a busy composer gets nothing
+RK="$FM/rk"; rm -rf "$RK"; mkdir -p "$RK/bin"; ln -s "$ROOT/bin/lib.sh" "$RK/bin/lib.sh"
+cat > "$RK/bin/clean.sh" <<'FAKE'
+#!/bin/sh
+R="$(dirname "$0")/.."
+echo "clean.sh $*" >> "$R/../calls.log"
+case "$1" in
+  --msg) echo "The kit was updated: your conversation was cleared and this is your role message."; exit 0;;
+  --all) exit "${FAKE_CLEAN_RC:-0}";;
+esac
+exit 0
+FAKE
+chmod +x "$RK/bin/clean.sh"
+RLOG="$WT/.git/orca-roles-restart.log"
+rkreset() { rm -f "$FM/calls.log" "$FM/wait.rc" "$FM/show.n" "$FM/send.sh" "$FM/empty_after" "$FM"/preview "$FM"/preview.* "$RLOG" "$WT/.git/orca-roles.mode-pending"; printf '❯ \n' > "$FM/preview"; : > "$FM/calls.log"; }
+rkc() { RKC=0; RKOUT="$(cd "$WT" && PATH="$FM/bin:$PATH" FAKE_CLEAN_RC="${FCRC:-0}" ORCA_ROLES_PACE=0 ORCA_ROLES_FRONT_MODEL_SETTLE=0 ORCA_ROLES_FRONT_MODEL_RETRY=0 ORCA_TERMINAL_HANDLE="${RKH:-hLC}" KIT="$RK" bash "$ROOT/bin/restart-coordinator.sh" "$@" 2>&1)" || RKC=$?; }
+rkcalls() { sed -e '/^clean\.sh --msg/d' -e 's/^terminal send --terminal [^ ]* --text \/clear --enter --json$/clear/' -e 's/^terminal send --terminal [^ ]* --text .*your conversation was cleared.* --enter --json$/role/' -e 's/^terminal wait --terminal [^ ]* --for tui-idle --timeout-ms [0-9]* --json$/wait/' -e 's/^terminal show --terminal [^ ]* --json$/show/' -e 's/^clean\.sh \(.*\)/clean:\1/' "$FM/calls.log" | tr '\n' ','; }
+rkline() { printf '%s\n' "$RKOUT" | tail -1 | grep -cF "Your conversation is cleared and your role message resent once this turn ends (log: $RLOG). End your turn now." || true; }
+printf '{"settings":{"kickoffTimeoutSeconds":2},"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"}}}\n' > "$CFG_F"
+rkreset; rkc; A1="$(rkline)"; fast_poll grep -q 'Cleared (/clear)' "$RLOG"; A1="$A1:$(rkcalls):$(grep -c '^clean\.sh --all' "$FM/calls.log" || true)"
+rkreset; rkc --workers; A2="$(rkline)"; fast_poll grep -q 'Cleared (/clear)' "$RLOG"; A2="$A2:$(rkcalls)"
+rkreset; FCRC=1 rkc --workers; A3="$RKC:$(printf '%s' "$RKOUT" | grep -c 'your conversation was not cleared'):$([ -e "$RLOG" ] && echo log || echo nolog):$(grep -c '^clean\.sh --all' "$FM/calls.log" || true)"; FCRC=0
+rkmsg() { printf '%s' "$RKOUT" | grep -cF "$1" || true; }
+rkreset; RKH=other rkc; RKH=hLC; X1="$RKC:$(rkmsg "run it from the local coordinator's own tab.")"
+printf '{"roles":{"local-coordinator":{"agent":"codex"}}}\n' > "$CFG_F"; rkc; X1="$X1 $RKC:$(rkmsg 'the local coordinator runs codex, not Claude Code')"
+printf '{"settings":{"kickoffTimeoutSeconds":2},"roles":{"local-coordinator":{"agent":"claude","model":"lcmodel"}}}\n' > "$CFG_F"
+: > "$WT/.git/orca-roles.mode-pending"; rkc; X1="$X1 $RKC:$(rkmsg 'no mode is chosen yet')"
+RKH=other rkc; RKH=hLC; X1="$X1 $RKC:$(rkmsg 'no mode is chosen yet')"
+rm -f "$WT/.git/orca-roles.mode-pending"
+mv "$STATE_F" "$STATE_F.x"; rkc; X1="$X1 $RKC:$(rkmsg 'run it from the worktree where the roles were opened.')"; mv "$STATE_F.x" "$STATE_F"
+rkc --bogus; X1="$X1 $RKC:$(rkmsg 'Usage: restart-coordinator.sh [--workers]')"; rkc --workers --workers; X1="$X1 $RKC:$(rkmsg 'Usage: restart-coordinator.sh [--workers]')"
+X2="$([ -e "$RLOG" ] && echo log || echo nolog):$(wc -l < "$FM/calls.log" | tr -d ' ')"
+printf '{"settings":{"kickoffTimeoutSeconds":1},"roles":{"local-coordinator":{"agent":"claude"}}}\n' > "$CFG_F"
+rkreset; echo $(( $(date +%s) + 2 )) > "$FM/empty_after"; rkc; sleep 1.5; A4="$RKC:$(grep -c 'terminal send' "$FM/calls.log" || true):$(grep -c 'was in use or not idle; nothing was sent' "$RLOG" || true)"
+check "restart-coordinator.sh: refusals (another tab, a non-claude coordinator, the mode-pending marker before the tab, a missing STATE, bad usage) with their messages and nothing run; the scheduled clear and role message after the turn; --workers cleans before any send; a failing clean; a busy composer gets nothing" "$X1:$X2|$A1|$A2|$A3|$A4" "2:1 2:1 2:1 2:1 2:1 2:1 2:1:nolog:0|1:wait,show,clear,wait,role,:0|1:clean:--all,wait,show,clear,wait,role,|1:1:nolog:1|0:0:1"
 echo "ok   front-model"
 }
 
@@ -9527,6 +9721,8 @@ check "REPORT_MARK_RE: marks Done./done:/blank-led/DONE/Hecho. bodies and none o
 sec_dispatch() {
 # dispatch.sh: dispatches like orca does and checks in the background that the worker started (fake orca; the checker's waits are shortened with ORCA_ROLES_DISPATCH_TICK / _POLLS)
 DS="$TMP/disp"; rm -rf "$DS"; mkdir -p "$DS/bin" "$DS/proj"; git -C "$DS/proj" init -q -b main; DSG="$DS/proj/.git"; DSL="$DS/orca.log"
+DSP="$(cd "$DS" && pwd -P)"   # the physical folder the section's detached dispatch.sh processes run in (or under): that is how it tells them from another worktree's
+SMK_REAP_HOOK=ds_reap
 cat > "$DS/bin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$DSL"
@@ -9560,11 +9756,28 @@ dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the sc
   t0=$SECONDS; if OUT="$(cd "${DDIR:-$DS/proj}" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=2 "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
   local n=0; if [ -z "${DNOCHECKER:-}" ]; then   # the checker ends with one closing line in the log (a pgrep could run before it has even started)
     until grep -qE 'started$|told |could not tell|not checked' "$DSG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.2; n=$((n + 1)); done
-    n=0; while pgrep -f -- "--watch task_abc123" >/dev/null 2>&1 && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    n=0; while [ -n "$(ds_pids watch)" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
   else sleep 1; fi
 }
 dsc() { grep -c -- "$1" "$DSL" || true; }
 dslog() { sed 's/^[0-9-]* [0-9:]* //' "$DSG/orca-roles-dispatch.log" 2>/dev/null | tr '\n' '/'; }
+ds_pids() {  # ds_pids <watch|all>: the pids of this section's dispatch.sh processes, told apart by their working directory
+  local re cwd p
+  if [ "$1" = watch ]; then re='dispatch\.sh --watch '; else re='dispatch\.sh --(watch|mail-watch) '; fi
+  for p in $(pgrep -f -- "$re" 2>/dev/null); do
+    if [ -e "/proc/$p/cwd" ]; then cwd="$(readlink "/proc/$p/cwd" 2>/dev/null)" || cwd=""
+    else cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"; fi
+    case "$cwd" in "$DSP"|"$DSP"/*) printf '%s\n' "$p";; esac
+  done
+  return 0
+}
+ds_reap() {  # ds_reap: TERM this section's dispatch.sh processes, then KILL the ones still there after 2 s
+  local p n=0
+  for p in $(ds_pids all); do kill -TERM "$p" 2>/dev/null || true; done
+  while [ -n "$(ds_pids all)" ] && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
+  for p in $(ds_pids all); do kill -KILL "$p" 2>/dev/null || true; done
+  return 0
+}
 EXP_JSON="$(cat "$DS/dispatch.json")"
 rm -f "$DSG/orca-roles-mail.log"; PACE_LOG="$DSL" ORCA_ROLES_PACE='' PATH="$TMP/pacebin:$PATH" dsrun early plain --task task_abc123 --to h-w --run run_1; mend run_1
 A="$RC:$([ "$OUT" = "$EXP_JSON" ] && echo same):$(dsc 'orchestration dispatch --task task_abc123 --to h-w --run run_1 --inject --json'):$(dsc 'terminal send'):$(dsc 'orchestration send'):$(dslog):$(mailog):$(wc -l < "$DS/err" | tr -d ' ')"
@@ -9648,10 +9861,11 @@ mstart --mail --run run_m; n=0; until grep -q 'mail run_m: started$' "$DSG/orca-
 mstart --mail --run run_m; mstart --mail-watch run_m
 cp "$DS/wl.none" "$DS/wl.json"; mend run_m; MP="$(grep -c 'mail run_m: started$' "$DSG/orca-roles-mail.log" || true)"
 M10="$MP:$(mailog | sed 's/run_m: //g'):$([ -e "$DSG/orca-roles-mail.run_m.pid" ] && echo lock || echo nolock)"
+DSLEFT="$(ds_pids all | wc -l | tr -d ' ')"
 rm -f "$DS/ps.mail"; mbox
-check "dispatch.sh mail watcher: one notice (exact text) for a message neither delivered nor read after 20 s, to the Run's coordinator, once per message; none for delivered, read, other-Run or younger messages; only to a Claude tab at rest (also 'working' while monitoring with its main agent done) with an empty composer; three failed sends then gives up; it ends with no open dispatch and nothing pending, else at its time limit, which a later start request renews (a live hidden run or an open dispatch keeps it), or after 20 unanswered looks; a lock naming a reused pid does not hold it, and a second start while one lives starts nothing" \
-  "$M1|$MN|$M2|$M3|$M4|$M5|$M6|$M7|$M8|$M9|$M10" \
-  "1:started/noticed 1 (m1) to h-co/ended: no task in flight/|1|0:started/ended: no task in flight/|1:started/noticed 1 (m1) to h-co/ended: no task in flight/| 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/|0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: not a Claude tab/ended: time limit/|0:started/ended: time limit/|3:started/notice to h-co failed (1)/notice to h-co failed (2)/notice to h-co failed (3)/gave up on m1/ended: no task in flight/|0:started/ended: time limit/ 0:started/ended: time limit/|0:started/ended: Orca did not answer 20 times/|1:started/ended: no task in flight/:nolock"
+check "dispatch.sh mail watcher: one notice (exact text) for a message neither delivered nor read after 20 s, to the Run's coordinator, once per message; none for delivered, read, other-Run or younger messages; only to a Claude tab at rest (also 'working' while monitoring with its main agent done) with an empty composer; three failed sends then gives up; it ends with no open dispatch and nothing pending, else at its time limit, which a later start request renews (a live hidden run or an open dispatch keeps it), or after 20 unanswered looks; a lock naming a reused pid does not hold it, and a second start while one lives starts nothing; no dispatch.sh process of the section is left once its watchers ended" \
+  "$M1|$MN|$M2|$M3|$M4|$M5|$M6|$M7|$M8|$M9|$M10|left:$DSLEFT" \
+  "1:started/noticed 1 (m1) to h-co/ended: no task in flight/|1|0:started/ended: no task in flight/|1:started/noticed 1 (m1) to h-co/ended: no task in flight/| 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/|0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: not a Claude tab/ended: time limit/|0:started/ended: time limit/|3:started/notice to h-co failed (1)/notice to h-co failed (2)/notice to h-co failed (3)/gave up on m1/ended: no task in flight/|0:started/ended: time limit/ 0:started/ended: time limit/|0:started/ended: Orca did not answer 20 times/|1:started/ended: no task in flight/:nolock|left:0"
 # the four local coordinator prompts carry the same assign line and silent-worker bullet
 PM=""; for m in programmer academic-research pr-reviewer quick; do f="$ROOT/prompts/$m/local-coordinator.md"
   PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`\( (the Planner.s tasks too)\)\{0,1\}: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
@@ -9667,6 +9881,7 @@ check "local coordinator prompts: the assign line and the silent-worker bullet a
 SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer,quick}/local-coordinator.md | tr '\n' ' ')"
 check "local coordinator prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the four modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/local-coordinator.md:1 %s/prompts/pr-reviewer/local-coordinator.md:1 %s/prompts/quick/local-coordinator.md:1 ' "$ROOT" "$ROOT" "$ROOT" "$ROOT")"
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too; the README describes the mail watcher (its paragraph and the troubleshooting row)" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'gets one notice typed into the Run.s coordinator tab' "$ROOT/README.md") $(grep -c 'the kit.s mail watcher types the notice itself when the tab is idle' "$ROOT/README.md")" "1 1 1 1 1 1 1 1"
+ds_reap; SMK_REAP_HOOK=""
 }
 
 sec_hidden() {
@@ -9896,6 +10111,101 @@ for TRA in "" "--" "--bogus x --" "--role --" "--role a --role b -- true" "-- X=
 done
 trc "test-run: usage errors exit 2, log nothing and run nothing" "$TRBAD:$(wc -c < "$TRL" | tr -d ' '):$([ -e "$TR/marker" ] && echo marker):$(grep -c 'put environment assignments before test-run.sh' "$TR/eu")" "0:0::1"
 trc "test-run: an assignment before the wrapper reaches the command" "$(X=1 tr_run -- sh -c 'echo "$X"' 2>/dev/null)" "1"
+# a fake PATH and a fake tests/smoke.sh, each touching the marker when run: refused calls leave the log empty and the marker absent
+TRKB="$TR/tkb"; rm -rf "$TRKB"; mkdir -p "$TRKB/bin" "$TRKB/tests"; TRKM="$TRKB/ran"
+for TRA in vitest jest pytest; do printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/bin/$TRA"; chmod +x "$TRKB/bin/$TRA"; done
+printf '#!/bin/sh\ntouch %s\nexec "$@"\n' "$TRKM" > "$TRKB/bin/npx"; chmod +x "$TRKB/bin/npx"
+printf '#!/bin/sh\ntouch %s\nexec "$@"\n' "$TRKM" > "$TRKB/bin/yarn"; chmod +x "$TRKB/bin/yarn"
+printf '#!/bin/sh\ntouch %s\nexec "$@"\n' "$TRKM" > "$TRKB/bin/bunx"; chmod +x "$TRKB/bin/bunx"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = exec ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/pnpm"; chmod +x "$TRKB/bin/pnpm"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = run ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/uv"; chmod +x "$TRKB/bin/uv"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = run ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/poetry"; chmod +x "$TRKB/bin/poetry"
+printf '#!/bin/sh\ntouch %s\n[ "$1" = -m ] && shift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/python3"; chmod +x "$TRKB/bin/python3"
+printf '#!/bin/sh\ntouch %s\nwhile [ $# -gt 0 ]; do case "$1" in -k|-s|--kill-after|--signal) shift 2 ;; -*) shift ;; *) break ;; esac; done\nshift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/timeout"; chmod +x "$TRKB/bin/timeout"
+cp "$TRKB/bin/timeout" "$TRKB/bin/gtimeout"; chmod +x "$TRKB/bin/gtimeout"
+printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/tests/smoke.sh"; chmod +x "$TRKB/tests/smoke.sh"
+trk_run() { ( cd "$TRKB" && export PATH="$TRKB/bin:$PATH" && ORCA_ROLES_TEST_LOG="$TRL" "$TRS" "$@" ); }
+# the C1 family, one form per line so that the other-role check below reuses the same list
+TRQS="tests/smoke.sh
+./tests/smoke.sh
+bash tests/smoke.sh
+npx vitest
+npx vitest run
+npx vitest run --maxWorkers=2
+pnpm exec vitest run
+yarn jest --maxWorkers=2
+pytest -n 2
+python3 -m pytest -q
+timeout 600 tests/smoke.sh
+timeout -k 5 600 pytest
+timeout --kill-after=5 600 pytest -q
+gtimeout -s TERM 600 npx vitest run
+env SMOKE_JOBS=1 tests/smoke.sh
+uv run pytest -x"
+# boundaries of the same family: nested wrappers, a wrapper named by its path, the other timeout option forms, a numeric-only selection
+TRQB="$TRQS
+env A=1 timeout 600 npx vitest run
+bash -e tests/smoke.sh
+uv run timeout 600 pytest -x
+/usr/bin/env A=1 pytest
+/usr/local/bin/npx vitest
+py.test
+pnpm exec pytest -n 2
+timeout --signal=TERM 600 pytest
+timeout -k5 600 pytest
+timeout --kill-after 5 600 npx vitest run
+bunx vitest
+poetry run pytest
+pytest 2"
+TRR=0; TRW=0; TRN=0; TRS1=0
+while IFS= read -r TRA; do
+  : > "$TRL"; rm -f "$TRKM"
+  # shellcheck disable=SC2086
+  try trk_run --role tester -- $TRA 2> "$TR/fx"
+  [ "$RC" = 2 ] || TRR=1
+  [ -s "$TRL" ] && TRW=1
+  [ -e "$TRKM" ] && TRN=1
+  grep -q 'refused for the Tester' "$TR/fx" || TRS1=1
+done <<< "$TRQB"
+trc "test-run: the Tester's whole-suite runner calls are refused (exit 2), log nothing and run nothing" "$TRR:$TRW:$TRN:$TRS1" "0:0:0:0"
+: > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- npx vitest run 2> "$TR/ff"
+trc "test-run: the refusal names the runner and the related-tests options" "$RC:$(cat "$TR/ff")" "2:test-run.sh: refused for the Tester: vitest with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>. The full suite is the Code-Reviewer's."
+TRS2=""
+# the C2 family: every accepted call runs, writes one log line and leaves the marker
+TRQOK="tests/smoke.sh rules prompts
+tests/smoke.sh --list
+npx vitest related src/a.ts --run
+npx vitest run src/a.test.ts
+npx jest --findRelatedTests src/a.ts
+pytest tests/test_a.py
+pytest -k name
+pytest --help
+npx vitest --version
+tests/smoke.sh -h
+timeout 600 tests/smoke.sh dispatch"
+while IFS= read -r TRA; do
+  : > "$TRL"; rm -f "$TRKM"
+  # shellcheck disable=SC2086
+  try trk_run --role tester -- $TRA 2> "$TR/fa"
+  TRS2="$TRS2$([ "$RC" = 0 ] && [ "$(wc -l < "$TRL" | tr -d ' ')" = 1 ] && [ -e "$TRKM" ] && echo y || echo n)"
+done <<< "$TRQOK"
+: > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- sh -c 'exit 0' 2>/dev/null
+TRS2="$TRS2:$([ ! -e "$TRKM" ] && echo ok):$RC:$(wc -l < "$TRL" | tr -d ' ')"
+trc "test-run: targeted runner calls, other commands and other roles run as before" "$TRS2" "yyyyyyyyyyy:ok:0:1"
+# C3: the C1 family without the Tester role still runs and logs, with no role and with --role code-reviewer
+TRS3=0
+while IFS= read -r TRA; do
+  for TRRL in none code-reviewer; do
+    : > "$TRL"; rm -f "$TRKM"
+    # shellcheck disable=SC2086
+    if [ "$TRRL" = none ]; then try trk_run -- $TRA 2>/dev/null; else try trk_run --role "$TRRL" -- $TRA 2>/dev/null; fi
+    { [ "$RC" = 0 ] && [ "$(wc -l < "$TRL" | tr -d ' ')" = 1 ] && [ -e "$TRKM" ]; } || TRS3=1
+  done
+done <<< "$TRQS"
+trc "test-run: without --role tester (no role, code-reviewer) the whole-suite runner calls run and log as before" "$TRS3" "0"
+# C4: --help prints the header from its first line through the exit-code line, the new refusal line included
+try "$TRS" --help
+trc "test-run: --help prints the header through the exit-code line, the new refusal line included" "$RC:$(printf '%s\n' "$OUT" | head -1):$(printf '%s\n' "$OUT" | tail -1):$(printf '%s\n' "$OUT" | grep -cF -- '# With --role tester, a vitest, jest, pytest or tests/smoke.sh call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer' || true):$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -vc '^#' || true)" "0:# test-run.sh: runs a test command and adds the run to the kit's test log.:# The exit code is the command's; 2 is a usage error (nothing is run or logged).:1:12:0"
 check "test-run: usage" "$TRF" ""
 TRF=""
 TRC="$TR/c"; unset TRX; TRX="$(env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" --path)"; env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" -- true 2>/dev/null
@@ -10046,6 +10356,7 @@ check "load throttle: not applied with SMOKE_JOBS set, SMOKE_MAX_LOAD=0 (under a
 sec_usage_metrics() {
 # settings.metrics and the kit's writers for the metrics pass: validation, worktrees.jsonl and events.jsonl from launch.sh and dispatch.sh, install.sh's mapping, enabled=false, a failing write
 UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
 umcv() { jq -c --argjson v "$2" "$1 = \$v" "$ROOT/config.default.json" > "$UM/cv.json"; check_config "$UM/cv.json" | tr '\n' '/'; }
 umbad() { [ "$(umcv "$1" "$2")" = "ERROR: invalid configuration: $3/" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
 umok() { [ -z "$(umcv "$1" "$2")" ] && printf 'ok ' || printf 'BAD[%s %s] ' "$1" "$2"; }
@@ -10175,8 +10486,22 @@ IWNP=""; IFS=: read -r -a IWDIRS <<< "$PATH"; for d in "${IWDIRS[@]}"; do [ -x "
 iwhome() { IH="$IW/h"; rm -rf "$IH"; mkdir -p "$IH/.orca-roles/metrics"; cp "$UH/.orca-roles/config.json" "$IH/.orca-roles/config.json"; printf '%s\n' "$(IWP D)" > "$IH/.orca-roles/trusted.list"; printf '%s\n' "{\"ts\":\"2026-10-01T00:00:00Z\",\"path\":\"$IW/E\",\"physical\":\"$(IWP E)\",\"project\":\"E\",\"task\":\"old\"}" > "$IH/.orca-roles/metrics/worktrees.jsonl"; }
 iwinst() { if (cd "$UM" && HOME="$IH" PATH="$1" FO_MODE="$2" bash "$ROOT/install.sh" </dev/null >"$IW/out" 2>&1); then IWRC=0; else IWRC=$?; fi; }
 iwj() { jq -r '[.project, .task] | join("/")' "$IH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort | tr '\n' ' '; }
-iwhome; : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; V1="$IWRC:$(iwj)"; L1="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; iwinst "$IW/fo:$PATH" ok; V2="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; V3="$(sort -u "$IW/fo/calls.log" | tr '\n' '|')"
-check "install: Orca's worktrees with orca-roles.env and not mapped are mapped once (project, task from the worktree's configuration or its folder name); listed in trusted.list too, already mapped, with no orca-roles.env, not a directory or a non-string path -> no line; a second install adds nothing; only 'worktree list --limit 1000 --json' is called" "$V1:$L1:$V2:$V3" "0:A/ta D/D E/old F/F :4:4:worktree list --limit 1000 --json|"
+iwhome; : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; V1="$IWRC:$(iwj)"; L1="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; M0="$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)"; iwinst "$IW/fo:$PATH" ok; V2="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; V3="$(sort -u "$IW/fo/calls.log" | tr '\n' '|')"; M1="$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)"
+I5E="orca-roles was updated and its prompts changed: these worktrees have a kit team, and one that is still open runs the old prompts. Before its next set, tell its local coordinator that the kit was updated, so it runs restart-coordinator.sh --workers: $(IWP D), $IW/A, $IW/E, $IW/F"
+iwi5() { printf '%s:%s:%s' "$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)" "$([ "$(grep '^orca-roles was updated and its prompts changed:' "$IW/out" || true)" = "$I5E" ] && echo i5 || echo other)" "$(grep -c '^worktree list --limit 1000 --json$' "$IW/fo/calls.log" || true)"; }
+awk '!d && /  prompts\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok
+M2="$(iwi5):$([ "$(tail -1 "$IW/out")" = "$I5E" ] && echo last || echo notlast)"
+awk '!d && /  bin\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M3="$(iwi5)"
+awk '!d && /  prompts\// { d=1; next } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M4="$(iwi5)"
+{ cat "$IH/.orca-roles/.manifest"; printf '%s  %s\n' 0000000000000000000000000000000000000000 prompts/added-later.md; } > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M5="$(iwi5)"
+iwhome; jq '.settings.metrics.enabled = false' "$IH/.orca-roles/config.json" > "$IW/c.json"; cp "$IW/c.json" "$IH/.orca-roles/config.json"; iwinst "$IW/fo:$PATH" ok
+awk '!d && /  prompts\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
+: > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M6="$(iwi5):$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"
+check "install: Orca's worktrees with orca-roles.env and not mapped are mapped once (project, task from the worktree's configuration or its folder name); listed in trusted.list too, already mapped, with no orca-roles.env, not a directory or a non-string path -> no line; a second install adds nothing; only 'worktree list --limit 1000 --json' is called; a first install and one with no prompt change print no I5 line; an update that changed a prompts/ file prints it once, as the last line, trusted.list's worktrees first then Orca's, no folder twice, and still asks 'worktree list' once; only a bin/ change prints no line; a prompts/ file the update added or removed prints it again; with metrics off it still prints and maps nothing" "$V1:$L1:$V2:$V3:$M0:$M1:$M2:$M3:$M4:$M5:$M6:$IWRC:$(grep -c '^worktree list --limit 1000 --json$' "$IW/fo/calls.log" || true)" "0:A/ta D/D E/old F/F :4:4:worktree list --limit 1000 --json|:0:0:1:i5:1:last:0:other:1:1:i5:1:1:i5:1:1:i5:1:1:0:1"
 iwhome; iwinst "$IW/fo:$PATH" fail; W1="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
 iwhome; iwinst "$IW/fo:$PATH" junk; W2="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
 iwhome; iwinst "$IWNP" ok; W3="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
@@ -10333,6 +10658,76 @@ jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/
 jq '.settings.metrics.retentionDays = "30"' "$HC" > "$PK/config.json"; echo '{}' > "$PM/sessions-$(umday 100).jsonl"; echo '{}' > "$PM/sessions-$(umday 31).jsonl"
 jq '.lastRotation = "2000-01-01"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"; umpass; R4="$([ -e "$PM/sessions-$(umday 100).jsonl" ] && echo kept || echo gone):$([ -e "$PM/sessions-$(umday 31).jsonl" ] && echo kept || echo gone)"
 check "usage parse: rotation on the first pass of a UTC day removes the daily files older than retentionDays (the day exactly retentionDays old stays) and nothing else (state.json, worktrees.jsonl, events.jsonl, a file that is not a daily file); a second pass the same day removes nothing more; an invalid retentionDays falls back to 90" "$R1|$R2|$R3|$R4" "3:0:b30:decoy:{\"ts\":\"x\"}:wt:state|kept|gone:b29|gone:kept"
+ # OpenCode sessions of the kit: read-only from OpenCode's store into the same daily files, marked "agent": "opencode"
+ umpk; W="/w/a/devgd-300/src"; kses cl1 "$W" "hello"; OCDB="$UM/oc.db"; OCL="$PM/usage-metrics.log"
+ ocn() { jq -c 'select(.agent == "opencode")' "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' '; }
+ ocnid() { jq -c --arg s "$1" 'select(.session_id == $s)' "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' '; }
+ oclog() { cat "$OCL" 2>/dev/null | grep -c 'opencode store:' || true; }
+ OCMISS="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-missing.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ : > "$UM/oc-empty.db"
+ OCEMPTY="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-empty.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("create table foo (x)"); c.commit(); c.close()' "$UM/oc-noschema.db"
+ OCNOSCH="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-noschema.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ printf 'not a database\n' > "$UM/oc-text.db"
+ OCNOTDB="$(ORCA_ROLES_OPENCODE_DB="$UM/oc-text.db" umpass; printf '%s:%s:%s' "$UPRC" "$(ocn)" "$(oclog)")"
+ OCLR="$(usf cl1 '[.turns, .tokens.input, (.agent // "-")] | join("|")')"
+ python3 -I -c '
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+c.execute("create table session_message (session_id text, seq integer, type text, time_created integer, data text)")
+
+def msg(sid, seq, typ, t, data):
+    c.execute("insert into session_message values (?,?,?,?,?)", (sid, seq, typ, t, json.dumps(data)))
+
+def sess(sid, directory, t, u):
+    c.execute("insert into session_v2 values (?,?,?,?)", (sid, directory, t, u))
+
+def turn(sid, seq, t, cost, inp, out, read, write, tools):
+    tokens = {"input": inp, "output": out, "reasoning": inp // 100, "cache": {"read": read, "write": write}}
+    msg(sid, seq, "assistant", t, {"model": {"id": "gpt-5", "providerID": "openai"}, "cost": cost, "tokens": tokens, "content": tools})
+
+dev, res, t3 = "ses_orca_dev_17945747508474019665", "ses_orca_researcher-2_1794577043", "ses_orca_tester-3_1794574760"
+sess(dev, "/w/a/devgd-300", 1794574750000, 1794574800000)
+sess(res, "/unmapped/x", 1794577043000, 1794577100000)
+sess(t3, "/w/a/devgd-300", 1794574760000, 1794574800000)
+sess("ses_abc", "/w/a/devgd-300", 1794574750000, 1794574800001)
+sess("ses_orca_re3_f1-final-check_179", "/w/a/devgd-300", 1794574750000, 1794574800002)
+sess("ses_orca_Dev_179", "/w/a/devgd-300", 1794574750000, 1794574800003)
+sess("ses_orca_dev_179x", "/w/a/devgd-300", 1794574750000, 1794574800004)
+sess("ses_orca__179", "/w/a/devgd-300", 1794574750000, 1794574800005)
+msg(dev, 1, "user", 1794574750000, {"text": "Your task ID is: task_0123abcd"})
+turn(dev, 2, 1794574752000, 0.01, 1000, 100, 200, 50, [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "ls"}}, "time": {"ran": 1000, "completed": 1500}}])
+turn(dev, 3, 1794574754000, 0.02, 2000, 200, 400, 100, [{"type": "tool", "name": "edit", "state": {"status": "error", "input": {}}, "time": {"ran": 2000, "completed": 2100}}, {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject \"ACCEPTED\" --task-id task_0123abcd"}}, "time": {"ran": 3000, "completed": 5000}}])
+msg(res, 1, "user", 1794577043000, {"text": "Your task ID is: task_0123abcd"})
+turn(res, 2, 1794577045000, 0.005, 10, 2, 0, 0, [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "pwd"}}, "time": {"ran": 0, "completed": 100}}])
+turn(res, 3, 1794577047000, 0.015, 20, 3, 0, 0, [])
+msg(t3, 1, "user", 1794574760000, {"text": "Your task ID is: task_beefbeef"})
+msg(t3, 2, "assistant", 1794574762000, {"cost": "9", "tokens": {"input": 10, "output": 1}, "content": [
+  {"type": "text", "text": "x"},
+  {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "echo hi"}}, "time": {"ran": 5000, "completed": 1000}},
+  {"type": "tool", "name": "read", "state": {"status": "error"}}]})
+msg(t3, 3, "assistant", 1794574764000, {"content": [
+  {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject REJECTED --task-id task_ffffffff"}}, "time": {"ran": 0, "completed": 250}}]})
+c.execute("insert into session_message values (?,?,?,?,?)", (t3, 4, "assistant", 1794574763000, "{not json"))
+msg(t3, 5, "idle", 1794574766000, {})
+msg(t3, 6, "user", 1794574767000, {"text": "plain"})
+c.commit()
+c.close()
+' "$OCDB"
+ OC0="$(cksum < "$OCDB")"
+ ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC1="$UPRC:$(ocn):$(ocnid ses_orca_dev_17945747508474019665):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
+ OCDEV="$(usf ses_orca_dev_17945747508474019665 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.cacheRead, .tokens.cacheCreation, .tokens.thinking, .maxContext, .costState, .cost, (.unpriced | join(",")), .models["openai/gpt-5"].turns, .tools.bash.calls, .tools.bash.seconds, .tools.edit.calls, .tools.edit.errors, .tools.edit.seconds, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
+ OCRES="$(usf ses_orca_researcher-2_1794577043 '[.agent, .orca_roles_role, .task, .project, .turns, .tokens.input, .tokens.output, .costState, .maxContext, .tools.bash.calls, .tools.bash.seconds, (.workerDone | length)] | join("|")')"
+ OCT3="$(usf ses_orca_tester-3_1794574760 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.thinking, .maxContext, (.costState // "null"), .cost, (.unpriced | join(",")), (.models | keys | join(",")), .tools.bash.calls, .tools.bash.seconds, .tools.read.calls, .tools.read.errors, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
+ OCN="$(usf ses_abc .session_id)$(usf ses_orca_re3_f1-final-check_179 .session_id)"
+ OCX="$(for s in ses_orca_Dev_179 ses_orca_dev_179x ses_orca__179; do o="$(usf "$s" .session_id)"; printf '%s,' "${o:-none}"; done)"
+ ON0="$(ocn)"
+ ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC2="$UPRC:$(( $(ocn) - ON0 ))"
+ python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("update session_v2 set time_updated = time_updated + 1000 where id like ?", ("ses_orca_dev_%",)); c.commit(); c.close()' "$OCDB"
+ OC0="$(cksum < "$OCDB")"
+ ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC3="$UPRC:$(( $(ocn) - ON0 )):$(ocnid ses_orca_dev_17945747508474019665):$(ocnid ses_orca_researcher-2_1794577043):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
+ check "usage parse: OpenCode sessions of the kit (ses_orca_<role>_<digits>) are read from OpenCode's store read-only into the same daily file marked \"agent\":\"opencode\": a mapped worktree gives the task, the role comes from the id, the token sums, two turns, max context, the tool calls/errors/seconds, the worker_done verdict with the seconds from the task prompt, the first and last message times and OpenCode's cost estimate as costState; a model without provider or id is \"unknown\", listed once as unpriced, an assistant without tokens is no turn (its tools still count), a tool whose completed time is before its ran time has no seconds, a cost that is not a number is not summed (no estimate: costState null), a bad JSON row and an idle row are skipped, a worker_done whose task id no prompt names has no seconds, and first/last are the message times; the non-kit id ses_abc and the kit-shaped ids that are not the pattern (ses_orca_re3_f1-final-check_179, ses_orca_Dev_179, ses_orca_dev_179x, ses_orca__179) give no row; a store missing, empty, without session_v2 or not a database logs one line for a bad store and none for a missing one, exits 0 and leaves the Claude rows as they were; a second pass with nothing changed writes no row, a new time_updated writes one row for that session only; the store bytes never change" "$OCMISS|$OCEMPTY|$OCNOSCH|$OCNOTDB|$OCLR|$OCDEV|$OCRES|$OCT3|$OCN|$OCX|$OC1|$OC2|$OC3" "0:0:0|0:0:1|0:0:2|0:0:3|1|1000000|-|opencode|dev|devgd-292|2|3000|300|600|150|30|2500|0.03|0.03|openai/gpt-5|2|2|2.5|1|1|0.1|ACCEPTED:4|2026-11-13T12:59:10.000Z|2026-11-13T12:59:14.000Z|opencode|researcher-2|||2|30|5|0.02|20|1|0.1|0|opencode|tester-3|devgd-292|1|10|1|0|10|null|0|unknown|unknown|2|0.25|1|1|REJECTED:null|2026-11-13T12:59:20.000Z|2026-11-13T12:59:27.000Z||none,none,none,|0:3:1:same|0:0|0:1:2:1:same"
 # --report: the latest line of each session, totals = sums by task, role and model, --task and --since filters, text and --json; and the same tokens and cost as bin/metrics.sh on one transcript
 umpk; W="/w/a/devgd-300/src"; RD="Read /k/prompts/programmer/dev.md and adopt that role."; RT="Read /k/prompts/programmer/tester.md and adopt that role."
 F6="$PD/r1.jsonl"; pu "$F6" 2026-10-27T10:00:00.000Z "$W" "$RD"; pa "$F6" 2026-10-27T10:00:01.000Z "$W" r1a claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'

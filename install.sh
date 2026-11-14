@@ -67,8 +67,10 @@ manifest_of() {
 
 # Copy of the kit (your config.json and your roles in ~/.orca-roles/roles/ are kept across updates)
 mkdir -p "$KIT"
+OLD_PROMPTS=""; HAD_MANIFEST=0
 # Files you changed or added in the regenerated folders since the last install are saved aside first (no manifest: nothing to compare)
 if [ -f "$KIT/.manifest" ]; then
+  HAD_MANIFEST=1; OLD_PROMPTS="$(grep '  prompts/' "$KIT/.manifest" 2>/dev/null | LC_ALL=C sort || true)"
   NOW="$(mktemp)"; manifest_of "$KIT" > "$NOW"
   # changed: another hash than in the old manifest; or absent from it and in a folder that was always listed (the top-level files are new in the manifest)
   CHANGED="$(awk 'NR == FNR { old[substr($0, 43)] = $1; next }
@@ -94,6 +96,9 @@ chmod +x "$KIT/bin/"*.sh
 if [ -f "$SRC/VERSION" ]; then cp "$SRC/VERSION" "$KIT/VERSION"; else rm -f "$KIT/VERSION"; fi   # refs older than the VERSION file have none
 echo "$SOURCE@$INST_REF${INST_SHA:+ $INST_SHA}" > "$KIT/.installed"
 manifest_of "$KIT" > "$KIT/.manifest"   # written right after the copy, so a later failed step cannot leave a stale one
+NEW_PROMPTS="$(grep '  prompts/' "$KIT/.manifest" 2>/dev/null | LC_ALL=C sort || true)"
+PROMPTS_CHANGED=0
+if [ "$HAD_MANIFEST" = 1 ] && [ "$OLD_PROMPTS" != "$NEW_PROMPTS" ]; then PROMPTS_CHANGED=1; fi   # a hash changed, or a file was added or removed
 mkdir -p "$KIT/pw"   # the pinned browser stack: node_modules and browsers/ are kept across updates
 cp "$SRC/pw/package.json" "$SRC/pw/package-lock.json" "$SRC/pw/e2e.config.js" "$KIT/pw/"
 rm -f "$KIT/config.env"   # old format
@@ -204,19 +209,48 @@ map_worktree() {
   return 0
 }
 
+# The worktrees Orca knows: 'orca worktree list' is asked at most once per install (the answer is kept in ORCA_WTS), and it gives nothing when the
+# CLI is absent or fails; never fatal. Call it outside a subshell so the answer is kept for the next caller.
+ensure_orca_worktrees() {
+  [ -z "${ORCA_WTS_READ:-}" ] || return 0
+  ORCA_WTS_READ=1; ORCA_WTS=""
+  if type -P orca >/dev/null 2>&1; then
+    ORCA_WTS="$(ORCA_ROLES_CLI_TIMEOUT=10 orca worktree list --limit 1000 --json 2>/dev/null | jq -r '.result.worktrees[]? | .path | strings' 2>/dev/null)" || ORCA_WTS=""
+  fi
+  return 0
+}
+
+# Whether a folder's git dir holds a kit team's files (<git dir>/orca-roles.env); never fatal
+worktree_has_team() {
+  local gd
+  [ -n "$1" ] && [ -d "$1" ] || return 1
+  gd="$(cd "$1" && git rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  [ -f "$gd/orca-roles.env" ]
+}
+
+# The worktrees that have a kit team, one per line and once each by physical path: the folders trusted.list recorded and Orca's worktrees
+# (restart-coordinator.sh --workers runs there). A failing orca call or an unreadable trusted.list gives no line; never fatal
+kit_team_worktrees() {
+  local wt ph seen
+  ensure_orca_worktrees
+  seen=$'\n'
+  { if [ -f "$(trusted_list)" ]; then cat "$(trusted_list)" 2>/dev/null || true; fi; [ -z "$ORCA_WTS" ] || printf '%s\n' "$ORCA_WTS"; } | while IFS= read -r wt; do
+    worktree_has_team "$wt" || continue
+    ph="$(cd "$wt" && pwd -P)" || continue
+    case "$seen" in *$'\n'"$ph"$'\n'*) continue;; esac
+    seen="$seen$ph"$'\n'
+    printf '%s\n' "$wt"
+  done
+}
+
 # Usage metrics: maps the worktrees the kit knows that were not launched since this update: the folders it recorded in trusted.list, and Orca's worktrees with a kit team (<git dir>/orca-roles.env); never fatal
 if metrics_enabled "$CONF"; then
   if [ -f "$(trusted_list)" ]; then
     while IFS= read -r wt; do map_worktree "$wt"; done < "$(trusted_list)"
   fi
-  ORCA_WTS=""
-  if type -P orca >/dev/null 2>&1; then
-    ORCA_WTS="$(ORCA_ROLES_CLI_TIMEOUT=10 orca worktree list --limit 1000 --json 2>/dev/null | jq -r '.result.worktrees[]? | .path | strings' 2>/dev/null)" || ORCA_WTS=""
-  fi
+  ensure_orca_worktrees
   while IFS= read -r wt; do
-    [ -n "$wt" ] && [ -d "$wt" ] || continue
-    gd="$(cd "$wt" && git rev-parse --absolute-git-dir 2>/dev/null)" || continue
-    [ -f "$gd/orca-roles.env" ] || continue
+    worktree_has_team "$wt" || continue
     map_worktree "$wt"
   done <<EOF
 $ORCA_WTS
@@ -311,3 +345,12 @@ fi
 echo "To enable or disable roles, edit \"enabled\" in $CONF."
 "$KIT/bin/apply-hooks.sh"
 echo "Open a new terminal (or 'source $RC') to use the 'roles', 'new-role', 'roles-yaml', 'team-status', 'coordinator' and 'auditor' commands."
+
+# A kit update that changed the prompts leaves the teams in open worktrees running the old ones; it comes last so it is the line that stays in view
+if [ "${PROMPTS_CHANGED:-0}" = 1 ]; then
+  TEAM_WTS="$(kit_team_worktrees 2>/dev/null)" || TEAM_WTS=""
+  if [ -n "$TEAM_WTS" ]; then
+    TEAM_WTS="$(printf '%s\n' "$TEAM_WTS" | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { if (NR) printf "\n" }')"
+    echo "orca-roles was updated and its prompts changed: these worktrees have a kit team, and one that is still open runs the old prompts. Before its next set, tell its local coordinator that the kit was updated, so it runs restart-coordinator.sh --workers: $TEAM_WTS"
+  fi
+fi
