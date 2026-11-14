@@ -26,7 +26,8 @@
     "extraDirs": [],
     "extraArgs": [],
     "env": {},
-    "params": {}
+    "params": {},
+    "advisor": { "model": "auto" }
   },
   "mcpServers": {
     "atlassian": { "type": "http", "url": "https://mcp.atlassian.com/v2/mcp" },
@@ -44,6 +45,7 @@
       "modes": "all",
       "model": "claude-sonnet-5-5",
       "modelByMode": { "quick": "claude-opus-5-5" },
+      "advisor": { "model": "opus" },
       "mcp": "all",
       "allowedTools": ["Bash(orca:*)", "Read"],
       "extraDirs": ["{kit}"],
@@ -55,6 +57,7 @@
       "open": "start",
       "modes": ["programmer", "academic-research"],
       "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" },
       "mcp": "all",
       "allowedTools": ["Bash(orca:*)", "Read"],
       "extraDirs": ["{kit}"],
@@ -67,6 +70,7 @@
       "modes": ["programmer", "academic-research", "quick"],
       "phases": ["experiment", "writing"],
       "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" },
       "maxInstances": 3,
       "mcp": ["context7"]
     },
@@ -78,6 +82,7 @@
       "modes": ["programmer", "academic-research", "quick"],
       "phases": ["experiment"],
       "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" },
       "mcp": ["context7"]
     },
     "tester": {
@@ -88,6 +93,7 @@
       "modes": ["programmer", "academic-research", "quick"],
       "phases": ["experiment"],
       "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" },
       "nice": 10,
       "env": { "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "NUMEXPR_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2",
                "TOKENIZERS_PARALLELISM": "false", "GOMAXPROCS": "2", "RAYON_NUM_THREADS": "2", "CARGO_BUILD_JOBS": "2", "MAKEFLAGS": "-j2",
@@ -99,6 +105,7 @@
       "enabled": true,
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" },
       "params": { "rejectSeverity": "high" }
     },
     "code-reviewer": {
@@ -106,6 +113,7 @@
       "enabled": true,
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" },
       "nice": 10,
       "env": { "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "NUMEXPR_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2",
                "TOKENIZERS_PARALLELISM": "false", "GOMAXPROCS": "2", "RAYON_NUM_THREADS": "2", "CARGO_BUILD_JOBS": "2", "MAKEFLAGS": "-j2",
@@ -117,6 +125,7 @@
       "enabled": true,
       "modes": ["pr-reviewer"],
       "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" },
       "nice": 10,
       "env": { "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2", "NUMEXPR_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2",
                "TOKENIZERS_PARALLELISM": "false", "GOMAXPROCS": "2", "RAYON_NUM_THREADS": "2", "CARGO_BUILD_JOBS": "2", "MAKEFLAGS": "-j2",
@@ -130,6 +139,7 @@
       "maxInstances": 3,
       "modes": ["programmer"],
       "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" },
       "mcp": ["playwright"],
       "params": { "evidenceDir": "qa-evidence", "e2eDir": "qa-e2e" }
     },
@@ -137,56 +147,64 @@
       "title": "Deployer",
       "enabled": true,
       "modes": ["programmer"],
-      "model": "claude-sonnet-5-5"
+      "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" }
     },
     "sota": {
       "title": "State-of-the-Art",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["experiment"],
-      "model": "claude-haiku-5-5"
+      "model": "claude-haiku-5-5",
+      "advisor": { "model": "off" }
     },
     "methodology": {
       "title": "Methodology",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["experiment"],
-      "model": "claude-opus-5-5"
+      "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" }
     },
     "tech-verifier": {
       "title": "Tech-Verifier",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["experiment"],
-      "model": "claude-opus-5-5"
+      "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" }
     },
     "writer": {
       "title": "Writer",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["writing"],
-      "model": "claude-sonnet-5-5"
+      "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" }
     },
     "evidence": {
       "title": "Evidence",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["writing"],
-      "model": "claude-sonnet-5-5"
+      "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" }
     },
     "rigor": {
       "title": "Rigor",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["writing"],
-      "model": "claude-opus-5-5"
+      "model": "claude-opus-5-5",
+      "advisor": { "model": "fable" }
     },
     "style": {
       "title": "Style",
       "enabled": true,
       "modes": ["academic-research"],
       "phases": ["writing"],
-      "model": "claude-sonnet-5-5"
+      "model": "claude-sonnet-5-5",
+      "advisor": { "model": "opus" }
     },
     "dev-opencode": {
       "title": "Dev (OpenCode)",
