@@ -46,10 +46,13 @@ fi
 
 # What this role is about to run, one JSON line in the worktree's git dir (outside a repo: nothing). Best-effort: it never stops the agent.
 # cliVersion is the first line of `<binary> --version` (claude/codex), killed after 3 s; null for a custom command.
+CLI_VER=""; CLI_VER_BIN=""   # a version line already taken for the launch (the advisor guard), so `--version` runs once
 record_provenance() {  # $1 binary to ask for its version, "" for none
   local gd ver="" out sha_c sha_p kv ki
   gd="$(agent_git_dir)" || return 0
-  if [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
+  if [ -n "$1" ] && [ "$1" = "$CLI_VER_BIN" ]; then
+    ver="$CLI_VER"
+  elif [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
     out="$(mktemp)"; bounded_run --quiet 3 "$1 --version" "$1" --version > "$out" 2>/dev/null < /dev/null || true
     ver="$(head -1 "$out")"; rm -f "$out"
   fi
@@ -142,6 +145,23 @@ case "$AGENT" in
     [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
     # settings.superpowers = false: "off" also means off for a superpowers the user installed (the front role has no other kit --settings)
     [ "$ROLE" = "$FRONT" ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    # The role's advisor: a model adds Claude Code's hidden --advisor, off disables the tool, auto adds nothing
+    ADVISOR="$(advisor_of "$CFG" "$ROLE")" || ADVISOR=""
+    if [ -z "$ADVISOR" ]; then
+      echo "agent.sh: the advisor setting of $ROLE is not valid (see README, \"Advisor of a role\"); it starts without the kit's advisor setting." >&2
+    elif [ "$ADVISOR" = off ]; then
+      export CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1
+    elif [ "$ADVISOR" != auto ]; then
+      CLI_VER="$(cli_version claude)"; CLI_VER_BIN=claude
+      if advisor_cli_ok "$CLI_VER"; then
+        ARGS+=(--advisor "$ADVISOR")
+        # A value inherited from the calling shell (a local coordinator on off) must not switch the role's advisor off; a value in the role's env stays
+        if ! jq -e --arg r "$ROLE" '((.defaults.env // {}) * (.roles[$r].env // {})) | has("CLAUDE_CODE_DISABLE_ADVISOR_TOOL")' "$CFG" >/dev/null 2>&1; then unset CLAUDE_CODE_DISABLE_ADVISOR_TOOL; fi
+      else
+        CV=""; if [[ "$CLI_VER" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then CV="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"; fi
+        echo "agent.sh: Claude Code $CV has no --advisor option (the kit's advisor setting needs 2.1.322 or later); $ROLE starts without it." >&2
+      fi
+    fi
     add_list extraArgs
     [ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
     record_provenance claude || true
