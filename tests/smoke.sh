@@ -9746,10 +9746,29 @@ X9="$(printf '%s' "$OUT" | jq -r '[.[] | select(.role | IN("dev", "gh", "e2e-tes
 R8="$R8|$X9"
 unset ORCA_ROLES_CONFIG; rm -rf "$TSG/orca-roles-hidden" "$TS/cfg.edge.json"
 check "team-status --run: closable is true only for a tab in state done, interrupted or failed that opens per batch or per task (or is an instance) and has no open dispatch of the Run: Dev, Tester, an instance Dev 2; not the Planner, the local coordinator, a first-use role, a working role, a row without a tab, an undelivered row or a not-opened role; --after-commits adds only the Plan-Reviewer and the Code-Reviewer; the text form has the 8th field closable or - after report and agrees with --json; a done role with a dispatch of the Run still open (running or pending) is not closable and is still done, with only a completed one it is closable; --after-commits fetches the same Orca calls (the worker-list is reused) and without --run is exit 2 with one stderr line and nothing on stdout (also with --json, a folder argument or no run id); a failing or non-JSON worker-list makes no row closable and still prints every row, exit 0; and a row whose state is waiting, hidden-running, no-tab or not-opened is not closable even when its role opens per batch" "$R8" "planner=false dev=true tst=true aud=false ud=false s1=false local-coordinator=false dev-2=true plan-reviewer=false code-reviewer=false e2e-tester=false|dev tst dev-2 plan-reviewer code-reviewer|0:Planner=- Dev=closable Tester=closable Plan-Reviewer=closable |done:false|done:false|done:true|same:2:1:0 2:1:0 2:1|0:[false]:24:0:[false]:24|deployer=hidden-running=false dev=waiting=false e2e-tester=not-opened=false gh=no-tab=false researcher=not-opened=false"
-git show HEAD:bin/team-status.sh > "$TS/ts-base.sh"; chmod +x "$TS/ts-base.sh"
-bts() { (cd "$TS/proj" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_NOW_MS="$TNOW" "$TS/ts-base.sh" "$@" 2>/dev/null); }
-tsr; S1T="$OUT"; S2T="$(bts)"; tsr --json; S1J="$OUT"; S2J="$(bts --json)"
-check "team-status without --run: the text and --json output of the base script (bin/team-status.sh at HEAD, the batch base) and of this one are byte-identical on the same fixture, the same 19 rows (neither the 8th field nor the closable key exists)" "$([ "$S1T" = "$S2T" ] && echo text || echo DIFF):$([ "$S1J" = "$S2J" ] && echo json || echo DIFF):$(printf '%s\n' "$S1T" | wc -l | tr -d ' ')" "text:json:19"
+# the pre-change script comes from a fixed ancestor commit with its blob pinned, never from HEAD: HEAD moves with the change, and once the
+# set is committed HEAD holds the changed script, so HEAD against HEAD compares the script with itself and the check can never fail. A copy
+# made at that base carries the same blob as its own commit. A shallow clone (CI) or a crosscheck copy of another ref has no such commit:
+# the check says so instead of passing silently; the golden text and --json checks above still pin the no---run output there
+TBR=c29c43f; TBS=c88842e363f70e99f28b720bd56a2676be15af1b; TBB=""
+if [ "$(git -C "$ROOT" rev-parse -q --verify "$TBR:bin/team-status.sh" 2>/dev/null)" = "$TBS" ]; then TBB="bin/team-status.sh at $TBR"
+elif [ "$(git -C "$ROOT" rev-parse -q --verify HEAD:bin/team-status.sh 2>/dev/null)" = "$TBS" ]; then TBB="this copy's own commit, whose bin/team-status.sh is the $TBR blob"
+fi
+if [ -n "$TBB" ]; then
+  git -C "$ROOT" cat-file blob "$TBS" > "$TS/ts-base.sh" 2>/dev/null || TBB=""
+fi
+if [ -n "$TBB" ]; then
+  chmod +x "$TS/ts-base.sh"
+  bts() { (cd "$TS/proj" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_NOW_MS="$TNOW" "$TS/ts-base.sh" "$@" 2>/dev/null); }
+  tsr; S1T="$OUT"; S2T="$(bts)"; tsr --json; S1J="$OUT"; S2J="$(bts --json)"
+  check "team-status without --run: the text and --json output of the pre-change script ($TBB, blob $TBS, read from that commit and never from HEAD, which holds the changed script) and of this one are byte-identical on the same fixture, the same 19 rows (neither the 8th field nor the closable key exists)" "$([ "$S1T" = "$S2T" ] && echo text || echo DIFF):$([ "$S1J" = "$S2J" ] && echo json || echo DIFF):$(printf '%s\n' "$S1T" | wc -l | tr -d ' ')" "text:json:19"
+else
+  TBW=""
+  [ ! -f "$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null)/orca-crosscheck" ] || TBW="a crosscheck copy has no history, so it does not carry $TBR"
+  if [ -z "$TBW" ] && [ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then TBW="a shallow clone (CI) does not fetch $TBR"; fi
+  if [ -n "$TBW" ]; then echo "ok   team-status without --run: not verified here: $TBW, and this tree's own script is not the pre-change one; the golden text and --json checks above still pin the no---run output"
+  else echo "FAIL team-status without --run: cannot read the pre-change bin/team-status.sh from $TBR (blob $TBS): that commit is not reachable and this tree's own script is not it"; FAIL=1; fi
+fi
 # set-close.sh: one command at the set close, over a real repo and pair trees made by pair-tree.sh (the section's fake orca)
 unset ORCA_ROLES_STATE ORCA_ROLES_CONFIG
 SC="$TS/sc"; rm -rf "$SC"; mkdir -p "$SC"; cp "$TS/ps.json" "$SC/ps.keep"; cp "$TS/wl.json" "$SC/wl.keep"; cp "$TS/inbox.json" "$SC/inbox.keep"
