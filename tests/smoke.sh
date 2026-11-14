@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -76,7 +76,7 @@ SMOKE_SERIAL=(
 )
 smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 # SMOKE_FIRST: the longest sections, longest first (median seconds of GitHub's macOS runs, Nov 2026); in a parallel run they start before the others, so none of them starts last. A stale order costs time, never a result
-SMOKE_FIRST=(launch usage-metrics modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
+SMOKE_FIRST=(launch launch-add launch-mode usage-metrics modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
 smoke_first() { local k; for k in "${SMOKE_FIRST[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running sections and waits up to 5 s for them, so their 'section … aborted' lines come before the total
   local k t
@@ -3005,6 +3005,14 @@ check "launch: an academic-research suggestion in a folder that is not a git rep
 # asking creates nothing in the project: the academic-research folders wait for the choice
 akreset; aksetting '.settings.mode = "academic-research"'; akrun; S1="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -cxF 'Mode: not chosen yet (suggested: academic-research)' || true):$(printf '%s\n' "$OUT" | grep -c '^Mode: academic-research\|^Phase:' || true):$(find "$AK/proj" -mindepth 1 -maxdepth 1 -not -name .git | wc -l | tr -d ' '):$(akasks)"
 check "launch: an ask start with academic-research suggested does not create the academic folders in the project, and the local coordinator receives the ask message" "$S1" "0:marker:1:0:0:1"
+}
+sec_launch_mode() {
+akkickgone() { ! pgrep -f "$TMP/home/.orca-roles/bin/kickoff.sh" >/dev/null; }
+AK="$TMP/ak"; mkdir -p "$AK/bin" "$AK/proj" "$AK/nogit"; git -C "$AK/proj" init -q; AKG="$AK/proj/.git"; AKL="$AK/orca.log"; : > "$AKL"
+write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.verifier = {"title": "Verifier", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
+akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 600 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 60s"; FAIL=1; }; fast_poll akkickgone; }
+akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/list.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
+akmark() { [ -e "$AKG/orca-roles.mode-pending" ] && printf marker || printf none; }
 # mode switch from the Planner's tab (B5) and the refusal that names the open tabs (B6): the real kickoff.sh with a fake orca whose tab states are files
 SWD="$AK/sw"; mkdir -p "$SWD/bin"
 cat > "$SWD/bin/orca" <<'EOS'
@@ -3275,6 +3283,13 @@ loreset; try lol; S0="$(losum)"; : > "$LOG/orca-roles.mode-pending"; try lol --o
 jq '.settings.mode = "pr-reviewer"' "$KIT/config.json" > "$LO/cfg-mode.json"; cp "$KIT/config.json" "$LO/cfg-keep.json"; cp "$LO/cfg-mode.json" "$KIT/config.json"; try lol --open dev; P2="$RC:$(grep -c 'terminal close' "$LO/orca.log" || true)"; cp "$LO/cfg-keep.json" "$KIT/config.json"; P3S="$([ "$(losum)" = "$S0" ] && echo same)"
 loreset; try lol --open dev; P3="$RC:$(printf '%s\n' "$OUT" | grep -c 'needs an open team' || true):$(grep -c '^terminal create' "$LO/orca.log" || true):$(ls "$LOG"/orca-roles.env 2>/dev/null | wc -l | tr -d ' ' || true)"; loreset
 check "launch --open: refused with nothing changed (no tab closed) while the mode is pending and after the configuration changed the open team's mode, and on a fresh worktree" "$P1|$P2|$P3S|$P3" "1:1|1:0|same|1:1:0:0"
+}
+sec_launch_add() {
+akkickgone() { ! pgrep -f "$TMP/home/.orca-roles/bin/kickoff.sh" >/dev/null; }
+AK="$TMP/ak"; mkdir -p "$AK/bin" "$AK/proj" "$AK/nogit"; git -C "$AK/proj" init -q; AKG="$AK/proj/.git"; AKL="$AK/orca.log"; : > "$AKL"
+write_launch_config; jq 'del(.settings.enableAskModeOnStart, .settings.jiraHandoff) | .settings.composerAgentWindowSeconds = 2 | .roles.verifier = {"title": "Verifier", "modes": ["pr-reviewer"]}' "$KIT/config.json" > "$AK/cfg.json"
+akdrain() { local n=0; while [ -n "$(ls -A "$AKG/orca-roles.kickoff.d" 2>/dev/null)" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n+1)); done; [ "$n" -lt 600 ] || { echo "FAIL launch: an ask-fixture kickoff was still running after 60s"; FAIL=1; }; fast_poll akkickgone; }
+akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/list.json" "$AK/proj/.orca-roles.json" "$AK/nogit"/orca-roles.* || { echo "FAIL launch: could not reset the ask fixture"; FAIL=1; }; cp "$AK/cfg.json" "$KIT/config.json"; git -C "$AK/proj" symbolic-ref HEAD refs/heads/main; : > "$AKL"; }
 # --add: one more tab of a scalable role (instances), their caps, the hardware check and recovery after a restart
 LA="$TMP/la"; mkdir -p "$LA/bin" "$LA/proj"; git -C "$LA/proj" init -q; LAG="$LA/proj/.git"
 printf '#!/bin/sh\necho "$*" >> "%s/kick.log"\n' "$LA" > "$LA/bin/kickoff"; printf '#!/bin/sh\necho 4242\n' > "$LA/bin/agentpid"
