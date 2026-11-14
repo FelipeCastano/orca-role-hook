@@ -1,6 +1,7 @@
 # shellcheck and smoke tests on every push to main and every pull request.
-# The tests run on Ubuntu and on macOS; on macOS with the system bash 3.2, which is what Mac users have.
-# The smoke sections run in parallel shard jobs; the gate jobs below keep the required check names.
+# Pull requests run the smoke tests on Ubuntu only, in 8 parallel shards.
+# macOS runs them after every push to main, with the system bash 3.2, which is what Mac users have; the local full suite covers it on pull requests.
+# The gate job below keeps the required check name smoke (ubuntu-latest); the macOS shards are not required checks.
 name: ci
 
 # push only on main: on a branch with an open PR, the pull_request event already covers it (otherwise every change runs twice)
@@ -27,7 +28,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        shard:
+          - id: 1
+            sections: "usage-metrics"
+          - id: 2
+            sections: "install-flat"
+          - id: 3
+            sections: "launch"
+          - id: 4
+            sections: "install sync-base"
+          - id: 5
+            sections: "prompts rules output-rules cleanup-msg mcp mcp-placeholders jira-key composer-title project-config roles-yaml planner-skill role-notes plugin-dirs orca-alias dead-tab restart wake new-role-repo e2e-run project-plugins relaunch team-status hidden test-run"
+          - id: 6
+            sections: "planner-msg flow oracle custom-command launch-overrides launch-mode prompts-misc reopen worktree-select trust-folder prompt-paths kit-path coordinator browser-login front-model crosscheck models review-skill"
+          - id: 7
+            sections: "syntax config clean mcp-gitdir cli-shim academic-research research-defaults wizard composer-session composer-tab agent-flags forget-trust opencode install-migration pair-tree model-check scholar"
+          - id: 8
+            sections: "loop scratch empty-lists launch-add status metrics modes new-role-modes remove-role codex-custom rounds e2e-browser checkpoint guard dispatch cli"
+        # the 8 shards are balanced on the Ubuntu timings of the shards before them: the longest sections each get a shard of their own, the rest fills the others
+    name: smoke-shard (ubuntu-latest, ${{ matrix.shard.id }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # one section per CPU (GitHub's runners for public repos have 4); smoke.sh's default, half the CPUs, is for local runs
+      - run: tests/smoke.sh ${{ matrix.shard.sections }}
+        env:
+          SMOKE_CLI_TIMEOUT: 60
+          SMOKE_JOBS: 4
+          SMOKE_TIMING_LOG: ${{ runner.temp }}/smoke-timings-ubuntu-latest-${{ matrix.shard.id }}.tsv
+          SMOKE_SLOW_CHECK: 0
+      # the timing log of the run (tests/smoke.sh: SMOKE_TIMING_LOG), kept even when the run fails
+      - name: Upload the smoke timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-timings-ubuntu-latest-${{ matrix.shard.id }}
+          path: ${{ runner.temp }}/smoke-timings-ubuntu-latest-${{ matrix.shard.id }}.tsv
+          if-no-files-found: warn
+
+  smoke-shard-macos:
+    # macOS only after a push to main (its bash 3.2 is covered on pull requests by the local full suite); no gate needs it, so it blocks nothing
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
         shard:
           - id: 1
             sections: "rules output-rules loop clean custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim status metrics modes research-defaults role-notes prompts-misc dead-tab agent-flags wake trust-folder codex-custom new-role-repo install-flat install browser-login e2e-run pair-tree project-plugins cli"
@@ -35,18 +79,12 @@ jobs:
             sections: "prompts config scratch launch-overrides launch-mode launch-add new-role-modes planner-skill composer-session composer-tab reopen worktree-select forget-trust prompt-paths kit-path checkpoint sync-base guard model-check models scholar team-status hidden test-run"
           - id: 3
             sections: "syntax planner-msg flow oracle cleanup-msg mcp mcp-placeholders roles-yaml launch usage-metrics academic-research wizard plugin-dirs orca-alias remove-role restart opencode install-migration coordinator rounds e2e-browser front-model crosscheck review-skill relaunch dispatch"
-        # one section per CPU: GitHub's runners for public repos have 4 (ubuntu) and 3 (macos); smoke.sh's default, half the CPUs, ran macOS serially
-        include:
-          - os: ubuntu-latest
-            jobs: 4
-          - os: macos-latest
-            jobs: 3
-    name: smoke-shard (${{ matrix.os }}, ${{ matrix.shard.id }})
-    runs-on: ${{ matrix.os }}
+        # 3 shards for the 3 CPUs of GitHub's macOS runners: one section per CPU, as the shards before the Ubuntu split
+    name: smoke-shard (macos-latest, ${{ matrix.shard.id }})
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Use the system bash 3.2 (macOS)
-        if: runner.os == 'macOS'
         run: |
           mkdir -p "$RUNNER_TEMP/bash32"
           ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
@@ -55,25 +93,25 @@ jobs:
       - run: tests/smoke.sh ${{ matrix.shard.sections }}
         env:
           SMOKE_CLI_TIMEOUT: 60
-          SMOKE_JOBS: ${{ matrix.jobs }}
-          SMOKE_TIMING_LOG: ${{ runner.temp }}/smoke-timings-${{ matrix.os }}-${{ matrix.shard.id }}.tsv
+          SMOKE_JOBS: 3
+          SMOKE_TIMING_LOG: ${{ runner.temp }}/smoke-timings-macos-latest-${{ matrix.shard.id }}.tsv
           SMOKE_SLOW_CHECK: 0
       # the timing log of the run (tests/smoke.sh: SMOKE_TIMING_LOG), kept even when the run fails
       - name: Upload the smoke timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-timings-${{ matrix.os }}-${{ matrix.shard.id }}
-          path: ${{ runner.temp }}/smoke-timings-${{ matrix.os }}-${{ matrix.shard.id }}.tsv
+          name: smoke-timings-macos-latest-${{ matrix.shard.id }}
+          path: ${{ runner.temp }}/smoke-timings-macos-latest-${{ matrix.shard.id }}.tsv
           if-no-files-found: warn
 
   smoke:
-    # the ruleset requires these check names, and each gate reflects every shard
+    # the ruleset requires this check name, and the gate reflects every Ubuntu shard
     needs: smoke-shard
     if: always()
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ubuntu-latest
     steps:
       - name: Every shard succeeded
