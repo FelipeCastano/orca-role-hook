@@ -326,6 +326,8 @@ rule R2 "$PD/local-coordinator.md" 'is not approving the commit' '\*\*Set audit\
 rule R2 "$PD/local-coordinator.md" 'fixed with a normal commit on top, on the user'"'"'s yes, after the same pipeline as a corrections round' '\*\*Set audit\.\*\*'
 rule R2 "$PD/local-coordinator.md" 'never a commit per step, per pipeline stage or per fix round' '^- The set is committed at its close'
 rule R2 "$PD/local-coordinator.md" 'Nothing is committed at step close' '\*\*No commit\.\*\*'
+for f in "$PD/local-coordinator.md" "$ROOT/prompts/quick/local-coordinator.md"; do rule R2 "$f" 'goes whole into the last commit that touches it, so no commit holds an intermediate version of a file'; done
+check "rules R2: no prompt tells to stage hunks with git apply --cached" "$(grep -rc 'git apply --cached' "$ROOT/prompts" | awk -F: '{ s += $NF } END { print s + 0 }' || true)" "0"
 # R3 no AI attribution in commits and PRs, and the check after every commit
 for p in common-workers local-coordinator; do
   rule R3 "$PD/$p.md" 'git log -1 --format=%B' 'never carry attribution to an AI'
@@ -905,6 +907,8 @@ rule E6 "$PD/local-coordinator-parallel.md" 'never runs while a pair tree has a 
 rule E6 "$PD/local-coordinator-parallel.md" 'shows no tree `open` or `integrated`'
 rule E6 "$PD/tester.md" 'write no test, mutate nothing, skip the base check and the cross-check'
 rule E6 "$PD/local-coordinator-team.md" 'Do not retry at once; give the task to the first tab of that role that reports'
+for frag in 'close it with `~/.orca-roles/bin/set-close.sh --run <run_id> <id> [...]` without asking' 'The Plan-Reviewer and the Code-Reviewer, where your team has them, are closed this way with the set, after its commits' 'check that it is not waiting for another role'"'"'s answer to go on' 'Use `set-close.sh` only at the set close, after its commits'; do rule E6 "$PD/local-coordinator-team.md" "$frag" '\*\*Set close\.\*\*'; done
+for f in "$PD/local-coordinator-parallel.md" "$PD/local-coordinator.md" "$ROOT/prompts/quick/local-coordinator.md"; do rule E6 "$f" 'close the set'"'"'s tabs as "Set close" in'; done
 rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh --add` in this mode'
 rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the Researcher'
 rule E6 "$AD/local-coordinator-team.md" 'The Dev fix and Tester rounds of one Review round count as one batch'
@@ -9620,7 +9624,7 @@ chmod +x "$TS/bin/orca"
 L101="$(printf 'x%.0s' $(seq 101))"; L100="$(printf 'y%.0s' $(seq 100))"
 printf 'PLANNER=h-pl\nDEV=h-dev\nTST=h-tst\nAUD=h-aud\nDEP=h-dep\nGH=h-gh\nRM=h-rm\nDUP=h-dup\nUK=h-uk\nUD=h-ud\nUD2=h-ud2\nUD3=h-ud3\nUD4=h-ud4\nS1=h-s1\nS2=h-s2\nS3=h-s3\nS4=h-s4\nS5=h-s5\nS6=h-s6\n' > "$TSG/orca-roles.env"
 for r in PLANNER DEV TST AUD DEP RM DUP UK UD UD2 UD3 UD4 S1 S2 S3 S4 S5 S6; do printf '%s=tab-%s leaf-%s\n' "$r" "$r" "$r"; done > "$TSG/orca-roles.tabs"
-printf '{"roles":{"planner":{"title":"Planner"},"dev":{"title":"Dev"},"tst":{"title":"Tester"}}}' > "$TSG/orca-roles.config.json"
+printf '{"defaults":{"open":"first-use"},"roles":{"planner":{"title":"Planner"},"dev":{"title":"Dev","open":"per-batch"},"tst":{"title":"Tester","open":"per-task"}}}' > "$TSG/orca-roles.config.json"
 tsa() {  # tsa <role var> <state> <ms ago, or null> <prompt> [extra jq object]: one agent row of the fake ps
   local x="${5:-}"; [ -n "$x" ] || x='{}'
   jq -n -c --arg k "tab-$1:leaf-$1" --arg st "$2" --arg pr "$4" --argjson ago "$3" --argjson now "$TNOW" --argjson x "$x" '{paneKey: $k, state: $st, prompt: $pr, stateStartedAt: (if $ago == null then null else $now - $ago end), updatedAt: 5} + $x'
@@ -9667,7 +9671,7 @@ check "team-status: an open instance is a row titled Researcher 2 with role rese
 tsr --run run_1; R1="$(tsl | awk -F'|' '$1 ~ /^ud/ {printf "%s=%s ", $1, $2}')"
 check "team-status --run: a done role with a dispatch still open whose task its prompt never named AND a pasted text in its composer is undelivered; a closed dispatch, an unseen paste or a task its prompt names stays done" "$R1" "ud=undelivered ud2=done ud3=done ud4=done "
 check "team-status: Orca calls: one 'worktree ps' without --run; with --run also one 'inbox', one 'worker-list' and one 'terminal show' per candidate (2 here), nothing else" "$C0|$C1" " 1 worktree ps,| 1 orchestration inbox, 1 orchestration worker-list, 2 terminal show, 1 worktree ps,"
-tsr --run run_1; RA="$(tsl | awk -F'|' '$1 == "planner" || $1 == "Planner" {print $2}')"; RB="$(tsl | awk -F'|' '$1 == "Dev" || $1 == "Tester" || $1 == "dep" {printf "%s=%s ", $1, $7}'):$(tsl | awk -F'|' 'NF != 7' | wc -l | tr -d ' ')"
+tsr --run run_1; RA="$(tsl | awk -F'|' '$1 == "planner" || $1 == "Planner" {print $2}')"; RB="$(tsl | awk -F'|' '$1 == "Dev" || $1 == "Tester" || $1 == "dep" {printf "%s=%s ", $1, $7}'):$(tsl | awk -F'|' 'NF != 8' | wc -l | tr -d ' ')"
 tsr --run run_1 --json; RB="$RB:$(printf '%s' "$OUT" | jq -r '[.[] | select(.title == "Dev" or .title == "Tester" or .title == "gh") | .report] | join(",")')"; mv "$TS/inbox.json" "$TS/inbox.keep"; tsr --run run_1; RB="$RB:$RC:$(tsl | awk -F'|' '{print $7}' | sort -u | tr '\n' ',')"; mv "$TS/inbox.keep" "$TS/inbox.json"
 check "team-status --run: a working role with an open dispatch is not a candidate; the 7th field report is ok for a role whose last worker_done of the Run starts with Done, missing for one that does not, - without a report (other Runs and types ignored) or a tab, in text and --json; with the inbox failing every report is - and the exit code stays 0" "$RA|$RB" "working|Dev=ok Tester=missing dep=- :0:ok,missing,-:0:-,"
 S0="$(cat "$TSG"/orca-roles.* | cksum)"; : > "$TSL"; tsr --run run_1 >/dev/null; check "team-status is read-only: it writes nothing in the git dir and calls only worktree ps, inbox, worker-list and terminal show" "$([ "$(cat "$TSG"/orca-roles.* | cksum)" = "$S0" ] && echo unchanged):$(awk '{print $1" "$2}' "$TSL" | sort -u | tr '\n' ',')" "unchanged:orchestration inbox,orchestration worker-list,terminal show,worktree ps,"
@@ -9716,6 +9720,127 @@ for i in $(seq 1 1100); do echo "old$i"; done > "$CS"; cn --run run_1 >/dev/null
 check "canary.sh --run: only the Run's worker_done reports (other Runs and types ignored); a report without Done is one missing line with title, handle, task and the start of its body (newline and tab as spaces), exit 1; a second run checks 0 and exits 0; --all (and --json) lists it again and leaves the seen file as it was; a lowest sequence more than 1 above the saved covered value gives the gap line, gap true and one stderr line with exit 1 even with nothing missing, 1 above does not, --all never, a first check does not; the seen file is the only thing written, orca is called only for inbox, a failing inbox is exit 2 with one stderr line and the seen file untouched, and the file is cut to 1000 lines; a payload sent as a JSON string (Orca's live shape) or as an object gives its taskId, and a null, missing, invalid, non-object or taskId-less payload gives - with no error" "$K1|$K2|$K3|$K4|$K5" "1:missing|2026-10-31T19:05:45Z|Tester|h-tst|task_t1|VERDICT: ACCEPTED all green/canary: 3 reports checked, 1 without the Done marker 0:canary: 0 reports checked, 0 without the Done marker 1:[3,false,[[\"Tester\",\"h-tst\",\"task_t1\",\"VERDICT: ACCEPTED all green\"]]]:same|1:missing|2026-10-31T19:05:45Z|Tester|h-tst|task_t1|VERDICT: ACCEPTED all green/gap|5|9/canary: 3 reports checked, 1 without the Done marker:1 1:missing|2026-10-31T19:05:45Z|Tester|h-tst|task_t1|VERDICT: ACCEPTED all green/canary: 3 reports checked, 1 without the Done marker:0 1:[3,true] 1:0|msg_10/covered|run_1|10/ orchestration inbox,|2:1:0:keep 1000:covered|run_1|13:0|1:0:task_s1,task_o2,-,-,-,-,-,-,-,:canary: 10 reports checked, 9 without the Done marker:1:0:task_s1,task_o2,-,-,-,-,-,-,-"
 BT="$(jq -n -c --arg re "$REPORT_MARK_RE" '["Done. VERDICT: ACCEPTED", "done: plan ready", "  Done\nreport", "DONE", "Hecho. Plan listo"] as $p | ["VERDICT: ACCEPTED", "Implemented X", "Doneness check failed", "Hechos", "", "No. Done."] as $f | [$p[] | test($re; "i")] + [$f[] | test($re; "i")]' 2>&1 | tr -d '[]')"
 check "REPORT_MARK_RE: marks Done./done:/blank-led/DONE/Hecho. bodies and none of VERDICT, Implemented, Doneness, Hechos, empty or No. Done." "$BT" "true,true,true,true,true,false,false,false,false,false,false"
+# closable: the 8th field (text) and the key (--json) say whether the local coordinator may close the tab now
+cp "$TSG/orca-roles.env" "$TS/env.k2"; cp "$TSG/orca-roles.tabs" "$TS/tabs.k2"; cp "$TSG/orca-roles.config.json" "$TS/cfg.k2"; cp "$TS/ps.json" "$TS/ps.k2"; cp "$TS/wl.json" "$TS/wl.k2"
+jq -c '.roles["dev-2"] = {"title": "Dev 2", "instanceOf": "dev"} | .roles["plan-reviewer"] = {"title": "Plan-Reviewer"} | .roles["code-reviewer"] = {"title": "Code-Reviewer"} | .roles["e2e-tester"] = {"title": "E2E-Tester", "open": "per-batch"}' "$TS/cfg.k2" > "$TS/cfg.close.json"
+printf 'LOCAL_COORDINATOR=h-lc\nDEV_2=h-dv2\nPLAN_REVIEWER=h-pr\nCODE_REVIEWER=h-cr\n' >> "$TSG/orca-roles.env"
+printf 'LOCAL_COORDINATOR=tab-LOCAL_COORDINATOR leaf-LOCAL_COORDINATOR\nDEV_2=tab-DEV_2 leaf-DEV_2\nPLAN_REVIEWER=tab-PLAN_REVIEWER leaf-PLAN_REVIEWER\nCODE_REVIEWER=tab-CODE_REVIEWER leaf-CODE_REVIEWER\n' >> "$TSG/orca-roles.tabs"
+jq -c --arg p "$TSP" '.result.worktrees |= map(if .path == $p then .agents = (.agents | map(if .paneKey == "tab-DEV:leaf-DEV" or .paneKey == "tab-PLANNER:leaf-PLANNER" then .state = "done" else . end) + [{paneKey: "tab-LOCAL_COORDINATOR:leaf-LOCAL_COORDINATOR", state: "done", prompt: "", updatedAt: 6}, {paneKey: "tab-DEV_2:leaf-DEV_2", state: "done", interrupted: true, prompt: "", updatedAt: 6}, {paneKey: "tab-PLAN_REVIEWER:leaf-PLAN_REVIEWER", state: "done", interrupted: true, prompt: "", updatedAt: 6}, {paneKey: "tab-CODE_REVIEWER:leaf-CODE_REVIEWER", state: "done", prompt: "", updatedAt: 6}]) else . end)' "$TS/ps.json" > "$TS/ps.close.json"
+cp "$TS/ps.close.json" "$TS/ps.json"; export ORCA_ROLES_CONFIG="$TS/cfg.close.json"
+tsr --run run_1 --json; R8="$(printf '%s' "$OUT" | jq -r '[.[] | select(.role | IN("local-coordinator", "planner", "dev", "tst", "aud", "s1", "ud", "dev-2", "plan-reviewer", "code-reviewer", "e2e-tester")) | "\(.role)=\(.closable)"] | join(" ")')"
+tsr --run run_1 --after-commits --json; R8="$R8|$(printf '%s' "$OUT" | jq -r '[.[] | select(.closable) | .role] | join(" ")')"
+tsr --run run_1 --after-commits; R8="$R8|$(tsl | awk -F'|' 'NF != 8' | wc -l | tr -d ' '):$(tsl | awk -F'|' '$1 == "Dev" || $1 == "Tester" || $1 == "Plan-Reviewer" || $1 == "Planner" {printf "%s=%s ", $1, $8}')"
+cld() { jq -c --arg s "$1" '.result.workers += [{"agentTerminalHandle": "h-dev", "dispatchStatus": $s, "taskId": "task_dev1"}]' "$TS/wl.k2" > "$TS/wl.json"; tsr --run run_1 --json; printf '%s' "$OUT" | jq -r '[.[] | select(.role == "dev") | [.state, .closable]] | flatten | join(":")'; }
+R8="$R8|$(cld running)|$(cld pending)|$(cld completed)"
+cp "$TS/wl.k2" "$TS/wl.json"; : > "$TSL"; tsr --run run_1; C3="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"; : > "$TSL"; tsr --run run_1 --after-commits; C4="$(awk '{print $1" "$2}' "$TSL" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+tsr --after-commits --json; A1="$RC:$(wc -l < "$TS/err" | tr -d ' '):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"; tsr --after-commits "$TS/proj"; A1="$A1 $RC:$(wc -l < "$TS/err" | tr -d ' '):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"; tsr --after-commits --run; A1="$A1 $RC:$(wc -l < "$TS/err" | tr -d ' ')"
+R8="$R8|$([ "$C3" = "$C4" ] && echo same || echo diff):$A1"
+rm -f "$TS/wl.json"; tsr --run run_1 --after-commits --json; W1="$RC:$(printf '%s' "$OUT" | jq -c '[.[].closable] | unique'):$(printf '%s' "$OUT" | jq 'length')"; echo 'not json' > "$TS/wl.json"; tsr --run run_1 --after-commits --json; W1="$W1:$RC:$(printf '%s' "$OUT" | jq -c '[.[].closable] | unique'):$(printf '%s' "$OUT" | jq 'length')"
+R8="$R8|$W1"
+cp "$TS/wl.k2" "$TS/wl.json"; cp "$TS/ps.k2" "$TS/ps.json"; cp "$TS/env.k2" "$TSG/orca-roles.env"; cp "$TS/tabs.k2" "$TSG/orca-roles.tabs"; cp "$TS/cfg.k2" "$TSG/orca-roles.config.json"; unset ORCA_ROLES_CONFIG; rm -f "$TS/ps.close.json" "$TS/cfg.close.json" "$TS/env.k2" "$TS/tabs.k2" "$TS/cfg.k2" "$TS/ps.k2" "$TS/wl.k2"
+jq -c '.roles.gh = {"title": "GH", "open": "per-batch"} | .roles["e2e-tester"] = {"title": "E2E-Tester", "open": "per-batch"} | .roles.researcher = {"title": "Researcher", "open": "first-use"} | .roles.deployer = {"title": "Deployer", "open": "hidden"}' "$TSG/orca-roles.config.json" > "$TS/cfg.edge.json"
+mkdir -p "$TSG/orca-roles-hidden"; echo "starting - - - t" > "$TSG/orca-roles-hidden/deployer.pid"
+export ORCA_ROLES_CONFIG="$TS/cfg.edge.json"
+tsr --run run_1 --after-commits --json
+X9="$(printf '%s' "$OUT" | jq -r '[.[] | select(.role | IN("dev", "gh", "e2e-tester", "deployer", "researcher")) | "\(.role)=\(.state)=\(.closable)"] | sort | join(" ")')"
+R8="$R8|$X9"
+unset ORCA_ROLES_CONFIG; rm -rf "$TSG/orca-roles-hidden" "$TS/cfg.edge.json"
+check "team-status --run: closable is true only for a tab in state done, interrupted or failed that opens per batch or per task (or is an instance) and has no open dispatch of the Run: Dev, Tester, an instance Dev 2; not the Planner, the local coordinator, a first-use role, a working role, a row without a tab, an undelivered row or a not-opened role; --after-commits adds only the Plan-Reviewer and the Code-Reviewer; the text form has the 8th field closable or - after report and agrees with --json; a done role with a dispatch of the Run still open (running or pending) is not closable and is still done, with only a completed one it is closable; --after-commits fetches the same Orca calls (the worker-list is reused) and without --run is exit 2 with one stderr line and nothing on stdout (also with --json, a folder argument or no run id); a failing or non-JSON worker-list makes no row closable and still prints every row, exit 0; and a row whose state is waiting, hidden-running, no-tab or not-opened is not closable even when its role opens per batch" "$R8" "planner=false dev=true tst=true aud=false ud=false s1=false local-coordinator=false dev-2=true plan-reviewer=false code-reviewer=false e2e-tester=false|dev tst dev-2 plan-reviewer code-reviewer|0:Planner=- Dev=closable Tester=closable Plan-Reviewer=closable |done:false|done:false|done:true|same:2:1:0 2:1:0 2:1|0:[false]:24:0:[false]:24|deployer=hidden-running=false dev=waiting=false e2e-tester=not-opened=false gh=no-tab=false researcher=not-opened=false"
+git show HEAD:bin/team-status.sh > "$TS/ts-base.sh"; chmod +x "$TS/ts-base.sh"
+bts() { (cd "$TS/proj" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_NOW_MS="$TNOW" "$TS/ts-base.sh" "$@" 2>/dev/null); }
+tsr; S1T="$OUT"; S2T="$(bts)"; tsr --json; S1J="$OUT"; S2J="$(bts --json)"
+check "team-status without --run: the text and --json output of the base script (bin/team-status.sh at HEAD, the batch base) and of this one are byte-identical on the same fixture, the same 19 rows (neither the 8th field nor the closable key exists)" "$([ "$S1T" = "$S2T" ] && echo text || echo DIFF):$([ "$S1J" = "$S2J" ] && echo json || echo DIFF):$(printf '%s\n' "$S1T" | wc -l | tr -d ' ')" "text:json:19"
+# set-close.sh: one command at the set close, over a real repo and pair trees made by pair-tree.sh (the section's fake orca)
+unset ORCA_ROLES_STATE ORCA_ROLES_CONFIG
+SC="$TS/sc"; rm -rf "$SC"; mkdir -p "$SC"; cp "$TS/ps.json" "$SC/ps.keep"; cp "$TS/wl.json" "$SC/wl.keep"; cp "$TS/inbox.json" "$SC/inbox.keep"
+git -C "$SC" init -q -b main; git -C "$SC" config user.name t; git -C "$SC" config user.email t@localhost
+printf 'x\n' > "$SC/f"; git -C "$SC" add f; git -C "$SC" commit -qm init
+SCG="$SC/.git"; SCP="$(cd "$SC" && pwd -P)"
+sctree() { (cd "$SC" && HOME="$TMP/home" PATH="$TS/bin:$PATH" "$KIT/bin/pair-tree.sh" "$@" 2>/dev/null); }
+P1="$(sctree create batch1 HEAD)"; P3="$(sctree create batch3 HEAD)"; P2="$(sctree create batch2 HEAD)"
+sctree integrate batch1 HEAD >/dev/null; sctree integrate batch3 HEAD >/dev/null
+screg() { awk -F'\t' -v b="$1" '$1 == b {l = $0} END {print l}' "$SCG/orca-roles.pairs"; }
+scf() { printf '%s' "$1" | cut -f"$2"; }
+scwt() {  # scwt <tree path> <pair git dir>: the checkpoint namespace, as pair-tree.sh clear and checkpoint.sh compute it
+  local h wt
+  h="$(printf '%s' "$2" | { shasum 2>/dev/null || sha1sum 2>/dev/null || cksum; } | cut -d' ' -f1 | cut -c1-10)"
+  wt="$(basename "$1" | tr -c 'A-Za-z0-9\n-' '-' | sed 's/^-*//')"; printf '%s' "${wt:-wt}-$h"
+}
+W0="$(scwt "$SCP" "$SCG")"; W1="$(scwt "$P1" "$(scf "$(screg batch1)" 5)")"; W2="$(scwt "$P2" "$(scf "$(screg batch2)" 5)")"; W3="$(scwt "$P3" "$(scf "$(screg batch3)" 5)")"
+for r in set-c1 integ-c1 batch2-start-c1; do git -C "$SC" update-ref "refs/orca-roles/checkpoints/$W0/$r" HEAD; done
+for r in set-c1 integ-c1; do git -C "$SC" update-ref "refs/orca-roles/checkpoints/$W1/$r" HEAD; done
+git -C "$SC" update-ref "refs/orca-roles/checkpoints/$W2/set-c1" HEAD
+git -C "$SC" update-ref "refs/orca-roles/checkpoints/$W3/set-c1" HEAD
+printf 'LOCAL_COORDINATOR=h-sc-lc\nPLANNER=h-sc-pl\nDEV=h-sc-dev\nDEV_2=h-sc-dev2\nDEV_3=h-sc-dev3\nDEV_4=h-sc-dev4\nTESTER=h-sc-tst\nTESTER_2=h-sc-t2\nPLAN_REVIEWER=h-sc-pr\nCODE_REVIEWER=h-sc-cr\nAUD=h-sc-aud\nWD=h-sc-wd\nHELPER=h-sc-help\nSOLO=h-sc-solo\n' > "$SCG/orca-roles.env"
+for r in LOCAL_COORDINATOR PLANNER DEV DEV_2 DEV_3 DEV_4 TESTER TESTER_2 PLAN_REVIEWER CODE_REVIEWER AUD WD HELPER SOLO; do printf '%s=tab-%s leaf-%s\n' "$r" "$r" "$r"; done > "$SCG/orca-roles.tabs"
+printf 'DEV_2=%s\nTESTER_2=%s\nDEV_3=%s\nHELPER=%s\nDEV_4=%s\n' "$P1" "$P1" "$P3" "$P3" "$P2" > "$SCG/orca-roles.trees"
+jq -n -c '{defaults: {open: "first-use"}, roles: {
+  "local-coordinator": {title: "Local coordinator"}, "planner": {title: "Planner", open: "start"},
+  "dev": {title: "Dev", open: "per-batch"}, "dev-2": {title: "Dev 2", instanceOf: "dev"}, "dev-3": {title: "Dev 3", instanceOf: "dev"}, "dev-4": {title: "Dev 4", instanceOf: "dev"},
+  "tester": {title: "Tester", open: "per-task", maxInstances: 3}, "tester-2": {title: "Tester 2", instanceOf: "tester"},
+  "plan-reviewer": {title: "Plan-Reviewer"}, "code-reviewer": {title: "Code-Reviewer"}, "aud": {title: "Auditor", open: "per-batch"},
+  "wd": {title: "Writer", open: "per-batch"}, "helper": {title: "Helper", open: "per-batch"}, "solo": {title: "Solo", open: "per-batch"}}}' > "$SCG/orca-roles.config.json"
+for h in $(cut -d= -f2 "$SCG/orca-roles.env"); do printf '{"result":{"terminal":{"preview":"> nothing pending"}}}' > "$TS/show.$h"; done
+rm -f "$TS/show.h-sc-solo"   # close-role.sh cannot close the tab it cannot see: Solo's close fails
+sca() { jq -n -c --arg k "tab-$1:leaf-$1" --arg st "$2" '{paneKey: $k, state: $st, prompt: "", updatedAt: 7}'; }
+{ sca LOCAL_COORDINATOR "done"; sca PLANNER "done"; sca DEV "done"; sca DEV_2 "done"; sca DEV_3 "done"; sca DEV_4 "done"; sca TESTER "done"; sca TESTER_2 "done"; sca PLAN_REVIEWER "done"; sca CODE_REVIEWER "done"; sca AUD "done"; sca WD working; sca HELPER "done"; sca SOLO failed; } | jq -s -c --arg p "$SCP" '{ok: true, result: {worktrees: [{path: $p, agents: .}]}}' > "$TS/ps.json"
+jq -n -c '{result: {workers: [{taskId: "task_aud1", agentTerminalHandle: "h-sc-aud", dispatchStatus: "running"}, {taskId: "task_dev2", agentTerminalHandle: "h-sc-dev2", dispatchStatus: "completed"}]}}' > "$TS/wl.json"
+scr() {  # scr <folder> <args...>: set-close.sh with the section's fake orca; S_RC, S_OUT, S_ERR
+  local d="$1"; shift
+  if S_OUT="$(cd "$d" && HOME="$TMP/home" PATH="$TS/bin:$PATH" "$KIT/bin/set-close.sh" "$@" 2>"$SC/err")"; then S_RC=0; else S_RC=$?; fi
+  S_ERR="$(cat "$SC/err")"
+}
+screfs() { git -C "$SC" for-each-ref --format='%(refname)' "refs/orca-roles/checkpoints/$1/" | wc -l | tr -d ' '; }
+scnames() { git -C "$SC" for-each-ref --format='%(refname)' "refs/orca-roles/checkpoints/$1/" | sed 's#^.*/##' | sort | tr '\n' ','; }
+scsnap() { printf '%s|%s|%s|%s|%s|%s|%s|%s' "$(cat "$SCG/orca-roles.env")" "$(cat "$SCG/orca-roles.trees")" "$(cat "$SCG/orca-roles.pairs")" "$(cksum < "$SCG/orca-roles.config.json")" "$(git -C "$SC" for-each-ref --format='%(refname)' refs/orca-roles/checkpoints | sort | tr '\n' ',')" "$([ -d "$P1" ] && echo t1)" "$([ -d "$P2" ] && echo t2)" "$([ -d "$P3" ] && echo t3)"; }
+scform() {  # the file form bin/set-close.sh is specced with
+  local f="$ROOT/bin/set-close.sh"
+  [ -x "$f" ] && [ "$(sed -n 1p "$f" 2>/dev/null)" = '#!/usr/bin/env bash' ] && grep -qx 'set -uo pipefail' "$f" && grep -qF 'KIT="${KIT:-$HOME/.orca-roles}"' "$f" \
+    && grep -qF "Only for the set close, after the set's commits" "$f" && grep -qF 'close a tab with close-role.sh.' "$f" && echo form
+}
+SNAP="$(scsnap)"
+scr "$SC"; A="$S_RC"
+scr "$SC" --run run_sc; A="$A $S_RC"
+scr "$SC" dev; A="$A $S_RC"
+scr "$SC" --run run_sc foo; A="$A $S_RC:$(printf '%s' "$S_ERR" | grep -c "no open tab 'foo'" || true)"
+scr "$P1" --run run_sc dev; A="$A $S_RC"
+: > "$TS/psfail"; scr "$SC" --run run_sc dev; A="$A $S_RC"; rm -f "$TS/psfail"
+mv "$TS/inbox.json" "$SC/inbox.move"; scr "$SC" --run run_sc dev; A="$A $S_RC"; mv "$SC/inbox.move" "$TS/inbox.json"
+scr "$SC" --run run_sc --bogus; A="$A $S_RC"
+check "set-close.sh: exit 2 and nothing changed (tabs, trees, refs, pair registry, configuration) for no arguments, a tab without --run, no tab argument, an unknown tab (one stderr line naming it), a run from a pair tree, team-status exiting 2, canary exiting 2 (Orca silent about the inbox) and an unknown option; the file is executable, bash, set -uo pipefail, with the kit default and the specced header sentence" "$A:$(scform || true):$([ "$(scsnap)" = "$SNAP" ] && echo unchanged || echo DIFF)" "2 2 2 2:1 2 2 2 2:form:unchanged"
+scr "$SC" --run run_sc wd aud planner local-coordinator dev-4 code-reviewer
+B="$S_RC:$(printf '%s\n' "$S_OUT" | grep -c 'refused: not closable (state done)' || true):$(printf '%s\n' "$S_OUT" | grep -c 'Writer: refused: not closable (state working)' || true)"
+B="$B:$(printf '%s\n' "$S_OUT" | grep -c 'Dev 4: refused: its pair tree (batch batch2) was not integrated' || true):$(grep -cE '^(WD|AUD|PLANNER|LOCAL_COORDINATOR|DEV_4)=' "$SCG/orca-roles.env" || true)"
+B="$B:$(grep -c '^CODE_REVIEWER=' "$SCG/orca-roles.env" || true):$(printf '%s\n' "$S_OUT" | tail -1):$(screfs "$W3"):$([ -d "$P2" ] && echo p2 || echo gone)"
+scr "$SC" --run run_sc wd planner
+B="$B:$(printf '%s\n' "$S_OUT" | tail -1):$(printf '%s\n' "$S_OUT" | grep -c canary || true):$S_RC"
+jq -c '.roles.planner.title = "Planner Alt"' "$SCG/orca-roles.config.json" > "$SC/cfg.alt.json"
+if B_OUT="$(cd "$SC" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_CONFIG="$SC/cfg.alt.json" "$KIT/bin/set-close.sh" --run run_sc planner 2>"$SC/err3")"; then B_RC=0; else B_RC=$?; fi
+B="$B:$(printf '%s\n' "$B_OUT" | grep -c 'Planner Alt: refused: not closable (state done)' || true):$B_RC"
+if B_OUT="$(cd "$SC" && HOME="$TMP/home" PATH="$TS/bin:$PATH" ORCA_ROLES_STATE="$SC/none.env" "$KIT/bin/set-close.sh" --run run_sc dev 2>"$SC/err3")"; then B_RC=0; else B_RC=$?; fi
+B="$B:$B_RC:$(printf '%s' "$B_OUT" | wc -c | tr -d ' ')"
+check "set-close.sh: a team that is still working, a tab with an open dispatch of the Run, the Planner, the local coordinator and a tab whose pair tree is still open are refused with the specced lines and stay open, while another closable tab of the same call (the Code-Reviewer, closable thanks to --after-commits) is closed anyway: 1 closed, 5 refused, exit 1, the open tree and the call's other tree untouched; a call whose tabs are all refused prints the summary as its last line (0 closed, 2 refused) and exits 1 without running canary; ORCA_ROLES_CONFIG names the configuration the titles come from (Planner Alt) and ORCA_ROLES_STATE names the team read (a missing one is exit 2, nothing on stdout)" "$B" "1:3:1:1:5:0:set-close: 1 closed, 5 refused:1:p2:set-close: 0 closed, 2 refused:0:1:1:1:2:0"
+scr "$SC" --run run_sc dev-3
+C="$S_RC:$(printf '%s\n' "$S_OUT" | grep -c 'Dev 3: pair tree kept: Helper still runs in it' || true):$(printf '%s\n' "$S_OUT" | tail -1)"
+C="$C:$(grep -c '^DEV_3=' "$SCG/orca-roles.env" || true):$(grep -c '^HELPER=' "$SCG/orca-roles.env" || true):$(screfs "$W3"):$([ -d "$P3" ] && echo p3 || echo gone):$(awk -F'\t' '$1 == "batch3" {print $6}' "$SCG/orca-roles.pairs")"
+scr "$SC" --run run_sc dev-2 tester-2
+D="$S_RC:$(printf '%s\n' "$S_OUT" | tail -1):$(grep -cE '^(DEV_2|TESTER_2)=' "$SCG/orca-roles.env" || true):$(screfs "$W1"):$([ -e "$P1" ] && echo p1 || echo gone)"
+D="$D:$(awk -F'\t' '$1 == "batch1" {print $6}' "$SCG/orca-roles.pairs"):$(jq -c '[.roles | has("dev-2"), has("tester-2")]' "$SCG/orca-roles.config.json")"
+scr "$SC" --run run_sc dev-2
+D="$D:$S_RC:$(printf '%s' "$S_OUT" | wc -c | tr -d ' '):$(printf '%s' "$S_ERR" | grep -c "no open tab 'dev-2'" || true)"
+scr "$SC" --run run_sc dEv
+E="$S_RC:$(printf '%s\n' "$S_OUT" | tail -1):$(grep -c '^DEV=' "$SCG/orca-roles.env" || true):$(screfs "$W0"):$(scnames "$W0"):$(screfs "$W2")"
+mv "$TS/inbox.json" "$SC/inbox.move"
+jq -n -c '{result: {messages: [{id: "msg_b1", sequence: 30, run_id: "run_bad", type: "worker_done", from_handle: "h-sc-help", body: "no marker here", created_at: "2026-10-31T19:05:45Z", payload: "{\"taskId\":\"task_b1\"}"}]}}' > "$TS/inbox.json"
+rm -f "$SCG/orca-roles.canary-seen"
+scr "$SC" --run run_bad plan-reviewer
+G="$S_RC:$(printf '%s\n' "$S_OUT" | grep -c 'without the Done marker' || true):$(printf '%s\n' "$S_OUT" | tail -1):$(grep -c '^PLAN_REVIEWER=' "$SCG/orca-roles.env" || true):$(grep -c '^HELPER=' "$SCG/orca-roles.env" || true)"
+mv "$SC/inbox.move" "$TS/inbox.json"; rm -f "$SCG/orca-roles.canary-seen"
+scr "$SC" --run run_sc solo
+S="$S_RC:$(printf '%s\n' "$S_OUT" | grep -cE '^set-close: Solo: (checkpoints|pair tree|close) failed$' || true):$(printf '%s\n' "$S_OUT" | grep -c 'refused:' || true):$(printf '%s\n' "$S_OUT" | grep -c 'Orca did not answer about its tab (h-sc-solo)' || true):$(printf '%s\n' "$S_OUT" | tail -1):$(grep -c '^SOLO=' "$SCG/orca-roles.env" || true)"
+check "set-close.sh: canary exiting 1 (a report without Done) is passed through and remembered: its tab is still closed and the exit code is 1 with the summary line; a failed-state tab is closable, so its close step runs; when close-role.sh cannot close it the line is set-close: <Title>: <step> failed, the tab is not refused, keeps its env line, counts as refused and makes the exit 1" "$G|$S" "1:1:set-close: 1 closed, 0 refused:0:1|1:1:0:1:set-close: 0 closed, 1 refused:1"
+check "set-close.sh: a tab whose integrated tree is also used by an open tab outside the call is still closed (counted closed), its refs and tree are kept with the specced line and the registry line stays integrated; two closable tabs sharing an integrated pair tree are both closed (env lines gone, instance entries dropped), the tree's refs are deleted, the tree removed and its registry line marked removed, exit 0, the second tab finds the tree already removed and only closes, and running again for a closed tab is exit 2 with nothing on stdout and one stderr line saying there is no open tab with that name; a closable worktree tab (a Dev with no trees line, named by its title here, in another case) is only closed, exit 0, the worktree's own refs (set-c1, integ-c1, batch2-start-c1) and another pair tree's refs staying; and after the pass, the refusals, the kept tree and these steps only the closed trees' refs are gone: the worktree's three refs, the open tree's ref (tree kept) and the kept tree's ref (tree kept) stay, only batch1's tree is gone, and batch2's registry line stays open" "$C|$D|$E|$(scnames "$W0"):$(screfs "$W2"):$(screfs "$W3"):$([ -d "$P2" ] && echo p2 || echo gone):$([ -d "$P3" ] && echo p3 || echo gone):$([ -e "$P1" ] && echo p1 || echo gone):$(awk -F'\t' '$1 == "batch2" {print $6}' "$SCG/orca-roles.pairs"):$(screfs "$W1")" "0:1:set-close: 1 closed, 0 refused:0:1:1:p3:integrated|0:set-close: 2 closed, 0 refused:0:0:gone:removed:[false,false]:2:0:1|0:set-close: 1 closed, 0 refused:0:3:batch2-start-c1,integ-c1,set-c1,:1|batch2-start-c1,integ-c1,set-c1,:1:1:p2:p3:gone:open:0"
+cp "$SC/ps.keep" "$TS/ps.json"; cp "$SC/wl.keep" "$TS/wl.json"; cp "$SC/inbox.keep" "$TS/inbox.json"
 }
 
 sec_dispatch() {
