@@ -3953,10 +3953,10 @@ sec_research_defaults() {
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester plan-reviewer code-reviewer verifier e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
-check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
-check "research-defaults: researcher joins the mode in experiment and writing, opens per task with maxInstances 3, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"per-task","modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","maxInstances":3,"mcp":["context7"]}'
+check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model,advisor|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model,advisor|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model,advisor|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-sonnet-5-5|true "
+check "research-defaults: researcher joins the mode in experiment and writing, opens per task with maxInstances 3, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"per-task","modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","advisor":{"model":"opus"},"maxInstances":3,"mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
-check "research-defaults: dev and tester join academic-research in experiment only and open per batch with maxInstances 3, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
+check "research-defaults: dev and tester join academic-research in experiment only and open per batch with maxInstances 3, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","advisor":{"model":"opus"},"mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","advisor":{"model":"opus"},"nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '"\(.roles[$r].model // "-"),\(.roles[$r].open // .defaults.open // "-")"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
 check "research-defaults: the programmer and pr-reviewer teams (roles, order, models, when each opens) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier; pr-reviewer opens the local coordinator, no Planner)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5,start programmer/planner=claude-opus-5-5,start programmer/researcher=claude-sonnet-5-5,per-task programmer/dev=claude-sonnet-5-5,per-batch programmer/tester=claude-sonnet-5-5,per-batch programmer/plan-reviewer=claude-opus-5-5,first-use programmer/code-reviewer=claude-opus-5-5,first-use programmer/e2e-tester=claude-opus-5-5,per-batch programmer/deployer=claude-sonnet-5-5,first-use pr-reviewer/local-coordinator=claude-sonnet-5-5,start pr-reviewer/verifier=claude-opus-5-5,first-use "
 check "research-defaults: the programmer team is the local coordinator and the eight old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "9:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/plan-reviewer programmer/code-reviewer programmer/e2e-tester programmer/deployer "
@@ -4815,6 +4815,199 @@ for AUROLE in plan-reviewer code-reviewer verifier; do
   AUR="$AUR$(AGN "$AUA" "--disallowedTools Agent Task ${DIAL}--settings"):$(AGN "$AUO" "--disallowedTools Agent Task ${DIAL}--disallowedTools WebFetch --settings"):$(AGN "$AUP" "--disallowedTools Agent Task --disallowedTools AskUserQuestion --settings"):$(AGN "$AUS" "ExitWorktree Agent Task --disallowedTools Agent Task ${DIAL}"):$(AGN "$AUX" 'disallowedTools'):$(AGN "$AUCU" 'disallowedTools')|"
 done; rmdir "$SPD" 2>/dev/null || true
 check "reviewers argv (plan-reviewer, code-reviewer, verifier): the kit's --disallowedTools Agent Task comes before the dialog deny (and the role's own list, which only adds), also in permissionMode plan and after the superpowers group; a codex or custom reviewer gets no --disallowedTools; no other role gets it (the Planner's own list is the superpowers one)" "$AUR$(AGN "$(agj "$AUC" dev)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" tester)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" planner)" '--disallowedTools Agent Task')" "1:1:1:1:0:0|1:1:1:1:0:0|1:1:1:1:0:0|0:0:0"
+# advisor: resolution (advisor_of), check_config, the launch in agent.sh, the non-Claude agents and the Claude Code version guard (a1; C1-C6, C8, C12)
+AV="$TMP/adv"; rm -rf "$AV"; mkdir -p "$AV"
+A200="$(printf 'a%.0s' $(seq 1 200))"; A201="$(printf 'a%.0s' $(seq 1 201))"
+avm() { [ "$1" = "$2" ] && AV1="${AV1}." || AV1="${AV1}[$3: expected $2, got $1]"; }
+advc() { printf '%s' "$1" > "$AV/c.json"; if AVO="$(advisor_of "$AV/c.json" "${2:-r}" 2>&1)"; then AVC=0; else AVC=$?; fi; printf '%s/%s' "$AVO" "$AVC"; }
+avq() { local g; g="$(advc "$1" "$2")"; avm "$g" "$3" "$4"; }
+AV1=""
+avq '{"roles":{"r":{"advisor":{"model":"fable"}}}}' r fable/0 fable
+avq '{"roles":{"r":{"advisor":{"model":"OFF"}}}}' r off/0 off-upper
+avq '{"roles":{"r":{"advisor":{"model":"Auto"}}}}' r auto/0 auto-mixed
+avq '{"roles":{"r":{"advisor":{"model":"OfF"}}}}' r off/0 off-mixed
+avq '{"roles":{"r":{"advisor":{"model":"claude-opus-5-5[1m]"}}}}' r 'claude-opus-5-5[1m]/0' model-brackets
+avq '{"roles":{"r":{"advisor":{"model":"us.anthropic.claude-fable-5-2"}}}}' r 'us.anthropic.claude-fable-5-2/0' model-dotted
+avq '{"roles":{"r":{"advisor":{"model":"a_b-c.d:e/f@g[1]"}}}}' r 'a_b-c.d:e/f@g[1]/0' model-charset
+avq '{"defaults":{"advisor":{"model":"opus"}},"roles":{"r":{}}}' r opus/0 defaults
+avq '{"defaults":{"advisor":{"model":"off"}},"roles":{"r":{"advisor":{}}}}' r off/0 empty-level
+avq '{"roles":{"r":{"advisor":{"model":null}}}}' r auto/0 null-model
+avq '{"roles":{"r":{}}}' r auto/0 none
+avq '{"roles":{"r":{}}}' zz auto/0 missing-role
+avq '{"defaults":{"advisor":{"model":"opus"}},"roles":{"r":{}}}' zz opus/0 missing-role-defaults
+avq "{\"roles\":{\"r\":{\"advisor\":{\"model\":\"$A200\"}}}}" r "$A200/0" len-200
+avq '{"roles":{"r":{"title":"R","advisor":{"model":"opus"}}},"defaults":{"advisor":{"model":"fable"}}}' r opus/0 role-over-defaults
+avq '{"defaults":{"advisor":{"model":"off"}}}' r off/0 no-roles
+avq '{"roles":{"r":{"advisor":{"model":""}}}}' r /1 empty
+avq '{"roles":{"r":{"advisor":{"model":"-p"}}}}' r /1 dash-option
+avq '{"roles":{"r":{"advisor":{"model":"--dangerously-skip-permissions"}}}}' r /1 long-option
+avq '{"roles":{"r":{"advisor":{"model":"fa ble"}}}}' r /1 space
+avq '{"roles":{"r":{"advisor":{"model":"fable\n"}}}}' r /1 trailing-newline
+avq '{"roles":{"r":{"advisor":{"model":"fa\nble"}}}}' r /1 inner-newline
+avq '{"roles":{"r":{"advisor":{"model":5}}}}' r /1 number
+avq '{"roles":{"r":{"advisor":{"model":true}}}}' r /1 boolean
+avq '{"roles":{"r":{"advisor":{"model":["fable"]}}}}' r /1 array
+avq '{"roles":{"r":{"advisor":{"model":{"model":"fable"}}}}}' r /1 object
+avq '{"roles":{"r":{"advisor":"fable"}}}' r /1 level-string
+avq '{"roles":{"r":{"advisor":{"model":"fable","x":1}}}}' r /1 extra-key
+avq "{\"roles\":{\"r\":{\"advisor\":{\"model\":\"$A201\"}}}}" r /1 len-201
+avq '{"roles":{"r":{"advisor":{"model":""}}},"defaults":{"advisor":{"model":"opus"}}}' r /1 empty-no-fallback
+avq '{"roles":{"r":{"advisor":{"model":"-p"}}},"defaults":{"advisor":{"model":"fable"}}}' r /1 invalid-no-fallback
+avq '{"roles":{"r":{"advisor":null}}}' r /1 null-level
+avq '{"roles":{"r":{"advisor":{"model":null}}},"defaults":{"advisor":{"model":5}}}' r /1 defaults-number
+avq '{"defaults":{"advisor":"off"},"roles":{"r":{}}}' r /1 defaults-string
+avq '{"roles":{"r":{"advisor":{"model":"fable "}}}}' r /1 trailing-space
+avq '{"roles":{"r":{"advisor":{"model":".fable"}}}}' r /1 leading-dot
+check "advisor_of: a model string and auto/off in any case resolve from the role, else from defaults, else auto, an empty level or a null model falls through and an unknown role gets auto or the defaults value, 200 characters pass; an empty, option-like, spaced, newline or over-long value, a non-string, an object with other keys and a level that is not an object fail with no output, and an invalid role level does not fall back to defaults (a1, C4)" "$AV1" "$(printf '.%.0s' $(seq 1 36))"
+avj() { jq -c "$1" "$ROOT/config.default.json" > "$AV/cc.json"; check_config "$AV/cc.json" | tr '\n' '|'; }
+avcm() { local g; g="$(avj "$1")"; avm "$g" "$2" "$3"; }
+ER='ERROR: role dev: advisor must be {"model": "<model>|auto|off"}|'; ERD='ERROR: defaults.advisor must be {"model": "<model>|auto|off"}|'
+AV1=""
+avcm '.roles.dev.advisor = "fable"' "$ER" level-string
+avcm '.roles.dev.advisor = {"model":"-p"}' "$ER" value
+avcm '.roles.dev.advisor = {"model":5}' "$ER" number
+avcm '.roles.dev.advisor = {"model":"fable","x":1}' "$ER" extra-key
+avcm '.roles.dev.advisor = {"model":("a"*201)}' "$ER" len-201
+avcm '.roles.dev.advisor = null' "$ER" null-level
+avcm '.roles.dev.advisor = {"model":"fable\n"}' "$ER" trailing-newline
+avcm '.roles.dev.advisor = {"model":"fa\nble"}' "$ER" inner-newline
+avcm '.roles.dev.advisor = {"model":""}' "$ER" empty-string
+avcm '.roles.dev.advisor = {}' "" empty-level
+avcm '.roles.dev.advisor = {"model":null}' "" null-model
+avcm '.roles.dev.advisor = {"model":"Auto"}' "" auto
+avcm '.roles.dev.advisor = {"model":"OFF"}' "" off
+avcm '.roles.dev.advisor = {"model":"claude-opus-5-5[1m]"}' "" model
+avcm '.roles.dev.advisor = {"model":("a"*200)}' "" len-200
+avcm '.defaults.advisor = {"model":"fa ble"}' "$ERD" defaults-value
+avcm '.defaults.advisor = 5' "$ERD" defaults-number
+avcm '.defaults.advisor = "off"' "$ERD" defaults-string
+avcm '.roles.dev.advisor = {"model":"opus"} | .defaults.advisor = {"model":"-p"}' "$ERD" valid-role-bad-defaults
+avcm '.roles.dev.advisor = 5 | .roles.tester.advisor = "x"' "$ER"'ERROR: role tester: advisor must be {"model": "<model>|auto|off"}|' two-roles
+avcm '.roles.dev.advisor = {"model":"-p"} | .defaults.advisor = {"model":"fable"}' "$ER" invalid-role-valid-defaults
+avcm 'del(.roles.dev.advisor)' "" absent
+avm "$(check_config "$ROOT/config.default.json")" "" shipped-silent
+avm "$(jq -r '[.roles | to_entries[] | select(.value | has("advisor"))] | length' "$ROOT/config.default.json")" 17 shipped-roles
+avm "$(jq -r '.roles | to_entries[] | select(.value | has("advisor")) | "\(.key)=\(.value.advisor.model)"' "$ROOT/config.default.json" | sort | tr '\n' ' ')" "code-reviewer=fable deployer=opus dev=opus e2e-tester=fable evidence=opus local-coordinator=opus methodology=fable plan-reviewer=fable planner=fable researcher=opus rigor=fable sota=off style=opus tech-verifier=fable tester=opus verifier=fable writer=opus " shipped-values
+avm "$(jq -r '.defaults.advisor.model' "$ROOT/config.default.json")" auto shipped-defaults
+avm "$(jq -r '
+  def r: if test("haiku") then 4 elif test("sonnet") then 6 elif test("opus") then 7 elif test("fable") then 10 else 99 end;
+  [ .roles | to_entries[] | .key as $k | .value as $v | ($v.advisor.model // "") as $a |
+    select($a != "" and $a != "auto" and $a != "off") |
+    ([ $v.model, (($v.modelByMode // {}) | to_entries[] | .value) ] | map(select(type == "string"))) as $ms |
+    $ms[] as $m | select(($m | r) > ($a | r)) | "\($k):\($a) below \($m)" ] | join(" ")' "$ROOT/config.default.json")" "" shipped-rank
+check "check_config: the advisor message for the role level and for defaults, nothing for a valid level, one line per invalid role; an empty, trailing-newline or inner-newline model is refused; the shipped values are the decided ones, defaults auto, 17 roles with the key, each advisor ranking at or above its role's model in every mode (a1/a3, C5, C8)" "$AV1" "$(printf '.%.0s' $(seq 1 27))"
+AV1=""
+AVB="$TMP/advb"; AVJ="$TMP/advwt"; rm -rf "$AVB" "$AVJ"; mkdir -p "$AVB" "$AVJ"; git -C "$AVJ" init -q
+cat > "$AVB/claude" <<'EOS'
+#!/bin/sh
+if [ "$1" = --version ]; then
+  v="${ADV_VER-}"; [ -n "$v" ] || v='2.1.325 (Claude Code)'
+  printf '%s\n' "$v" >> "$AV_OUT.ver"
+  case "$v" in HANG) sleep 30; exit 0;; VECHO) echo --version; exit 0;; EMPTY) exit 0;; esac
+  printf '%s\n' "$v"; exit 0
+fi
+printf '%s\n' "$@" > "$AV_OUT.argv"
+printf '%s' "${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}" > "$AV_OUT.env"
+exit "${ADV_RC:-0}"
+EOS
+chmod +x "$AVB/claude"
+advrun() { # advrun <config> <role> [args]: agent.sh in the fixture worktree; output in $OUT and $RC, the agent's argv/env in $AV.argv/$AV.env
+  rm -f "$AV.argv" "$AV.env" "$AV.ver"
+  if OUT="$(cd "$AVJ" && env HOME="$TMP/home" PATH="$AVB:$PATH" ORCA_ROLES_CONFIG="$1" AV_OUT="$AV" "$TMP/home/.orca-roles/bin/agent.sh" "${@:2}" 2>&1)"; then RC=0; else RC=$?; fi
+}
+avline() { awk -v a="$1" '$0 == a { n = NR } END { print n + 0 }' "$AV.argv"; }
+avnorm() { awk -v t="$TMP" '{ if (p) { print "<mcp>"; p = 0; next } if ($0 == "--mcp-config") p = 1; if (index($0, t) == 1) print "<tmp>"; else print }' "$1"; }   # a mktemp path under load is not a difference in the role's configuration
+avcount() { grep -cxF -- "$1" "$AV.argv" 2>/dev/null || true; }
+cat > "$AV/w.json" <<'J'
+{ "defaults": { "mcp": [], "agent": "claude" }, "mcpServers": {},
+  "roles": { "dev": { "advisor": { "model": "opus" }, "extraArgs": ["--verbose"] },
+             "dev2": { "advisor": { "model": "opus" }, "env": { "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1" } },
+             "tester": { "advisor": { "model": "OFF" }, "env": { "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "0" } },
+             "sota": { "advisor": { "model": "off" } },
+             "planner": {}, "local-coordinator": { "advisor": { "model": null } },
+             "inv": { "advisor": { "model": "-p" } } } }
+J
+advrun "$AV/w.json" dev
+avm "$(avcount --advisor)" 1 dev-flag-once
+avm "$(sed -n "$(( $(avline --advisor) + 1 ))p" "$AV.argv")" opus dev-flag-value
+avm "$(avline --advisor)" "$(( $(avline --settings) + 2 ))" dev-after-settings
+avm "$(tail -1 "$AV.argv")" --verbose dev-extraargs-last
+avm "$(cat "$AV.env")" unset dev-env
+CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 advrun "$AV/w.json" dev
+avm "$(avcount --advisor):$(cat "$AV.env")" 1:unset dev-inherited-unset
+advrun "$AV/w.json" dev2
+avm "$(avcount --advisor):$(cat "$AV.env")" 1:1 dev-role-env-wins
+advrun "$AV/w.json" tester
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:1 off-over-role-env
+advrun "$AV/w.json" sota
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:1 off
+advrun "$AV/w.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:unset none
+cp "$AV.argv" "$AV/planner.argv"
+jq '.defaults.advisor = {"model":"auto"}' "$AV/w.json" > "$AV/w-auto.json"
+advrun "$AV/w-auto.json" planner
+avm "$(cmp -s <(avnorm "$AV/planner.argv") <(avnorm "$AV.argv") && echo same || echo differs):$(cat "$AV.env")" same:unset auto-identical
+CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 advrun "$AV/w-auto.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:1 auto-keeps-inherited
+advrun "$AV/w.json" local-coordinator
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:unset null-model
+cp "$AV.argv" "$AV/lc.argv"
+jq 'del(.roles["local-coordinator"].advisor)' "$AV/w.json" > "$AV/w-del.json"
+advrun "$AV/w-del.json" local-coordinator
+avm "$(cmp -s <(avnorm "$AV/lc.argv") <(avnorm "$AV.argv") && echo same || echo differs)" same null-model-identical
+advrun "$AV/w.json" inv
+AVW='agent.sh: the advisor setting of inv is not valid (see README, "Advisor of a role"); it starts without the kit'"'"'s advisor setting.'
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$AVW" || true):$(avcount --advisor):$(cat "$AV.env")" 1:0:unset invalid-warning
+ADV_RC=7 advrun "$AV/w.json" inv
+avm "$RC:$(printf '%s\n' "$OUT" | grep -cxF -- "$AVW" || true)" 7:1 invalid-status
+check "agent.sh: a model adds --advisor <model> once, right after the last kit --settings and before extraArgs; off exports the variable (over a role env 0); auto, a missing key and a null model leave argv and env as without the key; a model unsets an inherited variable and keeps the role env's; an invalid value warns and starts as auto with the agent's status (a1, C1-C3, C5)" "$AV1" "$(printf '.%.0s' $(seq 1 16))"
+AV1=""
+cat > "$AV/n.json" <<'J'
+{ "defaults": { "mcp": [], "agent": "claude" }, "mcpServers": {},
+  "roles": { "dev": { "advisor": { "model": "opus" }, "extraArgs": ["--verbose"] },
+             "planner": {}, "local-coordinator": {},
+             "cx": { "agent": "codex", "advisor": { "model": "opus" } },
+             "cxi": { "agent": "codex", "advisor": { "model": "-p" } },
+             "cu": { "agent": "custom", "command": "echo CU=${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}", "advisor": { "model": "off" } },
+             "cuo": { "agent": "custom", "command": "echo CU=${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}", "advisor": { "model": "opus" } },
+             "oc": { "agent": "opencode", "advisor": { "model": "opus" } } } }
+J
+for c in codex opencode; do
+cat > "$AVB/$c" <<EOS
+#!/bin/sh
+[ "\$1" = --version ] && { echo "$c 9.9.9"; exit 0; }
+printf '%s\n' "\$@" > "$AV.argv"
+printf '%s' "\${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}" > "$AV.env"
+exit 0
+EOS
+chmod +x "$AVB/$c"
+done
+for r in cx cxi; do advrun "$AV/n.json" "$r"; avm "$(avcount --advisor):$(printf '%s\n' "$OUT" | grep -c 'advisor' || true):$([ -e "$AV.ver" ] && echo ver || echo nover):$(cat "$AV.env")" 0:0:nover:unset "codex-$r"; done
+for r in cu cuo; do advrun "$AV/n.json" "$r"; avm "$(printf '%s' "$OUT" | tr -d '\n'):$([ -e "$AV.ver" ] && echo ver || echo nover)" CU=unset:nover "custom-$r"; done
+: > "$KIT/prompts/programmer/oc.md"   # opencode-prepare.sh needs the role's prompt file
+advrun "$AV/n.json" oc
+avm "$(avcount --advisor):$(cat "$AV.env"):$([ -e "$AV.ver" ] && echo ver || echo nover)" 0:unset:nover opencode
+rm -f "$KIT/prompts/programmer/oc.md"
+advrun "$AV/n.json" dev
+avm "$(avcount --advisor):$(wc -l < "$AV.ver" | tr -d ' '):$(tail -1 "$AVJ/.git/orca-roles.provenance.jsonl" | jq -r .cliVersion)" "1:1:2.1.325 (Claude Code)" one-version-per-launch
+ADV_VER='2.1.321 (Claude Code)' advrun "$AV/n.json" dev
+AVF="agent.sh: Claude Code 2.1.321 has no --advisor option (the kit's advisor setting needs 2.1.322 or later); dev starts without it."
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$AVF" || true):$(avcount --advisor):$(wc -l < "$AV.ver" | tr -d ' ')" 1:0:1 floor-2.1.321
+ADV_VER='2.1.322 (Claude Code)' advrun "$AV/n.json" dev
+avm "$(avcount --advisor):$(sed -n "$(( $(avline --advisor) + 1 ))p" "$AV.argv")" 1:opus floor-2.1.322
+ADV_VER='2.2.0' advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-2.2.0
+ADV_VER='1.9.0' advrun "$AV/n.json" dev; avm "$(avcount --advisor):$(printf '%s\n' "$OUT" | grep -c 'has no --advisor option' || true)" 0:1 guard-1.9.0
+ADV_VER=VECHO advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-argv-echo
+ADV_VER=EMPTY advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-empty
+ADV_VER='Claude Code 2.1.300' advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-no-version-prefix
+ADV_VER='2.1.321 (Claude Code)' advrun "$AV/n.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env"):$(printf '%s\n' "$OUT" | grep -c 'advisor' || true):$(wc -l < "$AV.ver" | tr -d ' ')" 0:unset:0:1 auto-no-guard
+jq '.roles.planner.advisor = {"model":"off"}' "$AV/n.json" > "$AV/n-off.json"
+ADV_VER='2.1.321 (Claude Code)' advrun "$AV/n-off.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env"):$(printf '%s\n' "$OUT" | grep -c 'has no --advisor option' || true)" 0:1:0 off-no-guard
+S1="$(date +%s)"; ADV_VER=HANG advrun "$AV/n.json" dev; S2="$(date +%s)"
+avm "$(avcount --advisor):$([ $((S2 - S1)) -lt 20 ] && echo fast || echo slow):$(tail -1 "$AVJ/.git/orca-roles.provenance.jsonl" | jq -r .cliVersion)" 1:fast:null hang
+check "agent.sh: codex, opencode and custom roles ignore the key (no flag, variable, warning or --version call, also for an invalid value); the guard warns and drops the flag below 2.1.322, keeps it at the floor and for an unknown line, takes one --version per launch (provenance included), runs for no auto/off value and cuts a hanging one off (C6, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 16))"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 }
 
@@ -6852,6 +7045,59 @@ for m in programmer pr-reviewer academic-research quick; do
   check "local coordinator $m: outside a dispatch it writes to the coordinator's Run (question, then one status), never in its tab or a dialog" "$(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "${pl%.md}-under-coordinator.md" | grep -c 'Outside one, send it to the coordinator.s Run as your startup message says (`orca orchestration send --to run:<its Run> --type question`, with your own Run bound first). Never in this tab and never in a question dialog\|Outside a dispatch, send those three sentences and the report.s path as one `--type status` message')" "2"
   check "local coordinator $m: one 'Working under a coordinator' section, before Limits, with ask, one worker_done and the wait for the first dispatch" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "${pl%.md}-under-coordinator.md" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`\|no \(planning and no \)\{0,1\}question dialog before it arrives")" "1 before 3"
 done
+# coordinator.sh: the Planner's advisor as the last argv pair, off/auto/invalid and the version guard (a2; C7, C12)
+AV1=""
+ACO="$TMP/aco"; rm -rf "$ACO"; mkdir -p "$ACO/bin" "$ACO/home" "$ACO/wt"; git -C "$ACO/wt" init -q; echo '{"projects":{}}' > "$ACO/home/.claude.json"
+cat > "$ACO/bin/claude" <<'EOS'
+#!/bin/sh
+if [ "$1" = --version ]; then
+  v="${ADV_VER-}"; [ -n "$v" ] || v='2.1.325 (Claude Code)'
+  case "$v" in VECHO) echo --version; exit 0;; EMPTY) exit 0;; esac
+  printf '%s\n' "$v"; exit 0
+fi
+printf '%s\n' "$@" > "$AC_OUT/argv"
+printf '%s' "${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}" > "$AC_OUT/env"
+exit 0
+EOS
+chmod +x "$ACO/bin/claude"
+avm() { [ "$1" = "$2" ] && AV1="${AV1}." || AV1="${AV1}[$3: expected $2, got $1]"; }
+acrun() { # acrun <project json or -> <inherited value or -> <version> [coordinator args]
+  local proj="$1" inh="$2" ver="$3"; shift 3
+  rm -f "$ACO/argv" "$ACO/env"
+  if [ "$proj" = - ]; then rm -f "$ACO/wt/.orca-roles.json"; else printf '%s' "$proj" > "$ACO/wt/.orca-roles.json"; fi
+  if [ "$inh" = - ]; then
+    if OUT="$(cd "$ACO/wt" && env -i HOME="$ACO/home" PATH="$ACO/bin:$PATH" KIT="$KIT" ADV_VER="$ver" AC_OUT="$ACO" /bin/bash "$KIT/bin/coordinator.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi
+  else
+    if OUT="$(cd "$ACO/wt" && env -i HOME="$ACO/home" PATH="$ACO/bin:$PATH" KIT="$KIT" ADV_VER="$ver" AC_OUT="$ACO" CLAUDE_CODE_DISABLE_ADVISOR_TOOL="$inh" /bin/bash "$KIT/bin/coordinator.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi
+  fi
+}
+PM="$(jq -r '.roles.planner.model' "$KIT/config.default.json")"; PA="$(jq -r '.roles.planner.advisor.model' "$KIT/config.default.json")"
+acrun - - ''
+avm "$(sed -n 1p "$ACO/argv" | grep -c "^Read $KIT/prompts/coordinator.md and adopt that role")" 1 message
+avm "$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "--model|$PM|--permission-mode|auto|--add-dir|$KIT/prompts|" argv-2-7
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "9:--advisor:$PA:unset" default
+acrun - - '' --model opus
+avm "$(sed -n 3p "$ACO/argv"):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "opus:--advisor:$PA" model-option
+acrun - 1 ''
+avm "$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "$PA:unset" inherited-unset
+acrun '{"roles":{"planner":{"advisor":{"model":"off"}}}}' - ''
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(grep -c '^--advisor$' "$ACO/argv" || true):$(cat "$ACO/env")" 7:0:1 off
+acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' - ''
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env"):$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "7:unset:--model|$PM|--permission-mode|auto|--add-dir|$KIT/prompts|" auto
+acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' 1 ''
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env")" 7:1 auto-inherited
+acrun '{"roles":{"planner":{"advisor":{"model":"-p"}}}}' - ''
+ACW="coordinator.sh: the advisor setting of planner is not valid (see README, \"Advisor of a role\"); the coordinator starts without the kit's advisor setting."
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$ACW" || true):$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env")" 1:7:unset invalid
+acrun - - '2.1.321 (Claude Code)'
+ACV="coordinator.sh: Claude Code 2.1.321 has no --advisor option (the kit's advisor setting needs 2.1.322 or later); the coordinator starts without it."
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$ACV" || true):$(grep -c '^--advisor$' "$ACO/argv" || true)" 1:0 floor
+acrun - - '2.1.322 (Claude Code)'
+avm "$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "--advisor:$PA" at-floor
+acrun - - VECHO
+avm "$(sed -n 9p "$ACO/argv")" "$PA" unknown-line
+co -h; avm "$(grep -c advisor "$CO/out")" 1 usage
+check "coordinator.sh: with the default configuration --advisor <the Planner's advisor> is the last argv pair after --add-dir, --model does not move it, off and an inherited variable, auto, an invalid value, a Claude Code below 2.1.322, at the floor and on an unknown line, and the usage line (a2, C7, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 13))"
 if [ -f "$CO/kit-config.json" ]; then mv "$CO/kit-config.json" "$KIT/config.json"; fi
 }
 
@@ -10888,6 +11134,22 @@ mk1 ph claude-unknown-9 '{"input_tokens":1000000}'
 umpass
 PP="$(for x in pa pb pd pe pf pg; do usf $x '.cost'; done | tr '\n' ' ')$(usf pc '(.cost > 0.049 and .cost < 0.051)') $(usf ph '[.cost, (.unpriced | join(",")), .tokens.input] | join("|")')"
 check "usage parse: tokens, priced cost by type (1h cache writes, the us geo x1.1, web searches), thinking tokens, cache savings, tools (calls, errors, seconds tool_use to tool_result), lines from Edit/Write, one row per model with the cost never above what the rows sum to" "$S1C|$S1D|$S1E|$S1F" "2001000|200100|1002000|400000|50000|2000000|200000|1000000|400000|300000|100000|50000|2|3.795|0.725|2.1/1/0.1/0.575/0.02|0.0085|3.8035|3.8035||0.734|0|1|0|5|1|1|2|1|5|1|edits"
+mk1 pi claude-fable-5-2 '{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":1000000}'
+mk1 pj "claude-fable-5-2[1m]" '{"input_tokens":1000000}'
+mk1 pk claude-fable-5-1 '{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":1000000}'
+mk1 pl claude-fable-5-2-20270101 '{"input_tokens":1000000}'
+mk1 pm claude-fable-6 '{"input_tokens":1000000}'
+mk1 pn claude-fable-5 '{"cache_read_input_tokens":1000000}'
+mk1 po claude-mythos-5-1 '{"input_tokens":1000000,"cache_read_input_tokens":1000000}'
+mk1 pp claude-fable-5-2 '{"cache_creation_input_tokens":1000000}'
+mk1 pq claude-fable-5-2 '{"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_1h_input_tokens":1000000}}'
+mk1 pr claude-fable-5-2 '{"server_tool_use":{"web_search_requests":1}}'
+umpass
+UP="$ROOT/bin/usage_prices.json"
+upb="$(awk '/^  "claude-fable-5-2": \{$/{s=1} s{print} s && /^  \},?$/{exit}' "$UP" | tr '\n' '|')"
+UPOS="$(jq -r '.models | keys_unsorted as $k | [(($k | index("claude-fable-5-2")) - ($k | index("claude-fable-5-1"))), (($k | index("claude-mythos-5")) - ($k | index("claude-fable-5-2")))] | join("/")' "$UP" 2>/dev/null || true)"
+UPM="$(jq -r '[.version, .unit, (.source | (contains("Claude Code 2.1.311 model catalog") and contains("; the claude-fable-5-2 row comes from the Claude Code 2.1.325 catalog"))), (.note | contains("longest id")), (.models["claude-fable-5-2"] | has("longPrompt"))] | join("|")' "$UP" 2>/dev/null || true)"
+check "usage parse: claude-fable-5-2 has its own row in usage_prices.json (1M input, output and cache read price at 8/40/0.2, 48.2 the session; a [1m] id and a dated id at 8; cache writes at 10 for 5m and 16 for 1h; a web search at 0.01), while claude-fable-5-1 keeps 10/50 with its own 0.25 cache read and claude-fable-5 keeps 1.0, claude-mythos-5-1 stays 10/0.25 and claude-fable-6 is unpriced: without the row all of them fall to the claude-fable-5 longest prefix (10/50/1.0); the file is valid JSON, version, unit and note unchanged, source carries the catalog sentence, and the row sits between claude-fable-5-1 and claude-mythos-5 with its neighbours' 1-space indentation and field order and no longPrompt" "$(jq -e . "$UP" >/dev/null 2>&1 && echo valid)|$(usf pi '[.models["claude-fable-5-2"].costByType.input, .models["claude-fable-5-2"].costByType.output, .models["claude-fable-5-2"].costByType.cacheRead, .models["claude-fable-5-2"].costByType.cacheWrite, .models["claude-fable-5-2"].costByType.webSearch, .models["claude-fable-5-2"].cost] | map(tostring) | join("/")')|$(usf pj '.cost')|$(usf pl '.cost')|$(usf pm '[.cost, (.unpriced | join(","))] | join("/")')|$(usf pk '[.models["claude-fable-5-1"].costByType.input, .models["claude-fable-5-1"].costByType.output, .models["claude-fable-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pn '.models["claude-fable-5"].costByType.cacheRead')|$(usf po '[.models["claude-mythos-5-1"].costByType.input, .models["claude-mythos-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pp '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pq '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pr '.models["claude-fable-5-2"].costByType.webSearch')|$UPOS|$UPM|$upb" 'valid|8/40/0.2/0/0/48.2|8|8|0/claude-fable-6|10/50/0.25|1|10/0.25|10|16|0.01|1/1|2.1.311|USD per million tokens (webSearch: USD per request)|true|true|false|  "claude-fable-5-2": {|   "input": 8.0,|   "output": 40.0,|   "cacheWrite5m": 10.0,|   "cacheWrite1h": 16.0,|   "cacheRead": 0.2,|   "webSearch": 0.01|  },|'
 umsum() { (cd "$PM" && cksum sessions-*.jsonl 2>/dev/null | tr '\n' ' ') || true; jq -cS 'del(.lastPass)' "$PM/state.json" 2>/dev/null | cksum || true; }
 umcount() { cat "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' ' || true; }
 N0="$(umcount)"; B0="$(umsum)"; sleep 1; umpass; A0="$UPRC:$([ "$(umsum)" = "$B0" ] && echo same):$([ "$(umcount)" = "$N0" ] && echo nonew)"
@@ -11060,6 +11322,91 @@ c.close()
  OC0="$(cksum < "$OCDB")"
  ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC3="$UPRC:$(( $(ocn) - ON0 )):$(ocnid ses_orca_dev_17945747508474019665):$(ocnid ses_orca_researcher-2_1794577043):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
  check "usage parse: OpenCode sessions of the kit (ses_orca_<role>_<digits>) are read from OpenCode's store read-only into the same daily file marked \"agent\":\"opencode\": a mapped worktree gives the task, the role comes from the id, the token sums, two turns, max context, the tool calls/errors/seconds, the worker_done verdict with the seconds from the task prompt, the first and last message times and OpenCode's cost estimate as costState; a model without provider or id is \"unknown\", listed once as unpriced, an assistant without tokens is no turn (its tools still count), a tool whose completed time is before its ran time has no seconds, a cost that is not a number is not summed (no estimate: costState null), a bad JSON row and an idle row are skipped, a worker_done whose task id no prompt names has no seconds, and first/last are the message times; the non-kit id ses_abc and the kit-shaped ids that are not the pattern (ses_orca_re3_f1-final-check_179, ses_orca_Dev_179, ses_orca_dev_179x, ses_orca__179) give no row; a store missing, empty, without session_v2 or not a database logs one line for a bad store and none for a missing one, exits 0 and leaves the Claude rows as they were; a second pass with nothing changed writes no row, a new time_updated writes one row for that session only; the store bytes never change" "$OCMISS|$OCEMPTY|$OCNOSCH|$OCNOTDB|$OCLR|$OCDEV|$OCRES|$OCT3|$OCN|$OCX|$OC1|$OC2|$OC3" "0:0:0|0:0:1|0:0:2|0:0:3|1|1000000|-|opencode|dev|devgd-292|2|3000|300|600|150|30|2500|0.03|0.03|openai/gpt-5|2|2|2.5|1|1|0.1|ACCEPTED:4|2026-11-13T12:59:10.000Z|2026-11-13T12:59:14.000Z|opencode|researcher-2|||2|30|5|0.02|20|1|0.1|0|opencode|tester-3|devgd-292|1|10|1|0|10|null|0|unknown|unknown|2|0.25|1|1|REJECTED:null|2026-11-13T12:59:20.000Z|2026-11-13T12:59:27.000Z||none,none,none,|0:3:1:same|0:0|0:1:2:1:same"
+# pair trees (a1): a session whose cwd is in a pair tree gets the task and project of the worktree that owns it (the map is remembered)
+umpk
+PR="$UMR"; PT="$UM/ptree"; PT2="$UM/ptree2"; PT4="$UM/ptree4"; W2="$UM/wt/devgd-400"
+WGD="$(git -C "$UMA" rev-parse --absolute-git-dir)"
+git -C "$PR" worktree add -q --detach "$PT"; git -C "$PR" worktree add -q --detach "$PT2"; git -C "$PR" worktree add -q --detach "$PT4"; git -C "$PR" worktree add -q -b w2 "$W2"
+PTGD="$(git -C "$PT" rev-parse --absolute-git-dir)"; PT2GD="$(git -C "$PT2" rev-parse --absolute-git-dir)"; PT4GD="$(git -C "$PT4" rev-parse --absolute-git-dir)"; W2GD="$(git -C "$W2" rev-parse --absolute-git-dir)"
+printf '%s\n' "$WGD" > "$PTGD/orca-roles.pair"; printf '%s\n' "$PR/.git" > "$PT2GD/orca-roles.pair"; printf '%s\n' "$W2GD" > "$PT4GD/orca-roles.pair"
+W2P="$(cd "$W2" && pwd -P)"
+umrel() { python3 -I -c 'import os,sys; print(os.path.relpath(os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2])))' "$1" "$2"; }
+printf 'gitdir: %s\n' "$(umrel "$PTGD" "$PT")" > "$PT/.git"; printf '%s\n' "$(umrel "$UMA/.git" "$WGD")" > "$WGD/gitdir"   # relative paths in both files
+mkdir -p "$PT/src" "$PT/direct" "$PT2/a/b"
+umwadd() { jq -cn --arg p "$1" --arg ph "$2" --arg pr "$3" --arg t "$4" '{ts:"2026-11-14T00:00:00Z", path:$p, physical:$ph, project:$pr, task:$t}' >> "$PM/worktrees.jsonl"; }
+umwadd "$UMPA" "" svc devgd-292                                 # the owner, only under path
+umwadd "$PR/not-here" "$(cd "$PR" && pwd -P)" svcm main900      # the main checkout's owner, only under physical
+umwadd "$PT/direct" "" pv direct100                             # a mapped cwd inside the tree wins
+OCPT="$UM/ocpair.db"; rm -f "$OCPT"
+python3 -I - "$OCPT" "$PT" "$PT4" <<'PYE'
+import json, sqlite3, sys
+db, pt, pt4 = sys.argv[1:4]
+c = sqlite3.connect(db)
+c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+c.execute("create table session_message (session_id text, seq integer, type text, time_created integer, data text)")
+def msg(sid, seq, typ, t, d):
+    c.execute("insert into session_message values (?,?,?,?,?)", (sid, seq, typ, t, json.dumps(d)))
+def sess(sid, d, t, u):
+    c.execute("insert into session_v2 values (?,?,?,?)", (sid, d, t, u))
+def turn(sid, seq, t, cost, inp, out):
+    msg(sid, seq, "assistant", t, {"model": {"id": "gpt-5", "providerID": "openai"}, "cost": cost, "tokens": {"input": inp, "output": out}, "content": []})
+sess("ses_orca_pair_1794575001", pt, 1794575000000, 1794575010000)
+msg("ses_orca_pair_1794575001", 1, "user", 1794575000000, {"text": "go"})
+turn("ses_orca_pair_1794575001", 2, 1794575005000, 0.01, 100, 10)
+sess("ses_orca_late_1794575002", pt4, 1794575000000, 1794575010000)
+msg("ses_orca_late_1794575002", 1, "user", 1794575000000, {"text": "go"})
+turn("ses_orca_late_1794575002", 2, 1794575005000, 0.01, 10, 1)
+c.commit(); c.close()
+PYE
+kses pairc "$PT/src" "$RM"; kses mainc "$PT2/a/b" "$RM"; kses plaintc "$W2" "$RM"; kses directc "$PT/direct" "$RM"; kses emptyc "" "$RM"
+kses pairco "$PT4" "Read /k/prompts/coordinator.md and adopt that role from now on."   # owner not mapped: the global-role rule still applies
+ORCA_ROLES_OPENCODE_DB="$OCPT" umpass
+PT1="$UPRC:$(usf ses_orca_pair_1794575001 '[.task, .project, .agent, .orca_roles_role] | join("/")')"
+PT2V="$(usf ses_orca_late_1794575002 '[.task, .project] | join("/")')"
+PT3="$(for s in pairc mainc plaintc directc emptyc; do printf '%s ' "$(usf "$s" '[.task, .project] | join("/")')"; done)$(usf pairco '[.task, .project] | join("/")')"
+PT4V="$(jq -r --arg a "$PT" --arg b "$PT2" --arg c "$PT4" '[.pairs[$a], .pairs[$b], .pairs[$c]] | join(",")' "$PM/state.json" 2>/dev/null || true)"
+check "usage parse pair trees: an OpenCode session whose directory is a pair tree and a Claude session somewhere below it get the task and project of the worktree that owns the tree (a linked worktree through its gitdir, relative paths in the tree's .git file and in that gitdir, an owner mapped only under path or only under physical), also when the owner is a main checkout; a mapped cwd inside the tree keeps its own mapping; a plain linked worktree with no marker, an empty cwd and an owner that is not in worktrees.jsonl give the global-role task for a coordinator session and no task otherwise; the map is remembered as tree top -> owner path" "$PT1|$PT2V|$PT3|$PT4V" "0:devgd-292/svc/opencode/pair|/|devgd-292/svc main900/svcm / direct100/pv / global-coordinator/ptree4|$UMPA,$PR,$W2P"
+rm -rf "$PT" "$PT4"; umwadd "$W2" "$W2P" sv4 late400
+pa "$PD/plaintc.jsonl" 2026-11-14T00:00:20.000Z "$W2" pc-2 claude-haiku-4-5 '{"input_tokens":5}' '[{"type":"text","text":"x"}]'
+python3 -I - "$OCPT" "$PT" "$UM/never-seen-tree" <<'PYE'
+import json, sqlite3, sys
+db, pt, gone = sys.argv[1:4]
+c = sqlite3.connect(db)
+def msg(sid, seq, typ, t, d):
+    c.execute("insert into session_message values (?,?,?,?,?)", (sid, seq, typ, t, json.dumps(d)))
+def turn(sid, seq, t, inp):
+    msg(sid, seq, "assistant", t, {"model": {"id": "gpt-5", "providerID": "openai"}, "cost": 0.01, "tokens": {"input": inp, "output": 1}, "content": []})
+for sid in ("ses_orca_pair_1794575001", "ses_orca_late_1794575002"):
+    turn(sid, 3, 1794575020000, 5)
+    c.execute("update session_v2 set time_updated = ? where id = ?", (1794575020000, sid))
+c.execute("insert into session_v2 values (?,?,?,?)", ("ses_orca_after_1794575003", pt, 1794575015000, 1794575020000))
+msg("ses_orca_after_1794575003", 1, "user", 1794575015000, {"text": "go"})
+turn("ses_orca_after_1794575003", 2, 1794575020000, 1)
+c.execute("insert into session_v2 values (?,?,?,?)", ("ses_orca_gone_1794575004", gone, 1794575015000, 1794575020000))
+msg("ses_orca_gone_1794575004", 1, "user", 1794575015000, {"text": "go"})
+turn("ses_orca_gone_1794575004", 2, 1794575020000, 1)
+c.commit(); c.close()
+PYE
+ORCA_ROLES_OPENCODE_DB="$OCPT" umpass
+PT5="$(usf ses_orca_pair_1794575001 '[.task, .project] | join("/")')"
+PT6="$(usf ses_orca_late_1794575002 '[.task, .project] | join("/")')"
+PT7="$(usf ses_orca_after_1794575003 '[.task, .project] | join("/")')|$(usf ses_orca_gone_1794575004 '[.task, .project] | join("/")')|$(usf plaintc '[.task, .project] | join("/")')|$(usf directc '[.task, .project] | join("/")')"
+printf '%s\n' "$UMPA/.git" > "$WGD/gitdir"   # back to git's own absolute form for the worktree adds below
+check "usage parse pair trees: the task of a session labelled while its tree existed survives the tree's removal (a later message still gives the owner's task, and a session that appears under the removed tree's path is answered from the remembered map), a cwd under a tree never resolved gets no task, and a remembered tree whose owner is mapped only later gets the owner's task with no file to read (also for a plain session in that worktree once it is mapped)" "$UPRC:$PT5|$PT6|$PT7" "0:devgd-292/svc|late400/sv4|devgd-292/svc|/|late400/sv4|direct100/pv"
+umpk
+for b in 1 2 3 4; do mkdir -p "$UM/bad$b/src"; done
+printf 'not a gitdir line\n' > "$UM/bad1/.git"
+mkdir -p "$UM/bad2gd"; printf 'gitdir: %s\n' "$UM/bad2gd" > "$UM/bad2/.git"; : > "$UM/bad2gd/orca-roles.pair"
+mkdir -p "$UM/bad3gd"; printf 'gitdir: %s\n' "$UM/bad3gd" > "$UM/bad3/.git"; printf '%s\n' "$UM/no-such-owner/.git" > "$UM/bad3gd/orca-roles.pair"
+printf 'gitdir: %s\n' "$UM/bad1gd" > "$UM/bad4/.git"; chmod 000 "$UM/bad4/.git"
+umwadd "$UMPA" "" svc devgd-292; umwadd "$PR/not-here" "$(cd "$PR" && pwd -P)" svcm main900
+for b in 1 2 3 4; do kses "bad$b" "$UM/bad$b/src" "$RM"; done
+kses bad0 "$PT2/a/b" "$RM"   # a control: the same run resolves a good pair tree, so the four above really are refused
+ORCA_ROLES_OPENCODE_DB="$UM/no-oc.db" umpass
+BC="$(for b in 0 1 2 3 4; do printf '%s ' "$(usf "bad$b" '[.task, .project] | join("/")')"; done)"
+BL="$(cat "$PM/usage-metrics.log" 2>/dev/null | grep -c "$UM/bad" || true)"
+chmod 644 "$UM/bad4/.git"
+check "usage parse pair trees: malformed pair inputs are not a pair tree: a .git file without gitdir:, an empty orca-roles.pair, a marker naming a missing folder and an unreadable .git file give no task and project and log no line, while the good tree of the same run resolves; the pass exits 0 and only that tree is remembered" "$UPRC:$BC:$BL:$(jq -r '.pairs | length' "$PM/state.json" 2>/dev/null || true):$(jq -r '.pairs | keys | map(select(test("/bad"))) | length' "$PM/state.json" 2>/dev/null || true)" "0:main900/svcm / / / / :0:1:0"
 # --report: the latest line of each session, totals = sums by task, role and model, --task and --since filters, text and --json; and the same tokens and cost as bin/metrics.sh on one transcript
 umpk; W="/w/a/devgd-300/src"; RD="Read /k/prompts/programmer/dev.md and adopt that role."; RT="Read /k/prompts/programmer/tester.md and adopt that role."
 F6="$PD/r1.jsonl"; pu "$F6" 2026-10-27T10:00:00.000Z "$W" "$RD"; pa "$F6" 2026-10-27T10:00:01.000Z "$W" r1a claude-haiku-4-5 '{"input_tokens":1000000}' '[{"type":"text","text":"x"}]'
@@ -11294,6 +11641,245 @@ GXC="$(for n in 1 2 3 4; do gv "$n" orca_roles.context.max ''; done | tr '\n' ' 
 GM="$(jq -s '[.[].resourceMetrics[].scopeMetrics[].metrics[] | select(has("sum")) | .name as $n | .sum.dataPoints[] | {k: ($n + (.attributes | tostring)), v: .asDouble}] | group_by(.k) | map([.[].v] | . == sort) | all' "$UM"/fs/posts/*.json 2>/dev/null || true)"
 GS="$(usf g1 '[.tokens.input, .turns, .maxContext] | join("|")')"
 check "usage push floor: after a push, a transcript rewritten shorter makes the session recompute (the store shows the recomputed totals 420 input, 2 turns) but no pushed counter goes down (input 700, 5700, 5700, 5700; turns 2, 3, 3, 3; every sum series of every request non-decreasing), while the gauge of the context maximum follows the transcript (400, 5000, 400, 400)" "$GI|$GT|$GXC|$GM|$GS" "700 5700 5700 5700 |2 3 3 3 |400 5000 400 400 |true|420|2|400"
+# OpenCode sessions pushed live (a2): the Claude instruments and resource labels, marked opencode, with OpenCode's own cost per model
+umpk; freset; umcfg
+git -C "$UMR" worktree prune 2>/dev/null || true; PTB="$UM/ptree5"; git -C "$UMR" worktree add -q --detach "$PTB"; PTBGD="$(git -C "$PTB" rev-parse --absolute-git-dir)"; printf '%s\n' "$WGD" > "$PTBGD/orca-roles.pair"
+umwadd "$UMPA" "" svc devgd-292
+OCP="$UM/ocp.db"; rm -f "$OCP"
+cat > "$UM/ocp.py" <<'PYE'
+import json, sqlite3, sys, time
+db, cmd = sys.argv[1], sys.argv[2]
+c = sqlite3.connect(db)
+def t(off):
+    return int((time.time() + float(off)) * 1000)
+def msg(sid, seq, typ, off, d):
+    c.execute("insert or replace into session_message values (?,?,?,?,?)", (sid, seq, typ, t(off), d if isinstance(d, str) else json.dumps(d)))
+if cmd == "init":
+    c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+    c.execute("create table session_message (session_id text, seq integer, type text, time_created integer, data text)")
+elif cmd == "sess":
+    c.execute("insert or replace into session_v2 values (?,?,?,?)", (sys.argv[3], sys.argv[4], t(sys.argv[6]), t(sys.argv[5])))
+elif cmd == "upd":
+    c.execute("update session_v2 set time_updated = ? where id = ?", (t(sys.argv[4]), sys.argv[3]))
+elif cmd == "msg":
+    msg(sys.argv[3], int(sys.argv[4]), sys.argv[5], sys.argv[6], sys.argv[7])
+elif cmd == "turn":
+    sid, seq, off, prov, mid, cost, inp, out, rd, wr, tool = sys.argv[3:14]
+    if tool.startswith("@"):
+        content = [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": tool[1:]}}, "time": {"ran": 1000, "completed": 2500}}]
+    elif tool == "-":
+        content = []
+    else:
+        content = [{"type": "tool", "name": tool, "state": {"status": "completed", "input": {"command": "ls"}}, "time": {"ran": 1000, "completed": 1500}}]
+    d = {"model": {"id": mid, "providerID": prov}, "tokens": {"input": int(inp), "output": int(out), "cache": {"read": int(rd), "write": int(wr)}}, "content": content}
+    if cost != "-":
+        d["cost"] = json.loads(cost)
+    msg(sid, int(seq), "assistant", off, d)
+elif cmd == "del":
+    c.execute("delete from session_message where session_id = ?", (sys.argv[3],))
+    c.execute("delete from session_v2 where id = ?", (sys.argv[3],))
+elif cmd == "rmmsg":
+    c.execute("delete from session_message where session_id = ? and seq = ?", (sys.argv[3], int(sys.argv[4])))
+c.commit(); c.close()
+PYE
+oc() { python3 -I "$UM/ocp.py" "$OCP" "$@"; }
+oc init
+ocdev="ses_orca_dev_1794599001"; octst="ses_orca_tester-2_1794599002"; ocres="ses_orca_researcher_1794599003"; occhk="ses_orca_check_1794599004"
+oc sess "$ocdev" "$PTB" -40 -200; oc msg "$ocdev" 1 user -200 '{"text":"Your task ID is: task_beef0001"}'
+oc turn "$ocdev" 2 -150 openai gpt-5 0.01 1000 100 200 50 bash
+oc turn "$ocdev" 3 -60 openai gpt-5 0.02 2000 200 400 100 -
+oc turn "$ocdev" 4 -40 anthropic claude-haiku-4-5 0.04 500 50 0 0 -
+oc turn "$ocdev" 5 -50 openai gpt-5 - 0 0 0 0 '@orca orchestration send --from t --type worker_done --subject REJECTED --task-id task_beef0001'
+oc sess "$octst" /w/a/devgd-300 -30 -100; oc msg "$octst" 1 user -100 '{"text":"hi"}'; oc turn "$octst" 2 -30 openai gpt-5 0.005 10 1 0 0 -
+oc sess "$ocres" /unmapped/x -25 -90; oc msg "$ocres" 1 user -90 '{"text":"hi"}'; oc turn "$ocres" 2 -25 openai gpt-5 0.001 10 1 0 0 -
+oc sess "$occhk" /w/a/devgd-300 -20 -80; oc msg "$occhk" 1 user -80 '{"text":"hi"}'; oc turn "$occhk" 2 -20 openai gpt-5 '"9"' 10 1 0 0 -
+ps1 mixc 400 300
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass
+ocattr() { pbody "$1" '.resourceMetrics[] | select(any(.resource.attributes[]; .key == "session.id" and .value.stringValue == "'"$2"'")) | [.resource.attributes[] | "\(.key)=\(.value.stringValue)"] | sort | join(",")'; }
+ocmet() { pbody "$1" '.resourceMetrics[] | select(any(.resource.attributes[]; .key == "session.id" and .value.stringValue == "'"$2"'")) | .scopeMetrics[0].metrics[] | '"$3"; }
+OCA1="$(ocattr 1 "$ocdev")"; OCA2="$(ocattr 1 "$octst")"; OCA3="$(ocattr 1 "$ocres")"; OCA4="$(ocattr 1 "$occhk")"
+OCA5="$(ocattr 1 mixc)"
+OCROLE="$(pbody 1 '[.resourceMetrics[] | select(any(.resource.attributes[]; .key == "session.id" and (.value.stringValue | startswith("ses_orca_")))) | ([.resource.attributes[] | select(.key == "session.id") | .value.stringValue][0] | split("_")[2]) + "=" + ([.resource.attributes[] | select(.key == "orca_roles.role") | .value.stringValue][0])] | sort | join(" ")')"
+OCINS="$(ocmet 1 "$ocdev" '"\(.name):\(.unit):\(if has("sum") then "sum" else "gauge" end)"' | sort | tr '\n' ',')"
+OCTOK="$(pbody 1 '.resourceMetrics[] | select(any(.resource.attributes[]; .key == "session.id" and .value.stringValue == "'"$ocdev"'")) | .scopeMetrics[0].metrics[] | select(.name == "claude_code.token.usage") | .sum.dataPoints[] | select(any(.attributes[]; .key == "type" and .value.stringValue == "input") and any(.attributes[]; .key == "model" and .value.stringValue == "openai/gpt-5")) | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"')"
+OCLBL="$(pbody 1 '[.resourceMetrics[] | select(any(.resource.attributes[]; .key == "orca_roles.agent")) | select(any(.resource.attributes[]; .key == "service.version" and .value.stringValue == "opencode") | not)] | length'):$(pbody 1 '[.resourceMetrics[] | select(any(.resource.attributes[]; .key == "session.id" and .value.stringValue == "mixc")) | select(any(.resource.attributes[]; .key == "orca_roles.agent"))] | length'):$(pbody 1 '.resourceMetrics | length')"
+OCROW="$(usf "$ocdev" '[.orca_roles_role, .costState, .models["openai/gpt-5"].cost, (.models["openai/gpt-5"] | has("ocCost")), has("ocCost"), has("ocPos"), (.models | [.[] | keys[] | select(test("^oc"))] | length)] | join("/")'):$(usf "$octst" .orca_roles_role)"
+check "usage push OpenCode: each held OpenCode session is one ResourceMetrics with service.name=claude-code, service.version=opencode, session.id, task (the pair tree's owner task too), orca_roles.role with one trailing -<digits> dropped (the store keeps tester-2) and orca_roles.agent=opencode, and none of project, job, instance or session_id; its instruments, units and kinds are the Claude set without cache savings, its token points are per model and type (input of openai/gpt-5 = 3000) with effort medium and query_source main; every OpenCode resource carries both source labels and the Claude resource keeps exactly today's attributes and no orca_roles.agent; the store row keeps the unstripped role and no OpenCode cost or position in it" "$(fposts):$OCA1|$OCA2|$OCA3|$OCA4|$OCA5|$OCROLE|$OCINS|$OCTOK|$OCLBL|$OCROW" "1:orca_roles.agent=opencode,orca_roles.role=dev,service.name=claude-code,service.version=opencode,session.id=$ocdev,task=devgd-292|orca_roles.agent=opencode,orca_roles.role=tester,service.name=claude-code,service.version=opencode,session.id=$octst,task=devgd-292|orca_roles.agent=opencode,orca_roles.role=researcher,service.name=claude-code,service.version=opencode,session.id=$ocres|orca_roles.agent=opencode,orca_roles.role=check,service.name=claude-code,service.version=opencode,session.id=$occhk,task=devgd-292|orca_roles.role=dev,service.name=claude-code,service.version=2.1.311,session.id=mixc,task=devgd-292|check=check dev=dev researcher=researcher tester-2=tester|claude_code.cost.usage:USD:sum,claude_code.session.count::sum,claude_code.token.usage:tokens:sum,orca_roles.api.errors::sum,orca_roles.commit.lines::sum,orca_roles.commits::sum,orca_roles.compactions::sum,orca_roles.context.max:tokens:gauge,orca_roles.cost.by_type:USD:sum,orca_roles.lines::sum,orca_roles.model.changes::sum,orca_roles.task.duration:s:sum,orca_roles.thinking:tokens:sum,orca_roles.tool.calls::sum,orca_roles.tool.duration:s:sum,orca_roles.tool.errors::sum,orca_roles.turns::sum,orca_roles.user.messages::sum,orca_roles.verdicts::sum,|input/openai/gpt-5/medium/main=3000|0:0:5|dev/0.07/0/false/false/false/0:tester-2"
+OCC1="$(ocmet 1 "$ocdev" 'select(.name == "claude_code.cost.usage") | .sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble * 1000000 | round)"' | sort | tr '\n' ' ')"
+OCC2="$(ocmet 1 "$ocdev" 'select(.name == "orca_roles.cost.by_type") | .sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble * 1000000 | round)"' | sort | tr '\n' ' ')"
+OCC3="$(ocmet 1 "$ocdev" 'select(.name == "claude_code.cost.usage") | [.sum.dataPoints[].asDouble] | add * 1000000 | round'):$(usf "$ocdev" '.costState * 1000000 | round'):$(ocmet 1 "$ocdev" 'select(.name == "orca_roles.cache.savings") | 1' | wc -l | tr -d ' ')"
+OCC4="$(pbody 1 '.resourceMetrics[] | select(any(.resource.attributes[]; .key == "session.id" and .value.stringValue == "'"$occhk"'")) | [.scopeMetrics[0].metrics[] | select(.name == "claude_code.cost.usage") | .sum.dataPoints[].asDouble] | add // 0'):$(usf "$occhk" '(.costState // "null")'):$(usf "$occhk" '.cost')"
+OCC5="$(ocmet 1 "$ocdev" 'select(.name == "orca_roles.cost.by_type") | ([.sum.dataPoints[].attributes[] | select(.key == "type") | .value.stringValue] | unique | join(","))')"
+check "usage push OpenCode cost: claude_code.cost.usage is OpenCode's own cost per model (openai/gpt-5 0.03, anthropic/claude-haiku-4-5 0.04) and the model points add up to the store row's costState (1e-6); orca_roles.cost.by_type has one unsplit point per model and no other type, and no cache savings point or instrument exists; a message whose cost is the string 9 adds nothing (cost 0, no estimate)" "$OCC1|$OCC2|$OCC3|$OCC4|$OCC5" "anthropic/claude-haiku-4-5/medium/main=40000 openai/gpt-5/medium/main=30000 |unsplit/anthropic/claude-haiku-4-5=40000 unsplit/openai/gpt-5=30000 |70000:70000:0|0:null:0|unsplit"
+# OpenCode push rules: changed sessions only, history, a refused POST, a lower re-read
+umpk; freset; umcfg; OCP="$UM/ocp8.db"; rm -f "$OCP"; oc() { python3 -I "$UM/ocp.py" "$OCP" "$@"; }; oc init
+oc8a="ses_orca_dev_1794599011"; oc8h="ses_orca_dev_1794599012"
+oc sess "$oc8a" /w/a/devgd-300 -150 -300; oc msg "$oc8a" 1 user -300 '{"text":"go"}'; oc turn "$oc8a" 2 -150 openai gpt-5 0.01 100 1 0 0 -
+oc sess "$oc8h" /w/a/devgd-300 -1000 -1100; oc msg "$oc8h" 1 user -1100 '{"text":"go"}'; oc turn "$oc8h" 2 -1000 openai gpt-5 0.01 10 1 0 0 -
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR1="$(fposts)"
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR2="$(fposts)"
+oc turn "$oc8a" 3 -5 openai gpt-5 0.01 200 1 0 0 -; oc upd "$oc8a" -5
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR3="$(fposts)"
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR4="$(fposts):$(jq -r --arg s "$oc8h" '.ocSessions | has($s)' "$PM/state.json")"
+oc turn "$oc8h" 3 -10 openai gpt-5 0.01 20 2 0 0 -; oc upd "$oc8h" -10
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR5="$(fposts):$(ocmet "$(fposts)" "$oc8h" 'select(.name == "claude_code.token.usage") | .sum.dataPoints[] | select(any(.attributes[]; .key == "type" and .value.stringValue == "input")) | .asDouble')"
+fcfg '{"post_status":500}'; oc turn "$oc8a" 4 -3 openai gpt-5 0.01 50 3 0 0 -; oc upd "$oc8a" -3
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR6="$(fposts):$(cat "$PM/usage-metrics.log" 2>/dev/null | grep -c 'push refused: HTTP 500' || true)"
+fcfg '{}'
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR7="$(fposts)"
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCR8="$(fposts)"
+fcfg '{}'
+OCR9="$(ocmet "$OCR7" "$oc8a" 'select(.name == "claude_code.token.usage") | .sum.dataPoints[] | select(any(.attributes[]; .key == "type" and .value.stringValue == "input")) | .asDouble')"
+oc rmmsg "$oc8a" 4; oc upd "$oc8a" -2
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass
+OCR10="$(fposts):$(ocmet "$(fposts)" "$oc8a" 'select(.name == "claude_code.token.usage") | .sum.dataPoints[] | select(any(.attributes[]; .key == "type" and .value.stringValue == "input")) | .asDouble'):$(usf "$oc8a" '.tokens.input')"
+check "usage push OpenCode rules: the first pass pushes a changed session, an idle pass sends nothing, a new message (a new time_updated) pushes once more with the new totals; a never-pushed session older than 900 s is history (no push, not held) and its next message pushes its full totals; an HTTP 500 is logged as push refused: HTTP 500 and the next pass pushes it without a new message, a third sends nothing; a later read with lower totals pushes the earlier values (the store shows the recomputed 300)" "$OCR1|$OCR2|$OCR3|$OCR4|$OCR5|$OCR6|$OCR7|$OCR8|$OCR9|$OCR10" "1|1|2|2:false|3:30|4:1|5|5|350|6:350:300"
+# OpenCode push never reads Prometheus for its own sessions, and Prometheus errors or the remote rule do not hold it back
+umpk; freset; umcfg; OCP="$UM/ocp4.db"; rm -f "$OCP"; oc() { python3 -I "$UM/ocp.py" "$OCP" "$@"; }; oc init
+oc4="ses_orca_dev_1794599021"
+oc sess "$oc4" /w/a/devgd-300 -40 -60; oc msg "$oc4" 1 user -60 '{"text":"go"}'; oc turn "$oc4" 2 -40 openai gpt-5 0.01 100 1 0 0 -
+fcfg '{"series_status":500,"const_status":500}'
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCF1="$(fposts):$(grep -c 'GET .*ses_orca_' "$UM/fs/req.log" 2>/dev/null || true)"
+oc turn "$oc4" 3 -3 openai gpt-5 0.01 50 1 0 0 -; oc upd "$oc4" -3; umcfg 127.0.0.1 0.0.0.0 false
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCF2="$(fposts):$(grep -c 'GET .*ses_orca_' "$UM/fs/req.log" 2>/dev/null || true)"
+check "usage push OpenCode: a session is pushed although Prometheus answers errors, and although prometheusUrl is not on this machine without allowRemote; no request asks Prometheus for a series or a query naming its ses_orca_ id" "$OCF1|$OCF2" "1:0|2:0"
+# the held sessions of state.json: ocSessions holds a session only while it is pending
+umpk; freset; umcfg; OCP="$UM/ocp10.db"; rm -f "$OCP"; oc() { python3 -I "$UM/ocp.py" "$OCP" "$@"; }; oc init
+ochas() { jq -r --arg s "$1" '.ocSessions | has($s)' "$PM/state.json" 2>/dev/null || true; }
+oc10="ses_orca_dev_1794599031"; oc11="ses_orca_dev_1794599032"
+oc sess "$oc10" /w/a/devgd-300 -40 -60; oc msg "$oc10" 1 user -60 '{"text":"go"}'; oc turn "$oc10" 2 -40 openai gpt-5 0.01 100 1 0 0 -
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCH1="$(ochas "$oc10"):$(jq -r --arg s "$oc10" '.pushed[$s].pos | type' "$PM/state.json")"
+fcfg '{"post_status":500}'; oc turn "$oc10" 3 -3 openai gpt-5 0.01 50 1 0 0 -; oc upd "$oc10" -3
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCH2="$(ochas "$oc10"):$(fposts):$(cat "$PM/usage-metrics.log" 2>/dev/null | grep -c 'push refused: HTTP 500' || true)"
+fcfg '{"post_status":500}'
+ORCA_ROLES_OPENCODE_DB="$UM/none.db" umpass; OCH3="$(ochas "$oc10"):$(fposts)"
+jq '.settings.metrics.retentionDays = 1' "$PK/config.json" > "$PK/config.tmp" && mv "$PK/config.tmp" "$PK/config.json"
+jq --arg s "$oc10" '.ocSessions[$s].last = "2020-01-01T00:00:00.000Z"' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+ORCA_ROLES_OPENCODE_DB="$UM/none.db" umpass; OCH4="$(ochas "$oc10"):$(fposts)"
+oc sess "$oc11" /w/a/devgd-300 -40 -45; oc msg "$oc11" 1 user -45 '{"text":"go"}'; oc turn "$oc11" 2 -40 openai gpt-5 0.01 10 1 0 0 -
+fcfg '{"post_status":500}'
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCH5="$(ochas "$oc11"):$(fposts)"
+OCPOS="$(jq -r --arg s "$oc11" '.ocSessions[$s].ocPos' "$PM/state.json")"
+oc del "$oc11"; fcfg '{}'
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCH6="$(jq -r --arg s "$oc11" '.pushed[$s].pos' "$PM/state.json"):$(fposts)"
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCH7="$(ochas "$oc11"):$(fposts)"
+# a read that raises holds, stores and pushes nothing from that read (L1): two recent sessions, one healthy and, after it, one whose message query raises
+umpk; freset; umcfg; OCHP="$UM/ocr.db"; rm -f "$OCHP"
+ochr1="ses_orca_dev_1794599051"; ochr2="ses_orca_dev_1794599052"
+python3 -I - "$OCHP" "$ochr1" "$ochr2" <<'PYE'
+import json, sqlite3, sys, time
+db, one, two = sys.argv[1:4]
+now = int(time.time() * 1000)
+c = sqlite3.connect(db)
+c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+c.execute("create table msgs (session_id text, seq integer, type text, time_created integer, data text)")
+c.execute("create view session_message as select session_id, type, time_created, case when session_id = '%s' then abs(-9223372036854775808) else data end as data, seq from msgs" % two)
+for sid, off in ((one, -40), (two, -30)):
+    c.execute("insert into session_v2 values (?,?,?,?)", (sid, "/w/a/devgd-300", now + off * 1000, now + off * 1000))
+    c.execute("insert into msgs values (?,?,?,?,?)", (sid, 1, "user", now + off * 1000, json.dumps({"text": "go"})))
+    c.execute("insert into msgs values (?,?,?,?,?)", (sid, 2, "assistant", now + off * 1000, json.dumps({"model": {"id": "gpt-5", "providerID": "openai"}, "cost": 0.01, "tokens": {"input": 100, "output": 1}, "content": []})))
+c.commit()
+c.close()
+PYE
+ochl() { jq -r --arg k "$1" '(.[$k] // {}) | length' "$PM/state.json" 2>/dev/null || true; }
+ochrows() { if [ -z "$(usf "$ochr1" .session_id)$(usf "$ochr2" .session_id)" ]; then echo none; else echo row; fi; }
+ORCA_ROLES_OPENCODE_DB="$OCHP" umpass; OCH8="$(fposts):$(ochl ocSessions):$(ochl opencode):$(ochrows)"
+ORCA_ROLES_OPENCODE_DB="$OCHP" umpass; OCH8="$OCH8/$(fposts):$(ochl ocSessions)"
+python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("drop view session_message"); c.execute("alter table msgs rename to session_message"); c.commit(); c.close()' "$OCHP"
+ORCA_ROLES_OPENCODE_DB="$OCHP" umpass; OCH8="$OCH8/$(fposts):$(ochl ocSessions)"
+ORCA_ROLES_OPENCODE_DB="$OCHP" umpass; OCH8="$OCH8/$(fposts):$(ochl ocSessions)"
+check "usage push OpenCode held sessions: state.json's ocSessions is empty after a successful push (its pushed position is a number) and after history, keeps a session across a refused push and a missing OpenCode store, drops an entry whose last message is older than retentionDays, and pushes a session deleted from OpenCode's store before its refused push was retried with its last figures (pushed pos = ocPos, not null) and nothing after that; a pass whose OpenCode store read raises a sqlite error holds, stores and pushes nothing from that read (no POST, empty ocSessions and seen, no store row) on every failing pass, and the clean read that follows pushes each session once and lets it leave ocSessions" "$OCH1|$OCH2|$OCH3|$OCH4|$OCH5|$([ "$OCPOS" = "$(cut -d: -f1 <<< "$OCH6")" ] && echo same):$(cut -d: -f2 <<< "$OCH6")|$OCH7|$OCH8" "false:number|true:2:1|true:3|false:3|true:4|same:5|false:5|0:0:0:none/0:0/1:0/1:0"
+# the dashboard panels select the OpenCode series: the same selectors as for Claude, and the by-model panels list both sources' models
+umpk; freset; umcfg; OCP="$UM/ocsel.db"; rm -f "$OCP"; oc() { python3 -I "$UM/ocp.py" "$OCP" "$@"; }; oc init
+ocsel="ses_orca_dev_1794599041"
+oc sess "$ocsel" /w/a/devgd-300 -30 -35; oc msg "$ocsel" 1 user -35 '{"text":"go"}'; oc turn "$ocsel" 2 -30 openai gpt-5 0.01 1000 100 200 50 bash
+ps1 selc 400 300
+ORCA_ROLES_OPENCODE_DB="$OCP" umpass
+cat > "$UM/sel.py" <<'PYE'
+import json, re, sys
+db = json.load(open(sys.argv[1]))
+def name_of(m):
+    n = m["name"].replace(".", "_") + (("_" + m["unit"]) if m.get("unit") else "")
+    return n + ("_total" if "sum" in m else "")
+series = []
+for fn in sys.argv[2:]:
+    for rm in json.load(open(fn)).get("resourceMetrics", []):
+        rl = {a["key"].replace(".", "_"): a["value"].get("stringValue", "") for a in rm["resource"]["attributes"]}
+        for sm in rm.get("scopeMetrics", []):
+            for m in sm["metrics"]:
+                for dp in (m.get("sum") or m.get("gauge"))["dataPoints"]:
+                    lb = dict(rl)
+                    for a in dp.get("attributes", []):
+                        lb[a["key"].replace(".", "_")] = a["value"].get("stringValue", "")
+                    lb["__name__"] = name_of(m)
+                    series.append(lb)
+def matchers(body):
+    return re.findall(r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*"([^"]*)"', body)
+def matches(lb, name, ms):
+    if lb["__name__"] != name:
+        return False
+    for k, op, v in ms:
+        if op in ("=~", "!~"):
+            ok = re.fullmatch(v, lb.get(k, "")) is not None
+            if op == "!~":
+                ok = not ok
+        else:
+            ok = lb.get(k, "") == v
+            if op == "!=":
+                ok = not ok
+        if not ok:
+            return False
+    return True
+panels = (7, 27, 39, 40, 41, 42)
+exprs = []
+def walk(ps):
+    for p in ps:
+        if p.get("id") in panels:
+            for t in p.get("targets", []) or []:
+                if t.get("expr"):
+                    exprs.append((p["id"], t["expr"]))
+        walk(p.get("panels", []))
+walk(db.get("panels", []))
+ocs = [s for s in series if s.get("orca_roles_agent") == "opencode"]
+def audit(sub_task, sub_role):
+    total = bad = 0
+    for pid, ex in exprs:
+        for name, body in re.findall(r'([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]*)\}', ex):
+            total += 1
+            body = body.replace("$task", sub_task).replace("$orca_roles_role", sub_role)
+            if not any(matches(lb, name, matchers(body)) for lb in ocs):
+                bad += 1
+    return total, bad
+t1, b1 = audit(".*", ".*")
+t2, b2 = audit("devgd-292", "dev")
+models = {}
+for pid, ex in exprs:
+    if pid in (40, 42):
+        for name, body in re.findall(r'([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]*)\}', ex):
+            ms = matchers(body.replace("$task", ".*").replace("$orca_roles_role", ".*"))
+            for lb in series:
+                if matches(lb, name, ms):
+                    models.setdefault(pid, set()).add(lb.get("model", ""))
+bad = 0
+n = 0
+for s in series:
+    if s.get("session_id", "").startswith("ses_orca"):
+        n += 1
+        if s.get("service_version") != "opencode" or s.get("orca_roles_agent") != "opencode":
+            bad += 1
+    elif "orca_roles_agent" in s:
+        bad += 1
+print("%d:%d:%d:%d:%s:%s:%s:%d" % (t1, b1, t2, b2, ",".join(sorted(models.get(40, []))), ",".join(sorted(models.get(42, []))), "yes" if n else "none", bad))
+PYE
+OCSEL="$(python3 -I "$UM/sel.py" "$ROOT/grafana/orca-roles-usage.json" "$UM"/fs/posts/*.json)"
+check "usage push OpenCode dashboard: every metric selector of panels 7 (cost per role), 27 (turns per role), 39 (tokens by type per role), 40 (cost by model), 41 (cost against tokens per role and model, all four targets) and 42 (tokens by model) matches at least one series converted from the OpenCode push, with \$task and \$orca_roles_role set to All and to the session's own task and role (attribute dots become underscores); in a run that pushes a Claude and an OpenCode session, the series of panels 40 and 42 grouped by model list both the OpenCode model openai/gpt-5 and the Claude model claude-haiku-4-5; every converted OpenCode series (all instruments and points) carries service_version=opencode and orca_roles_agent=opencode and no Claude series carries orca_roles_agent" "$OCSEL" "11:0:11:0:claude-haiku-4-5,openai/gpt-5:claude-haiku-4-5,openai/gpt-5:yes:0"
+# the header docstring and README state what an OpenCode push is (C12)
+UMDOC="$(python3 -I -c 'import sys; print(open(sys.argv[1]).read().split("\"\"\"")[1])' "$ROOT/bin/usage_metrics.py")"
+umsay() { case "$1" in 0) echo no;; *) echo yes;; esac; }
+OCD1="$(for p in 'orca_roles.agent' 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'time_updated' 'no continuation' 'remembered'; do umsay "$(grep -ciF -- "$p" <<< "$UMDOC" || true)"; done | tr '\n' ':' | sed 's/:$//')"
+RMO="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
+OCD2="$(for p in 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'update time' 'no continuation' 'drops one trailing' 'remembered' 'orca_roles_agent="opencode"'; do umsay "$(grep -ciF -- "$p" <<< "$RMO" || true)"; done | tr '\n' ':' | sed 's/:$//')"
+check "usage docs OpenCode: the header docstring names the orca_roles.agent resource attribute and the orca_roles_agent source label, the unsplit by-type cost, OpenCode sessions, pair trees, their update time and the lack of continuation; the README's Usage metrics section tells the sources apart by orca_roles_agent (with a query example), lists unsplit in the cost_by_type types, states the update time and the lack of continuation, the role's trailing -<digits>, and covers OpenCode sessions, pair trees and the remembered owner" "$OCD1|$OCD2" "yes:yes:yes:yes:yes:yes:yes:yes|yes:yes:yes:yes:yes:yes:yes:yes:yes"
 # the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
 SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
 for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done

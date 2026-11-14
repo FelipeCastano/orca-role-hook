@@ -1,5 +1,5 @@
 {
- "source": "Claude Code 2.1.311 model catalog (pricing_tiers and models[].pricing)",
+ "source": "Claude Code 2.1.311 model catalog (pricing_tiers and models[].pricing); the claude-fable-5-2 row comes from the Claude Code 2.1.325 catalog",
  "version": "2.1.311",
  "unit": "USD per million tokens (webSearch: USD per request)",
  "note": "a model id in a transcript matches the longest id here that it starts with; usage.inference_geo \"us\" multiplies a message's cost by 1.1",
@@ -170,6 +170,14 @@
    "cacheWrite5m": 12.5,
    "cacheWrite1h": 20.0,
    "cacheRead": 0.25,
+   "webSearch": 0.01
+  },
+  "claude-fable-5-2": {
+   "input": 8.0,
+   "output": 40.0,
+   "cacheWrite5m": 10.0,
+   "cacheWrite1h": 16.0,
+   "cacheRead": 0.2,
    "webSearch": 0.01
   },
   "claude-mythos-5": {
