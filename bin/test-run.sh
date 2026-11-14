@@ -9,7 +9,7 @@
 # Log file: $ORCA_ROLES_TEST_LOG when set and not "off"; unset or empty: ${XDG_CACHE_HOME:-$HOME/.cache}/orca-roles/test-runs.jsonl;
 # "off": nothing is written. A file over 5 MB is moved to <file>.1 first. Needs jq for the record (without it the command still runs).
 # Environment assignments go before test-run.sh, not after --.
-# With --role tester, a vitest, jest, pytest or tests/smoke.sh call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer's.
+# With --role tester, a vitest, jest, pytest, tests/smoke.sh, npm test, go test, cargo test, make test, Maven (test, verify) or Gradle (test, check) call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer's.
 # The exit code is the command's; 2 is a usage error (nothing is run or logged).
 set -uo pipefail
 
@@ -116,26 +116,99 @@ if [ "$ROLE" = tester ]; then
   done
   RUN=""
   [ "$i" -lt "$N" ] && RUN="${ARGS[i]##*/}"
+  # a word that names a test, a pattern or a section; every runner below adds its own forms
+  sel() {
+    case "$1" in
+      -h|--help|--version|--list) return 0 ;;
+      -*) return 1 ;;
+    esac
+    case "$1" in *[!0-9]*) return 0 ;; esac
+    return 1
+  }
+  SEL=0 RLBL="$RUN" TESTRUN=0
   case "$RUN" in
     vitest|jest|pytest|py.test|smoke.sh)
-      i=$((i + 1))
+      TESTRUN=1; i=$((i + 1))
       if [ "$RUN" = vitest ] && [ "$i" -lt "$N" ]; then
         case "${ARGS[i]}" in run|related) i=$((i + 1)) ;; esac
       fi
-      SEL=0
+      while [ "$i" -lt "$N" ]; do
+        sel "${ARGS[i]}" && SEL=1
+        i=$((i + 1))
+      done ;;
+    npm)
+      W="$(arg $((i + 1)))"
+      if [ "$W" = test ] || [ "$W" = t ]; then
+        TESTRUN=1; RLBL="npm $W"; i=$((i + 2))
+      elif { [ "$W" = run ] || [ "$W" = run-script ]; } && [ "$(arg $((i + 2)))" = test ]; then
+        TESTRUN=1; RLBL="npm $W test"; i=$((i + 3))
+      fi
+      if [ "$TESTRUN" = 1 ]; then
+        while [ "$i" -lt "$N" ]; do
+          sel "${ARGS[i]}" && SEL=1
+          i=$((i + 1))
+        done
+      fi ;;
+    go)
+      if [ "$(arg $((i + 1)))" = test ]; then
+        TESTRUN=1; RLBL="go test"; i=$((i + 2))
+        while [ "$i" -lt "$N" ]; do
+          case "${ARGS[i]}" in
+            ./...|...|all) ;;
+            -run=?*|-bench=?*) SEL=1 ;;
+            *) sel "${ARGS[i]}" && SEL=1 ;;
+          esac
+          i=$((i + 1))
+        done
+      fi ;;
+    cargo)
+      if [ "$(arg $((i + 1)))" = test ]; then
+        TESTRUN=1; RLBL="cargo test"; i=$((i + 2))
+        while [ "$i" -lt "$N" ]; do
+          sel "${ARGS[i]}" && SEL=1
+          i=$((i + 1))
+        done
+      fi ;;
+    make)
+      MT=0 MSEL=0; i=$((i + 1))
       while [ "$i" -lt "$N" ]; do
         case "${ARGS[i]}" in
-          -h|--help|--version|--list) SEL=1 ;;
           -*) ;;
-          *) case "${ARGS[i]}" in *[!0-9]*) SEL=1 ;; esac ;;
+          test) MT=1 ;;
+          *) case "${ARGS[i]}" in *[!0-9]*) MSEL=1 ;; esac ;;
         esac
         i=$((i + 1))
       done
-      if [ "$SEL" = 0 ]; then
-        echo "test-run.sh: refused for the Tester: $RUN with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>. The full suite is the Code-Reviewer's." >&2
-        exit 2
-      fi ;;
+      if [ "$MT" = 1 ]; then TESTRUN=1; RLBL="make test"; SEL="$MSEL"; fi ;;
+    mvn|mvnw)
+      MGOAL="" MSEL=0; i=$((i + 1))
+      while [ "$i" -lt "$N" ]; do
+        case "${ARGS[i]}" in
+          -Dtest=?*|-pl=?*|--projects=?*) MSEL=1 ;;
+          -pl|--projects) [ -n "$(arg $((i + 1)))" ] && MSEL=1 ;;
+          -*) ;;
+          test|verify) [ -z "$MGOAL" ] && MGOAL="${ARGS[i]}" ;;
+        esac
+        i=$((i + 1))
+      done
+      if [ -n "$MGOAL" ]; then TESTRUN=1; RLBL="$RUN $MGOAL"; SEL="$MSEL"; fi ;;
+    gradle|gradlew)
+      GTASK="" GSEL=0; i=$((i + 1))
+      while [ "$i" -lt "$N" ]; do
+        case "${ARGS[i]}" in
+          --tests=?*) GSEL=1 ;;
+          --tests) [ -n "$(arg $((i + 1)))" ] && GSEL=1 ;;
+          -*) ;;
+          test|check) [ -z "$GTASK" ] && GTASK="${ARGS[i]}" ;;
+        esac
+        i=$((i + 1))
+      done
+      if [ -n "$GTASK" ]; then TESTRUN=1; RLBL="$RUN $GTASK"; SEL="$GSEL"; fi ;;
   esac
+  if [ "$TESTRUN" = 1 ] && [ "$SEL" = 0 ]; then
+    echo "test-run.sh: refused for the Tester: $RLBL with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>, npm test -- <test files>, go test -run <pattern> <packages>, cargo test <filter>, mvn test -Dtest=<classes>, gradle test --tests <pattern>. The full suite is the Code-Reviewer's." >&2
+    exit 2
+  fi
 fi
 
 CMD="$*"

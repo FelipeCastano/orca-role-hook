@@ -188,8 +188,8 @@ wt_cleanup() {  # closes every tab of the throwaway worktree and removes it
 # ---------- checks shared by mac.sh and wsl.sh ----------
 c_smoke_combo() {  # sections that failed together once (#29) must pass together
   local id=$1 out rc
-  out="$(SMOKE_JOBS=1 "$LIVE_ROOT/tests/smoke.sh" launch restart reopen wake worktree-select 2>&1)"; rc=$?
-  if [ $rc = 0 ] && printf '%s' "$out" | grep -q 'ALL OK'; then ok "$id" "smoke launch+restart+reopen+wake+worktree-select together: ALL OK"
+  out="$(SMOKE_JOBS=1 "$LIVE_ROOT/tests/smoke.sh" launch launch-mode launch-add restart reopen wake worktree-select 2>&1)"; rc=$?
+  if [ $rc = 0 ] && printf '%s' "$out" | grep -q 'ALL OK'; then ok "$id" "smoke launch+launch-mode+launch-add+restart+reopen+wake+worktree-select together: ALL OK"
   else fail "$id" "smoke sections together: rc=$rc"; attach "$id smoke" "$(printf '%s\n' "$out" | grep -E 'FAIL|aborted' | head -40)"; fi
 }
 c_upgrade_no_roles() {  # upgrade_config on a user config without "roles" (#37: "null has no keys")
@@ -476,7 +476,7 @@ live_main() {
   if [ -z "$phase" ]; then
     project_setup   # the throwaway project: X7 runs its E2E flow there
     echo "== Part 1: checks without Orca"
-    echo "X1: running smoke sections launch restart reopen wake worktree-select together (several minutes)..."
+    echo "X1: running smoke sections launch launch-mode launch-add restart reopen wake worktree-select together (several minutes)..."
     run_check X1 c_smoke_combo
     run_check X2 c_upgrade_no_roles
     run_check X3 c_scholar

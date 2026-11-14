@@ -15,7 +15,7 @@ On WSL do the same steps; where a step differs, it says so. The kit's shim is `~
 
 | Id | Do | Look at | Expected |
 |---|---|---|---|
-| X1 | `tests/smoke.sh launch restart reopen wake worktree-select` | the last line | `ALL OK` |
+| X1 | `tests/smoke.sh launch launch-mode launch-add restart reopen wake worktree-select` | the last line | `ALL OK` |
 | X2 | `bash -c '. bin/lib.sh; upgrade_config config.default.json <(echo "{}") .'` | the output | The upgraded config, with every role of `config.default.json` in its order (no error) |
 | X3 | `~/.orca-roles/bin/scholar.sh search "transformer" --source arxiv --limit 2`, the same with `"attention is all you need"`, then `--source openalex` and `--source s2`; `scholar.sh show 10.1038/nature14539`; `scholar.sh bibtex 10.48550/arXiv.1706.03762` | results per source | Rows for each source, also for the several-word arXiv search; Semantic Scholar may fail without `S2_API_KEY` |
 | X3 | In a scratch git repo: `scholar.sh bibtex arxiv:1706.03762 --add`, `scholar.sh verify`, `scholar.sh pdf arxiv:1706.03762` | the three outputs | The key added, the entry `ok`, `downloaded <key> <file>` |

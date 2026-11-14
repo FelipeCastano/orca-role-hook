@@ -54,13 +54,18 @@ a_codex_mcp() {  # Codex gets the role's MCP servers as -c overrides, without to
   [ "$HAS_CODEX" = 1 ] || { skip "$id" "codex is not installed"; return; }
   h="$(env_of DEV)"; pid="$(pid_of_handle "$h")" || { fail "$id" "no Codex process for the Dev"; return; }
   ps -o args= -p "$pid" | grep -q 'mcp_servers.live-echo.command' && ok "$id.args" "the Dev's codex got mcp_servers.live-echo as a -c override" || fail "$id.args" "no live-echo override in the Dev's codex arguments"
-  orca terminal send --terminal "$h" --text "/mcp" --enter --json >/dev/null 2>&1
-  wait_screen "$h" 'live-echo' 20 && ok "$id.mcp" "codex /mcp lists live-echo" || fail "$id.mcp" "codex /mcp does not list live-echo"
+  if [ ! -f "$HOME/.codex/auth.json" ]; then
+    skip "$id.mcp" "codex is not signed in (no ~/.codex/auth.json): it shows its login screen, not /mcp"
+  else
+    orca terminal send --terminal "$h" --text "/mcp" --enter --json >/dev/null 2>&1
+    wait_screen "$h" 'live-echo' 20 && ok "$id.mcp" "codex /mcp lists live-echo" || fail "$id.mcp" "codex /mcp does not list live-echo"
+  fi
   grep -q 'live-echo' "$HOME/.codex/config.toml" 2>/dev/null && fail "$id.config" "the codex config.toml was changed" || ok "$id.config" "the codex config.toml was not touched"
 }
 a_codex_new() {  # after /new Codex keeps its developer instructions: it still knows its role (#14)
   local id=$1 h
   [ "$HAS_CODEX" = 1 ] || { skip "$id" "codex is not installed"; return; }
+  if [ ! -f "$HOME/.codex/auth.json" ]; then skip "$id" "codex is not signed in (no ~/.codex/auth.json): it shows its login screen"; return; fi
   h="$(env_of DEV)"
   orca terminal wait --terminal "$h" --for tui-idle --timeout-ms 120000 --json >/dev/null 2>&1
   orca terminal send --terminal "$h" --text "/new" --enter --json >/dev/null 2>&1; sleep 5
