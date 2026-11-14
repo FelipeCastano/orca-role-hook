@@ -3957,10 +3957,10 @@ sec_research_defaults() {
 D="$ROOT/config.default.json"
 check "research-defaults: the file is valid JSON and check_config is silent" "$(jq empty "$D" && echo valid):$(check_config "$D")" "valid:"
 check "research-defaults: role order, the old seven first" "$(jq -r '.roles | keys_unsorted | join(" ")' "$D")" "local-coordinator planner researcher dev tester plan-reviewer code-reviewer verifier e2e-tester deployer sota methodology tech-verifier writer evidence rigor style dev-opencode cross-dev"
-check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model|academic-research|writing|claude-sonnet-5-5|true "
-check "research-defaults: researcher joins the mode in experiment and writing, opens per task with maxInstances 3, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"per-task","modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","maxInstances":3,"mcp":["context7"]}'
+check "research-defaults: each new role's modes, phases and model, with exactly those fields" "$(jq -r '.roles | to_entries[] | select(.key | IN("sota","methodology","tech-verifier","writer","evidence","rigor","style")) | "\(.key)=\(.value | [(keys_unsorted | join(",")), (.modes | join(",")), (.phases | join(",")), .model, .enabled] | join("|"))"' "$D" | tr '\n' ' ')" "sota=title,enabled,modes,phases,model,advisor|academic-research|experiment|claude-haiku-5-5|true methodology=title,enabled,modes,phases,model,advisor|academic-research|experiment|claude-opus-5-5|true tech-verifier=title,enabled,modes,phases,model,advisor|academic-research|experiment|claude-opus-5-5|true writer=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-sonnet-5-5|true evidence=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-sonnet-5-5|true rigor=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-opus-5-5|true style=title,enabled,modes,phases,model,advisor|academic-research|writing|claude-sonnet-5-5|true "
+check "research-defaults: researcher joins the mode in experiment and writing, opens per task with maxInstances 3, nothing else changed" "$(jq -c '.roles.researcher' "$D")" '{"title":"Researcher","enabled":true,"open":"per-task","modes":["programmer","academic-research","quick"],"phases":["experiment","writing"],"model":"claude-sonnet-5-5","advisor":{"model":"opus"},"maxInstances":3,"mcp":["context7"]}'
 git -C "$ROOT" show HEAD:config.default.json > "$TMP/awd-old.json"
-check "research-defaults: dev and tester join academic-research in experiment only and open per batch with maxInstances 3, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
+check "research-defaults: dev and tester join academic-research in experiment only and open per batch with maxInstances 3, field order kept, nothing else changed" "$(jq -c '[.roles.dev, (.roles.tester | del(.env))]' "$D"):$(jq -c '.roles.tester.env' "$D" "$TMP/awd-old.json" | uniq | wc -l | tr -d ' ')" '[{"title":"Dev","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","advisor":{"model":"opus"},"mcp":["context7"]},{"title":"Tester","enabled":true,"open":"per-batch","maxInstances":3,"modes":["programmer","academic-research","quick"],"phases":["experiment"],"model":"claude-sonnet-5-5","advisor":{"model":"opus"},"nice":10,"params":{"maxNewTests":10,"maxWorkers":2,"timeoutMinutes":10,"maxSelfMutants":3,"baseCheck":true}}]:1'
 awt() { for m in programmer pr-reviewer; do jq -c --arg m "$m" '.settings.mode=$m' "$1" > "$TMP/awd-t.json"; enabled_roles "$TMP/awd-t.json" | while read -r r; do echo "$m/$r=$(jq -r --arg r "$r" '"\(.roles[$r].model // "-"),\(.roles[$r].open // .defaults.open // "-")"' "$TMP/awd-t.json")"; done; done | tr '\n' ' '; }
 check "research-defaults: the programmer and pr-reviewer teams (roles, order, models, when each opens) are the expected ones (the Auditor split into Plan-Reviewer, Code-Reviewer and Verifier; pr-reviewer opens the local coordinator, no Planner)" "$(awt "$D")" "programmer/local-coordinator=claude-sonnet-5-5,start programmer/planner=claude-opus-5-5,start programmer/researcher=claude-sonnet-5-5,per-task programmer/dev=claude-sonnet-5-5,per-batch programmer/tester=claude-sonnet-5-5,per-batch programmer/plan-reviewer=claude-opus-5-5,first-use programmer/code-reviewer=claude-opus-5-5,first-use programmer/e2e-tester=claude-opus-5-5,per-batch programmer/deployer=claude-sonnet-5-5,first-use pr-reviewer/local-coordinator=claude-sonnet-5-5,start pr-reviewer/verifier=claude-opus-5-5,first-use "
 check "research-defaults: the programmer team is the local coordinator and the eight old roles" "$(awt "$D" | tr ' ' '\n' | grep -c '^programmer/'):$(awt "$D" | grep -o 'programmer/[a-z0-9-]*' | tr '\n' ' ')" "9:programmer/local-coordinator programmer/planner programmer/researcher programmer/dev programmer/tester programmer/plan-reviewer programmer/code-reviewer programmer/e2e-tester programmer/deployer "
@@ -4819,6 +4819,199 @@ for AUROLE in plan-reviewer code-reviewer verifier; do
   AUR="$AUR$(AGN "$AUA" "--disallowedTools Agent Task ${DIAL}--settings"):$(AGN "$AUO" "--disallowedTools Agent Task ${DIAL}--disallowedTools WebFetch --settings"):$(AGN "$AUP" "--disallowedTools Agent Task --disallowedTools AskUserQuestion --settings"):$(AGN "$AUS" "ExitWorktree Agent Task --disallowedTools Agent Task ${DIAL}"):$(AGN "$AUX" 'disallowedTools'):$(AGN "$AUCU" 'disallowedTools')|"
 done; rmdir "$SPD" 2>/dev/null || true
 check "reviewers argv (plan-reviewer, code-reviewer, verifier): the kit's --disallowedTools Agent Task comes before the dialog deny (and the role's own list, which only adds), also in permissionMode plan and after the superpowers group; a codex or custom reviewer gets no --disallowedTools; no other role gets it (the Planner's own list is the superpowers one)" "$AUR$(AGN "$(agj "$AUC" dev)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" tester)" '--disallowedTools Agent Task'):$(AGN "$(agj "$AUC" planner)" '--disallowedTools Agent Task')" "1:1:1:1:0:0|1:1:1:1:0:0|1:1:1:1:0:0|0:0:0"
+# advisor: resolution (advisor_of), check_config, the launch in agent.sh, the non-Claude agents and the Claude Code version guard (a1; C1-C6, C8, C12)
+AV="$TMP/adv"; rm -rf "$AV"; mkdir -p "$AV"
+A200="$(printf 'a%.0s' $(seq 1 200))"; A201="$(printf 'a%.0s' $(seq 1 201))"
+avm() { [ "$1" = "$2" ] && AV1="${AV1}." || AV1="${AV1}[$3: expected $2, got $1]"; }
+advc() { printf '%s' "$1" > "$AV/c.json"; if AVO="$(advisor_of "$AV/c.json" "${2:-r}" 2>&1)"; then AVC=0; else AVC=$?; fi; printf '%s/%s' "$AVO" "$AVC"; }
+avq() { local g; g="$(advc "$1" "$2")"; avm "$g" "$3" "$4"; }
+AV1=""
+avq '{"roles":{"r":{"advisor":{"model":"fable"}}}}' r fable/0 fable
+avq '{"roles":{"r":{"advisor":{"model":"OFF"}}}}' r off/0 off-upper
+avq '{"roles":{"r":{"advisor":{"model":"Auto"}}}}' r auto/0 auto-mixed
+avq '{"roles":{"r":{"advisor":{"model":"OfF"}}}}' r off/0 off-mixed
+avq '{"roles":{"r":{"advisor":{"model":"claude-opus-5-5[1m]"}}}}' r 'claude-opus-5-5[1m]/0' model-brackets
+avq '{"roles":{"r":{"advisor":{"model":"us.anthropic.claude-fable-5-2"}}}}' r 'us.anthropic.claude-fable-5-2/0' model-dotted
+avq '{"roles":{"r":{"advisor":{"model":"a_b-c.d:e/f@g[1]"}}}}' r 'a_b-c.d:e/f@g[1]/0' model-charset
+avq '{"defaults":{"advisor":{"model":"opus"}},"roles":{"r":{}}}' r opus/0 defaults
+avq '{"defaults":{"advisor":{"model":"off"}},"roles":{"r":{"advisor":{}}}}' r off/0 empty-level
+avq '{"roles":{"r":{"advisor":{"model":null}}}}' r auto/0 null-model
+avq '{"roles":{"r":{}}}' r auto/0 none
+avq '{"roles":{"r":{}}}' zz auto/0 missing-role
+avq '{"defaults":{"advisor":{"model":"opus"}},"roles":{"r":{}}}' zz opus/0 missing-role-defaults
+avq "{\"roles\":{\"r\":{\"advisor\":{\"model\":\"$A200\"}}}}" r "$A200/0" len-200
+avq '{"roles":{"r":{"title":"R","advisor":{"model":"opus"}}},"defaults":{"advisor":{"model":"fable"}}}' r opus/0 role-over-defaults
+avq '{"defaults":{"advisor":{"model":"off"}}}' r off/0 no-roles
+avq '{"roles":{"r":{"advisor":{"model":""}}}}' r /1 empty
+avq '{"roles":{"r":{"advisor":{"model":"-p"}}}}' r /1 dash-option
+avq '{"roles":{"r":{"advisor":{"model":"--dangerously-skip-permissions"}}}}' r /1 long-option
+avq '{"roles":{"r":{"advisor":{"model":"fa ble"}}}}' r /1 space
+avq '{"roles":{"r":{"advisor":{"model":"fable\n"}}}}' r /1 trailing-newline
+avq '{"roles":{"r":{"advisor":{"model":"fa\nble"}}}}' r /1 inner-newline
+avq '{"roles":{"r":{"advisor":{"model":5}}}}' r /1 number
+avq '{"roles":{"r":{"advisor":{"model":true}}}}' r /1 boolean
+avq '{"roles":{"r":{"advisor":{"model":["fable"]}}}}' r /1 array
+avq '{"roles":{"r":{"advisor":{"model":{"model":"fable"}}}}}' r /1 object
+avq '{"roles":{"r":{"advisor":"fable"}}}' r /1 level-string
+avq '{"roles":{"r":{"advisor":{"model":"fable","x":1}}}}' r /1 extra-key
+avq "{\"roles\":{\"r\":{\"advisor\":{\"model\":\"$A201\"}}}}" r /1 len-201
+avq '{"roles":{"r":{"advisor":{"model":""}}},"defaults":{"advisor":{"model":"opus"}}}' r /1 empty-no-fallback
+avq '{"roles":{"r":{"advisor":{"model":"-p"}}},"defaults":{"advisor":{"model":"fable"}}}' r /1 invalid-no-fallback
+avq '{"roles":{"r":{"advisor":null}}}' r /1 null-level
+avq '{"roles":{"r":{"advisor":{"model":null}}},"defaults":{"advisor":{"model":5}}}' r /1 defaults-number
+avq '{"defaults":{"advisor":"off"},"roles":{"r":{}}}' r /1 defaults-string
+avq '{"roles":{"r":{"advisor":{"model":"fable "}}}}' r /1 trailing-space
+avq '{"roles":{"r":{"advisor":{"model":".fable"}}}}' r /1 leading-dot
+check "advisor_of: a model string and auto/off in any case resolve from the role, else from defaults, else auto, an empty level or a null model falls through and an unknown role gets auto or the defaults value, 200 characters pass; an empty, option-like, spaced, newline or over-long value, a non-string, an object with other keys and a level that is not an object fail with no output, and an invalid role level does not fall back to defaults (a1, C4)" "$AV1" "$(printf '.%.0s' $(seq 1 36))"
+avj() { jq -c "$1" "$ROOT/config.default.json" > "$AV/cc.json"; check_config "$AV/cc.json" | tr '\n' '|'; }
+avcm() { local g; g="$(avj "$1")"; avm "$g" "$2" "$3"; }
+ER='ERROR: role dev: advisor must be {"model": "<model>|auto|off"}|'; ERD='ERROR: defaults.advisor must be {"model": "<model>|auto|off"}|'
+AV1=""
+avcm '.roles.dev.advisor = "fable"' "$ER" level-string
+avcm '.roles.dev.advisor = {"model":"-p"}' "$ER" value
+avcm '.roles.dev.advisor = {"model":5}' "$ER" number
+avcm '.roles.dev.advisor = {"model":"fable","x":1}' "$ER" extra-key
+avcm '.roles.dev.advisor = {"model":("a"*201)}' "$ER" len-201
+avcm '.roles.dev.advisor = null' "$ER" null-level
+avcm '.roles.dev.advisor = {"model":"fable\n"}' "$ER" trailing-newline
+avcm '.roles.dev.advisor = {"model":"fa\nble"}' "$ER" inner-newline
+avcm '.roles.dev.advisor = {"model":""}' "$ER" empty-string
+avcm '.roles.dev.advisor = {}' "" empty-level
+avcm '.roles.dev.advisor = {"model":null}' "" null-model
+avcm '.roles.dev.advisor = {"model":"Auto"}' "" auto
+avcm '.roles.dev.advisor = {"model":"OFF"}' "" off
+avcm '.roles.dev.advisor = {"model":"claude-opus-5-5[1m]"}' "" model
+avcm '.roles.dev.advisor = {"model":("a"*200)}' "" len-200
+avcm '.defaults.advisor = {"model":"fa ble"}' "$ERD" defaults-value
+avcm '.defaults.advisor = 5' "$ERD" defaults-number
+avcm '.defaults.advisor = "off"' "$ERD" defaults-string
+avcm '.roles.dev.advisor = {"model":"opus"} | .defaults.advisor = {"model":"-p"}' "$ERD" valid-role-bad-defaults
+avcm '.roles.dev.advisor = 5 | .roles.tester.advisor = "x"' "$ER"'ERROR: role tester: advisor must be {"model": "<model>|auto|off"}|' two-roles
+avcm '.roles.dev.advisor = {"model":"-p"} | .defaults.advisor = {"model":"fable"}' "$ER" invalid-role-valid-defaults
+avcm 'del(.roles.dev.advisor)' "" absent
+avm "$(check_config "$ROOT/config.default.json")" "" shipped-silent
+avm "$(jq -r '[.roles | to_entries[] | select(.value | has("advisor"))] | length' "$ROOT/config.default.json")" 17 shipped-roles
+avm "$(jq -r '.roles | to_entries[] | select(.value | has("advisor")) | "\(.key)=\(.value.advisor.model)"' "$ROOT/config.default.json" | sort | tr '\n' ' ')" "code-reviewer=fable deployer=opus dev=opus e2e-tester=fable evidence=opus local-coordinator=opus methodology=fable plan-reviewer=fable planner=fable researcher=opus rigor=fable sota=off style=opus tech-verifier=fable tester=opus verifier=fable writer=opus " shipped-values
+avm "$(jq -r '.defaults.advisor.model' "$ROOT/config.default.json")" auto shipped-defaults
+avm "$(jq -r '
+  def r: if test("haiku") then 4 elif test("sonnet") then 6 elif test("opus") then 7 elif test("fable") then 10 else 99 end;
+  [ .roles | to_entries[] | .key as $k | .value as $v | ($v.advisor.model // "") as $a |
+    select($a != "" and $a != "auto" and $a != "off") |
+    ([ $v.model, (($v.modelByMode // {}) | to_entries[] | .value) ] | map(select(type == "string"))) as $ms |
+    $ms[] as $m | select(($m | r) > ($a | r)) | "\($k):\($a) below \($m)" ] | join(" ")' "$ROOT/config.default.json")" "" shipped-rank
+check "check_config: the advisor message for the role level and for defaults, nothing for a valid level, one line per invalid role; an empty, trailing-newline or inner-newline model is refused; the shipped values are the decided ones, defaults auto, 17 roles with the key, each advisor ranking at or above its role's model in every mode (a1/a3, C5, C8)" "$AV1" "$(printf '.%.0s' $(seq 1 27))"
+AV1=""
+AVB="$TMP/advb"; AVJ="$TMP/advwt"; rm -rf "$AVB" "$AVJ"; mkdir -p "$AVB" "$AVJ"; git -C "$AVJ" init -q
+cat > "$AVB/claude" <<'EOS'
+#!/bin/sh
+if [ "$1" = --version ]; then
+  v="${ADV_VER-}"; [ -n "$v" ] || v='2.1.325 (Claude Code)'
+  printf '%s\n' "$v" >> "$AV_OUT.ver"
+  case "$v" in HANG) sleep 30; exit 0;; VECHO) echo --version; exit 0;; EMPTY) exit 0;; esac
+  printf '%s\n' "$v"; exit 0
+fi
+printf '%s\n' "$@" > "$AV_OUT.argv"
+printf '%s' "${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}" > "$AV_OUT.env"
+exit "${ADV_RC:-0}"
+EOS
+chmod +x "$AVB/claude"
+advrun() { # advrun <config> <role> [args]: agent.sh in the fixture worktree; output in $OUT and $RC, the agent's argv/env in $AV.argv/$AV.env
+  rm -f "$AV.argv" "$AV.env" "$AV.ver"
+  if OUT="$(cd "$AVJ" && env HOME="$TMP/home" PATH="$AVB:$PATH" ORCA_ROLES_CONFIG="$1" AV_OUT="$AV" "$TMP/home/.orca-roles/bin/agent.sh" "${@:2}" 2>&1)"; then RC=0; else RC=$?; fi
+}
+avline() { awk -v a="$1" '$0 == a { n = NR } END { print n + 0 }' "$AV.argv"; }
+avnorm() { awk -v t="$TMP" '{ if (p) { print "<mcp>"; p = 0; next } if ($0 == "--mcp-config") p = 1; if (index($0, t) == 1) print "<tmp>"; else print }' "$1"; }   # a mktemp path under load is not a difference in the role's configuration
+avcount() { grep -cxF -- "$1" "$AV.argv" 2>/dev/null || true; }
+cat > "$AV/w.json" <<'J'
+{ "defaults": { "mcp": [], "agent": "claude" }, "mcpServers": {},
+  "roles": { "dev": { "advisor": { "model": "opus" }, "extraArgs": ["--verbose"] },
+             "dev2": { "advisor": { "model": "opus" }, "env": { "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1" } },
+             "tester": { "advisor": { "model": "OFF" }, "env": { "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "0" } },
+             "sota": { "advisor": { "model": "off" } },
+             "planner": {}, "local-coordinator": { "advisor": { "model": null } },
+             "inv": { "advisor": { "model": "-p" } } } }
+J
+advrun "$AV/w.json" dev
+avm "$(avcount --advisor)" 1 dev-flag-once
+avm "$(sed -n "$(( $(avline --advisor) + 1 ))p" "$AV.argv")" opus dev-flag-value
+avm "$(avline --advisor)" "$(( $(avline --settings) + 2 ))" dev-after-settings
+avm "$(tail -1 "$AV.argv")" --verbose dev-extraargs-last
+avm "$(cat "$AV.env")" unset dev-env
+CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 advrun "$AV/w.json" dev
+avm "$(avcount --advisor):$(cat "$AV.env")" 1:unset dev-inherited-unset
+advrun "$AV/w.json" dev2
+avm "$(avcount --advisor):$(cat "$AV.env")" 1:1 dev-role-env-wins
+advrun "$AV/w.json" tester
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:1 off-over-role-env
+advrun "$AV/w.json" sota
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:1 off
+advrun "$AV/w.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:unset none
+cp "$AV.argv" "$AV/planner.argv"
+jq '.defaults.advisor = {"model":"auto"}' "$AV/w.json" > "$AV/w-auto.json"
+advrun "$AV/w-auto.json" planner
+avm "$(cmp -s <(avnorm "$AV/planner.argv") <(avnorm "$AV.argv") && echo same || echo differs):$(cat "$AV.env")" same:unset auto-identical
+CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 advrun "$AV/w-auto.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:1 auto-keeps-inherited
+advrun "$AV/w.json" local-coordinator
+avm "$(avcount --advisor):$(cat "$AV.env")" 0:unset null-model
+cp "$AV.argv" "$AV/lc.argv"
+jq 'del(.roles["local-coordinator"].advisor)' "$AV/w.json" > "$AV/w-del.json"
+advrun "$AV/w-del.json" local-coordinator
+avm "$(cmp -s <(avnorm "$AV/lc.argv") <(avnorm "$AV.argv") && echo same || echo differs)" same null-model-identical
+advrun "$AV/w.json" inv
+AVW='agent.sh: the advisor setting of inv is not valid (see README, "Advisor of a role"); it starts without the kit'"'"'s advisor setting.'
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$AVW" || true):$(avcount --advisor):$(cat "$AV.env")" 1:0:unset invalid-warning
+ADV_RC=7 advrun "$AV/w.json" inv
+avm "$RC:$(printf '%s\n' "$OUT" | grep -cxF -- "$AVW" || true)" 7:1 invalid-status
+check "agent.sh: a model adds --advisor <model> once, right after the last kit --settings and before extraArgs; off exports the variable (over a role env 0); auto, a missing key and a null model leave argv and env as without the key; a model unsets an inherited variable and keeps the role env's; an invalid value warns and starts as auto with the agent's status (a1, C1-C3, C5)" "$AV1" "$(printf '.%.0s' $(seq 1 16))"
+AV1=""
+cat > "$AV/n.json" <<'J'
+{ "defaults": { "mcp": [], "agent": "claude" }, "mcpServers": {},
+  "roles": { "dev": { "advisor": { "model": "opus" }, "extraArgs": ["--verbose"] },
+             "planner": {}, "local-coordinator": {},
+             "cx": { "agent": "codex", "advisor": { "model": "opus" } },
+             "cxi": { "agent": "codex", "advisor": { "model": "-p" } },
+             "cu": { "agent": "custom", "command": "echo CU=${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}", "advisor": { "model": "off" } },
+             "cuo": { "agent": "custom", "command": "echo CU=${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}", "advisor": { "model": "opus" } },
+             "oc": { "agent": "opencode", "advisor": { "model": "opus" } } } }
+J
+for c in codex opencode; do
+cat > "$AVB/$c" <<EOS
+#!/bin/sh
+[ "\$1" = --version ] && { echo "$c 9.9.9"; exit 0; }
+printf '%s\n' "\$@" > "$AV.argv"
+printf '%s' "\${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}" > "$AV.env"
+exit 0
+EOS
+chmod +x "$AVB/$c"
+done
+for r in cx cxi; do advrun "$AV/n.json" "$r"; avm "$(avcount --advisor):$(printf '%s\n' "$OUT" | grep -c 'advisor' || true):$([ -e "$AV.ver" ] && echo ver || echo nover):$(cat "$AV.env")" 0:0:nover:unset "codex-$r"; done
+for r in cu cuo; do advrun "$AV/n.json" "$r"; avm "$(printf '%s' "$OUT" | tr -d '\n'):$([ -e "$AV.ver" ] && echo ver || echo nover)" CU=unset:nover "custom-$r"; done
+: > "$KIT/prompts/programmer/oc.md"   # opencode-prepare.sh needs the role's prompt file
+advrun "$AV/n.json" oc
+avm "$(avcount --advisor):$(cat "$AV.env"):$([ -e "$AV.ver" ] && echo ver || echo nover)" 0:unset:nover opencode
+rm -f "$KIT/prompts/programmer/oc.md"
+advrun "$AV/n.json" dev
+avm "$(avcount --advisor):$(wc -l < "$AV.ver" | tr -d ' '):$(tail -1 "$AVJ/.git/orca-roles.provenance.jsonl" | jq -r .cliVersion)" "1:1:2.1.325 (Claude Code)" one-version-per-launch
+ADV_VER='2.1.321 (Claude Code)' advrun "$AV/n.json" dev
+AVF="agent.sh: Claude Code 2.1.321 has no --advisor option (the kit's advisor setting needs 2.1.322 or later); dev starts without it."
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$AVF" || true):$(avcount --advisor):$(wc -l < "$AV.ver" | tr -d ' ')" 1:0:1 floor-2.1.321
+ADV_VER='2.1.322 (Claude Code)' advrun "$AV/n.json" dev
+avm "$(avcount --advisor):$(sed -n "$(( $(avline --advisor) + 1 ))p" "$AV.argv")" 1:opus floor-2.1.322
+ADV_VER='2.2.0' advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-2.2.0
+ADV_VER='1.9.0' advrun "$AV/n.json" dev; avm "$(avcount --advisor):$(printf '%s\n' "$OUT" | grep -c 'has no --advisor option' || true)" 0:1 guard-1.9.0
+ADV_VER=VECHO advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-argv-echo
+ADV_VER=EMPTY advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-empty
+ADV_VER='Claude Code 2.1.300' advrun "$AV/n.json" dev; avm "$(avcount --advisor)" 1 guard-no-version-prefix
+ADV_VER='2.1.321 (Claude Code)' advrun "$AV/n.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env"):$(printf '%s\n' "$OUT" | grep -c 'advisor' || true):$(wc -l < "$AV.ver" | tr -d ' ')" 0:unset:0:1 auto-no-guard
+jq '.roles.planner.advisor = {"model":"off"}' "$AV/n.json" > "$AV/n-off.json"
+ADV_VER='2.1.321 (Claude Code)' advrun "$AV/n-off.json" planner
+avm "$(avcount --advisor):$(cat "$AV.env"):$(printf '%s\n' "$OUT" | grep -c 'has no --advisor option' || true)" 0:1:0 off-no-guard
+S1="$(date +%s)"; ADV_VER=HANG advrun "$AV/n.json" dev; S2="$(date +%s)"
+avm "$(avcount --advisor):$([ $((S2 - S1)) -lt 20 ] && echo fast || echo slow):$(tail -1 "$AVJ/.git/orca-roles.provenance.jsonl" | jq -r .cliVersion)" 1:fast:null hang
+check "agent.sh: codex, opencode and custom roles ignore the key (no flag, variable, warning or --version call, also for an invalid value); the guard warns and drops the flag below 2.1.322, keeps it at the floor and for an unknown line, takes one --version per launch (provenance included), runs for no auto/off value and cuts a hanging one off (C6, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 16))"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
 }
 
@@ -6856,6 +7049,59 @@ for m in programmer pr-reviewer academic-research quick; do
   check "local coordinator $m: outside a dispatch it writes to the coordinator's Run (question, then one status), never in its tab or a dialog" "$(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "${pl%.md}-under-coordinator.md" | grep -c 'Outside one, send it to the coordinator.s Run as your startup message says (`orca orchestration send --to run:<its Run> --type question`, with your own Run bound first). Never in this tab and never in a question dialog\|Outside a dispatch, send those three sentences and the report.s path as one `--type status` message')" "2"
   check "local coordinator $m: one 'Working under a coordinator' section, before Limits, with ask, one worker_done and the wait for the first dispatch" "$(grep -c '^## Working under a coordinator$' "$pl") $(awk '/^## Working under a coordinator$/{w=NR} /^## Limits$/{l=NR} END{print (w && l && w < l) ? "before" : "no"}' "$pl") $(awk '/^## Working under a coordinator$/{f=1;next} /^## /{f=0} f' "${pl%.md}-under-coordinator.md" | grep -c "preamble's \`ask\` command\|exactly one \`worker_done\`\|no \(planning and no \)\{0,1\}question dialog before it arrives")" "1 before 3"
 done
+# coordinator.sh: the Planner's advisor as the last argv pair, off/auto/invalid and the version guard (a2; C7, C12)
+AV1=""
+ACO="$TMP/aco"; rm -rf "$ACO"; mkdir -p "$ACO/bin" "$ACO/home" "$ACO/wt"; git -C "$ACO/wt" init -q; echo '{"projects":{}}' > "$ACO/home/.claude.json"
+cat > "$ACO/bin/claude" <<'EOS'
+#!/bin/sh
+if [ "$1" = --version ]; then
+  v="${ADV_VER-}"; [ -n "$v" ] || v='2.1.325 (Claude Code)'
+  case "$v" in VECHO) echo --version; exit 0;; EMPTY) exit 0;; esac
+  printf '%s\n' "$v"; exit 0
+fi
+printf '%s\n' "$@" > "$AC_OUT/argv"
+printf '%s' "${CLAUDE_CODE_DISABLE_ADVISOR_TOOL-unset}" > "$AC_OUT/env"
+exit 0
+EOS
+chmod +x "$ACO/bin/claude"
+avm() { [ "$1" = "$2" ] && AV1="${AV1}." || AV1="${AV1}[$3: expected $2, got $1]"; }
+acrun() { # acrun <project json or -> <inherited value or -> <version> [coordinator args]
+  local proj="$1" inh="$2" ver="$3"; shift 3
+  rm -f "$ACO/argv" "$ACO/env"
+  if [ "$proj" = - ]; then rm -f "$ACO/wt/.orca-roles.json"; else printf '%s' "$proj" > "$ACO/wt/.orca-roles.json"; fi
+  if [ "$inh" = - ]; then
+    if OUT="$(cd "$ACO/wt" && env -i HOME="$ACO/home" PATH="$ACO/bin:$PATH" KIT="$KIT" ADV_VER="$ver" AC_OUT="$ACO" /bin/bash "$KIT/bin/coordinator.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi
+  else
+    if OUT="$(cd "$ACO/wt" && env -i HOME="$ACO/home" PATH="$ACO/bin:$PATH" KIT="$KIT" ADV_VER="$ver" AC_OUT="$ACO" CLAUDE_CODE_DISABLE_ADVISOR_TOOL="$inh" /bin/bash "$KIT/bin/coordinator.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi
+  fi
+}
+PM="$(jq -r '.roles.planner.model' "$KIT/config.default.json")"; PA="$(jq -r '.roles.planner.advisor.model' "$KIT/config.default.json")"
+acrun - - ''
+avm "$(sed -n 1p "$ACO/argv" | grep -c "^Read $KIT/prompts/coordinator.md and adopt that role")" 1 message
+avm "$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "--model|$PM|--permission-mode|auto|--add-dir|$KIT/prompts|" argv-2-7
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "9:--advisor:$PA:unset" default
+acrun - - '' --model opus
+avm "$(sed -n 3p "$ACO/argv"):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "opus:--advisor:$PA" model-option
+acrun - 1 ''
+avm "$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "$PA:unset" inherited-unset
+acrun '{"roles":{"planner":{"advisor":{"model":"off"}}}}' - ''
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(grep -c '^--advisor$' "$ACO/argv" || true):$(cat "$ACO/env")" 7:0:1 off
+acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' - ''
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env"):$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "7:unset:--model|$PM|--permission-mode|auto|--add-dir|$KIT/prompts|" auto
+acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' 1 ''
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env")" 7:1 auto-inherited
+acrun '{"roles":{"planner":{"advisor":{"model":"-p"}}}}' - ''
+ACW="coordinator.sh: the advisor setting of planner is not valid (see README, \"Advisor of a role\"); the coordinator starts without the kit's advisor setting."
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$ACW" || true):$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env")" 1:7:unset invalid
+acrun - - '2.1.321 (Claude Code)'
+ACV="coordinator.sh: Claude Code 2.1.321 has no --advisor option (the kit's advisor setting needs 2.1.322 or later); the coordinator starts without it."
+avm "$(printf '%s\n' "$OUT" | grep -cxF -- "$ACV" || true):$(grep -c '^--advisor$' "$ACO/argv" || true)" 1:0 floor
+acrun - - '2.1.322 (Claude Code)'
+avm "$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "--advisor:$PA" at-floor
+acrun - - VECHO
+avm "$(sed -n 9p "$ACO/argv")" "$PA" unknown-line
+co -h; avm "$(grep -c advisor "$CO/out")" 1 usage
+check "coordinator.sh: with the default configuration --advisor <the Planner's advisor> is the last argv pair after --add-dir, --model does not move it, off and an inherited variable, auto, an invalid value, a Claude Code below 2.1.322, at the floor and on an unknown line, and the usage line (a2, C7, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 13))"
 if [ -f "$CO/kit-config.json" ]; then mv "$CO/kit-config.json" "$KIT/config.json"; fi
 }
 
@@ -10898,6 +11144,22 @@ mk1 ph claude-unknown-9 '{"input_tokens":1000000}'
 umpass
 PP="$(for x in pa pb pd pe pf pg; do usf $x '.cost'; done | tr '\n' ' ')$(usf pc '(.cost > 0.049 and .cost < 0.051)') $(usf ph '[.cost, (.unpriced | join(",")), .tokens.input] | join("|")')"
 check "usage parse: tokens, priced cost by type (1h cache writes, the us geo x1.1, web searches), thinking tokens, cache savings, tools (calls, errors, seconds tool_use to tool_result), lines from Edit/Write, one row per model with the cost never above what the rows sum to" "$S1C|$S1D|$S1E|$S1F" "2001000|200100|1002000|400000|50000|2000000|200000|1000000|400000|300000|100000|50000|2|3.795|0.725|2.1/1/0.1/0.575/0.02|0.0085|3.8035|3.8035||0.734|0|1|0|5|1|1|2|1|5|1|edits"
+mk1 pi claude-fable-5-2 '{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":1000000}'
+mk1 pj "claude-fable-5-2[1m]" '{"input_tokens":1000000}'
+mk1 pk claude-fable-5-1 '{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":1000000}'
+mk1 pl claude-fable-5-2-20270101 '{"input_tokens":1000000}'
+mk1 pm claude-fable-6 '{"input_tokens":1000000}'
+mk1 pn claude-fable-5 '{"cache_read_input_tokens":1000000}'
+mk1 po claude-mythos-5-1 '{"input_tokens":1000000,"cache_read_input_tokens":1000000}'
+mk1 pp claude-fable-5-2 '{"cache_creation_input_tokens":1000000}'
+mk1 pq claude-fable-5-2 '{"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_1h_input_tokens":1000000}}'
+mk1 pr claude-fable-5-2 '{"server_tool_use":{"web_search_requests":1}}'
+umpass
+UP="$ROOT/bin/usage_prices.json"
+upb="$(awk '/^  "claude-fable-5-2": \{$/{s=1} s{print} s && /^  \},?$/{exit}' "$UP" | tr '\n' '|')"
+UPOS="$(jq -r '.models | keys_unsorted as $k | [(($k | index("claude-fable-5-2")) - ($k | index("claude-fable-5-1"))), (($k | index("claude-mythos-5")) - ($k | index("claude-fable-5-2")))] | join("/")' "$UP" 2>/dev/null || true)"
+UPM="$(jq -r '[.version, .unit, (.source | (contains("Claude Code 2.1.311 model catalog") and contains("; the claude-fable-5-2 row comes from the Claude Code 2.1.325 catalog"))), (.note | contains("longest id")), (.models["claude-fable-5-2"] | has("longPrompt"))] | join("|")' "$UP" 2>/dev/null || true)"
+check "usage parse: claude-fable-5-2 has its own row in usage_prices.json (1M input, output and cache read price at 8/40/0.2, 48.2 the session; a [1m] id and a dated id at 8; cache writes at 10 for 5m and 16 for 1h; a web search at 0.01), while claude-fable-5-1 keeps 10/50 with its own 0.25 cache read and claude-fable-5 keeps 1.0, claude-mythos-5-1 stays 10/0.25 and claude-fable-6 is unpriced: without the row all of them fall to the claude-fable-5 longest prefix (10/50/1.0); the file is valid JSON, version, unit and note unchanged, source carries the catalog sentence, and the row sits between claude-fable-5-1 and claude-mythos-5 with its neighbours' 1-space indentation and field order and no longPrompt" "$(jq -e . "$UP" >/dev/null 2>&1 && echo valid)|$(usf pi '[.models["claude-fable-5-2"].costByType.input, .models["claude-fable-5-2"].costByType.output, .models["claude-fable-5-2"].costByType.cacheRead, .models["claude-fable-5-2"].costByType.cacheWrite, .models["claude-fable-5-2"].costByType.webSearch, .models["claude-fable-5-2"].cost] | map(tostring) | join("/")')|$(usf pj '.cost')|$(usf pl '.cost')|$(usf pm '[.cost, (.unpriced | join(","))] | join("/")')|$(usf pk '[.models["claude-fable-5-1"].costByType.input, .models["claude-fable-5-1"].costByType.output, .models["claude-fable-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pn '.models["claude-fable-5"].costByType.cacheRead')|$(usf po '[.models["claude-mythos-5-1"].costByType.input, .models["claude-mythos-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pp '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pq '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pr '.models["claude-fable-5-2"].costByType.webSearch')|$UPOS|$UPM|$upb" 'valid|8/40/0.2/0/0/48.2|8|8|0/claude-fable-6|10/50/0.25|1|10/0.25|10|16|0.01|1/1|2.1.311|USD per million tokens (webSearch: USD per request)|true|true|false|  "claude-fable-5-2": {|   "input": 8.0,|   "output": 40.0,|   "cacheWrite5m": 10.0,|   "cacheWrite1h": 16.0,|   "cacheRead": 0.2,|   "webSearch": 0.01|  },|'
 umsum() { (cd "$PM" && cksum sessions-*.jsonl 2>/dev/null | tr '\n' ' ') || true; jq -cS 'del(.lastPass)' "$PM/state.json" 2>/dev/null | cksum || true; }
 umcount() { cat "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' ' || true; }
 N0="$(umcount)"; B0="$(umsum)"; sleep 1; umpass; A0="$UPRC:$([ "$(umsum)" = "$B0" ] && echo same):$([ "$(umcount)" = "$N0" ] && echo nonew)"

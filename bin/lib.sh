@@ -424,6 +424,37 @@ rcfg() { jq -c --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) //
 rstr() { jq -r --arg r "$2" --arg k "$3" '(.roles[$r][$k]) // (.defaults[$k]) // empty' "$1"; }
 # A role's model in a mode (default: the configuration's saved mode): roles.<role>.modelByMode.<mode> when it is a non-empty string, else the role's model (or defaults.model).  role_model <config> <role> [<mode>]
 role_model() { local m="${3:-}"; [ -n "$m" ] || m="$(mode_of --saved "$1" 2>/dev/null)" || m=programmer; jq -r --arg r "$2" --arg m "$m" '(.roles[$r].modelByMode // null) as $b | if ($b | type) == "object" and ($b[$m] | type) == "string" and $b[$m] != "" then $b[$m] else ((.roles[$r].model) // (.defaults.model) // empty) end' "$1"; }
+# The advisor a role gets: roles.<id>.advisor.model, else defaults.advisor.model, else auto; invalid gives no stdout and status 1, so a typo cannot become another claude option.  advisor_of <config> <role>
+advisor_of() {
+  local v
+  v="$(jq -r --arg r "$2" '
+    def lvl: if type != "object" then error("not an object") elif ((keys - ["model"]) | length) > 0 then error("unknown keys") else (if has("model") then .model else null end) end;
+    def okstr: (type == "string") and (length > 0) and (length <= 200) and (test("^[A-Za-z0-9][A-Za-z0-9._:/@\\[\\]-]*\\z") or (ascii_downcase == "auto") or (ascii_downcase == "off"));
+    (.roles[$r] // null) as $role | (.defaults // null) as $def
+    | (if ($role | type) == "object" and ($role | has("advisor")) then ($role.advisor | lvl) else null end) as $rv
+    | (if $rv == null and ($def | type) == "object" and ($def | has("advisor")) then ($def.advisor | lvl) else $rv end) as $v
+    | if $v == null then "auto"
+      elif ($v | okstr) then (if ($v | ascii_downcase) == "auto" then "auto" elif ($v | ascii_downcase) == "off" then "off" else $v end)
+      else error("invalid advisor") end' "$1" 2>/dev/null)" || return 1
+  printf '%s\n' "$v"
+}
+# The first line of `<binary> --version`, bounded and read back from a file, so a slow or hanging version check cannot hang the launch.  cli_version <binary>
+cli_version() {
+  command -v "$1" >/dev/null 2>&1 || return 0
+  local out; out="$(mktemp)" || return 0
+  bounded_run --quiet 3 "$1 --version" "$1" --version > "$out" 2>/dev/null < /dev/null || true
+  head -1 "$out"; rm -f "$out"
+  return 0
+}
+# 0 unless the line starts below 2.1.322, the oldest Claude Code seen with --advisor; an unknown line passes because claude runs anyway.  advisor_cli_ok <version line>
+advisor_cli_ok() {
+  [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 0
+  [ "${BASH_REMATCH[1]}" -gt 2 ] && return 0
+  [ "${BASH_REMATCH[1]}" -lt 2 ] && return 1
+  [ "${BASH_REMATCH[2]}" -gt 1 ] && return 0
+  [ "${BASH_REMATCH[2]}" -lt 1 ] && return 1
+  [ "${BASH_REMATCH[3]}" -ge 322 ]
+}
 # The error text (ERE) a role's agent prints when its model does not exist; empty = no detection for that role.  model_error_regex <config> <role> <model>
 # claude: Claude Code's own texts; codex: the API error naming the model; custom and opencode: the role's modelError with {model} as the
 # escaped model id. For opencode the screen check only runs with the role's own modelError: `opencode mini` printed nothing for a missing model,
@@ -895,6 +926,18 @@ check_config() {
               (if got("permissions") and (.permissions | type != "array" or any(.[]; type != "object" or (.action | type) != "string" or (.resource | type) != "string" or (.effect | IN("allow", "ask", "deny") | not)))
                 then "ERROR: invalid configuration: role \($r): opencode.permissions must be a list of {\"action\", \"resource\", \"effect\": \"allow\"|\"ask\"|\"deny\"}" else empty end) end)' "$1" 2>/dev/null)" \
     || { echo "ERROR: invalid configuration: settings.flow, settings.oracle, settings.telemetry, settings.metrics, settings.trust and roles.<role>.opencode must be valid (see README)"; return 0; }
+  [ -z "$out" ] || printf '%s\n' "$out"
+  out="$(jq -r 'def advok:
+      if type != "object" then false
+      elif ((keys - ["model"]) | length) > 0 then false
+      elif has("model") and .model != null then (.model | (type == "string") and length > 0 and length <= 200 and (test("^[A-Za-z0-9][A-Za-z0-9._:/@\\[\\]-]*\\z") or (ascii_downcase == "auto") or (ascii_downcase == "off")))
+      else true end;
+    (.roles // {} | to_entries[] | .key as $r | .value as $v
+      | select(($v | type) == "object" and ($v | has("advisor")) and ($v.advisor | advok | not))
+      | "ERROR: role \($r): advisor must be {\"model\": \"<model>|auto|off\"}"),
+    (select((.defaults? | type) == "object" and (.defaults | has("advisor")) and (.defaults.advisor | advok | not))
+      | "ERROR: defaults.advisor must be {\"model\": \"<model>|auto|off\"}")' "$1" 2>/dev/null)" \
+    || { echo "ERROR: invalid configuration: roles.<role>.advisor must be {\"model\": \"<model>|auto|off\"} (see README, Advisor of a role)"; return 0; }
   [ -z "$out" ] || printf '%s\n' "$out"
   m="$(mode_of "$1" 2>&1)" || { echo "ERROR: $m"; return 0; }
   [ -n "${2:-}" ] || return 0

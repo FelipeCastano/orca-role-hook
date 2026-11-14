@@ -617,6 +617,7 @@ Each role inherits from `defaults` whatever it does not define.
 | `agent` | Which CLI is launched: `claude`, `codex`, `opencode` or `custom`. |
 | `model` | Exact model passed to the agent. |
 | `modelByMode` | `{ "<mode>": "<model>" }`: the model the role runs in that mode, instead of `model`. The default gives the local coordinator `claude-opus-5-5` in `quick`. The upgrade adds it only to a local coordinator on the agent `claude` with the default model; if you change the local coordinator's agent or model, set or remove its `modelByMode.quick` too. A role gets it when its tab opens; for the local coordinator, a mode switch or choice that changes its model (or its skills, as into or out of `quick`) closes its tab once its turn ends and opens a new one. `relaunch-role.sh` sets `model` only. |
+| `advisor` | `{ "model": "<model>" \| "auto" \| "off" }`: Claude Code's advisor for the role (Claude roles only); see [Advisor of a role](#advisor-of-a-role). |
 | `modelError` | With `agent: "custom"` (or `"opencode"`, which also checks `opencode models`, see [OpenCode roles](#opencode-roles)): an ERE (`grep -E`) the agent prints when its model does not exist; `{model}` stands for the escaped model id. Without it, a missing model is not detected for that role. |
 | `models` | `{ "list", "parse", "probe" }`, for `models.sh` (see [Models of a role](#models-of-a-role)): `list` is a command that prints the models, `parse` how to read it (`lines`, `json:<jq filter>` or `regex:<ERE with one group>`), `probe` a command that exits 0 only if the model works (`{model}` is replaced, quoted). Custom agents only (claude and codex roles have built-in listing and probes); in `defaults` or in a role. Unknown keys are rejected. |
 | `permissionMode` | In `claude`, the `--permission-mode` (`auto`, `acceptEdits`, `manual`...). `default` means not passing the flag. In `codex`, `auto` is `--sandbox workspace-write --ask-for-approval on-request` (what `--full-auto` was); any other value passes nothing. |
@@ -664,6 +665,30 @@ For a `custom` role, describe how to list and test models in `models`:
 ```
 
 `parse` is `lines` (default: each non-empty line), `json:<jq filter>` (for example `json:.data[].id`) or `regex:<ERE with one group>` (the group of each matching line). Without `list` the role's `model` is the only candidate; without `probe`, `--check` answers `unknown`.
+
+### Advisor of a role
+
+Claude Code's **advisor** is a server-side tool: when the role consults it, Claude Code sends the whole conversation to a stronger model and brings its answer back. It costs more: one consultation on a 132k-token conversation cost about 0.68 USD with Opus 5.5 as the advisor.
+
+The key is `advisor`, an object with one key, `model`. The value in effect is `roles.<id>.advisor.model`, else `defaults.advisor.model`, else `auto`. `auto` and `off` count in any case (`"Off"` is `off`); any other value is a model, passed as it is, and it must start with a letter or a digit and contain only letters, digits, `.`, `_`, `:`, `/`, `@`, `[`, `]` and `-` (at most 200 characters), so that a typo cannot become another `claude` option. An invalid value stops the launch at the configuration check (`ERROR: role <id>: advisor must be {"model": "<model>|auto|off"}`, or the same for `defaults.advisor`); `agent.sh` and `coordinator.sh` also warn and start the role without the kit's advisor setting.
+
+- `"auto"` adds nothing: the Claude Code settings decide, for example an `advisorModel` in the Orca profile's settings file.
+- `"off"` sets `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` for the role.
+- A model adds `--advisor <model>` to the agent's command, a hidden Claude Code option. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the role's `env` keeps the advisor off, also when a model is set.
+
+It applies to Claude roles only: `codex`, `opencode` and `custom` roles ignore the key, with no flag, no variable and no warning.
+
+**Rank.** The advisor must be at least as capable as the role's model (Haiku 5.5 < Sonnet 5.5 < Opus 5.5 < Fable 5.2); with one below it, Claude Code prints one line (`"<advisor>" cannot advise "<model>" ...`) and the role runs without an advisor. The shipped values are one tier up: the local coordinator gets `opus` in every mode (in `quick` its model is `opus` too, the same tier), the Planner, the Plan-Reviewer, the Code-Reviewer, the Verifier, the E2E-Tester, Methodology, the Tech-Verifier and Rigor get `fable`, the Deployer, the Writer, Evidence and Style get `opus`, and Dev, the Tester and the Researcher get `opus` (no effect while they run on OpenCode); the State-of-the-Art gets `off`, and `dev-opencode` and `cross-dev` have no key. The pr-reviewer roles you create get none from the kit; recommended: `auditor-pr` and `lens-tests` `fable`, `tester-pr`, `dev-pr` and `lens-architecture` `opus`, `lens-correctness` and `lens-security` `off`. The shipped advisor is merged into your configuration at install even when you changed the role's model: a role you moved above its shipped advisor (for example the Writer on a Fable model, with the shipped `opus`) loses the advisor it had through the Claude Code settings; set its `advisor.model` to `"auto"` or to a model at least as capable. The same happens for a while when a role's model is raised at runtime (an escalation, `relaunch-role.sh --model`, `/model`): Claude Code prints its line and the role runs without an advisor.
+
+The global coordinator (`coordinator.sh`) takes the advisor from `roles.planner.advisor.model`, as it takes the Planner's model and permission mode.
+
+It takes effect when the role's tab opens; a running tab keeps its setting until it is reopened.
+
+**Measuring.** Run `~/.orca-roles/bin/metrics.sh --summary` per worktree after closing the sessions: `advisorCalls`, `byModel` and `usd` show what the advisor costs. The first review is on 2026-11-28.
+
+**Revert.** Set the role's `advisor.model` to `"auto"` in `~/.orca-roles/config.json` and reopen the role. For a role with a shipped value, `"auto"` is the durable revert: removing the key works only until the next install or update, which merges the shipped value back. Removing the key is enough only for roles with no shipped value (for example the pr-reviewer roles you create). `"off"` turns the advisor off for that role even when the Claude Code settings name one.
+
+**Requirement and failures.** A model value needs Claude Code 2.1.322 or later (the oldest version known to have `--advisor`); with an older one the kit warns and starts the role without it. A name Claude Code cannot use as an advisor stops the tab before it starts (`Error: The model "<name>" cannot be used as an advisor.`; for a hidden role the local coordinator gets the run's failure with that line in the log tail): fix or clear the value.
 
 ### Metrics and provenance
 
@@ -917,6 +942,8 @@ To run several features at once, each in its own worktree with its own team, sta
 coordinator                                 # Claude Code with the model and permission mode of `roles.planner`; --model <m> to change it
 ~/.orca-roles/bin/coordinator.sh            # the same, by its path (before opening a new terminal after installing)
 ```
+
+It also takes the Planner's advisor setting ([Advisor of a role](#advisor-of-a-role)).
 
 It follows [`prompts/coordinator.md`](prompts/coordinator.md) and Orca's orchestration guide:
 1. It splits what you ask for into features, one worktree each, and waits for your yes.
