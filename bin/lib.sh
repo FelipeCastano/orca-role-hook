@@ -80,11 +80,11 @@ kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c";
 bounded_msg() { printf '%s: no answer in %s s; stopped.\n' "$1" "$2"; }
 # Runs a command with a time limit, keeping its stdin, stdout and stderr (redirect the call to change them): bounded_run [--quiet] [--cd <dir>] <secs> <label> <command> [args...].
 # Past the limit its process tree is killed, the status is 124, BOUNDED_TIMED is 1 (0 otherwise, so a command's own exit 124 is not a timeout; it does not survive $(...)) and bounded_msg goes to stderr unless --quiet.
-# --cd runs an external command in <dir> (a shell function gives 127 and bash's own "not found"; a <dir> that fails gives 1 and cd's own message). <secs> must be a number above 0 (0 means no limit only in orca()): anything else prints a message, returns 2 and runs nothing.
+# --cd runs an external command in <dir> (a shell function gives 127 and bash's own "not found"; a <dir> that fails gives 1 and cd's own message). <secs> must be a number above 0 and at most 2147483647, the largest value macOS sleep accepts (0 means no limit only in orca()): anything else prints a message, returns 2 and runs nothing.
 # If no marker can be created in the temp folder the command runs without a limit. If the caller dies, the watchdog still stops the command at the limit and removes the markers.
 # shellcheck disable=SC2034  # BOUNDED_TIMED is read by the callers
 bounded_run() {
-  local quiet=0 dir="" secs label m pid wd s="" rc=0 caller=$$
+  local quiet=0 dir="" secs label m pid wd s="" rc=0 caller=$$ ip fp=""
   BOUNDED_TIMED=0
   while :; do
     case "${1:-}" in
@@ -99,16 +99,33 @@ bounded_run() {
     *[1-9]*) ;;
     *) rc=2;;
   esac
+  if [ "$rc" = 0 ]; then
+    # at most 2147483647, compared by digits: a long value must not wrap in shell arithmetic. Leading zeros do not count, and a
+    # fraction counts only when the integer part is exactly 2147483647.
+    ip="$secs"
+    case "$secs" in *.*) ip="${secs%%.*}"; fp="${secs#*.}";; esac
+    ip="${ip#"${ip%%[!0]*}"}"
+    case "${#ip}" in
+      0|[1-9]) ;;
+      10) case "$ip" in
+            [01]?????????|20????????|21[0-3]???????|214[0-6]??????|2147[0-3]?????|21474[0-7]????|214748[0-2]???|2147483[0-5]??|21474836[0-3]?|214748364[0-6]|2147483647) ;;
+            *) rc=2;;
+          esac;;
+      *) rc=2;;
+    esac
+    if [ "$ip" = 2147483647 ]; then case "$fp" in *[1-9]*) rc=2;; esac; fi
+  fi
   if [ "$rc" = 2 ]; then echo "bounded_run: bad limit '$secs' for $label" >&2; return 2; fi
   if [ -n "$dir" ]; then ( cd "$dir" && exec "$@" ) <&0 & pid=$!
   else "$@" <&0 & pid=$!; fi
   m="${TMPDIR:-/tmp}/orca-roles-limit.$$.$pid"
   { : > "$m"; } 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
   # No signal goes to the watchdog (a trapped TERM can be lost or held until its sleep ends): it writes its sleep's pid to $m.s before it looks for $m, and the caller removes $m before it reads $m.s, so one of the two always kills that sleep
+  # Past the limit the command's own process is stopped before kill_tree walks its tree, so its shell cannot report a child's death on the command's stderr; SIGKILL ends a stopped process.
   ( sleep "$secs" & s=$!; echo "$s" > "$m.s" || { kill "$s"; exit 0; }
     if [ ! -e "$m" ]; then kill "$s" 2>/dev/null; exit 0; fi
     wait "$s"
-    if [ -e "$m" ] && kill -0 "$pid" 2>/dev/null; then : > "$m.fired"; kill_tree "$pid"; fi
+    if [ -e "$m" ] && kill -0 "$pid" 2>/dev/null; then : > "$m.fired"; kill -STOP "$pid" 2>/dev/null; kill_tree "$pid"; fi
     kill -0 "$caller" 2>/dev/null || rm -f "$m" "$m.fired" "$m.s" ) </dev/null >/dev/null 2>&1 & wd=$!
   wait "$pid" 2>/dev/null || rc=$?
   rm -f "$m"
@@ -135,13 +152,19 @@ bounded() {
 pace() { sleep "${ORCA_ROLES_PACE:-$1}"; }
 
 # Waits until a Claude Code tab is at rest with an empty composer (read as dispatch.sh's coord_ready reads it), so the kit never types over what the
-# user is writing.  front_wait_ready <handle> <timeout ms> → 0 ready; 1 the tab never became idle; 2 it stayed idle with text in its composer
+# user is writing.  front_wait_ready <handle> <timeout ms> → 0 ready; 1 the tab never became idle; 2 it stayed idle with text in its composer.
+# The first wait gets the whole timeout; a timeout that is not a whole number of at least 1 returns 1 at once, with no orca call.
 front_wait_ready() {
-  local end left rc=1
+  local end left rc=1 first=1
+  case "$2" in ''|*[!0-9]*) return 1;; esac
+  [ "$2" -ge 1 ] || return 1
   end=$(( $(date +%s) + ($2 + 999) / 1000 ))
   while :; do
-    left=$(( (end - $(date +%s)) * 1000 ))
-    [ "$left" -gt 0 ] || return "$rc"
+    if [ "$first" = 1 ]; then left="$2"; first=0
+    else
+      left=$(( (end - $(date +%s)) * 1000 ))
+      [ "$left" -gt 0 ] || return "$rc"
+    fi
     orca terminal wait --terminal "$1" --for tui-idle --timeout-ms "$left" --json >/dev/null 2>&1 || return "$rc"
     pace "${ORCA_ROLES_FRONT_MODEL_SETTLE:-2}"
     if orca terminal show --terminal "$1" --json 2>/dev/null | jq -e '(.result.terminal.preview // "") as $p | ($p | contains("[Pasted text") | not) and ($p | split("\n") | any(sub("\\s+$"; "") == "❯"))' >/dev/null 2>&1; then return 0; fi
@@ -1285,9 +1308,10 @@ kit_protected_paths() {
 # --add-dir gives write access in auto mode (additional directories follow the permission mode), and every future worker
 # reads these files.  Not the whole $KIT: scratch folders live in $KIT/tmp and must stay writable (a deny cannot be undone by an allow).
 # "//" anchors the pattern at the filesystem root; Claude Code applies a rule written through a symlinked directory at its real location too.
+# A failed write does not stop the list: an interrupted write to the caller's pipe must not end this producer under the caller's errexit, or the tail of the list is lost.
 kit_deny_rules() {
   local k="${KIT#/}" d
-  while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d"; done < <(kit_protected_paths)
+  while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d" || :; done < <(kit_protected_paths)
 }
 # A worker's message when its tab was reopened with its previous conversation (after a restart, or after its tab or its agent was lost).  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
