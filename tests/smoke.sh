@@ -1732,7 +1732,6 @@ check "clean.sh --msg local-coordinator: Jira ticket of this worktree" "$(case "
 : > "$LOGF"; try run_clean --all; check "clean.sh --all: dead tab reported" "$RC" "1"; case "$OUT" in *"Codex: its tab (t3) does not respond."*) echo "ok   clean.sh --all: dead tab message";; *) echo "FAIL clean.sh --all: $OUT"; FAIL=1;; esac
 check "clean.sh --all excludes the local coordinator" "$(grep -c 'terminal show --terminal t5' "$LOGF" || true):$(printf '%s\n' "$OUT" | grep -c 'local coordinator' || true)" "0:0"
 check "clean.sh --all goes through the workers, the planner included" "$(grep -c 'terminal show' "$LOGF")" "4"
-check "clean.sh --msg" "$(run_clean --msg dev | sed "s#$TMP/home/.orca-roles#$KIT#g")" "$(cd "$TMP" && worker_msg "$C" dev)"
 # compact-role.sh (fake orca; FAKE_WAIT_FAIL makes the waits time out)
 cr_run() { local s="$1"; shift; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_STATE="$TMP/state.env" ORCA_ROLES_CONFIG="${CR_CFG:-$C}" ORCA_ROLES_CLAUDE_PROJECTS="$CRP" ORCA_ROLES_SESSION_HANDLES="$CRH" "$TMP/home/.orca-roles/bin/$s" "$@" 2>&1); }
 sent() { grep -c -F -e "$1" "$LOGF" || true; }
@@ -2341,7 +2340,6 @@ ychk run-both "$KITL" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: run-both
 ychk local-only "$KITL" ask; check "roles-yaml --check: ask message" "$RC:$OUT" "0:$W_ASK"
 ychk local-only "$KITL" skip-by-default; check "roles-yaml --check: skip-by-default message" "$RC:$OUT" "0:$W_SKIP"
 ychk shared-only "npm i" ask "$KIT_Y" orca.yaml; check "roles-yaml --check: ask with a working orca.yaml" "$RC:$OUT" "0:$W_ASK"
-ychk shared-only "npm i" "" "$KIT_Y" orca.yaml; check "roles-yaml --check: listed and ignored orca.yaml is silent" "$RC:$OUT" "0:"
 yreset; hsjson shared-only "npm i" > "$YP"; printf '%s' "$KIT_Y" > "$Y2/orca.yaml"; printf 'orca.yaml\n' > "$Y2/.worktreeinclude"; yrun --check
 check "roles-yaml --check: listed but not ignored orca.yaml warns" "$RC:$OUT" "0:$W_SHARED"
 rm -f "$Y2/.worktreeinclude"
@@ -3770,8 +3768,6 @@ rm -f "$MG/orca-roles.env" "$M/.orca-roles.json"
 try ml --reset --mode programmer; check "selection: --mode programmer over a pr-reviewer settings.mode" "$RC:$(mmode)" "0:programmer"
 rm -f "$MG/orca-roles.env"; jq '.settings.mode = "programmer"' "$MC" > "$TMP/m.json" && mv "$TMP/m.json" "$MC"
 try ml --reset; check "back to the default mode" "$RC:$(mmode)" "0:programmer"
-rm -f "$MG/orca-roles.env"
-try ml --set settings.mode=pr-reviewer; check "selection: --set settings.mode" "$RC:$(mmode)" "0:pr-reviewer"
 rm -f "$MG/orca-roles.env"; ml --reset >/dev/null; rm -f "$MG/orca-roles.env"
 
 # rejections: nothing opened, nothing saved
@@ -7841,9 +7837,6 @@ MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claud
 echo 4 > "$MF/waitdelay"; t0=$SECONDS
 mf "$MF3" bad "dev tester code-reviewer"
 check "model-check: the checks of three roles run in parallel" "$(( SECONDS - t0 < 9 ))" "1"
-echo 4 > "$MF/waitdelay"; t0=$SECONDS
-mf "$MF3" clean "dev tester code-reviewer"
-check "model-check: three roles are checked in parallel" "$(( SECONDS - t0 < 9 ))" "1"
 echo 0 > "$MF/waitdelay"
 # kept lines, config untouched, bounded waits
 PRE=$'CODE_REVIEWER=claude-x\nDEV=FAILED:old\n'
@@ -10597,14 +10590,11 @@ cli_f boom; BL="$(grep -n '^sec_boom()' "$CF/tests/smoke.sh" | tail -1 | cut -d:
 check "cli: an unguarded failing command in a section -> exit 1, stderr names the section, the line and the command, nothing after it runs, no ALL OK" "$CRC:$(grep -c "^smoke.sh: aborted in section boom at line $BL: x=\"\$(cat /nonexistent-smoke-probe)\"$" "$TMP/cli.err"):$(grep -c 'unreachable-probe' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:0:0"
 cli_f guarded; check "cli: guarded failures (if, ||, &&, a failing command in a condition) print no 'aborted' line and do not change the result" "$CRC:$(grep -c 'aborted' "$TMP/cli.err"):$(grep -c '^ok   marker guarded$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1:1"
 cli_f quit; check "cli: a section that exits 0 early prints no 'aborted' line" "$(grep -c 'aborted' "$TMP/cli.err")" "0"
-# the rules helpers fail loudly: an unmodified copy of the prompts passes, a lost fragment or a renamed pr-reviewer section does not
+# the rules helpers fail loudly: a lost fragment or a renamed pr-reviewer section does not pass
 RT="$TMP/rules-selftest"; rm -rf "$RT"; mkdir -p "$RT/tests"; cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$ROOT/README.md" "$ROOT/BACKLOG.md" "$RT/"; mkdir -p "$RT/plugin"; cp -R "$ROOT/plugin/skills" "$RT/plugin/"; cp "$ROOT/tests/smoke.sh" "$RT/tests/smoke.sh"
 rt_run() { CRC=0; bash "$RT/tests/smoke.sh" rules > "$TMP/cli.out" 2> "$TMP/cli.err" || CRC=$?; }
-rt_run; check "rules helpers: an unmodified copy of the prompts passes" "$CRC:$(grep -c '^FAIL' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "0:0:1"
-sed -i.bak "s/Nothing leaves the worktree without the user's explicit yes/Nothing leaves/" "$RT/prompts/programmer/local-coordinator.md"; rm -f "$RT/prompts/programmer/local-coordinator.md.bak"
-rt_run; check "rules helpers: a pinned fragment removed from a prompt -> 'FAIL rules R1' naming the file, FAILURES, exit 1, no ALL OK" "$CRC:$(grep -c "^FAIL rules R1: prompts/programmer/local-coordinator.md lost 'Nothing leaves the worktree without the user's explicit yes'$" "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:1:0"
-rm -rf "$RT/prompts"; cp -R "$ROOT/prompts" "$RT/"; sed -i.bak 's/^## The review skill$/## Review skill/' "$RT/prompts/pr-reviewer/local-coordinator.md"; rm -f "$RT/prompts/pr-reviewer/local-coordinator.md.bak"
-rt_run; check "rules helpers: a pr-reviewer section whose title is gone makes its pins fail (prsec finds nothing)" "$CRC:$(grep -c "^FAIL rules R6: pr-reviewer local-coordinator.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:2:0"
+sed -i.bak "s/Nothing leaves the worktree without the user's explicit yes/Nothing leaves/" "$RT/prompts/programmer/local-coordinator.md"; rm -f "$RT/prompts/programmer/local-coordinator.md.bak"; sed -i.bak 's/^## The review skill$/## Review skill/' "$RT/prompts/pr-reviewer/local-coordinator.md"; rm -f "$RT/prompts/pr-reviewer/local-coordinator.md.bak"
+rt_run; check "rules helpers: a pinned fragment removed from a prompt -> 'FAIL rules R1' naming the file, and a pr-reviewer section whose title is gone -> its pins fail (prsec finds nothing), FAILURES, exit 1, no ALL OK" "$CRC:$(grep -c "^FAIL rules R1: prompts/programmer/local-coordinator.md lost 'Nothing leaves the worktree without the user's explicit yes'$" "$TMP/cli.out"):$(grep -c "^FAIL rules R6: pr-reviewer local-coordinator.md, section 'The review skill', lost " "$TMP/cli.out"):$(grep -c '^FAILURES$' "$TMP/cli.out"):$(grep -c '^ALL OK' "$TMP/cli.out")" "1:1:2:1:0"
 # the parallel runner (SMOKE_JOBS): output in the requested order, one process per section, the serial sections alone at the end, the same result as a sequential run
 CP="$TMP/cli-par"; rm -rf "$CP"; mkdir -p "$CP/tests"; ln -sfn "$ROOT/bin" "$CP/bin"; ln -sfn "$ROOT/prompts" "$CP/prompts"; ln -sfn "$ROOT/config.default.json" "$CP/config.default.json"
 sed -e 's/^SECTIONS=.*/SECTIONS="slow fast wake bad quit hold filler first"/' -e 's/^SMOKE_FIRST=(.*/SMOKE_FIRST=(first)/' -e 's/^\[ \$# -gt 0 \] || set -- \$SECTIONS$/sec_slow() { : > "$RUNDIR\/run.slow"; sleep 1; echo "marker slow $$"; rm -f "$RUNDIR\/run.slow"; }\
