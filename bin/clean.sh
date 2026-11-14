@@ -65,13 +65,14 @@ for id in "${TARGETS[@]}"; do
     # claude/codex: the answer to the role message is waited out after the loop, or a task dispatched right after lands in it and Orca reports the worker stopped without reporting
     case "$(rstr "$CFG" "$id" agent)" in
       claude|codex|"") ANS+=("$h");;
+      opencode)
+        # OpenCode: the answer is waited out here, right after its role message (not after the loop); the tab's session is tracked after that same wait, before the next tab's /new
+        pace 2
+        orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true
+        # /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
+        if [ -n "$ocf" ]; then oc_retrack "$id" "$since" "$GITDIR"; fi;;
       *) if [ "$id" = planner ]; then orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true; fi;;
     esac
-    # OpenCode: /new left the tab in a session whose id the kit did not choose; track it and delete the old one (it was idle)
-    if [ -n "$ocf" ]; then
-      orca terminal wait --terminal "$h" --for tui-idle --timeout-ms "$wms" --json >/dev/null || true
-      oc_retrack "$id" "$since" "$GITDIR"
-    fi
   else
     echo "$t: context cleaned, but the role could not be resent. Resend it with: orca terminal send --terminal $h --text \"\$($(kit_env)$KIT/bin/clean.sh --msg $id)\" --enter"; RC=1
   fi
