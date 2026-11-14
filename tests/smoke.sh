@@ -2093,10 +2093,10 @@ check "bounded_run: the command's status (also its own 124, with BOUNDED_TIMED 0
 err|0:0|3:done|rc=7 T=0|rc=124 T=0~|rc=127 T=0"
 # bounded_run limits: positive numbers run, anything else is refused with status 2 and nothing is run
 rm -f "$TMP/lim.ran"; LG=""; LB=""; LX=""
-for x in 2 0.2 .5; do LG="$LG$(rlb "$x" lbl sh -c "echo ran >> '$TMP/lim.ran'" | tr '\n' '~')|"; done
+for x in 2 0.2 .5 5. 2147483647 0002147483647 1000000000 999999999 2147483647.0 2147483646.9; do LG="$LG$(rlb "$x" lbl sh -c "echo ran >> '$TMP/lim.ran'" | tr '\n' '~')|"; done
 LRAN="$(wc -l < "$TMP/lim.ran" | tr -d ' ')"; rm -f "$TMP/lim.ran"
-for x in abc "" 1.2.3 . 0 0.0 -1 1e3; do LB="$LB$(rlb "$x" lbl sh -c "echo ran >> '$TMP/lim.ran'" | tr '\n' '~')|"; LX="${LX}bounded_run: bad limit '$x' for lbl~rc=2 T=0~|"; done
-check "bounded_run: limits 2, 0.2 and .5 run; abc, empty, 1.2.3, ., 0, 0.0, -1 and 1e3 print 'bounded_run: bad limit' with the label, return 2 and run nothing" "$LG$LRAN|$LB$([ -e "$TMP/lim.ran" ] && echo ran || echo none)" "rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|3|${LX}none"
+for x in abc "" 1.2.3 . 0 0.0 -1 1e3 1e20 2147483648 02147483648 2147483647.5 2147483647.001 9999999999 100000000000000000000 99999999999999999999999999999999; do LB="$LB$(rlb "$x" lbl sh -c "echo ran >> '$TMP/lim.ran'" | tr '\n' '~')|"; LX="${LX}bounded_run: bad limit '$x' for lbl~rc=2 T=0~|"; done
+check "bounded_run: limits 2, 0.2, .5, 5., 2147483647, 0002147483647, 1000000000, 999999999, 2147483647.0 and 2147483646.9 run; abc, empty, 1.2.3, ., 0, 0.0, -1, 1e3, 1e20, 2147483648, 02147483648, 2147483647.5, 2147483647.001, 9999999999, 100000000000000000000 and 99999999999999999999999999999999 print 'bounded_run: bad limit' with the label, return 2 and run nothing; 2147483647 leaves no watchdog sleep and no marker" "$LG$LRAN|$LB$([ -e "$TMP/lim.ran" ] && echo ran || echo none)|$(ls -A "$RLT" | wc -l | tr -d ' '):$(pgrep -f 'sleep 214748364' | wc -l | tr -d ' ')" "rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|rc=0 T=0~|10|${LX}none|0:0"
 # bounded_run options: --cd, shell functions, $(...)
 CDD="$TMP/cd dir"; mkdir -p "$CDD"
 O1="$(rlb --cd "$CDD" 5 lbl sh -c 'echo "${PWD##*/}"' | tr '\n' '~')"; O2="$(rlb --cd "$CDD" 5 lbl sh -c 'exit 7')"
@@ -7335,13 +7335,30 @@ case "$1 $2" in
 esac
 FAKE
 chmod +x "$FM/bin/orca"
+mkdir -p "$FM/tick"   # a clock that ticks one second between its calls (only on the PATH of the one tick call below: the fake orca keeps the real date)
+cat > "$FM/tick/date" <<'FAKEDATE'
+#!/bin/sh
+F="$(dirname "$0")/.."
+n=$(( $(cat "$F/tick.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$F/tick.n"
+[ "$n" = 1 ] && echo 1700000000 || echo 1700000001
+FAKEDATE
+chmod +x "$FM/tick/date"
 fmreset() { rm -f "$FM/calls.log" "$FM/wait.rc" "$FM/show.n" "$FM/send.sh" "$FM/empty_after" "$FM"/preview "$FM"/preview.* "$FM/wt/.git/orca-roles-front-model.log"; printf '❯ \n' > "$FM/preview"; : > "$FM/calls.log"; }
 fmset() { local rc=0; FMOUT="$(PATH="$FM/bin:$PATH" ORCA_ROLES_PACE=0 front_set_model "$@" 2>&1)" || rc=$?; FMRC=$rc; }
 nsent() { grep -c 'terminal send' "$FM/calls.log" || true; }
 export ORCA_ROLES_CLAUDE_SETTINGS="$FM/settings.json"
 
+fmreset; rm -f "$FM/tick.n"; FMTICK=0; PATH="$FM/tick:$FM/bin:$PATH" ORCA_ROLES_PACE=0 front_wait_ready h1 1000 >/dev/null 2>&1 || FMTICK=$?
+FMT="|tick:$FMTICK:$(grep -c 'terminal wait.*--timeout-ms 1000' "$FM/calls.log" || true)"
 fmreset; printf '{"model":"old","k":1}\n' > "$FM/settings.json"; fmset h1 m1 1000
-check "front_set_model: idle tab, empty composer -> wait, then show, then '/model m1' with Enter; settings untouched, no put-back line" "$FMRC:$(awk '{print $1" "$2}' "$FM/calls.log" | head -3 | tr '\n' ,):$(grep -c -- '--text /model m1 --enter' "$FM/calls.log"):$(jq -c . "$FM/settings.json"):$(printf '%s' "$FMOUT" | grep -c 'Put back')" '0:terminal wait,terminal show,terminal send,:1:{"model":"old","k":1}:0'
+check "front_set_model: idle tab, empty composer -> wait, then show, then '/model m1' with Enter; settings untouched, no put-back line; a clock tick before the first wait still waits once with the full timeout" "$FMRC:$(awk '{print $1" "$2}' "$FM/calls.log" | head -3 | tr '\n' ,):$(grep -c -- '--text /model m1 --enter' "$FM/calls.log"):$(jq -c . "$FM/settings.json"):$(printf '%s' "$FMOUT" | grep -c 'Put back')$FMT" '0:terminal wait,terminal show,terminal send,:1:{"model":"old","k":1}:0|tick:0:1'
+
+# front_wait_ready's own contract: the first wait gets the whole timeout whatever the clock reads (1 ms and multi-second values, where the
+# remaining-time arithmetic differs), and a timeout that is not a whole number of at least 1 returns 1 at once, with no orca call and no message
+fmw() { local rc=0; PATH="$FM/tick:$FM/bin:$PATH" ORCA_ROLES_PACE=0 front_wait_ready h1 "$1" >/dev/null 2>"$FM/err" || rc=$?; FMWRC=$rc; }   # fmw <timeout>: one front_wait_ready call under the ticking clock
+FWT=""; for v in 1 5000 60000; do fmreset; rm -f "$FM/tick.n"; fmw "$v"; FWT="$FWT $v:$FMWRC:$(grep -c -- "terminal wait .*--timeout-ms $v " "$FM/calls.log" || true)"; done
+FWB=""; for v in 0 "" abc -5; do fmreset; rm -f "$FM/tick.n"; fmw "$v"; FWB="$FWB [$v]:$FMWRC:$(grep -c 'terminal wait' "$FM/calls.log" || true):$(wc -l < "$FM/err" | tr -d ' ')"; done
+check "front_wait_ready: the first wait gets the whole timeout with a clock that ticks between the deadline and the wait (1 ms, 5 s and 60 s); a timeout of 0, empty, 'abc' or -5 -> return 1 at once, no orca call, nothing on stderr" "$FWT|$FWB" " 1:0:1 5000:0:1 60000:0:1| [0]:1:0:0 []:1:0:0 [abc]:1:0:0 [-5]:1:0:0"
 
 fmreset; printf '{"model":"old","k":1,"n":{"a":[1,2]}}\n' > "$FM/settings.json"; printf '#!/bin/sh\njq ".model=\\"m1\\" | .theme=\\"dark\\"" "%s" > "%s.t" && mv "%s.t" "%s"\n' "$FM/settings.json" "$FM/settings.json" "$FM/settings.json" "$FM/settings.json" > "$FM/send.sh"
 fmset h1 m1 1000; RV1="$FMRC:$(jq -c . "$FM/settings.json"):$(printf '%s' "$FMOUT" | grep -c 'Put back the default model')"
@@ -7648,7 +7665,7 @@ ptr remove --force v1
 }
 
 sec_model_check() {
-# A role whose model does not exist is detected, recorded and escalated, never switched (kickoff.sh), with a fake orca whose screen accumulates history
+# A role whose model does not exist is detected, recorded and reported, never switched (kickoff.sh), with a fake orca whose screen accumulates history
 MF="$TMP/mf"; mkdir -p "$MF/gd" "$MF/bin" "$MF/wt"; git -C "$MF/wt" init -q
 cat > "$MF/bin/orca" <<EOS
 #!/bin/sh
@@ -7680,7 +7697,7 @@ case "\$1 \$2" in
     to=""; sub=""; body=""; ty=""; fr=""; while [ \$# -gt 0 ]; do case "\$1" in --to) to="\$2";; --subject) sub="\$2";; --body) body="\$2";; --type) ty="\$2";; --from) fr="\$2";; esac; shift; done
     if [ -f "$MF/nosender" ] && [ -z "\$fr" ] && [ -z "\${ORCA_TERMINAL_HANDLE:-}" ]; then echo '{"id":"local","ok":false,"error":{"code":"no_active_sender_terminal","message":"Could not determine the sender terminal for this orchestration command."}}'; exit 1; fi
     case "\$sub" in
-      *" model unavailable") echo "ESC \$to|\$sub|\$body" >> "\$L"; f="$MF/failsend";;
+      *" model unavailable") echo "NOTE \$to|\$sub|\$body" >> "\$L"; f="$MF/failsend";;
       *) echo "HND \$to|\$ty|\$sub|\$(printf '%s' "\$body" | tr '\\n' '/')" >> "\$L"; f="$MF/failhnd";;
     esac
     if [ -f "\$f" ]; then if [ -f "$MF/failout" ]; then cat "$MF/failout"; else echo '{"error":{"code":"boom","message":"fake failure"}}'; fi; exit 1; fi;;
@@ -7704,10 +7721,10 @@ mfc() { printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent"
 models() { cat "$MF/gd/orca-roles.models" 2>/dev/null | tr '\n' ' '; }
 nomodel() { grep -c '/model' "$MF/orca.log" || true; }
 hnds() { grep '^HND ' "$MF/orca.log" || true; }
-escs() { grep '^ESC ' "$MF/orca.log" || true; }
-nesc() { escs | wc -l | tr -d ' '; }
+mnotes() { grep '^NOTE ' "$MF/orca.log" || true; }
+nmnote() { mnotes | wc -l | tr -d ' '; }
 DEVOK='"title": "Dev", "model": "claude-opus-5-5"'
-BODY="ESC hp|Dev model unavailable|Dev did not start: its model claude-opus-5-5 is not available (There's an issue with the selected model). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
+BODY="NOTE hp|Dev model unavailable|Dev did not start: its model claude-opus-5-5 is not available (There's an issue with the selected model). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
 # model_error_regex
 MR="$MF/mr.json"; echo '{"defaults":{"agent":"claude"},"roles":{"c":{},"x":{"agent":"codex"},"u":{"agent":"custom"},"u2":{"agent":"custom","modelError":"boom {model}!"}}}' > "$MR"
 check "model_error_regex: claude" "$(model_error_regex "$MR" c m)" "There's an issue with the selected model|The model [^ ]+ is not available on your|API Error \([^)]+\): [^.]*[Mm]odel [Ii][Dd]"
@@ -7715,10 +7732,10 @@ check "model_error_regex: no model, no detection" "$(model_error_regex "$MR" c "
 check "model_error_regex: codex escapes the model id" "$(model_error_regex "$MR" x 'gpt-5.5')" '(unexpected status|ERROR:)[^E]{0,200}gpt-5\.5[^E]{0,200}(does not exist|not supported|model_not_found)'
 check "model_error_regex: custom without modelError" "$(model_error_regex "$MR" u m)" ""
 check "model_error_regex: custom with {model} escaped" "$(model_error_regex "$MR" u2 'a.b')" 'boom a\.b!'
-# claude: bad model -> FAILED, exact escalation, nothing is switched
+# claude: bad model -> FAILED, exact notice, nothing is switched
 mf "$(mfc "$DEVOK")" bad "dev"
 check "model-check: bad model recorded as FAILED" "$(models)" "DEV=FAILED:claude-opus-5-5 "
-check "model-check: exact escalation" "$(escs)" "$BODY"
+check "model-check: exact notice" "$(mnotes)" "$BODY"
 check "model-check: no /model is ever sent" "$(nomodel)" "0"
 # kickoff.sh removes only its own registry file when it ends
 printf '#!/bin/sh\nmkdir -p "%s/gd/orca-roles.kickoff.d"; echo dev > "%s/gd/orca-roles.kickoff.d/$$"; echo "$$" > "%s/own.pid"\nexec "$@"\n' "$MF" "$MF" "$MF" > "$MF/regrun"; chmod +x "$MF/regrun"
@@ -7746,40 +7763,40 @@ mf "$(mfc "$DEVOK")" clean "local-coordinator"
 check "kickoff.sh: the next start's send carries the wait for the coordinator and removes the marker" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c 'opened by a coordinator' "$MF/text.hp")|$(grep -c 'Kept the coordinator' "$MF/out.log" || true)" "gone|1|0"
 rm -rf "${CM%/*}" "$MF/gd/orca-roles.coordinator"
 mf "$(mfc "$DEVOK")" clean "dev"
-check "model-check: good model recorded, no escalation" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+check "model-check: good model recorded, no notice" "$(models):$(nmnote)" "DEV=claude-opus-5-5 :0"
 for how in new remembered; do
   if [ "$how" = new ]; then STALE=1 mf "$(mfc "$DEVOK")" clean "dev"; else STALE=1 REM=dev mf "$(mfc "$DEVOK")" clean "dev"; fi
-  check "model-check: stale error, good model, $how role" "$(models):$(nesc):$(nomodel)" "DEV=claude-opus-5-5 :0:0"
+  check "model-check: stale error, good model, $how role" "$(models):$(nmnote):$(nomodel)" "DEV=claude-opus-5-5 :0:0"
 done
 STALE=1 mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: a stale error does not hide a new one" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: a stale error does not hide a new one" "$(models):$(nmnote)" "DEV=FAILED:claude-opus-5-5 :1"
 PASTE=1 mf "$(mfc "$DEVOK")" bad "dev"
 check "model-check: collapsed paste still detected" "$(models)" "DEV=FAILED:claude-opus-5-5 "
 ERRTXT="The model us.anthropic.claude-x is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: Bedrock text detected" "$(models):$(escs | grep -c 'The model us.anthropic.claude-x is not available on your)')" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: Bedrock text detected" "$(models):$(mnotes | grep -c 'The model us.anthropic.claude-x is not available on your)')" "DEV=FAILED:claude-opus-5-5 :1"
 ERRWRAP=model mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: wrapped error detected (indented continuation)" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: wrapped error detected (indented continuation)" "$(models):$(nmnote)" "DEV=FAILED:claude-opus-5-5 :1"
 BREG="The model us.anthropic.claude-opus-5-5-20260101-v1:0 is not available on your bedrock deployment."
 ERRWRAP="on your" ERRTXT="$BREG" mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: wrapped Bedrock error detected" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: wrapped Bedrock error detected" "$(models):$(nmnote)" "DEV=FAILED:claude-opus-5-5 :1"
 ERRTXT="API Error (us.anthropic.claude-opus-5-5-v9:0): The provided model identifier is invalid.. Run /model to pick a different model." mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: Bedrock invalid model id detected" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: Bedrock invalid model id detected" "$(models):$(nmnote)" "DEV=FAILED:claude-opus-5-5 :1"
 ERRTXT="API Error (500): Internal server error" mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: other API errors are not model errors" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+check "model-check: other API errors are not model errors" "$(models):$(nmnote)" "DEV=claude-opus-5-5 :0"
 STALETXT="The model us.anthropic.old-1 is not available on your account." STALE=1 ERRTXT="The model us.anthropic.new-2 is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: the escalation quotes the newest error" "$(escs | grep -c 'is not available (The model us.anthropic.new-2 is not available on your)')" "1"
+check "model-check: the notice quotes the newest error" "$(mnotes | grep -c 'is not available (The model us.anthropic.new-2 is not available on your)')" "1"
 ERRTXT="Warning: model x isn't described by this version's model catalog" mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: catalog warning is fine" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+check "model-check: catalog warning is fine" "$(models):$(nmnote)" "DEV=claude-opus-5-5 :0"
 VIEW=2 STALE=1 REM=dev mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: known limit: small pane at the first check" "$(models):$(nesc)" "DEV=claude-opus-5-5 :0"
+check "model-check: known limit: small pane at the first check" "$(models):$(nmnote)" "DEV=claude-opus-5-5 :0"
 mf "$(mfc "$DEVOK" | jq -c 'del(.defaults.agent)')" bad "dev"
 check "model-check: a role with no agent is treated as claude" "$(models)" "DEV=FAILED:claude-opus-5-5 "
 # codex
 CXERR='ERROR: unexpected status 404 Not Found: The model `gpt-5.5` does not exist or you do not have access to it.'
 ERRTXT="$CXERR" mf "$(mfc '"title": "Dev", "agent": "codex", "model": "gpt-5.5"')" bad "dev"
-check "model-check: codex bad model -> FAILED" "$(models):$(nesc)" "DEV=FAILED:gpt-5.5 :1"
+check "model-check: codex bad model -> FAILED" "$(models):$(nmnote)" "DEV=FAILED:gpt-5.5 :1"
 ERRTXT="${CXERR//gpt-5.5/gpt-5x5}" mf "$(mfc '"title": "Dev", "agent": "codex", "model": "gpt-5.5"')" bad "dev"
-check "model-check: codex model id is not a regex" "$(models):$(nesc)" "DEV=gpt-5.5 :0"
+check "model-check: codex model id is not a regex" "$(models):$(nmnote)" "DEV=gpt-5.5 :0"
 ERRTXT="$CXERR" mf "$(mfc '"title": "Dev", "agent": "codex"')" bad "dev"
 check "model-check: codex without model, no detection" "$(models)" ""
 # custom
@@ -7791,15 +7808,15 @@ check "model-check: custom without modelError, no detection" "$(models)" ""
 # no model, planner, failed send
 mf "$(mfc '"title": "Dev"')" bad "dev"
 check "model-check: no model -> no detection, no line" "$(models)" ""
-mf "$(mfc "$DEVOK")" bad "planner"; PF="$(models):$(nesc)"
+mf "$(mfc "$DEVOK")" bad "planner"; PF="$(models):$(nmnote)"
 mf "$(mfc "$DEVOK" | jq -c '.roles["local-coordinator"].model = "claude-opus-5-5"')" bad "local-coordinator"
-check "model-check: the Planner (a worker in programmer) FAILED -> recorded and escalated to the local coordinator; the local coordinator's own FAILED -> recorded, no escalation" "$PF|$(models):$(nesc)" "PLANNER=FAILED:claude-opus-5-5 :1|LOCAL_COORDINATOR=FAILED:claude-opus-5-5 :0"
+check "model-check: the Planner (a worker in programmer) FAILED -> recorded and the local coordinator told; the local coordinator's own FAILED -> recorded, no notice" "$PF|$(models):$(nmnote)" "PLANNER=FAILED:claude-opus-5-5 :1|LOCAL_COORDINATOR=FAILED:claude-opus-5-5 :0"
 RC=0; FAILSEND=1 mf "$(mfc "$DEVOK")" bad "dev" || RC=$?
-check "model-check: failed escalation send is ignored" "$RC:$(models):$(grep -c 'Could not tell the local coordinator: Dev model unavailable (boom: fake failure)' "$MF/out.log")" "0:DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: failed notice send is ignored" "$RC:$(models):$(grep -c 'Could not tell the local coordinator: Dev model unavailable (boom: fake failure)' "$MF/out.log")" "0:DEV=FAILED:claude-opus-5-5 :1"
 # parallel
 mf "$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"}')" bad "dev tester"
 check "model-check: two roles, both lines" "$(sort "$MF/gd/orca-roles.models" | tr '\n' ' ')" "DEV=FAILED:claude-opus-5-5 TESTER=FAILED:claude-opus-5-5 "
-check "model-check: two roles, both escalations" "$(escs | cut -d'|' -f2 | sort | tr '\n' ' ')" "Dev model unavailable Tester model unavailable "
+check "model-check: two roles, both notices" "$(mnotes | cut -d'|' -f2 | sort | tr '\n' ' ')" "Dev model unavailable Tester model unavailable "
 check "model-check: no leftover partial files" "$([ -e "$MF/gd/orca-roles.models.d" ] && echo 1 || echo 0)" "0"
 MF3="$(mfc "$DEVOK" | jq -c '.roles.tester = {"title": "Tester", "model": "claude-opus-5-5"} | .roles["code-reviewer"] = {"title": "Code-Reviewer", "model": "claude-opus-5-5"}')"
 echo 4 > "$MF/waitdelay"; t0=$SECONDS
@@ -7819,15 +7836,15 @@ check "model-check: every wait is bounded by kickoffTimeoutSeconds" "$(grep -vc 
 check "model-check: waits happened" "$(( $(wc -l < "$MF/waits.log") > 1 ))" "1"
 # more edges: remembered bad role, old and new codex error, long text cut, writes confined to the git dir
 REM=dev mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: remembered role with a bad model -> FAILED" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: remembered role with a bad model -> FAILED" "$(models):$(nmnote)" "DEV=FAILED:claude-opus-5-5 :1"
 CXD='"title": "Dev", "agent": "codex", "model": "gpt-5.5"'
 STALE=1 STALETXT="$CXERR" ERRTXT="$CXERR" mf "$(mfc "$CXD")" bad "dev"
-check "model-check: codex stale error does not merge with the new one" "$(models):$(nesc)" "DEV=FAILED:gpt-5.5 :1"
+check "model-check: codex stale error does not merge with the new one" "$(models):$(nmnote)" "DEV=FAILED:gpt-5.5 :1"
 STALE=1 STALETXT="$CXERR" mf "$(mfc "$CXD")" clean "dev"
-check "model-check: codex stale error, good model" "$(models):$(nesc)" "DEV=gpt-5.5 :0"
+check "model-check: codex stale error, good model" "$(models):$(nmnote)" "DEV=gpt-5.5 :0"
 PAD="$(printf 'x%.0s' $(seq 1 150))"
 ERRTXT="ERROR: unexpected status 404 $PAD gpt-5.5 $PAD does not exist" mf "$(mfc "$CXD")" bad "dev"
-check "model-check: matched text in the escalation is cut to 200 characters" "$(escs | sed 's/^[^(]*(//; s/)\. config.json.*$//' | tr -d '\n' | wc -c | tr -d ' ')" "200"
+check "model-check: matched text in the notice is cut to 200 characters" "$(mnotes | sed 's/^[^(]*(//; s/)\. config.json.*$//' | tr -d '\n' | wc -c | tr -d ' ')" "200"
 mkdir -p "$TMP/home"; HB="$(cd "$TMP/home" && find . | sort | shasum)"
 mf "$(mfc "$DEVOK")" bad "dev tester"
 check "model-check: nothing outside the git dir is written" "$(find "$MF/wt" -mindepth 1 -not -path "$MF/wt/.git" -not -path "$MF/wt/.git/*" | wc -l | tr -d ' '):$(ls "$MF/gd" | tr '\n' ' '):$(cd "$TMP/home" && find . | sort | shasum | cmp -s - <(echo "$HB") && echo same || echo changed)" "0:orca-roles.env orca-roles.kicked orca-roles.models :same"
@@ -7864,7 +7881,7 @@ FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"
 check "handles: a failed send is reported with the cat hint" "$(grep -c "^Could not tell the local coordinator the new handles (boom: fake failure); tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log"):$(grep -c 'orchestration send' "$MF/orch.log")" "1:1"
 NSL="^No Orca terminal identity here (no_active_sender_terminal): sent as the local coordinator's own tab\\.\$"; NSC() { grep -c "$NSL" "$MF/out.log" || true; }; FRM() { grep -c -- '--from hp --to hp' "$MF/orch.log" || true; }
 NS1="$(NOSENDER=1 mf "$(mfc "$DEVOK")" clean "dev"; echo "$(hnds | wc -l | tr -d ' '):$(FRM):$(NSC):$(grep -c '^Told the local coordinator the new handles\.$' "$MF/out.log")")"
-NS2="$(NOSENDER=1 mf "$(mfc "$DEVOK")" bad "dev"; echo "$(nesc):$(grep -c -- '--type escalation' "$MF/orch.log" || true):$(FRM):$(NSC):$(grep -c '^Could not tell' "$MF/out.log" || true)")"
+NS2="$(NOSENDER=1 mf "$(mfc "$DEVOK")" bad "dev"; echo "$(nmnote):$(grep -c -- '--type escalation' "$MF/orch.log" || true):$(FRM):$(NSC):$(grep -c '^Could not tell' "$MF/out.log" || true)")"
 NS3="$(NOSENDER=1 FAILHND=1 mf "$(mfc "$DEVOK")" clean "dev"; echo "$(hnds | wc -l | tr -d ' '):$(grep -c 'orchestration send' "$MF/orch.log"):$(NSC):$(grep -c "^Could not tell the local coordinator the new handles (boom: fake failure); tell it to run: cat $MF/gd/orca-roles.env\$" "$MF/out.log")")"
 check "sender: with no Orca identity each kickoff message is sent again as the local coordinator's own tab" "$NS1|$NS2|$NS3" "1:1:1:1|1:0:2:2:0|1:2:0:1"
 FE() { sed -n 's/^Could not tell the local coordinator the new handles (\(.*\)); tell it to run: cat .*$/\1/p' "$MF/out.log"; }
@@ -7966,29 +7983,29 @@ ocm_run() {  # <role json fields> <models lines> <mode>
   ORCA_ROLES_OC_MODELS_RETRY=0 OCSCREEN="${OCSCREEN-  ctrl+p commands}" mf "$(mfc "$1")" clean "dev"
 }
 OCD='"title": "Dev", "agent": "opencode", "model": "p/m"'
-OCMSG="ESC hp|Dev model unavailable|Dev did not start: its model p/m is not available (not in opencode models). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
+OCMSG="NOTE hp|Dev model unavailable|Dev did not start: its model p/m is not available (not in opencode models). config.json is unchanged. To fix it yourself: set roles.dev.model in ~/.orca-roles/config.json, then close its tab with ~/.orca-roles/bin/close-role.sh dev and run roles --open dev (without other options, so this worktree's saved options are kept)."
 ocm_run "$OCD" "p/m
 p/other" ""
-check "opencode model: listed -> recorded, no line, no escalation, one list call run in the worktree" "$(models):$(nesc):$(grep -c 'not available' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' '):$(grep -c "PWD=$(cd "$MF/wt" && pwd -P)\$" "$MF/oc.log")" "DEV=p/m :0:0:1:1"
+check "opencode model: listed -> recorded, no line, no notice, one list call run in the worktree" "$(models):$(nmnote):$(grep -c 'not available' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' '):$(grep -c "PWD=$(cd "$MF/wt" && pwd -P)\$" "$MF/oc.log")" "DEV=p/m :0:0:1:1"
 ocm_run "$OCD" "p/other" ""
-check "opencode model: absent -> line, FAILED, Planner told once with check_model's wording" "$(models):$(escs):$(grep -c '^dev: model p/m is not available (not in opencode models)$' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' ')" "DEV=FAILED:p/m :$OCMSG:1:2"
+check "opencode model: absent -> line, FAILED, Planner told once with check_model's wording" "$(models):$(mnotes):$(grep -c '^dev: model p/m is not available (not in opencode models)$' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' ')" "DEV=FAILED:p/m :$OCMSG:1:2"
 check "opencode model: the role message is still sent" "$(grep -c '^SEND ' "$MF/orca.log")" "1"
 ocm_run "$OCD" "p/m" warm
-check "opencode model: absent on the first call only -> present (retry)" "$(models):$(nesc):$(wc -l < "$MF/oc.log" | tr -d ' ')" "DEV=p/m :0:2"
+check "opencode model: absent on the first call only -> present (retry)" "$(models):$(nmnote):$(wc -l < "$MF/oc.log" | tr -d ' ')" "DEV=p/m :0:2"
 ocm_run "$(printf '"title": "Dev", "agent": "opencode", "model": "p/m#high"')" "p/m" ""
-check "opencode model: a #variant is ignored in the comparison" "$(models):$(nesc)" "DEV=p/m#high :0"
+check "opencode model: a #variant is ignored in the comparison" "$(models):$(nmnote)" "DEV=p/m#high :0"
 ocm_run "$(printf '"title": "Dev", "agent": "opencode", "model": "p/m#high"')" "p/other" ""
-check "opencode model: absent with a #variant is reported with the configured model" "$(models):$(nesc)" "DEV=FAILED:p/m#high :1"
+check "opencode model: absent with a #variant is reported with the configured model" "$(models):$(nmnote)" "DEV=FAILED:p/m#high :1"
 ocm_run "$OCD" "p/m" fail
-check "opencode model: listing fails twice -> could not be checked, nothing FAILED, Planner not told" "$(models):$(nesc):$(grep -c '^dev: could not check that model p/m exists' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' ')" ":0:1:2"
+check "opencode model: listing fails twice -> could not be checked, nothing FAILED, Planner not told" "$(models):$(nmnote):$(grep -c '^dev: could not check that model p/m exists' "$MF/out.log"):$(wc -l < "$MF/oc.log" | tr -d ' ')" ":0:1:2"
 ocm_run '"title": "Dev", "agent": "codex", "model": "p/m"' "p/other" ""
 check "opencode model: a codex role never calls opencode models" "$(test -f "$MF/oc.log" && echo called || echo no)" "no"
 ocm_run '"title": "Dev", "model": "p/m"' "p/other" ""
 check "opencode model: a claude role never calls opencode models" "$(test -f "$MF/oc.log" && echo called || echo no)" "no"
 ocm_run '"title": "Dev", "agent": "opencode"' "p/other" ""
-check "opencode model: an opencode role with no model is not checked" "$(test -f "$MF/oc.log" && echo called || echo no):$(models):$(nesc)" "no::0"
+check "opencode model: an opencode role with no model is not checked" "$(test -f "$MF/oc.log" && echo called || echo no):$(models):$(nmnote)" "no::0"
 ocm_run "$OCD, \"modelError\": \"no such {model}\"" "p/m" ""
-check "opencode model: listed model with a modelError of its own, screen check still records" "$(models):$(nesc)" "DEV=p/m :0"
+check "opencode model: listed model with a modelError of its own, screen check still records" "$(models):$(nmnote)" "DEV=p/m :0"
 OCSCREEN='' ocm_run "$OCD" "p/m" ""; G1="$(grep -c '^Dev: its OpenCode screen showed no prompt after 1 s; sending its role anyway\.$' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true):$(grep -e 'showed no prompt' -e '^Prompt sent to hd' "$MF/out.log" | head -1 | grep -c 'showed no prompt' || true)"
 ocm_run "$OCD" "p/m" ""; G2="$(grep -c 'showed no prompt' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true)"
 OCSCREEN='' REUSED=dev ocm_run "$OCD" "p/m" ""; G3="$(grep -c 'showed no prompt' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true)"
@@ -8002,11 +8019,11 @@ rm -f "$MF/oc.mode" "$MF/oc.models" "$MF/oc.log"
 # defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
 CUD='"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"'
 ERRTXT="dflt my-model" mf "$(mfc "$CUD" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"
-check "model-check: a custom role inherits defaults.modelError" "$(models):$(nesc)" "DEV=FAILED:my-model :1"
+check "model-check: a custom role inherits defaults.modelError" "$(models):$(nmnote)" "DEV=FAILED:my-model :1"
 ERRTXT="dflt my-model" mf "$(mfc "$CUD, \"modelError\": \"own {model}\"" | jq -c '.defaults.modelError = "dflt {model}"')" bad "dev"
-check "model-check: the role's modelError wins over the default" "$(models):$(nesc)" "DEV=my-model :0"
+check "model-check: the role's modelError wins over the default" "$(models):$(nmnote)" "DEV=my-model :0"
 STALETXT="The model us.anthropic.old-1 is not available on your account." STALE=1 ERRTXT="The model us.anthropic.new-2 is not available on your account." mf "$(mfc "$DEVOK")" bad "dev"
-check "model-check: an old and a new Bedrock error are two matches" "$(models):$(nesc)" "DEV=FAILED:claude-opus-5-5 :1"
+check "model-check: an old and a new Bedrock error are two matches" "$(models):$(nmnote)" "DEV=FAILED:claude-opus-5-5 :1"
 for bad in '""' '5'; do
   check "check_config: defaults modelError $bad rejected" "$(cc "$(printf '{"defaults":{"modelError":%s},"roles":{}}' "$bad")")" "ERROR: invalid configuration: modelError must be a non-empty string"
 done
@@ -9856,7 +9873,7 @@ mbox; mkdir -p "$DSG/orca-roles-hidden"; echo "starting - - - x" > "$DSG/orca-ro
 mv "$DS/inbox.json" "$DS/inbox.off"; rm -f "$DSG"/orca-roles-mail.run_m.*; echo $(( $(date +%s) + 60 )) > "$DSG/orca-roles-mail.run_m.req"; MKEEP=1 MMAX=1 mw none; M9="$MW"; mv "$DS/inbox.off" "$DS/inbox.json"
 # one watcher per Run: a lock left by a dead watcher whose pid now names another live process does not hold it; a second --mail while the first lives starts nothing, and a watcher started while it lives exits on the lock (one 'started' in the log); it ends once the Run has no open dispatch, and leaves no lock
 cp "$DS/wl.open" "$DS/wl.json"; rm -f "$DSG/orca-roles-mail.log"; rm -f "$DSG"/orca-roles-mail.run_m.*; echo "$$ not-its-start" > "$DSG/orca-roles-mail.run_m.pid"
-mstart() { (cd "$DS/proj" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=5 "$ROOT/bin/dispatch.sh" "$@") >/dev/null 2>&1; }   # mstart <args>: dispatch.sh in run_m's test worktree
+mstart() { (cd "$DS/proj" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=60 "$ROOT/bin/dispatch.sh" "$@") >/dev/null 2>&1; }   # mstart <args>: dispatch.sh in run_m's test worktree; 60 s so the first watcher outlives a gap over 5 s before the later two starts (mend waits at most 5 s)
 mstart --mail --run run_m; n=0; until grep -q 'mail run_m: started$' "$DSG/orca-roles-mail.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.1; n=$((n + 1)); done
 mstart --mail --run run_m; mstart --mail-watch run_m
 cp "$DS/wl.none" "$DS/wl.json"; mend run_m; MP="$(grep -c 'mail run_m: started$' "$DSG/orca-roles-mail.log" || true)"
@@ -10124,6 +10141,8 @@ printf '#!/bin/sh\ntouch %s\n[ "$1" = -m ] && shift\nexec "$@"\n' "$TRKM" > "$TR
 printf '#!/bin/sh\ntouch %s\nwhile [ $# -gt 0 ]; do case "$1" in -k|-s|--kill-after|--signal) shift 2 ;; -*) shift ;; *) break ;; esac; done\nshift\nexec "$@"\n' "$TRKM" > "$TRKB/bin/timeout"; chmod +x "$TRKB/bin/timeout"
 cp "$TRKB/bin/timeout" "$TRKB/bin/gtimeout"; chmod +x "$TRKB/bin/gtimeout"
 printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/tests/smoke.sh"; chmod +x "$TRKB/tests/smoke.sh"
+for TRA in npm go cargo make mvn mvnw gradle gradlew; do printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/bin/$TRA"; chmod +x "$TRKB/bin/$TRA"; done
+for TRA in mvnw gradlew; do printf '#!/bin/sh\ntouch %s\nexit 0\n' "$TRKM" > "$TRKB/$TRA"; chmod +x "$TRKB/$TRA"; done
 trk_run() { ( cd "$TRKB" && export PATH="$TRKB/bin:$PATH" && ORCA_ROLES_TEST_LOG="$TRL" "$TRS" "$@" ); }
 # the C1 family, one form per line so that the other-role check below reuses the same list
 TRQS="tests/smoke.sh
@@ -10141,7 +10160,34 @@ timeout -k 5 600 pytest
 timeout --kill-after=5 600 pytest -q
 gtimeout -s TERM 600 npx vitest run
 env SMOKE_JOBS=1 tests/smoke.sh
-uv run pytest -x"
+uv run pytest -x
+npm test
+npm t
+npm run test
+npm run-script test
+npm test --
+npm test -- --coverage
+go test
+go test ./...
+go test -v ./...
+go test all
+go test -count 1 ./...
+go test -run= ./...
+cargo test
+cargo test --workspace
+cargo test -- --nocapture
+make test
+make -j4 test
+make -j 4 test
+mvn test
+mvn -q test
+mvn clean verify
+./mvnw test
+gradle test
+gradle check
+./gradlew clean test
+timeout 600 go test ./...
+env A=1 cargo test"
 # boundaries of the same family: nested wrappers, a wrapper named by its path, the other timeout option forms, a numeric-only selection
 TRQB="$TRQS
 env A=1 timeout 600 npx vitest run
@@ -10156,7 +10202,20 @@ timeout -k5 600 pytest
 timeout --kill-after 5 600 npx vitest run
 bunx vitest
 poetry run pytest
-pytest 2"
+pytest 2
+timeout 600 npm test
+env A=1 gradlew check
+npm t -- --coverage
+go test -bench= ./...
+mvn -Dtest= test
+mvn test -pl
+gradle test --tests=
+gradle test --tests
+gradlew --offline check
+go test ...
+go test 5
+cargo test 5
+make test 4"
 TRR=0; TRW=0; TRN=0; TRS1=0
 while IFS= read -r TRA; do
   : > "$TRL"; rm -f "$TRKM"
@@ -10169,7 +10228,11 @@ while IFS= read -r TRA; do
 done <<< "$TRQB"
 trc "test-run: the Tester's whole-suite runner calls are refused (exit 2), log nothing and run nothing" "$TRR:$TRW:$TRN:$TRS1" "0:0:0:0"
 : > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- npx vitest run 2> "$TR/ff"
-trc "test-run: the refusal names the runner and the related-tests options" "$RC:$(cat "$TR/ff")" "2:test-run.sh: refused for the Tester: vitest with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>. The full suite is the Code-Reviewer's."
+trc "test-run: the refusal names the runner and the related-tests options" "$RC:$(cat "$TR/ff")" "2:test-run.sh: refused for the Tester: vitest with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>, npm test -- <test files>, go test -run <pattern> <packages>, cargo test <filter>, mvn test -Dtest=<classes>, gradle test --tests <pattern>. The full suite is the Code-Reviewer's."
+: > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- mvn clean verify test 2> "$TR/fg"
+trc "test-run: the Maven refusal names the first goal that matched" "$RC:$(cat "$TR/fg")" "2:test-run.sh: refused for the Tester: mvn verify with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>, npm test -- <test files>, go test -run <pattern> <packages>, cargo test <filter>, mvn test -Dtest=<classes>, gradle test --tests <pattern>. The full suite is the Code-Reviewer's."
+: > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- ./gradlew clean test 2> "$TR/fh"
+trc "test-run: the Gradle refusal names the first task that matched" "$RC:$(cat "$TR/fh")" "2:test-run.sh: refused for the Tester: gradlew test with no path, pattern or section runs the whole suite. Name what to run, for example: npx vitest related <changed files> --run, npx jest --findRelatedTests <changed files>, pytest <test files or -k pattern>, tests/smoke.sh <sections>, npm test -- <test files>, go test -run <pattern> <packages>, cargo test <filter>, mvn test -Dtest=<classes>, gradle test --tests <pattern>. The full suite is the Code-Reviewer's."
 TRS2=""
 # the C2 family: every accepted call runs, writes one log line and leaves the marker
 TRQOK="tests/smoke.sh rules prompts
@@ -10182,7 +10245,36 @@ pytest -k name
 pytest --help
 npx vitest --version
 tests/smoke.sh -h
-timeout 600 tests/smoke.sh dispatch"
+timeout 600 tests/smoke.sh dispatch
+npm test -- src/a.test.ts
+npm run lint
+npm install
+go test -run TestA ./...
+go test -run=TestA ./...
+go test -bench=BenchA ./...
+go test ./pkg/a
+go test .
+go vet ./...
+go build ./...
+cargo test parse_
+cargo test -p core
+cargo build
+make test TESTS=a
+make lint
+make
+mvn test -Dtest=FooTest
+mvn verify -pl core
+mvn compile
+gradle test --tests a.B
+gradle test --tests=a.B
+gradle :app:test
+gradle build
+npm --help
+npm run t
+make -C dir test
+mvn --projects core test
+mvn -pl=core test
+mvn --projects=core test"
 while IFS= read -r TRA; do
   : > "$TRL"; rm -f "$TRKM"
   # shellcheck disable=SC2086
@@ -10191,7 +10283,7 @@ while IFS= read -r TRA; do
 done <<< "$TRQOK"
 : > "$TRL"; rm -f "$TRKM"; try trk_run --role tester -- sh -c 'exit 0' 2>/dev/null
 TRS2="$TRS2:$([ ! -e "$TRKM" ] && echo ok):$RC:$(wc -l < "$TRL" | tr -d ' ')"
-trc "test-run: targeted runner calls, other commands and other roles run as before" "$TRS2" "yyyyyyyyyyy:ok:0:1"
+trc "test-run: targeted runner calls, other commands and other roles run as before" "$TRS2" "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy:ok:0:1"
 # C3: the C1 family without the Tester role still runs and logs, with no role and with --role code-reviewer
 TRS3=0
 while IFS= read -r TRA; do
@@ -10205,7 +10297,7 @@ done <<< "$TRQS"
 trc "test-run: without --role tester (no role, code-reviewer) the whole-suite runner calls run and log as before" "$TRS3" "0"
 # C4: --help prints the header from its first line through the exit-code line, the new refusal line included
 try "$TRS" --help
-trc "test-run: --help prints the header through the exit-code line, the new refusal line included" "$RC:$(printf '%s\n' "$OUT" | head -1):$(printf '%s\n' "$OUT" | tail -1):$(printf '%s\n' "$OUT" | grep -cF -- '# With --role tester, a vitest, jest, pytest or tests/smoke.sh call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer' || true):$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -vc '^#' || true)" "0:# test-run.sh: runs a test command and adds the run to the kit's test log.:# The exit code is the command's; 2 is a usage error (nothing is run or logged).:1:12:0"
+trc "test-run: --help prints the header through the exit-code line, the new refusal line included" "$RC:$(printf '%s\n' "$OUT" | head -1):$(printf '%s\n' "$OUT" | tail -1):$(printf '%s\n' "$OUT" | grep -cF -- '# With --role tester, a vitest, jest, pytest, tests/smoke.sh, npm test, go test, cargo test, make test, Maven (test, verify) or Gradle (test, check) call that names no test, pattern or section is refused (exit 2): the full suite is the Code-Reviewer' || true):$(printf '%s\n' "$OUT" | wc -l | tr -d ' '):$(printf '%s\n' "$OUT" | grep -vc '^#' || true)" "0:# test-run.sh: runs a test command and adds the run to the kit's test log.:# The exit code is the command's; 2 is a usage error (nothing is run or logged).:1:12:0"
 check "test-run: usage" "$TRF" ""
 TRF=""
 TRC="$TR/c"; unset TRX; TRX="$(env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" --path)"; env -u ORCA_ROLES_TEST_LOG XDG_CACHE_HOME="$TRC" "$TRS" -- true 2>/dev/null
