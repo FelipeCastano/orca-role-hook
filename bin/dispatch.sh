@@ -3,10 +3,11 @@
 # Usage:  dispatch.sh --task <task_id> --to <handle> [--run <run_id>]
 #         dispatch.sh --check-only --task <task_id> --to <handle>
 # The first form runs `orca orchestration dispatch --task <t> --to <h> [--run <id>] --inject --json`, prints Orca's JSON unchanged and exits
-# with its status at once; when it succeeded, a checker is started detached. --check-only starts only the checker (for a task delivered
-# another way; the message goes to $ORCA_TERMINAL_HANDLE).
-# Before it dispatches to a role whose agent is claude or codex (or unset, or a handle that is no role), it pauses 2 s and waits up to 60 s for the tab to be idle (orca terminal
-# wait --for tui-idle), so the brief does not land in the worker's answer to its role message; past that it dispatches anyway and logs one line.
+# with its status at once: 3 when Orca exited 0 but its output holds no created dispatch (after the same JSON and one line on stderr); when it
+# succeeded, a checker is started detached. --check-only starts only the checker (for a task delivered another way; the message goes to $ORCA_TERMINAL_HANDLE).
+# Before it dispatches to a role whose agent is claude, codex or unset (or a handle that is no role) it pauses 2 s and waits up to 60 s for the tab to be idle
+# (orca terminal wait --for tui-idle); an opencode role: the same pause and up to 30 s. So the brief does not land in the worker's answer to its role
+# message; past that it dispatches anyway and logs one line.
 # The checker (about 95 s at most, nothing printed in the caller's terminal, notes in <git dir>/orca-roles-dispatch.log): Orca's dispatch
 # result cannot tell whether the turn began (the brief may stay typed but unsent in the composer), so it polls `orca worktree ps` for
 # a row of the worker's pane whose prompt names the task (none for a role whose agent is neither claude nor codex): every 3 s for 45 s. If it has not started it sends Enter once, only when the
@@ -35,10 +36,10 @@ mevent() {  # mevent <event> <task> <handle>
   [ -n "$id" ] && { b="$(instance_base "$MCFG" "$id")"; id="${b:-$id}"; }
   metrics_event "$MTOP" "$1" "$id" "$2"
 }
-role_of_handle() {  # role_of_handle <handle>: the role id that owns it in this worktree, or nothing
-  local var
-  [ -n "$GITDIR" ] && [ -f "$GITDIR/orca-roles.env" ] || return 0
-  var="$(grep -m1 "=$1\$" "$GITDIR/orca-roles.env" 2>/dev/null | cut -d= -f1)"; [ -n "$var" ] || return 0
+role_of_handle() {  # role_of_handle <handle>: the role id that owns it in the team state, or nothing
+  local var state="${ORCA_ROLES_STATE:-${GITDIR:+$GITDIR/orca-roles.env}}"
+  [ -n "$state" ] && [ -f "$state" ] || return 0
+  var="$(grep -m1 "=$1\$" "$state" 2>/dev/null | cut -d= -f1)"; [ -n "$var" ] || return 0
   printf '%s' "$var" | tr 'A-Z_' 'a-z-'
 }
 
@@ -50,13 +51,13 @@ detached_start() {  # detached_start <log> <command> [args...]
   else return 1; fi
 }
 
-# The agent of the role in this worktree that owns <handle>, when it is neither claude nor codex: Orca may have no worktree-ps row for such a tab.
+# The agent of the role in the team state that owns <handle>, when it is neither claude nor codex: Orca may have no worktree-ps row for such a tab.
 other_agent_of() {  # other_agent_of <handle>
-  local var id ag
-  [ -n "$GITDIR" ] && [ -f "$GITDIR/orca-roles.env" ] && [ -f "$GITDIR/orca-roles.config.json" ] || return 1
-  var="$(grep -m1 "=$1\$" "$GITDIR/orca-roles.env" 2>/dev/null | cut -d= -f1)"; [ -n "$var" ] || return 1
+  local var id ag state="${ORCA_ROLES_STATE:-${GITDIR:+$GITDIR/orca-roles.env}}" cfg="${ORCA_ROLES_CONFIG:-${GITDIR:+$GITDIR/orca-roles.config.json}}"
+  [ -n "$state" ] && [ -n "$cfg" ] && [ -f "$state" ] && [ -f "$cfg" ] || return 1
+  var="$(grep -m1 "=$1\$" "$state" 2>/dev/null | cut -d= -f1)"; [ -n "$var" ] || return 1
   id="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
-  ag="$(rstr "$GITDIR/orca-roles.config.json" "$id" agent 2>/dev/null)"
+  ag="$(rstr "$cfg" "$id" agent 2>/dev/null)"
   case "$ag" in ''|claude|codex) return 1;; esac
   printf '%s' "$ag"
 }
@@ -216,7 +217,14 @@ if [ "$ONLY" = 1 ]; then
 fi
 
 # A brief typed while the worker is still answering (its role message, just resent by clean.sh or launch.sh) arrives in that turn; Orca reads the turn's end as the worker stopping without reporting
-if ! other_agent_of "$TO" >/dev/null; then
+if ag="$(other_agent_of "$TO")"; then
+  # opencode: the same pause and one wait of at most 30 s (`opencode mini` tabs never report idle after their first turn, as clean.sh notes); any other agent: no wait
+  if [ "$ag" = opencode ]; then
+    pace 2
+    orca terminal wait --terminal "$TO" --for tui-idle --timeout-ms 30000 --json >/dev/null 2>&1 || log "$TO: not idle within 30 s (or the wait failed); dispatching $TASK anyway"
+  fi
+else
+  # claude, codex, an unset agent, a handle that is no role
   pace 2   # a role message typed just before has begun its turn, so the wait does not read the tab as idle before it (as kickoff.sh's check_model does)
   orca terminal wait --terminal "$TO" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1 || log "$TO: not idle within 60 s (or the wait failed); dispatching $TASK anyway"
 fi
@@ -225,6 +233,11 @@ args=(orchestration dispatch --task "$TASK" --to "$TO")
 OUT="$(orca "${args[@]}" --inject --json)"; rc=$?
 printf '%s\n' "$OUT"
 if [ "$rc" = 0 ]; then
+  # Created: Orca exited 0, ok is true and its dispatch holds a non-empty string id (.result.dispatch when the key is there, else .result); anything else is not a dispatch
+  if ! printf '%s' "$OUT" | jq -e '.ok == true and ((if (.result | type) == "object" and (.result | has("dispatch")) then .result.dispatch else .result end) | (type == "object") and ((.id // "") | (type == "string") and (length > 0)))' >/dev/null 2>&1; then
+    echo "dispatch.sh: no dispatch was created for $TASK on $TO (orca exited 0); see Orca's output above." >&2
+    exit 3
+  fi
   mevent dispatch "$TASK" "$TO"
   pane="$(printf '%s' "$OUT" | jq -r '(.result.dispatch // .result // {}) | .assignee_pane_key // empty' 2>/dev/null)"
   creator="$(printf '%s' "$OUT" | jq -r '(.result.dispatch // .result // {}) | .creator_handle // empty' 2>/dev/null)"
