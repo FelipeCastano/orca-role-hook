@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -76,7 +76,7 @@ SMOKE_SERIAL=(
 )
 smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 # SMOKE_FIRST: the longest sections, longest first (median seconds of GitHub's macOS runs, Nov 2026); in a parallel run they start before the others, so none of them starts last. A stale order costs time, never a result
-SMOKE_FIRST=(launch launch-add launch-mode usage-metrics modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
+SMOKE_FIRST=(launch launch-add launch-mode usage-metrics usage-install usage-scheduler usage-pass modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
 smoke_first() { local k; for k in "${SMOKE_FIRST[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running sections and waits up to 5 s for them, so their 'section … aborted' lines come before the total
   local k t
@@ -11052,6 +11052,12 @@ uminst; Z4="$UIRC:$([ -e "$UH/.orca-roles/metrics" ] && echo wrote || echo none)
 jq '.settings.metrics.enabled = true' "$UH/.orca-roles/config.json" > "$UM/hcfg.json"; cp "$UM/hcfg.json" "$UH/.orca-roles/config.json"; uminst; Y4="$([ -e "$UH/.orca-roles/metrics/worktrees.jsonl" ] && echo wrote || echo none)"
 check "usage metrics: the same runs write with settings.metrics.enabled true or absent, and with it false nothing is written: launch.sh (also on a launch over an open team and the relauncher's), dispatch.sh (the saved copy of the worktree's configuration, and the kit's when the worktree has none; every outcome) and install.sh" "$Y1 $Y2 $Y4|$Z1|$Z2|$Z3|$Z4" "wrote wrote wrote|none|none none none none none|none none|0:none"
 check "usage metrics: an install run with metrics on reaches the suite's no-op orca first on the PATH, never the user's real Orca" "$(grep -c '^worktree list --limit 1000 --json$' "$NOORCA/calls.log" | tr -d ' ' | sed 's/^[1-9][0-9]*$/called/')" "called"
+}
+sec_usage_install() {
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
+write_launch_config
+UH="$UM/ih"; mkdir -p "$UH/.orca-roles"; jq '.settings.metrics.enabled = true' "$ROOT/config.default.json" > "$UH/.orca-roles/config.json"
 # install.sh also maps Orca's worktrees that have a kit team (<git dir>/orca-roles.env), found with 'orca worktree list'; a fake orca on the PATH, never the real one
 IW="$UM/iw"; rm -rf "$IW"; mkdir -p "$IW/fo"
 for n in A B D E F; do mkdir -p "$IW/$n"; git -C "$IW/$n" init -q; done
@@ -11087,6 +11093,14 @@ iwhome; t0=$SECONDS; iwinst "$IW/fo:$PATH" hang; W4="$IWRC:$(iwj):$([ $((SECONDS
 check "install: orca failing, printing non-JSON, absent from the PATH or hanging (capped at 10 s) -> the install goes on (exit 0), the trusted worktree is still mapped, nothing printed by the block" "$W1|$W2|$W3|$W4" "0:D/D E/old :0|0:D/D E/old :0|0:D/D E/old :0|0:D/D E/old :capped"
 iwhome; jq '.settings.metrics.enabled = false' "$IH/.orca-roles/config.json" > "$IW/c.json"; cp "$IW/c.json" "$IH/.orca-roles/config.json"; rm -rf "$IH/.orca-roles/metrics"; iwinst "$IW/fo:$PATH" ok
 check "install: metrics disabled -> Orca's worktrees are not mapped and nothing is written" "$IWRC:$([ -e "$IH/.orca-roles/metrics" ] && echo wrote || echo none)" "0:none"
+}
+sec_usage_pass() {
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
+write_launch_config
+UMR="$UM/svc"; mkdir -p "$UMR"; git -C "$UMR" init -q -b main; git -C "$UMR" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+for w in devgd-300 devia-251; do git -C "$UMR" worktree add -q -b "b-$w" "$UM/wt/$w"; done
+UMA="$UM/wt/devgd-300"; UMB="$UM/wt/devia-251"; UMPB="$(cd "$UMB" && pwd -P)"; UMPA="$(cd "$UMA" && pwd -P)"
 # the transcript parser (usage-metrics.sh --once / --report) on fixture transcripts: temp kit, ORCA_ROLES_CLAUDE_PROJECTS and HOME, never the real ones
 PK="$UM/pk"; PC="$UM/cp"; PM="$PK/metrics"; PD="$PC/-w-a-devgd-300"
 HC="$UM/hermetic.json"; jq '.settings.metrics.otlpEndpoint = "http://127.0.0.1:1/v1/metrics" | .settings.metrics.prometheusUrl = "http://127.0.0.1:1"' "$ROOT/config.default.json" > "$HC"   # the passes never reach the real collector or Prometheus
@@ -11880,50 +11894,6 @@ OCD1="$(for p in 'orca_roles.agent' 'orca_roles_agent' 'unsplit' 'opencode' 'pai
 RMO="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
 OCD2="$(for p in 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'update time' 'no continuation' 'drops one trailing' 'remembered' 'orca_roles_agent="opencode"'; do umsay "$(grep -ciF -- "$p" <<< "$RMO" || true)"; done | tr '\n' ':' | sed 's/:$//')"
 check "usage docs OpenCode: the header docstring names the orca_roles.agent resource attribute and the orca_roles_agent source label, the unsplit by-type cost, OpenCode sessions, pair trees, their update time and the lack of continuation; the README's Usage metrics section tells the sources apart by orca_roles_agent (with a query example), lists unsplit in the cost_by_type types, states the update time and the lack of continuation, the role's trailing -<digits>, and covers OpenCode sessions, pair trees and the remembered owner" "$OCD1|$OCD2" "yes:yes:yes:yes:yes:yes:yes:yes|yes:yes:yes:yes:yes:yes:yes:yes:yes"
-# the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
-SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
-for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
-printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$SB/pybin/python3"; chmod +x "$SB/pybin/python3"
-sinst() {  # sinst <home> [VAR=value ...]: installs from the clone into <home> with the fake scheduler; SOUT, SRC
-  local h="$1"; shift; mkdir -p "$h"
-  if SOUT="$(cd "$UM" && env HOME="$h" PATH="$SB/pybin:$SB/rbin:$PATH" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$SLOG" "$@" bash "$ROOT/install.sh" </dev/null 2>&1)"; then SRC=0; else SRC=$?; fi
-}
-scfg() { mkdir -p "$1/.orca-roles"; jq "$2" "$ROOT/config.default.json" > "$1/.orca-roles/config.json"; }   # scfg <home> <jq edit>: the user's config before the install
-sl() { grep -c "$1" "$SLOG" 2>/dev/null || true; }
-splist() { python3 -I -c 'import json, plistlib, sys; print(json.dumps(plistlib.load(open(sys.argv[1], "rb")), sort_keys=True))' "$1" 2>/dev/null || true; }
-MACOS=ORCA_ROLES_SCHEDULER_OS=Darwin; LINUX=ORCA_ROLES_SCHEDULER_OS=Linux; SU="$(id -u)"; SL=com.orca-roles.usage-metrics
-H1="$SB/h1"; PL="$H1/Library/LaunchAgents/$SL.plist"; : > "$SLOG"
-sinst "$H1" "$MACOS"
-EXP="$(jq -cnS --arg h "$H1" --arg py "$SB/pybin/python3" --arg l "$SL" '{Label: $l, ProgramArguments: ["/bin/bash", "\($h)/.orca-roles/bin/usage-metrics.sh", "--once"], EnvironmentVariables: {ORCA_ROLES_PYTHON: $py, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: $h}, StartInterval: 60, RunAtLoad: true, Nice: 10, ProcessType: "Background", StandardOutPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log", StandardErrorPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log"}')"
-S1="$SRC:$([ "$(splist "$PL" | jq -cS . 2>/dev/null)" = "$EXP" ] && echo plist):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every 60 s (launchd)\.$' || true)"
-S2="$(cat "$SLOG" | sed "s#$H1#H#g")"
-sinst "$H1" "$MACOS"; S3="$SRC:$(sl 'launchctl bootout'):$(sl 'launchctl bootstrap'):$(find "$H1/Library/LaunchAgents" -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
-HA="$SB/h&amp<m>"; sinst "$HA" "$MACOS"; S4="$SRC:$(splist "$HA/Library/LaunchAgents/$SL.plist" | jq -r '.EnvironmentVariables.HOME + "|" + .ProgramArguments[1]' 2>/dev/null || true)"
-check "usage scheduler macOS: install writes the LaunchAgent (label, /bin/bash, the kit's script with --once, the absolute python3 found on PATH, the minimal PATH, HOME, StartInterval 60, RunAtLoad, Nice 10, Background, the launchd log) and prints the line; it runs launchctl bootout then bootstrap (gui/<uid>/<label> and gui/<uid> <plist>) once; a second install leaves one plist and runs the pair once more; a home with & < > in its name gives a valid plist with the right paths" "$S1|$S2|$S3|$S4" "0:plist:1|launchctl bootout gui/$SU/$SL
-launchctl bootstrap gui/$SU H/Library/LaunchAgents/$SL.plist|0:2:2:1|0:$HA|$HA/.orca-roles/bin/usage-metrics.sh"
-: > "$SLOG"; scfg "$SB/h1" '.settings.metrics.enabled = false'; sinst "$SB/h1" "$MACOS"
-D1="$SRC:$([ -e "$PL" ] && echo plist || echo gone):$(sl 'launchctl bootout gui/'):$(sl 'launchctl bootstrap'):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled\.$' || true)"
-: > "$SLOG"; sinst "$SB/h1" "$MACOS"; D2="$SRC:$(wc -c < "$SLOG" | tr -d ' ')"
-rm -rf "$SB/h0"; scfg "$SB/h0" '.settings.metrics.enabled = false'; : > "$SLOG"; sinst "$SB/h0" "$MACOS"; D3="$SRC:$(wc -c < "$SLOG" | tr -d ' '):$([ -e "$SB/h0/Library" ] && echo lib || echo nolib)"
-check "usage scheduler: with settings.metrics.enabled false the install runs launchctl bootout and removes the plist when there is one, says metrics are off, and does nothing when there is none (no log, no LaunchAgents folder)" "$D1|$D2|$D3" "0:gone:1:0:1|0:0|0:0:nolib"
-HL="$SB/hl"; rm -rf "$HL"; mkdir -p "$HL"; printf '0 5 * * * echo mine\n' > "$SLOG.crontab"; : > "$SLOG"
-CL="* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash $HL/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics"
-sinst "$HL" "$LINUX"; C1="$SRC:$(cat "$SLOG.crontab" | sed "s#$HL#H#g"):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every minute (cron)\.$' || true):$([ -e "$HL/Library" ] && echo plist || echo noplist)"
-sinst "$HL" "$LINUX"; C2="$(grep -c 'orca-roles usage-metrics' "$SLOG.crontab"):$(grep -c 'echo mine' "$SLOG.crontab"):$([ "$(sed -n 2p "$SLOG.crontab")" = "$CL" ] && echo exact || echo notexact)"
-scfg "$HL" '.settings.metrics.enabled = false'; sinst "$HL" "$LINUX"; C3="$(cat "$SLOG.crontab"):$(printf '%s\n' "$SOUT" | grep -c 'Usage metrics: off' || true)"
-: > "$SLOG"; sinst "$HL" "$LINUX"; C4="$(sl 'crontab -')"
-rm -f "$SLOG.crontab"; scfg "$HL" '.settings.metrics.enabled = true'; sinst "$HL" "$LINUX" ORCA_ROLES_SCHEDULER=fake-nocron; C5="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no crontab found; run .*usage-metrics.sh --once yourself or schedule it\.$' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
-check "usage scheduler Linux: one marker line in the user's crontab next to their own line (every minute, absolute python3 and bash and script, output discarded), not duplicated by a second install, removed when disabled (their line kept, nothing run when there is no line), no crontab -> a message, exit 0 and nothing written; no plist on Linux" "$C1|$C2|$C3|$C4|$C5" "0:0 5 * * * echo mine
-* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash H/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics:1:noplist|1:1:exact|0 5 * * * echo mine:1|0|0:1:nocron"
-rm -rf "$SB/hr"; sinst "$SB/hr" "$MACOS"; RP="$SB/hr/Library/LaunchAgents/$SL.plist"
-PE="$(splist "$RP" | jq -r '.EnvironmentVariables | "\(.HOME)\n\(.ORCA_ROLES_PYTHON)\n\(.PATH)"')"; PH="$(printf '%s\n' "$PE" | sed -n 1p)"; PH="${PH:-$SB/nohome}"; PP="$(printf '%s\n' "$PE" | sed -n 2p)"; PA="$(printf '%s\n' "$PE" | sed -n 3p)"
-rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"
-env -i HOME="$PH" PATH="$PA" ORCA_ROLES_PYTHON="$PP" /bin/bash "$PH/.orca-roles/bin/usage-metrics.sh" --once >"$SB/run.out" 2>&1 && RN=0 || RN=$?; RR1="$RN:$(wc -c < "$SB/run.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
-rm -rf "$PH/.orca-roles/metrics"; rm -f "$SLOG.crontab"; sinst "$SB/hr" "$LINUX"; LN="$(grep 'orca-roles usage-metrics' "$SLOG.crontab" 2>/dev/null | sed 's/^\* \* \* \* \* //' || true)"
-env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; RR2="$RN:$(wc -c < "$SB/run2.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
-check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
-SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
-check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
 # backfill: a fake docker first on PATH (records every call; discovery, compose, tar, promtool simulated) and the fake Prometheus HTTP server; never anything real
 FD="$UM/fdock"; BH="$UM/bh"
 fdreset() { rm -rf "$FD" "$BH"; mkdir -p "$FD/bin" "$FD/compose" "$BH"; : > "$FD/docker.log"; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\nother\tprom/prometheus-extra:1\no2\tbitnami/prometheus:1\no3\tnotprom/prometheus\nweb\tnginx\n' > "$FD/ps.txt"
@@ -12050,6 +12020,54 @@ K1="$(sk '**Usage metrics** (background, kit-wide; README → Usage metrics)'):$
 check "usage docs skill: the team skill's Usage metrics part tells the Planner to answer cost questions with --report, to run --backfill with --dry-run first and only after the user says yes (never --yes on its own), not to set allowRemote for the user, how to turn the metrics off, and that organization-managed OpenTelemetry settings are separate" "$K1" "1:1:1:1:1:1:1:1"
 set -e
 fstop
+}
+sec_usage_scheduler() {
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
+# the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
+SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
+for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$SB/pybin/python3"; chmod +x "$SB/pybin/python3"
+sinst() {  # sinst <home> [VAR=value ...]: installs from the clone into <home> with the fake scheduler; SOUT, SRC
+  local h="$1"; shift; mkdir -p "$h"
+  if SOUT="$(cd "$UM" && env HOME="$h" PATH="$SB/pybin:$SB/rbin:$PATH" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$SLOG" "$@" bash "$ROOT/install.sh" </dev/null 2>&1)"; then SRC=0; else SRC=$?; fi
+}
+scfg() { mkdir -p "$1/.orca-roles"; jq "$2" "$ROOT/config.default.json" > "$1/.orca-roles/config.json"; }   # scfg <home> <jq edit>: the user's config before the install
+sl() { grep -c "$1" "$SLOG" 2>/dev/null || true; }
+splist() { python3 -I -c 'import json, plistlib, sys; print(json.dumps(plistlib.load(open(sys.argv[1], "rb")), sort_keys=True))' "$1" 2>/dev/null || true; }
+MACOS=ORCA_ROLES_SCHEDULER_OS=Darwin; LINUX=ORCA_ROLES_SCHEDULER_OS=Linux; SU="$(id -u)"; SL=com.orca-roles.usage-metrics
+H1="$SB/h1"; PL="$H1/Library/LaunchAgents/$SL.plist"; : > "$SLOG"
+sinst "$H1" "$MACOS"
+EXP="$(jq -cnS --arg h "$H1" --arg py "$SB/pybin/python3" --arg l "$SL" '{Label: $l, ProgramArguments: ["/bin/bash", "\($h)/.orca-roles/bin/usage-metrics.sh", "--once"], EnvironmentVariables: {ORCA_ROLES_PYTHON: $py, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: $h}, StartInterval: 60, RunAtLoad: true, Nice: 10, ProcessType: "Background", StandardOutPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log", StandardErrorPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log"}')"
+S1="$SRC:$([ "$(splist "$PL" | jq -cS . 2>/dev/null)" = "$EXP" ] && echo plist):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every 60 s (launchd)\.$' || true)"
+S2="$(cat "$SLOG" | sed "s#$H1#H#g")"
+sinst "$H1" "$MACOS"; S3="$SRC:$(sl 'launchctl bootout'):$(sl 'launchctl bootstrap'):$(find "$H1/Library/LaunchAgents" -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
+HA="$SB/h&amp<m>"; sinst "$HA" "$MACOS"; S4="$SRC:$(splist "$HA/Library/LaunchAgents/$SL.plist" | jq -r '.EnvironmentVariables.HOME + "|" + .ProgramArguments[1]' 2>/dev/null || true)"
+check "usage scheduler macOS: install writes the LaunchAgent (label, /bin/bash, the kit's script with --once, the absolute python3 found on PATH, the minimal PATH, HOME, StartInterval 60, RunAtLoad, Nice 10, Background, the launchd log) and prints the line; it runs launchctl bootout then bootstrap (gui/<uid>/<label> and gui/<uid> <plist>) once; a second install leaves one plist and runs the pair once more; a home with & < > in its name gives a valid plist with the right paths" "$S1|$S2|$S3|$S4" "0:plist:1|launchctl bootout gui/$SU/$SL
+launchctl bootstrap gui/$SU H/Library/LaunchAgents/$SL.plist|0:2:2:1|0:$HA|$HA/.orca-roles/bin/usage-metrics.sh"
+: > "$SLOG"; scfg "$SB/h1" '.settings.metrics.enabled = false'; sinst "$SB/h1" "$MACOS"
+D1="$SRC:$([ -e "$PL" ] && echo plist || echo gone):$(sl 'launchctl bootout gui/'):$(sl 'launchctl bootstrap'):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled\.$' || true)"
+: > "$SLOG"; sinst "$SB/h1" "$MACOS"; D2="$SRC:$(wc -c < "$SLOG" | tr -d ' ')"
+rm -rf "$SB/h0"; scfg "$SB/h0" '.settings.metrics.enabled = false'; : > "$SLOG"; sinst "$SB/h0" "$MACOS"; D3="$SRC:$(wc -c < "$SLOG" | tr -d ' '):$([ -e "$SB/h0/Library" ] && echo lib || echo nolib)"
+check "usage scheduler: with settings.metrics.enabled false the install runs launchctl bootout and removes the plist when there is one, says metrics are off, and does nothing when there is none (no log, no LaunchAgents folder)" "$D1|$D2|$D3" "0:gone:1:0:1|0:0|0:0:nolib"
+HL="$SB/hl"; rm -rf "$HL"; mkdir -p "$HL"; printf '0 5 * * * echo mine\n' > "$SLOG.crontab"; : > "$SLOG"
+CL="* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash $HL/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics"
+sinst "$HL" "$LINUX"; C1="$SRC:$(cat "$SLOG.crontab" | sed "s#$HL#H#g"):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every minute (cron)\.$' || true):$([ -e "$HL/Library" ] && echo plist || echo noplist)"
+sinst "$HL" "$LINUX"; C2="$(grep -c 'orca-roles usage-metrics' "$SLOG.crontab"):$(grep -c 'echo mine' "$SLOG.crontab"):$([ "$(sed -n 2p "$SLOG.crontab")" = "$CL" ] && echo exact || echo notexact)"
+scfg "$HL" '.settings.metrics.enabled = false'; sinst "$HL" "$LINUX"; C3="$(cat "$SLOG.crontab"):$(printf '%s\n' "$SOUT" | grep -c 'Usage metrics: off' || true)"
+: > "$SLOG"; sinst "$HL" "$LINUX"; C4="$(sl 'crontab -')"
+rm -f "$SLOG.crontab"; scfg "$HL" '.settings.metrics.enabled = true'; sinst "$HL" "$LINUX" ORCA_ROLES_SCHEDULER=fake-nocron; C5="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no crontab found; run .*usage-metrics.sh --once yourself or schedule it\.$' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
+check "usage scheduler Linux: one marker line in the user's crontab next to their own line (every minute, absolute python3 and bash and script, output discarded), not duplicated by a second install, removed when disabled (their line kept, nothing run when there is no line), no crontab -> a message, exit 0 and nothing written; no plist on Linux" "$C1|$C2|$C3|$C4|$C5" "0:0 5 * * * echo mine
+* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash H/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics:1:noplist|1:1:exact|0 5 * * * echo mine:1|0|0:1:nocron"
+rm -rf "$SB/hr"; sinst "$SB/hr" "$MACOS"; RP="$SB/hr/Library/LaunchAgents/$SL.plist"
+PE="$(splist "$RP" | jq -r '.EnvironmentVariables | "\(.HOME)\n\(.ORCA_ROLES_PYTHON)\n\(.PATH)"')"; PH="$(printf '%s\n' "$PE" | sed -n 1p)"; PH="${PH:-$SB/nohome}"; PP="$(printf '%s\n' "$PE" | sed -n 2p)"; PA="$(printf '%s\n' "$PE" | sed -n 3p)"
+rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"
+env -i HOME="$PH" PATH="$PA" ORCA_ROLES_PYTHON="$PP" /bin/bash "$PH/.orca-roles/bin/usage-metrics.sh" --once >"$SB/run.out" 2>&1 && RN=0 || RN=$?; RR1="$RN:$(wc -c < "$SB/run.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
+rm -rf "$PH/.orca-roles/metrics"; rm -f "$SLOG.crontab"; sinst "$SB/hr" "$LINUX"; LN="$(grep 'orca-roles usage-metrics' "$SLOG.crontab" 2>/dev/null | sed 's/^\* \* \* \* \* //' || true)"
+env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; RR2="$RN:$(wc -c < "$SB/run2.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
+check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
+SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
+check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
