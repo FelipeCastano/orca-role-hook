@@ -4,14 +4,18 @@
   usage_metrics.py --once
   usage_metrics.py --report [--task <t>] [--since <YYYY-MM-DD>] [--json]
 
-One pass reads ONLY <claude projects>/*/*.jsonl (and <session>/subagents/*.jsonl), OpenCode's store (read-only, see oc_db) and $KIT/metrics/*; it runs no other program. The transcripts root is
+One pass reads ONLY <claude projects>/*/*.jsonl (and <session>/subagents/*.jsonl), OpenCode's store (read-only, see oc_db) and $KIT/metrics/*; for a
+session cwd no worktrees.jsonl line holds it also reads the .git entry of that cwd or its nearest ancestor that has one and the gitdir and orca-roles.pair
+files those lead to (a pair tree of a batch, see pair-tree.sh); it runs no other program. The transcripts root is
 $ORCA_ROLES_CLAUDE_PROJECTS, else ${CLAUDE_CONFIG_DIR:-~/.claude}/projects. The store never holds prompts, tool inputs or tool outputs: only counts,
 tool names, durations, verdict words and line counts.
 
 Store: $KIT/metrics/state.json (offsets and running totals, rewritten every pass) and $KIT/metrics/sessions-YYYY-MM-DD.jsonl (UTC day of the pass):
 one JSON line per kit session that changed in that pass, with all its cumulative values:
   ts                 pass time (ISO-8601 UTC)
-  session_id, task, project, orca_roles_role   labels (task/project: the longest worktrees.jsonl path that holds the session's first cwd; else, for role "coordinator" or "auditor", "global-coordinator" or "global-auditor" and that folder's name; "" if neither;
+  session_id, task, project, orca_roles_role   labels (task/project: the longest worktrees.jsonl path that holds the session's first cwd; else the task and
+                     project of the worktree that owns the pair tree the cwd lies in, remembered in state.json so a tree removed later keeps them; else, for role
+                     "coordinator" or "auditor", "global-coordinator" or "global-auditor" and that folder's name; "" if neither;
                      role: from the kit's role message, "" if none), effort (the last api-request's output_config.effort, default "medium"),
                      query_source ("main"), service_version
   first, last        timestamps of the session's first and last line
@@ -33,19 +37,25 @@ one JSON line per kit session that changed in that pass, with all its cumulative
 Live push (after the store, in the same pass): OTLP/HTTP JSON (application/json) to settings.metrics.otlpEndpoint, one ResourceMetrics per session,
 cumulative monotonic Sums (Gauges where noted), startTime = the session's first line, time = now. Only sessions with new transcript lines since their
 last successful push (position kept in state.json) are sent; a session never pushed is sent only when its last line is under 15 minutes old (older
-ones are history: step 5). A non-loopback endpoint (or prometheusUrl) without settings.metrics.allowRemote true sends nothing and warns once per UTC
+ones are history: step 5). An OpenCode session is sent from its held entry in state.json with the same instruments and names: its position is OpenCode's
+time_updated for the session, the history rule is the same, and it has no continuation: no Prometheus read, never "reset" (its totals are absolute and
+the kit is their only writer). A non-loopback endpoint (or prometheusUrl) without settings.metrics.allowRemote true sends nothing and warns once per UTC
 day; connection errors/timeouts (5 s, ORCA_ROLES_METRICS_HTTP_TIMEOUT) are silent and retried next pass. Resource attributes: service.name=claude-code,
-service.version, session.id, task, orca_roles.role and the constant labels (user_*, organization_id, host_arch, os_type, os_version, terminal_type,
-copied once a day from the newest claude_code_* series of prometheusUrl /api/v1/series; omitted when unavailable); never job/instance/project. Before
-a session's first push its old series (session_id) are read from Prometheus and continued: value = old last + (transcript cumulative now - transcript
-cumulative at the anchor, the last point where the transcript equals the old value exactly, else at the old last sample time), with the old series'
-labels; old counters that reset -> the session is not pushed (logged once); Prometheus unreachable -> the first push waits.
+service.version, session.id, task, orca_roles.role, orca_roles.agent (opencode sessions only) and the constant labels (user_*, organization_id, host_arch,
+os_type, os_version, terminal_type, copied once a day from the newest claude_code_* series of prometheusUrl /api/v1/series; omitted when unavailable);
+never job/instance/project. An OpenCode resource carries service.version=opencode and orca_roles.agent=opencode, so every series of it is marked
+service_version="opencode" and orca_roles_agent="opencode"; Claude resources keep today's attributes and have no orca_roles.agent. Its cost is
+OpenCode's own estimate per model, its cost by type is one "unsplit" point per model and it has no cache savings series. The role pushed is the session
+id's role without one trailing -<digits> (dev-2 -> dev; the store keeps dev-2). Before a session's first push its old series (session_id) are read from
+Prometheus and continued: value = old last + (transcript cumulative now - transcript cumulative at the anchor, the last point where the transcript equals
+the old value exactly, else at the old last sample time), with the old series' labels; old counters that reset -> the session is not pushed (logged once);
+Prometheus unreachable -> the first push waits.
 Instrument -> Prometheus name (collector: resource_to_telemetry_conversion, unit and _total suffixes):
-  claude_code.cost.usage (USD)            claude_code_cost_usage_USD_total{model,effort,query_source}   (priced cost per model)
+  claude_code.cost.usage (USD)            claude_code_cost_usage_USD_total{model,effort,query_source}   (priced cost per model; an OpenCode session's own estimate)
   claude_code.token.usage (tokens)        claude_code_token_usage_tokens_total{type,model,effort,query_source}
   claude_code.session.count               claude_code_session_count_total{start_type}
-  orca_roles.cost.by_type (USD)           orca_roles_cost_by_type_USD_total{type,model}
-  orca_roles.cache.savings (USD, gauge)   orca_roles_cache_savings_USD{model}
+  orca_roles.cost.by_type (USD)           orca_roles_cost_by_type_USD_total{type,model}   (type "unsplit" for an OpenCode session)
+  orca_roles.cache.savings (USD, gauge)   orca_roles_cache_savings_USD{model}   (not sent for an OpenCode session)
   orca_roles.thinking (tokens)            orca_roles_thinking_tokens_total{model}
   orca_roles.tool.calls / .errors         orca_roles_tool_calls_total{tool} / orca_roles_tool_errors_total{tool}
   orca_roles.tool.duration (s)            orca_roles_tool_duration_seconds_total{tool}
@@ -569,11 +579,74 @@ def wt_match(wts, cwd):
     return None
 
 
-def session_labels(wts, S):
-    """(task, project) of a session: the mapped worktree that holds its first cwd; else, for the global coordinator or the global Auditor, whose folders no launch maps, its GLOBAL_TASKS task and the folder's name; else empty."""
+def pair_owner(cwd, pairs):
+    """(pair tree top, owner worktree) of the pair tree the cwd lies in, or None; a tree resolved before is answered without reading a file."""
+    top = os.path.abspath(cwd)
+    d = top
+    while True:   # a remembered tree keeps its owner after pair-tree.sh removed the tree
+        if d in pairs:
+            return d, pairs[d]
+        if os.path.dirname(d) == d:
+            break
+        d = os.path.dirname(d)
+    d = top
+    while True:   # the first folder that holds any .git entry decides: a directory or a bad file is no pair tree
+        g = os.path.join(d, ".git")
+        if os.path.lexists(g):
+            break
+        if os.path.dirname(d) == d:
+            return None
+        d = os.path.dirname(d)
+    try:
+        if not os.path.isfile(g):
+            return None
+        with open(g) as f:
+            txt = f.read().strip()
+    except OSError:
+        return None
+    m = re.match(r"^gitdir:\s*(\S.*)$", txt)
+    if not m:
+        return None
+    gd = m.group(1).strip()
+    gd = os.path.normpath(gd if os.path.isabs(gd) else os.path.join(d, gd))
+    try:
+        with open(os.path.join(gd, "orca-roles.pair")) as f:
+            line = f.readline().strip()
+    except OSError:
+        return None
+    if not line:
+        return None
+    owner_gd = os.path.normpath(line if os.path.isabs(line) else os.path.join(gd, line))
+    if not os.path.isdir(owner_gd):
+        return None
+    link = os.path.join(owner_gd, "gitdir")
+    if os.path.lexists(link):   # a linked worktree's git dir names its own <worktree>/.git
+        try:
+            with open(link) as f:
+                line = f.readline().strip()
+        except OSError:
+            return None
+        if not line:
+            return None
+        owner = os.path.dirname(os.path.normpath(line if os.path.isabs(line) else os.path.join(owner_gd, line)))
+    else:   # a main checkout's .git folder: its parent is the worktree
+        owner = os.path.dirname(owner_gd)
+    if not owner:
+        return None
+    pairs[d] = owner
+    return d, owner
+
+
+def session_labels(wts, S, pairs):
+    """(task, project) of a session: the mapped worktree that holds its first cwd, else the one that owns the pair tree the cwd lies in (pairs remembers what resolved before); else, for the global coordinator or the global Auditor, whose folders no launch maps, its GLOBAL_TASKS task and the folder's name; else empty."""
     hit = wt_match(wts, S["cwd"]) if S["cwd"] else None
     if hit:
         return hit
+    o = pair_owner(S["cwd"], pairs) if S["cwd"] else None
+    if o:
+        hit = wt_match(wts, o[1]) or wt_match(wts, os.path.realpath(o[1]))
+        if hit:
+            return hit
     if S["role"] in GLOBAL_TASKS:
         return GLOBAL_TASKS[S["role"]], os.path.basename((S["cwd"] or "").rstrip("/"))
     return "", ""
@@ -624,10 +697,13 @@ def load_state():
         with open(os.path.join(MDIR, "state.json")) as f:
             s = json.load(f)
         if isinstance(s, dict) and s.get("v") == 1:
+            for k in ("pairs", "ocSessions"):   # a hand-edited or partial state.json must not break a pass
+                if not isinstance(s.get(k), dict):
+                    s[k] = {}
             return s
     except (OSError, ValueError):
         pass
-    return {"v": 1, "lastPass": "", "lastRotation": "", "wt": "", "files": {}, "sessions": {}}
+    return {"v": 1, "lastPass": "", "lastRotation": "", "wt": "", "files": {}, "sessions": {}, "pairs": {}, "ocSessions": {}}
 
 
 def save_state(state):
@@ -713,7 +789,7 @@ def compute(state, root, deadline, wts, wt_changed):
     return {sid for sid in changed if sid in state["sessions"] and state["sessions"][sid]["kit"]}
 
 
-def store(state, changed, wts, ts):  # wts: the worktrees map
+def store(state, changed, wts, ts, pairs):  # wts: the worktrees map, pairs: the resolved pair trees
     """Appends the snapshot of each changed session to today's daily file."""
     if not changed:
         return
@@ -721,7 +797,7 @@ def store(state, changed, wts, ts):  # wts: the worktrees map
     with open(path, "a") as f:
         for sid in sorted(changed):
             S = state["sessions"][sid]
-            task, project = session_labels(wts, S)
+            task, project = session_labels(wts, S, pairs)
             f.write(json.dumps(snapshot(S, ts, task, project), separators=(",", ":")) + "\n")
 
 
@@ -735,11 +811,12 @@ def oc_db():
 
 
 def opencode_sessions(state, deadline):
-    """-> {sid: S} of the kit's OpenCode sessions that changed since the last pass, read from OpenCode's store (read-only)."""
+    """-> {sid: S} of the kit's OpenCode sessions that changed since the last pass, read from OpenCode's store (read-only); each is also held in state['ocSessions'] for the push, with its position and its cost per model."""
     path = oc_db()
     if not os.path.exists(path):
         return {}
     seen = state.setdefault("opencode", {})
+    held = state.setdefault("ocSessions", {})
     try:
         con = sqlite3.connect("file:" + urllib.parse.quote(path) + "?mode=ro", uri=True, timeout=1)
         try:
@@ -757,7 +834,7 @@ def opencode_sessions(state, deadline):
                 S = new_session(sid)
                 S["kit"], S["role"], S["version"] = True, m.group(1), "opencode"
                 S["cwd"] = directory if isinstance(directory, str) else ""
-                cost, cost_seen, times = 0.0, False, []
+                cost, cost_seen, times, oc_cost = 0.0, False, [], {}
                 for mtype, created, data in con.execute("select type, time_created, data from session_message where session_id = ? order by seq", (sid,)):
                     try:
                         d = json.loads(data)
@@ -798,6 +875,7 @@ def opencode_sessions(state, deadline):
                             S["unpriced"].append(name)
                         if isinstance(d.get("cost"), (int, float)):
                             cost += d["cost"]
+                            oc_cost[name] = oc_cost.get(name, 0.0) + d["cost"]   # pushed as that model's cost: the row's cost field stays 0
                             cost_seen = True
                     for b in d.get("content") if isinstance(d.get("content"), list) else []:
                         if not isinstance(b, dict) or b.get("type") != "tool":
@@ -820,12 +898,15 @@ def opencode_sessions(state, deadline):
                                 S["workerDone"].append({"verdict": wd[0], "seconds": round(t1 - t0) if t0 is not None and t1 is not None else None})
                 if cost_seen:
                     S["cs"] = [cost, None, None]
+                S["ocCost"] = oc_cost
+                S["ocPos"] = updated
                 if times:
                     fmt = "%Y-%m-%dT%H:%M:%S.%f"
                     S["first"] = datetime.datetime.fromtimestamp(min(times) / 1000.0, datetime.timezone.utc).strftime(fmt)[:-3] + "Z"
                     S["last"] = datetime.datetime.fromtimestamp(max(times) / 1000.0, datetime.timezone.utc).strftime(fmt)[:-3] + "Z"
                 out[sid] = S
                 read[sid] = updated
+            held.update(out)   # held only once the whole read succeeds: a read that fails holds, stores and pushes nothing
             seen.update(read)
             return out
         finally:
@@ -835,7 +916,7 @@ def opencode_sessions(state, deadline):
         return {}
 
 
-def store_opencode(sessions, wts, ts):  # wts: the worktrees map
+def store_opencode(sessions, wts, ts, pairs):  # wts: the worktrees map, pairs: the resolved pair trees
     """Appends the snapshot of each OpenCode session to today's daily file, marked with its agent."""
     if not sessions:
         return
@@ -843,7 +924,7 @@ def store_opencode(sessions, wts, ts):  # wts: the worktrees map
     with open(path, "a") as f:
         for sid in sorted(sessions):
             S = sessions[sid]
-            task, project = session_labels(wts, S)
+            task, project = session_labels(wts, S, pairs)
             row = snapshot(S, ts, task, project)
             row["agent"] = "opencode"
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
@@ -1126,6 +1207,7 @@ def session_points(S, P):
     def add_pt(name, unit, kind, attrs, value, base=None):
         pts.append((name, unit, kind, attrs, value, base))
     eff = S["effort"]
+    oc = S.get("ocCost")
     for model, r in S["models"].items():
         for typ, k in (("input", "input"), ("output", "output"), ("cacheRead", "cacheRead"), ("cacheCreation", "cacheCreation")):
             base = "%s|%s|%s" % (CLAUDE_SERIES[1], model, typ)
@@ -1133,10 +1215,14 @@ def session_points(S, P):
             add_pt("claude_code.token.usage", "tokens", "sum", {"type": typ, "model": model, "effort": e, "query_source": "main"}, r[k], base)
         base = "%s|%s|" % (CLAUDE_SERIES[0], model)
         e = (P["lab"].get(base) or {}).get("effort", eff)
-        add_pt("claude_code.cost.usage", "USD", "sum", {"model": model, "effort": e, "query_source": "main"}, r["cost"], base)
-        for typ, v in r["costByType"].items():
-            add_pt("orca_roles.cost.by_type", "USD", "sum", {"type": typ, "model": model}, v)
-        add_pt("orca_roles.cache.savings", "USD", "gauge", {"model": model}, r["cacheSavings"])
+        if oc is None:
+            add_pt("claude_code.cost.usage", "USD", "sum", {"model": model, "effort": e, "query_source": "main"}, r["cost"], base)
+            for typ, v in r["costByType"].items():
+                add_pt("orca_roles.cost.by_type", "USD", "sum", {"type": typ, "model": model}, v)
+            add_pt("orca_roles.cache.savings", "USD", "gauge", {"model": model}, r["cacheSavings"])
+        else:   # OpenCode's own estimate, not split by token type; its cache savings are unknown, so no point
+            add_pt("claude_code.cost.usage", "USD", "sum", {"model": model, "effort": e, "query_source": "main"}, oc.get(model, 0.0), base)
+            add_pt("orca_roles.cost.by_type", "USD", "sum", {"type": "unsplit", "model": model}, oc.get(model, 0.0))
         add_pt("orca_roles.thinking", "tokens", "sum", {"model": model}, r["thinking"])
     base = "%s||" % CLAUDE_SERIES[2]
     add_pt("claude_code.session.count", "", "sum", {"start_type": (P["lab"].get(base) or {}).get("start_type", "fresh")}, 1, base)
@@ -1170,18 +1256,22 @@ def session_points(S, P):
 
 def resource_of(S, P, constants, task):
     """The resource attributes the collector turns into labels (resource_to_telemetry_conversion): a continued session keeps the labels of its old
-    series; a new one gets the constant labels. No job/instance, no project."""
+    series; a new one gets the constant labels. No job/instance, no project. An OpenCode session is marked as such and drops the instance suffix from its role."""
     attrs = {"service.name": "claude-code"}
     for k, v in (P["res"] or constants).items():
         if k not in ("service_name", "service_version"):
             attrs[k] = v
     attrs["service.version"] = P["res"].get("service_version") or S["version"]
     attrs["session.id"] = S["sid"]
+    oc = S.get("ocCost") is not None
+    if oc:
+        attrs["orca_roles.agent"] = "opencode"   # marks every series of an OpenCode session; Claude resources never carry it
     if not P["res"]:
         if task:
             attrs["task"] = task
-        if S["role"]:
-            attrs["orca_roles.role"] = S["role"]
+        role = re.sub(r"-[0-9]+$", "", S["role"], count=1) if oc else S["role"]   # the store keeps the instance suffix (dev-2 -> dev)
+        if role:
+            attrs["orca_roles.role"] = role
     return attrs
 
 
@@ -1223,25 +1313,36 @@ def push(state):
     now = time.time()
     pending = []
     pushed = state.setdefault("pushed", {})   # per session, outside the session object: it survives a recompute (the counters never go down)
-    for sid, S in state["sessions"].items():
+    pairs = state.setdefault("pairs", {})
+    held = state.setdefault("ocSessions", {})
+    limit = now - retention_days() * 86400
+    for sid in [k for k, S in held.items() if (parse_ts(S.get("last")) or 0) < limit]:
+        del held[sid]   # its last message is older than retentionDays: nothing of it is pushed again
+
+    def sess(sid):
+        return held[sid] if sid in held else state["sessions"][sid]
+    def position(sid):
+        return held[sid]["ocPos"] if sid in held else pos.get(sid)   # an OpenCode session is pushed by its own update time
+    for sid, S in list(state["sessions"].items()) + [(k, held[k]) for k in list(held)]:
         if not S.get("kit"):
             continue
         P = pushed.get(sid)
         if P is None:
             P = pushed[sid] = S.pop("push", None) or {"pos": None, "state": "", "off": {}, "lab": {}, "res": {}, "vals": {}, "seen": now}
-        if P["pos"] != pos.get(sid):
+        if P["pos"] != position(sid):
             P["seen"] = now
         if P["state"] == "reset":   # its old counters reset: never pushed
-            P["pos"] = pos.get(sid)
+            P["pos"] = position(sid)
             continue
-        if P["state"] == "history" and P["pos"] == pos.get(sid):
+        if P["state"] == "history" and P["pos"] == position(sid):
             continue
         if P["state"] == "history":   # new lines in a session that was history: live from now on
             P["state"], P["pos"] = "", None
         if P["pos"] is None and P["state"] == "" and now - (parse_ts(S["last"]) or 0) > HISTORY_WINDOW:
-            P["state"], P["pos"] = "history", pos.get(sid)   # finished before the live push existed: history is step 5's
+            P["state"], P["pos"] = "history", position(sid)   # finished before the live push existed: history is step 5's
+            held.pop(sid, None)   # classified history: no longer held for the push
             continue
-        if P["pos"] != pos.get(sid) or P["pos"] is None:
+        if P["pos"] != position(sid) or P["pos"] is None:
             pending.append(sid)
     if not pending:
         return
@@ -1252,9 +1353,9 @@ def push(state):
     constants = None
     ready = []
     for sid in pending:
-        S = state["sessions"][sid]
+        S = sess(sid)
         P = pushed[sid]
-        if P["state"] == "" and not P.get("cont"):
+        if sid not in held and P["state"] == "" and not P.get("cont"):   # an OpenCode session has no old series to continue
             if prom_down:
                 continue
             try:
@@ -1263,7 +1364,7 @@ def push(state):
                 prom_down = True
                 continue
             if c is None:
-                P["state"], P["pos"] = "reset", pos.get(sid)
+                P["state"], P["pos"] = "reset", position(sid)
                 log("session %s not continued: its old counters in Prometheus reset" % sid)
                 continue
             P.update(off=c["off"], lab=c["lab"], res=c["res"], tlast=c["tlast"], cont=True)
@@ -1280,19 +1381,20 @@ def push(state):
     wts = load_worktrees()
 
     def task_of(sid):
-        return session_labels(wts, state["sessions"][sid])[0]
+        return session_labels(wts, sess(sid), pairs)[0]
     for i in range(0, len(ready), BATCH):
         chunk = ready[i:i + BATCH]
         saved = {sid: dict(pushed[sid]["vals"]) for sid in chunk}
-        body = {"resourceMetrics": [otlp_resource(state["sessions"][sid], pushed[sid], constants or {}, task_of(sid), now_ns) for sid in chunk]}
+        body = {"resourceMetrics": [otlp_resource(sess(sid), pushed[sid], constants or {}, task_of(sid), now_ns) for sid in chunk]}
         try:
             st, _ = http_json(otlp, body)
         except Down:
             st = None
         if st is not None and 200 <= st < 300:
             for sid in chunk:
-                pushed[sid]["pos"] = pos.get(sid)
+                pushed[sid]["pos"] = position(sid)
                 pushed[sid].setdefault("first", now)   # when this session's series began in Prometheus: a backfill ends before it
+                held.pop(sid, None)   # pushed: the next change in OpenCode's store holds it again
         else:
             for sid in chunk:
                 pushed[sid]["vals"] = saved[sid]
@@ -1529,11 +1631,12 @@ def build_backfill(state, prom, since, until, task_filter, head_start, wts, scra
     """-> (series {(family, kind, series name, labels tuple): [(t, v)]}, report dict)."""
     series, rep = {}, {"sessions": 0, "skipped": [], "unknownFirst": 0, "tasks": {}, "min": None, "max": None}
     pushed = state.get("pushed") or {}
+    pairs = state.setdefault("pairs", {})   # a resolution made here is not saved (backfill never writes state): the next pass makes it again
     now = time.time()
     for sid, S0 in sorted(state["sessions"].items()):
         if not S0.get("kit"):
             continue
-        task = session_labels(wts, S0)[0]
+        task = session_labels(wts, S0, pairs)[0]
         if task_filter is not None and task != task_filter:
             continue
         if (parse_ts(S0["last"]) or 0) < since:
@@ -1785,8 +1888,9 @@ def backfill(args):
 def prune_pushed(state, keep_days):
     """Drops the pushed values of a session whose transcripts are all gone and that has not changed for retentionDays."""
     pushed = state.get("pushed") or {}
+    held = state.get("ocSessions") or {}
     limit = time.time() - keep_days * 86400
-    for sid in [k for k, P in pushed.items() if k not in state["sessions"] and (P.get("seen") or 0) < limit]:
+    for sid in [k for k, P in pushed.items() if k not in state["sessions"] and k not in held and (P.get("seen") or 0) < limit]:
         del pushed[sid]
 
 
@@ -1815,11 +1919,12 @@ def once():
             return cache[0]
         wt_changed = state.get("wt") != wt_sig
         state["wt"] = wt_sig
+        pairs = state.setdefault("pairs", {})
         changed = compute(state, claude_root(), deadline, wts, wt_changed)
         if changed:
-            store(state, changed, wts(), ts)
+            store(state, changed, wts(), ts, pairs)
         try:
-            store_opencode(opencode_sessions(state, deadline), wts(), ts)
+            store_opencode(opencode_sessions(state, deadline), wts(), ts, pairs)
         except Exception as ex:   # an OpenCode problem never fails the pass
             log("opencode pass failed: %s: %s" % (type(ex).__name__, ex))
         try:
