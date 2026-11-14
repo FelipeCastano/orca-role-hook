@@ -24,5 +24,5 @@ When `checkpoint.sh --same` says `differs` after an integration, then before any
 
 ## Set close
 - The set audit starts when every batch is closed and integrated and `~/.orca-roles/bin/pair-tree.sh list` shows no tree `open` or `integrated`.
-- After the set's commits, with `checkpoint.sh --clear-all`, run `~/.orca-roles/bin/pair-tree.sh clear`.
+- After the set's commits, with `checkpoint.sh --clear-all`, run `~/.orca-roles/bin/pair-tree.sh clear`, then close the set's tabs as "Set close" in `local-coordinator-team.md` says.
 - After a restart, `pair-tree.sh list` names the trees still open; their Dev and Tester tabs reopen in them (launch.sh keeps each tab's tree).

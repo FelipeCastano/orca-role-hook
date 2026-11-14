@@ -32,7 +32,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 
 | Id | What it proves | From |
 |---|---|---|
-| X1 | The smoke sections that once failed together (`launch restart reopen wake worktree-select`) pass in one run | #29 |
+| X1 | The smoke sections that once failed together (`launch launch-mode launch-add restart reopen wake worktree-select`) pass in one run | #29 |
 | X2 | `upgrade_config` on a user config without a `roles` key (or with `"roles": null`): it returns the upgraded config with the default roles | #37 |
 | X3 | `scholar.sh` against the live APIs: OpenAlex, arXiv (one word and a phrase), Semantic Scholar (with `S2_API_KEY` if set), Crossref and DataCite DOIs through doi.org, `verify`, a real PDF download under the size limit | #28 |
 | X4 | `roles-yaml --all --dry-run` over the projects registered in your Orca; nothing is written; fails when every project was skipped | #32 |

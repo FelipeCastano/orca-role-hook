@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # What each role of a worktree's team is doing, from what Orca tracks (no agent is asked).  Read-only.
-# Usage:  team-status.sh [--json] [--run <run_id>] [<worktree folder>]     (default folder: the current directory)
+# Usage:  team-status.sh [--json] [--run <run_id> [--after-commits]] [<worktree folder>]     (default folder: the current directory)
 #   Without a folder argument it honours ORCA_ROLES_STATE / ORCA_ROLES_CONFIG (as clean.sh does), and reads that team's orca-roles.tabs and
 #   orca-roles-hidden/ from the state file's folder.
 #   One line per role, tab-separated: Title, state, since, task, tool, summary.
@@ -11,20 +11,26 @@
 #   --json     a JSON array of {role, title, handle, paneKey, state, since, sinceMs, task, tool, summary} instead of the lines
 #   --run <id> also looks for dispatches whose text was never submitted (one worker-list; for a role in state done with a dispatch still open
 #              whose task its prompt never named, one terminal show), and adds a 7th field, report: ok | missing (its last worker_done in that Run
-#              does not start with Done, see canary.sh) | - (no report, or older than the inbox's last 200 messages, or a role without a tab)
-# Exit 0 whatever the states; 2 when the folder has no team, or Orca does not answer or does not know the folder.
+#              does not start with Done, see canary.sh) | - (no report, or older than the inbox's last 200 messages, or a role without a tab);
+#              then an 8th field, closable | -: whether the local coordinator may close the tab now (a tab, state done, interrupted or failed, no
+#              open dispatch of this Run to its handle, and a role opened per batch, per task or as an instance; --json: the key closable, a
+#              boolean, on every element).  Without --run neither field nor key exists.
+#   --after-commits  with --run, at the set close: the Plan-Reviewer and the Code-Reviewer are closable too.
+# Exit 0 whatever the states; 2 when the folder has no team, Orca does not answer or does not know the folder, or --after-commits comes without --run.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
-JSON=0; RUN=""; DIR=""
+JSON=0; RUN=""; DIR=""; AFTER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --json) JSON=1;;
     --run) [ $# -ge 2 ] || { echo "team-status: --run needs a run id" >&2; exit 2; }; RUN="$2"; shift;;
+    --after-commits) AFTER=1;;
     -*) echo "team-status: unknown option $1" >&2; exit 2;;
     *) [ -z "$DIR" ] || { echo "team-status: only one folder" >&2; exit 2; }; DIR="$1";;
   esac
   shift
 done
+[ "$AFTER" = 0 ] || [ -n "$RUN" ] || { echo "team-status: --after-commits needs --run" >&2; exit 2; }
 OWN=""; [ -n "$DIR" ] || OWN=1   # no folder argument: ORCA_ROLES_STATE and ORCA_ROLES_CONFIG apply, as in clean.sh
 DIR="${DIR:-.}"
 TOP="$(cd "$DIR" 2>/dev/null && pwd -P)" || { echo "team-status: $DIR is not a folder" >&2; exit 2; }
@@ -113,12 +119,28 @@ if [ -n "$RUN" ]; then
   OUT="$(printf '%s' "$OUT" | jq -c --argjson inb "$INB" --arg run "$RUN" --arg re "$REPORT_MARK_RE" '
     map(. as $r | ([$inb.result.messages[] | select(.type == "worker_done" and .run_id == $run and .from_handle == $r.handle)] | sort_by(.sequence) | last) as $d
       | .report = (if $r.handle == "" or $d == null then "-" elif (($d.body // "") | test($re; "i")) then "ok" else "missing" end))')"
+  WLOK=0; if [ -n "$WL" ] && printf '%s' "$WL" | jq -e '.result.workers | type == "array"' >/dev/null 2>&1; then WLOK=1; fi
+  WLJ="$WL"; [ "$WLOK" = 1 ] || WLJ='{}'
+  ELIG="$(printf '%s' "$OUT" | jq -r '.[].role' | sort -u | while IFS= read -r r; do
+    e=0
+    if [ "$r" != local-coordinator ]; then
+      o="$(open_of "$CFG" "$r" 2>/dev/null)"
+      if [ -n "$(instance_base "$CFG" "$r" 2>/dev/null)" ] || [ "$o" = per-batch ] || [ "$o" = per-task ]; then e=1; fi
+      if [ "$AFTER" = 1 ] && { [ "$r" = plan-reviewer ] || [ "$r" = code-reviewer ]; }; then e=1; fi
+    fi
+    printf '%s\t%s\n' "$r" "$e"
+  done | jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t")) | map({(.[0]): (.[1] == "1")}) | add // {}')"
+  OUT="$(printf '%s' "$OUT" | jq -c --argjson wl "$WLJ" --argjson elig "$ELIG" --argjson wok "$WLOK" '
+    map(. as $r
+      | ([$wl.result.workers[]? | select(.agentTerminalHandle == $r.handle and ((.dispatchStatus // "") | IN("completed", "failed", "cancelled", "abandoned", "released") | not))] | length) as $busy
+      | ($r.state == "done" or $r.state == "interrupted" or $r.state == "failed") as $stok
+      | .closable = (($wok == 1) and ($r.paneKey != "") and $stok and ($busy == 0) and (($elig[$r.role] // false) == true)))')"
 fi
 
 if [ "$JSON" = 1 ]; then
   printf '%s' "$OUT" | jq 'map(del(.prompt, .notOpened, .hiddenRun))'
 elif [ -n "$RUN" ]; then
-  printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary, .report] | join("\t")'
+  printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary, .report, (if .closable then "closable" else "-" end)] | join("\t")'
 else
   printf '%s' "$OUT" | jq -r '.[] | [.title, .state, .since, .task, .tool, .summary] | join("\t")'
 fi
