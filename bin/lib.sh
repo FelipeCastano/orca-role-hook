@@ -619,7 +619,7 @@ host_capacity() {
   lc="$(python3 -c 'import os; print("%.2f %d" % (os.getloadavg()[0], os.cpu_count() or 1))' 2>/dev/null)" || lc=""
   case "$lc" in *" "*) ;; *) lc="- -";; esac
   case "$(uname -s 2>/dev/null)" in
-    Linux) mem="$(awk '/^MemAvailable:/ {print int($2 / 1024); exit}' /proc/meminfo 2>/dev/null)";;
+    Linux) mem="$(awk '/^MemAvailable:/ {print int($2 / 1024); exit}' "${ORCA_ROLES_PROC:-/proc}/meminfo" 2>/dev/null)";;
     Darwin)
       out="$(memory_pressure -Q 2>/dev/null)"
       total="$(printf '%s\n' "$out" | awk '/^The system has/ {print $4; exit}')"
@@ -639,6 +639,147 @@ host_capacity() {
   esac
   case "$mem" in ''|*[!0-9]*) mem="-";; esac
   printf '%s %s\n' "$lc" "$mem"
+}
+# The kind of this system as the kit names it: macos, linux, wsl (a Linux whose kernel version says Microsoft, in any letter
+# case) or other. Test seams: a uname found on the PATH, and ORCA_ROLES_PROC (the folder that stands for /proc).  host_os
+host_os() {
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) printf 'macos\n';;
+    Linux) if grep -qi microsoft "${ORCA_ROLES_PROC:-/proc}/version" 2>/dev/null; then printf 'wsl\n'; else printf 'linux\n'; fi;;
+    *) printf 'other\n';;
+  esac
+}
+# The process table: one line per process, tab-separated <pid> <ppid> <MB> <executable> <args>. MB is the memory of the
+# process in MB rounded down: its real footprint (the MEM column of top) on macOS, its RSS elsewhere. The executable and the
+# args come from two ps calls joined by pid (each takes its column last, so both may contain spaces); a pid in only one of
+# them is left out, and so is, on macOS, one that top does not list or lists with a value outside <number>[BKMGT][+*-].
+# Test seam: ORCA_ROLES_PROC_TABLE (a command printing the same lines). Sets PROC_TABLE_KIND to footprint, rss, or empty when
+# this system gives no process table (proc, top and ps are looked up on the PATH).  proc_table
+proc_table() {
+  local os joined top="" rows=0
+  PROC_TABLE_KIND=""
+  if [ -n "${ORCA_ROLES_PROC_TABLE:-}" ]; then
+    case "$(host_os)" in macos) PROC_TABLE_KIND=footprint;; linux|wsl) PROC_TABLE_KIND=rss;; esac
+    "$ORCA_ROLES_PROC_TABLE"
+    return 0
+  fi
+  os="$(host_os)"
+  case "$os" in macos|linux|wsl) ;; *) return 0;; esac
+  joined="$(awk '
+    FILENAME != prev { src++; prev = FILENAME }
+    src == 1 { c = ""; for (i = 4; i <= NF; i++) c = c (i > 4 ? " " : "") $i; P[$1] = $2; R[$1] = $3; C[$1] = c; next }
+    src == 2 { a = ""; for (i = 2; i <= NF; i++) a = a (i > 2 ? " " : "") $i; if ($1 in P) A[$1] = a }
+    END { for (p in P) if (p in A) printf "%s\t%s\t%s\t%s\t%s\n", p, P[p], R[p], C[p], A[p] }
+  ' <(ps -axo pid=,ppid=,rss=,comm= 2>/dev/null) <(ps -axo pid=,args= 2>/dev/null) 2>/dev/null)" || joined=""
+  [ -n "$joined" ] || return 0
+  if [ "$os" = macos ]; then
+    top="$(top -l 1 -stats pid,mem 2>/dev/null)" || top=""
+    rows="$(printf '%s\n' "$top" | awk '{ l = $0; sub(/^[ \t]+/, "", l); if (l ~ /^[0-9]+[ \t]/) { print 1; exit } }')"
+  fi
+  if [ "${rows:-}" = 1 ]; then PROC_TABLE_KIND=footprint; else PROC_TABLE_KIND=rss; fi
+  { printf '%s\n%s\n%s\n' '#top' "$top" '#table'; printf '%s\n' "$joined"; } | awk -F'\t' -v kind="$PROC_TABLE_KIND" '
+    function mb(v,  u, n, m) {
+      if (v !~ /^[0-9]+(\.[0-9]+)?[BKMGT][+\-*]?$/) return ""
+      u = substr(v, length(v), 1)
+      if (u == "+" || u == "-" || u == "*") { v = substr(v, 1, length(v) - 1); u = substr(v, length(v), 1) }
+      n = substr(v, 1, length(v) - 1) + 0
+      m = (u == "B") ? 1 : (u == "K") ? 1024 : (u == "M") ? 1048576 : (u == "G") ? 1073741824 : 1099511627776
+      return int(n * m / 1048576)
+    }
+    $0 == "#top" { sec = 1; next }
+    $0 == "#table" { sec = 2; next }
+    sec == 1 {
+      l = $0; sub(/^[ \t]+/, "", l)
+      if (l ~ /^[0-9]+[ \t]/) { k = split(l, f, /[ \t]+/); if (k >= 2) T[f[1]] = f[2] }
+      next
+    }
+    sec == 2 {
+      if (kind == "footprint") {
+        if (!($1 in T)) next
+        v = mb(T[$1]); if (v == "") v = 0
+      } else v = int($3 / 1024)
+      printf "%s\t%s\t%d\t%s\t%s\n", $1, $2, v, $4, $5
+    }'
+}
+# The agent tabs of a process table, one line per tab: tab-separated <pid> <agent> <own MB> <footprint MB>, by pid. An agent
+# process is claude, opencode or codex by the basename of the first word of its args, or node with a second word whose
+# basename starts with claude or codex (an npm-installed CLI), and neither is verified; an `opencode serve` is the shared
+# service, so it is no tab. A tab is an agent process with no agent-process ancestor; its footprint is its own MB plus that of
+# every descendant in the table.  proc_tabs [<table>]
+proc_tabs() {
+  local t; t="${1:-$(proc_table)}"
+  [ -n "$t" ] || return 0
+  printf '%s\n' "$t" | awk -F'\t' '
+    function bname(s) { sub(/.*\//, "", s); return s }
+    {
+      if ($1 !~ /^[0-9]+$/) next
+      p = $1 + 0; P[p] = $2 + 0; M[p] = $3 + 0; ID[++cnt] = p
+      args = $5; sub(/^[ \t]+/, "", args)
+      k = split(args, w, /[ \t]+/); a = ""
+      if (k >= 1) {
+        f = bname(w[1])
+        if (f == "claude" || f == "opencode" || f == "codex") a = f
+        else if (f == "node" && k >= 2) { s = bname(w[2]); if (s ~ /^claude/) a = "claude"; else if (s ~ /^codex/) a = "codex" }
+        if (a == "opencode" && k >= 2 && bname(w[2]) == "serve") a = ""
+      }
+      if (a != "") A[p] = a
+    }
+    END {
+      for (i = 1; i <= cnt; i++) {
+        p = ID[i]; if (!(p in A)) continue
+        x = P[p]; seen = 0; tab = 1
+        while (x != 0 && seen < 1000) { seen++; if (x in A) { tab = 0; break }; if (!(x in P)) break; x = P[x] }
+        if (tab) { T[p] = 1; F[p] = M[p]; TP[++nt] = p }
+      }
+      for (i = 1; i <= cnt; i++) {
+        p = ID[i]; x = P[p]; seen = 0
+        while (x != 0 && seen < 1000) { seen++; if (x in T) { F[x] += M[p]; break }; if (!(x in P)) break; x = P[x] }
+      }
+      for (i = 1; i <= nt; i++) for (j = i + 1; j <= nt; j++) if (TP[j] < TP[i]) { q = TP[i]; TP[i] = TP[j]; TP[j] = q }
+      for (i = 1; i <= nt; i++) printf "%d\t%s\t%d\t%d\n", TP[i], A[TP[i]], M[TP[i]], F[TP[i]]
+    }'
+}
+# The footprint of a live tab of <agent> and how many tabs it averages, as "<MB> <n>": the average rounded down over the live
+# tabs, or 0 tabs and the fallback value (claude 550, opencode 800, codex 550; any other name gets claude's).  agent_tab_mb <agent> [<table>]
+agent_tab_mb() {
+  local tabs; tabs="$(proc_tabs "${2:-$(proc_table)}")"
+  printf '%s\n' "$tabs" | awk -F'\t' -v a="$1" '
+    $2 == a { s += $4; n++ }
+    END { if (n == 0) print (a == "opencode" ? "800 0" : "550 0"); else printf "%d %d\n", int(s / n), n }'
+}
+# What the MB of a process table are: footprint (macOS: the MEM column of top), rss (the RSS from ps, also on macOS when top
+# lists no process), or empty when this system gives no process table.  proc_kind
+proc_kind() {
+  case "$(host_os)" in
+    macos) if [ -n "${ORCA_ROLES_PROC_TABLE:-}" ]; then printf 'footprint\n'
+      elif [ -n "$(top -l 1 -stats pid,mem 2>/dev/null | awk '{ l = $0; sub(/^[ \t]+/, "", l); if (l ~ /^[0-9]+[ \t]/) { print 1; exit } }')" ]; then printf 'footprint\n'
+      else printf 'rss\n'; fi;;
+    linux|wsl) printf 'rss\n';;
+  esac
+}
+# How many more Dev+Tester pairs fit, from the available MB, minFreeMemoryMB, the pair's MB, the load, the cores and maxLoad:
+# "<by memory> <by CPU> <fit> <limit>", a count "-" when that resource is unreadable (the load is a number, Q = 1.0 per pair),
+# the fit the smaller known count and the limit memory, CPU, memory and CPU, or unknown.  pair_capacity <availableMB> <minFreeMB> <pairMB> <load> <cores> <maxLoad>
+pair_capacity() {
+  awk -v a="$1" -v f="$2" -v p="$3" -v l="$4" -v c="$5" -v m="$6" '
+    function num(v) { return v ~ /^[0-9]+(\.[0-9]+)?$/ }
+    function whole(v) { return v ~ /^[0-9]+$/ }
+    BEGIN {
+      mk = 0; ck = 0
+      if (whole(a) && whole(p) && p + 0 > 0) { bm = int((a - f) / p); if (bm < 0) bm = 0; mk = 1 }
+      if (num(l) && whole(c) && c + 0 > 0 && num(m)) { v = m * c - l; if (v < 0) v = 0; bc = int(v + 1e-9); ck = 1 }
+      if (mk && ck) {
+        if (bm < bc) { fit = bm; lim = "memory" }
+        else if (bc < bm) { fit = bc; lim = "CPU" }
+        else { fit = bm; lim = "memory and CPU" }
+      } else if (mk) { fit = bm; lim = "memory" }
+      else if (ck) { fit = bc; lim = "CPU" }
+      else lim = "unknown"
+      bms = mk ? sprintf("%d", bm) : "-"
+      bcs = ck ? sprintf("%d", bc) : "-"
+      if (mk || ck) fs = sprintf("%d", fit); else fs = "-"
+      printf "%s %s %s %s\n", bms, bcs, fs, lim
+    }'
 }
 # A process's start time as one word (ps lstart, spaces as _), or nothing when it is gone: with the pid it names one process, so a reused pid is not taken for it. LC_ALL=C: the supervisor and --status must print it alike
 proc_start() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' | tr -s ' ' '_'; }
@@ -1389,6 +1530,46 @@ kit_protected_paths() {
 kit_deny_rules() {
   local k="${KIT#/}" d
   while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d" || :; done < <(kit_protected_paths)
+}
+# The folder Claude Code keeps a project's memory in (<config dir>/projects/<slug>/memory; the slug is the git root, or the cwd outside a
+# repository, with every character outside [a-zA-Z0-9] as -). Claude Code slugs the physical spelling, and in an Orca profile the projects
+# entry is a symlink to ~/.claude/projects, so a role started with nothing writes there through the link and its sensitive-file check asks.
+# The folder is printed only when it can be spelled exactly: a wrong slug would move the role's memory to an empty folder, which is worse
+# than today's dialog.  Never an error, never a folder created.  claude_memory_dir
+claude_memory_dir() {
+  local cfg proj common root slug uset
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  [ -d "$cfg/projects" ] || return 0
+  # Claude Code reads the kit's --settings (flagSettings) before the user settings, so the kit's folder would override a folder the user chose there
+  if [ -f "$cfg/settings.json" ]; then
+    uset="$(jq -c 'if type == "object" then {a: .autoMemoryDirectory} else {a: 0} end' "$cfg/settings.json" 2>/dev/null)" || return 0
+    [ "$uset" = '{"a":null}' ] || return 0
+  fi
+  proj="$(cd -P "$cfg/projects" 2>/dev/null && pwd -P)" || return 0
+  if common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+    case "$common" in
+      */.git) root="${common%/.git}"; root="${root:-/}";;
+      *) return 0;;   # a bare repository, a submodule's modules/ dir or a --separate-git-dir checkout: Claude Code does not slug it as a root
+    esac
+  else
+    root="$(pwd -P 2>/dev/null)" || return 0
+  fi
+  root="$(cd -P "$root" 2>/dev/null && pwd -P)" || return 0
+  # Claude Code sanitizes per UTF-16 code unit in JS and the shell per byte or per locale character: a non-ASCII root could get another slug
+  [ -z "$(printf '%s' "$root" | LC_ALL=C tr -d ' -~')" ] || return 0
+  slug="${root//[^a-zA-Z0-9]/-}"
+  [ "${#slug}" -le 200 ] || return 0   # longer slugs get a hash suffix there; copying that hash is not worth a wrong guess
+  printf '%s/%s/memory\n' "$proj" "$slug"
+}
+# The kit's --settings object with autoMemoryDirectory set to claude_memory_dir, so that Claude Code's built-in allowance for .md files in
+# that folder applies and the role writes its memory with no dialog; the object unchanged when there is no folder. No permission rule is
+# added: what opens is only that folder, and only for .md files.  claude_memory_settings <json object>
+claude_memory_settings() {
+  local d out
+  d="$(claude_memory_dir)"
+  if [ -z "$d" ]; then printf '%s\n' "${1:-}"; return 0; fi
+  out="$(jq -c --arg d "$d" '. + {autoMemoryDirectory: $d}' <<<"${1:-}" 2>/dev/null)" || out=""
+  printf '%s\n' "${out:-${1:-}}"
 }
 # A worker's message when its tab was reopened with its previous conversation (after a restart, or after its tab or its agent was lost).  worker_back_msg <config> <role> <handle>
 worker_back_msg() {

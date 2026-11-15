@@ -10,7 +10,7 @@ To follow the same checks by hand instead, step by step, use [manual-checks.md](
 Install the checkout you want to check (`./install.sh`), then run the script from that checkout (`cd` into it) in any terminal, with Orca open. Each script:
 
 - works in a throwaway project, `~/orca-live-checks/project` (registered in Orca once and reused), with a cheap team (local coordinator, Planner, Dev, Tester, Plan-Reviewer and Code-Reviewer on `claude-haiku-5-5`; override with `ORCA_LIVE_MODEL`; the Researcher stays on its own model and opens on first use). Your own teams are never touched, except by the Orca restart that `mac.sh` and `wsl.sh` ask for;
-- asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca); type `skip` at a prompt to skip that check;
+- asks you only for what a script cannot do (close a browser window, answer the new-role wizard, restart Orca), and only when it runs with a terminal (without one, X6 feeds the wizard from a file and X7 skips what needs a person); type `skip` at a prompt to skip that check;
 - writes one report, `~/orca-live-checks/report-<script>.md`: one row per check (OK, FAIL, INFO, SKIP) plus the logs of the failures. Send it to the Planner;
 - records how long each check took, and how long it waited for you at a prompt, in `~/orca-live-checks/timings-<script>.tsv` (one line per check run, one `# run` line per run of the script), so a slow check shows without timing it again.
 
@@ -32,13 +32,13 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 
 | Id | What it proves | From |
 |---|---|---|
-| X1 | The smoke sections that once failed together (`launch launch-mode launch-add restart reopen wake worktree-select`) pass in one run | #29 |
+| X1 | The smoke sections that once failed together (`launch launch-mode launch-add restart reopen wake worktree-select`) pass in one run; it honours `SMOKE_JOBS` (default 1) | #29 |
 | X2 | `upgrade_config` on a user config without a `roles` key (or with `"roles": null`): it returns the upgraded config with the default roles | #37 |
 | X3 | `scholar.sh` against the live APIs: OpenAlex, arXiv (one word and a phrase), Semantic Scholar (with `S2_API_KEY` if set), Crossref and DataCite DOIs through doi.org, `verify`, a real PDF download under the size limit | #28 |
 | X4 | `roles-yaml --all --dry-run` over the projects registered in your Orca; nothing is written; fails when every project was skipped | #32 |
 | X5 | A fresh install into a temporary HOME: the real superpowers fetch from GitHub, a Claude session that loads its skills, and `project-plugins.sh install` doing a real `claude plugin marketplace add` and `install` (in a temporary Claude config) | #39 |
-| X6 | The new-role wizard typed by you, in that temporary kit | #28 |
-| X7 | The pinned E2E stack: install, `browser-login.sh` saving a real session (a local page sets a cookie and localStorage), `e2e-browser.sh session`, and `e2e-run.sh` running a flow with that session against the page | #31 |
+| X6 | The new-role wizard in that temporary kit: typed by you, or fed from a file when there is no terminal | #28 |
+| X7 | The pinned E2E stack: install, `browser-login.sh` saving a real session (a local page sets a cookie and localStorage), `e2e-browser.sh session`, and `e2e-run.sh` running a flow with that session against the page; it asks before opening the browser, and without a terminal the login, session and flow are skipped, so X7 is not marked done and a later run with a terminal asks for it again | #31 |
 | T1 | A worktree created by Orca with an agent: the setup script runs the kit, only the local coordinator opens and asks the mode; the composer's extra session (its title is reported) is closed | #1, #45 |
 | T2 | Choosing the mode from a terminal of another worktree: the kit takes the folder's worktree and opens the programmer team | #45, this PR |
 | T3 | `orca-roles.pty` holds Orca's ptyId byte for byte (on WSL the ptyIds have backslashes) | this PR |
@@ -57,6 +57,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 |---|---|---|
 | W0 | How the `orca` CLI is reached from WSL (`$ORCA_CLI_COMMAND`, the bridge) | #19 |
 | W1 | The Planner relauncher's hang: a process started in a tab and detached with `setsid` closes that same tab; does the close return? And closing another tab from this terminal. It measures Orca's behaviour and stays FAIL while Orca hangs; the kit no longer hangs on it because it limits closes to 15 s (`ORCA_ROLES_CLOSE_TIMEOUT`) | WSL bug report |
+| W2 | `capacity.sh --json` in the WSL VM: the OS kind and whether it is `wsl`, the available memory, the pairs it fits and what it says it does not measure | this PR |
 
 ### agents.sh
 
@@ -77,6 +78,7 @@ For the person running the checks; each line says what to do and what to see.
 - **H. On-demand Auditor on real data.** Run `auditor` in the global coordinator's folder and ask it to audit the roles of a real worktree: it reports problems and proposals and changes no file.
 - **I. The Researcher on Sonnet on a real task.** Give the Researcher a real research question through the local coordinator: its tab opens on first use, it answers within its brief, its report starts with `Done`.
 - **J. A hidden role.** Section 5 of [manual-checks.md](manual-checks.md) (HR0-HR6): a role with `"open": "hidden"` run by a real local coordinator, with its question, `--resume`, `--stop`, the `orca` deny, a killed supervisor and usage metrics.
+- **K. Automatic reopen of the coordinated worktrees' teams after a restart.** A person, through a real global coordinator. This is the first real check of `launch.sh id:<worktree> --reopen` started from a detached process with the coordinator tab's environment (the smoke tests cover the script and the hook with a fake Orca and a stub `launch.sh`). Precondition: the global coordinator was started by this version's `coordinator.sh`; a session started by an older one gets no automatic reopen. With a global coordinator managing at least one worktree with an open team, restart Orca as `mac.sh`/`wsl.sh` describe, reopen the coordinator's tab, and check: the SessionStart line in its tab that says the teams are being reopened in the background; `~/.orca-roles/state/reopen-teams.last` with that worktree `reopened` (and any role named after "without memory"); the worktree's local coordinator back with its conversation and the kit's settings; whether the "Teams reopened" status was shown in the coordinator's tab (Orca does not always announce it: record which); no duplicate tab; the reopened local coordinator's record in `~/.orca-roles/state/session-handles/` has no second line `coordinator`. On WSL the same with `wsl.sh`'s restart.
 
 ## Not scriptable: observed in normal use
 
