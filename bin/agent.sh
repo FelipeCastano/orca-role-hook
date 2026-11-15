@@ -72,6 +72,8 @@ add_list() {  # $1 field (array), $2 optional flag per element, $3 = path to exp
   done < <(rcfg "$CFG" "$ROLE" "$1" | jq -r '.[]?' 2>/dev/null)
 }
 
+unset ORCA_ROLES_SESSION_KIND   # coordinator.sh's mark (and any inherited one): a role's tab is never a coordinator session
+
 case "$AGENT" in
   claude)
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
