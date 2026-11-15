@@ -1701,24 +1701,34 @@ trust_custom_roles() {
   return 0
 }
 
-# Orca's own binary (in node mode) and its runtime client, from the 'orca' on the PATH: "<binary>|<runtime-client.js>" (macOS app), else nothing and 1.
+# Orca's own binary (in node mode) and its runtime client, from the 'orca' on the PATH: "<binary>|<client path>" (macOS app), else nothing and 1.
+# The client is the app's out/cli/runtime/client.js when it and runtime/metadata.js are there (Orca 1.4.259 and later), else out/cli/runtime-client.js.
 # On WSL (Orca for Windows) the binary is Orca.exe, found through orca-ide's ORCA_WIN_LAUNCHER line, and the result ends in "|wsl": the runtime client is a Windows path.
+# On failure it sets ORCA_APP_NODE_WHY to one line naming the cause (see orca_app_node_reason).
 orca_app_node() {
-  local p l d app ide line v inst exe suf
+  local p l d app c js w lc ide line v inst exe suf
+  ORCA_APP_NODE_WHY="no orca command on the PATH"
   if p="$(type -P orca 2>/dev/null)" && case "$p" in /*) true;; *) false;; esac; then
     while [ -L "$p" ]; do
       l="$(readlink "$p")" || break
       case "$l" in /*) p="$l";; *) d="$(dirname "$p")"; p="$d/$l";; esac
     done
+    ORCA_APP_NODE_WHY="the orca on the PATH ($p) is not inside an Orca app"
     case "$p" in
       *.app/Contents/Resources/bin/orca)
         app="${p%/Contents/Resources/bin/orca}"
-        [ -x "$app/Contents/MacOS/Orca" ] && [ -f "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js" ] || return 1
-        printf '%s|%s\n' "$app/Contents/MacOS/Orca" "$app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+        [ -x "$app/Contents/MacOS/Orca" ] || { ORCA_APP_NODE_WHY="Orca's binary $app/Contents/MacOS/Orca is not executable"; return 1; }
+        c="$app/Contents/Resources/app.asar.unpacked/out/cli"
+        if [ -f "$c/runtime/client.js" ] && [ -f "$c/runtime/metadata.js" ]; then js="$c/runtime/client.js"
+        elif [ -f "$c/runtime-client.js" ]; then js="$c/runtime-client.js"
+        else ORCA_APP_NODE_WHY="Orca's runtime client is missing: neither $c/runtime/client.js with runtime/metadata.js nor $c/runtime-client.js exists"; return 1
+        fi
+        printf '%s|%s\n' "$app/Contents/MacOS/Orca" "$js"
         return 0;;
     esac
   fi
   is_wsl || return 1
+  ORCA_APP_NODE_WHY="Orca for Windows was not found through orca-ide's ORCA_WIN_LAUNCHER line"
   ide="$(orca_ide_path)" || return 1
   line="$(grep -m1 '^ORCA_WIN_LAUNCHER=' "$ide" 2>/dev/null)" || return 1
   v="${line#*\'}"; v="${v%%\'*}"
@@ -1727,7 +1737,15 @@ orca_app_node() {
   inst="${v:0:${#v}-${#suf}}"
   exe="$(wslpath -u "$inst\\Orca.exe" 2>/dev/null)" || return 1
   [ -n "$exe" ] && [ -f "$exe" ] && [ -x "$exe" ] || return 1
-  printf '%s|%s|wsl\n' "$exe" "$inst\\resources\\app.asar.unpacked\\out\\cli\\runtime-client.js"
+  w="${inst}\\resources\\app.asar.unpacked\\out\\cli"
+  if lc="$(wslpath -u "$w\\runtime\\client.js" 2>/dev/null)" && [ -n "$lc" ] && [ -f "$lc" ]; then js="$w\\runtime\\client.js"; else js="$w\\runtime-client.js"; fi
+  printf '%s|%s|wsl\n' "$exe" "$js"
+}
+
+# Why orca_app_node finds no Orca app: one line when it would return 1, nothing when it would return 0; always status 0.
+orca_app_node_reason() {
+  orca_app_node >/dev/null || printf '%s\n' "${ORCA_APP_NODE_WHY:-}"
+  return 0
 }
 
 # A path as the kit's shell sees it: a Windows UNC path (\\wsl.localhost\Ubuntu\...) as a Linux path; any other path unchanged.
@@ -1739,14 +1757,14 @@ local_path() {
   esac
 }
 
-# Wakes a tab Orca keeps asleep after a restart: wake_tab <worktreeId> <tabId> <leafId>. Returns 0 woken (stdout empty), 1 failed (stdout: the reason), 2 unavailable here.
+# Wakes a tab Orca keeps asleep after a restart: wake_tab <worktreeId> <tabId> <leafId>. Returns 0 woken (stdout empty), 1 failed (stdout: the reason), 2 unavailable here (stdout: the reason).
 wake_tab() {
   local n bin rc rcl err wenv
   if [ -n "${ORCA_ROLES_WAKE:-}" ]; then
     "$ORCA_ROLES_WAKE" "$@"; rc=$?
     case "$rc" in 0) return 0;; 2) return 2;; *) return 1;; esac
   fi
-  n="$(orca_app_node)" || return 2
+  n="$(orca_app_node)" || { orca_app_node_reason; return 2; }
   bin="${n%%|*}"; rcl="${n#*|}"
   if [ "${rcl##*|}" = wsl ]; then
     rcl="${rcl%|wsl}"
