@@ -14,6 +14,10 @@
 #   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use", "per-task" or "per-batch" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
 #   --add <role>     opens one more tab of that role (id or title) now: its own tab when it has none, else the instance <id>-<n> with the lowest free n; refused (exit 3, a line starting REFUSED:) over its maxInstances, settings.scaling or the machine's load or memory. Not saved. Takes no other option.
 #   --tree <path>    with --add: the new tab's agent runs in that pair tree (pair-tree.sh create), not in the worktree; kept for every reopen of that tab
+#   --new-team       moves this worktree's saved team aside (into <git dir>/orca-roles.set-aside/<UTC stamp>-<pid>/, not deleted) once none of
+#                    its saved roles has a real tab open, then opens a new team in the worktree's saved mode and with its saved options. Takes no other option.
+#   --confirm-no-tabs  with --new-team: skips the open-tab check (for when Orca cannot tell, or when the tabs it names are not this team's);
+#                    any tab it still finds is named in a warning and left running.
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
 # saved ones (the same option replaces its saved value: --only, --mode, a --set path; a role in --enable/--disable leaves the other list);
@@ -22,16 +26,20 @@
 # Only one launch runs per worktree at a time (orca-roles.lock in its git dir). If Orca cannot tell which tabs are open
 # ("Orca is not ready"), it stops before closing or opening anything.
 set -uo pipefail
-case "${1:-}" in -h|--help) sed -n 2,23p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,27p "$0"; exit 0;; esac
 command -v jq >/dev/null || { echo "ERROR: 'jq' is missing (macOS: brew install jq; Ubuntu: sudo apt install jq); orca-roles cannot read its configuration without it." >&2; exit 1; }
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 type -P orca >/dev/null || { echo "ERROR: Orca CLI not found (neither 'orca' nor \$ORCA_CLI_COMMAND). Run this from an Orca terminal." >&2; exit 1; }
 WT=""; RESET=0; STATUS=0; REOPEN=0; FLAGS=(); OPEN_REQ=""; NAMED_REQ=""; ADD_REQ=""; ADD_SEEN=0; TREE_REQ=""; TREE_SEEN=0; TREE_PATH=""; TREE_SLOT=""
+NEW_TEAM=0; CONFIRM_NO_TABS=0   # --new-team and --confirm-no-tabs: never saved in the overrides
+TAB_NOFAIL=0; TAB_UNKNOWN=0; TAB_CODE=""   # what tab_exists does on a state 4: stop (0), or report it to the caller (1)
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) RESET=1;;
     --status) STATUS=1;;
     --reopen) REOPEN=1;;
+    --new-team) NEW_TEAM=1;;
+    --confirm-no-tabs) CONFIRM_NO_TABS=1;;
     --open) OPEN_REQ="${OPEN_REQ:+$OPEN_REQ,}${2:-}"; shift;;
     --open=*) OPEN_REQ="${OPEN_REQ:+$OPEN_REQ,}${1#--open=}";;
     --add|--add=*)
@@ -54,6 +62,16 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ "$NEW_TEAM" = 1 ]; then   # takes no other option: the positional worktree id only
+  OTHERS=""; [ ${#FLAGS[@]} -gt 0 ] && OTHERS="${FLAGS[*]}"
+  [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
+  [ "$REOPEN" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reopen"
+  [ -z "$OPEN_REQ" ] || OTHERS="${OTHERS:+$OTHERS }--open"
+  [ -z "$ADD_REQ" ] || OTHERS="${OTHERS:+$OTHERS }--add"
+  [ -z "$TREE_REQ" ] || OTHERS="${OTHERS:+$OTHERS }--tree"
+  [ -z "$OTHERS" ] || { echo "ERROR: --new-team takes no other option (got: $OTHERS). Nothing was changed."; exit 1; }
+fi
+[ "$CONFIRM_NO_TABS" = 0 ] || [ "$NEW_TEAM" = 1 ] || { echo "ERROR: --confirm-no-tabs goes with --new-team. Nothing was changed."; exit 1; }
 if [ "$REOPEN" = 1 ]; then
   OTHERS=""; [ ${#FLAGS[@]} -gt 0 ] && OTHERS="${FLAGS[*]}"
   [ "$RESET" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--reset"; [ "$STATUS" = 1 ] && OTHERS="${OTHERS:+$OTHERS }--status"
@@ -406,8 +424,37 @@ for i in $(seq 1 "$WAIT"); do
   LIST="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" && { LISTOK=1; break; }
   echo "Waiting for Orca to have the worktree ready ($i/$WAIT)..."; sleep 1
 done
-LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
-if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then LROLES="$FRONT"; fi
+# The roles this launch opens:  role_filter [keep|rebuild]
+# No argument: the launchable roles of the mode, or only the front role while the mode is not chosen yet (the --open/--add checks run on
+#   this list). 'keep': keeps only the roles that start with the team, have a saved tab or are named by this run; the others fill the lazy
+#   lists. 'rebuild': the same, on a list computed again; --new-team runs it that way once the saved team is set aside, so the new team is
+#   the one a first launch opens here.
+role_filter() {
+  local id om keep=""
+  case "${1:-}" in
+    keep) ;;
+    *) LROLES="$(launchable_roles "$NEWCFG" | tr '\n' ' ')"
+       if [ "$ASK" = 1 ] || { [ "$PENDING" = 1 ] && [ "$REOPEN" = 1 ]; }; then LROLES="$FRONT"; fi
+       [ "${1:-}" = rebuild ] || return 0;;
+  esac
+  [ "$ASK" = 0 ] || return 0
+  LAZY_FIRST=""; LAZY_TASK=""; LAZY_BATCH=""; LAZY_HID=""
+  for id in $LROLES; do
+    om="$(open_of "$NEWCFG" "$id")"
+    if [ -n "$(instance_base "$NEWCFG" "$id")" ] && ! grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then
+      case " $OPEN_IDS " in *" $id "*) keep="$keep $id";; esac
+      continue
+    fi
+    if [ "$om" = start ] || grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then keep="$keep $id"; continue; fi
+    if [ "$om" = hidden ]; then LAZY_HID="${LAZY_HID:+$LAZY_HID, }$(title_of "$NEWCFG" "$id") ($id)"; continue; fi
+    case " $OPEN_IDS $NAMED_IDS " in *" $id "*) keep="$keep $id"; continue;; esac
+    if [ "$om" = first-use ]; then LAZY_FIRST="${LAZY_FIRST:+$LAZY_FIRST, }$(title_of "$NEWCFG" "$id") ($id)"
+    elif [ "$om" = per-batch ]; then LAZY_BATCH="${LAZY_BATCH:+$LAZY_BATCH, }$(title_of "$NEWCFG" "$id") ($id)"
+    else LAZY_TASK="${LAZY_TASK:+$LAZY_TASK, }$(title_of "$NEWCFG" "$id") ($id)"; fi
+  done
+  LROLES="${keep# }"
+}
+role_filter
 OPEN_IDS=""; NAMED_IDS=""; LAZY_FIRST=""; LAZY_TASK=""; LAZY_BATCH=""; LAZY_HID=""
 if [ -n "$OPEN_REQ" ]; then
   [ "$FRESH" = 0 ] || fail "ERROR: --open needs an open team: run roles first. Nothing was changed."
@@ -496,23 +543,7 @@ fi
 for n in $(printf '%s' "$NAMED_REQ" | tr ',' ' '); do   # roles named by --only/--enable in this run (unknown names were already refused by check_overrides)
   r="$(resolve_role "$NEWCFG" "$n")"; [ -z "$r" ] || NAMED_IDS="$NAMED_IDS $r"
 done
-if [ "$ASK" = 0 ]; then
-  KEEP=""
-  for id in $LROLES; do
-    om="$(open_of "$NEWCFG" "$id")"
-    if [ -n "$(instance_base "$NEWCFG" "$id")" ] && ! grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then
-      case " $OPEN_IDS " in *" $id "*) KEEP="$KEEP $id";; esac
-      continue
-    fi
-    if [ "$om" = start ] || grep -q "^$(var_of "$id")=." "$STATE" 2>/dev/null; then KEEP="$KEEP $id"; continue; fi
-    if [ "$om" = hidden ]; then LAZY_HID="${LAZY_HID:+$LAZY_HID, }$(title_of "$NEWCFG" "$id") ($id)"; continue; fi
-    case " $OPEN_IDS $NAMED_IDS " in *" $id "*) KEEP="$KEEP $id"; continue;; esac
-    if [ "$om" = first-use ]; then LAZY_FIRST="${LAZY_FIRST:+$LAZY_FIRST, }$(title_of "$NEWCFG" "$id") ($id)"
-    elif [ "$om" = per-batch ]; then LAZY_BATCH="${LAZY_BATCH:+$LAZY_BATCH, }$(title_of "$NEWCFG" "$id") ($id)"
-    else LAZY_TASK="${LAZY_TASK:+$LAZY_TASK, }$(title_of "$NEWCFG" "$id") ($id)"; fi
-  done
-  LROLES="${KEEP# }"
-fi
+role_filter keep
 # After a restart Orca keeps agent tabs asleep: not in the terminal list, no handle, until someone clicks them (then Orca resumes their session itself).
 # Waking them first lets the code below see them as the restored tabs they are and reopen each with its conversation, instead of opening a second tab.
 if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
@@ -521,6 +552,8 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
   if [ "$PREV_MODE" = academic-research ] && [ "$NEWMODE" = academic-research ] && [ "$(phase_of "$CFG")" != "$(phase_of "$NEWCFG")" ]; then WAKE_ALL=1; fi
   # An old-layout team (PLANNER= and no LOCAL_COORDINATOR=) is refused while any of its tabs exists, so every saved tab must be seen: wake them all.
   if [ "$FRONT" = local-coordinator ] && grep -q '^PLANNER=' "$STATE" && ! grep -q '^LOCAL_COORDINATOR=' "$STATE"; then WAKE_ALL=1; fi
+  # --new-team decides on the saved team's tabs: it must see them all too.
+  [ "$NEW_TEAM" = 0 ] || WAKE_ALL=1
   WAKE_MSG="Cannot wake tabs Orca kept asleep on this system; their roles are treated as closed."
   W_N=0; W_STOP=0
   for line in $(cat "$STATE"); do
@@ -598,24 +631,134 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
     done
   fi
 fi
-# Whether a saved role's tab still exists: its saved handle, or, after a restart of Orca or the computer (new handles), the tab that has the
-# role's saved ptyId.  tab_exists <VAR>
+# Whether a saved role has a real tab of the saved team, which is not the plain terminal that runs roles:
+# - its saved handle when that tab is alive (state 0, not detached) or has no agent behind it (2);
+# - only when the saved handle gave no such candidate, after a restart of Orca or the computer (new handles), the tab that has the
+#   role's saved ptyId when that terminal is a real tab (states 0, 2 and 3: Orca flags a restored tab it has not bound yet as orphaned);
+# - never a session Orca kept without its tab (state 3, or 0 with ROLE_DETACHED=1): it is recorded for the caller to name it;
+# - never the plain terminal this launch runs in (ORCA_TERMINAL_HANDLE, by handle or by its ptyId) while no agent runs in it: an agent under
+#   the found handle or under the calling terminal's own handle makes the role count (the two are one tab);
+# - a state 4 stops the launch, unless the caller asked to only report it (TAB_NOFAIL).
+# Sets TAB_COUNTED (the handle that counts) and TAB_SESSION (the handle of the session without a tab).  tab_exists <VAR>
 tab_exists() {
-  local var="$1" role h rc p rh=""
+  local var="$1" role h rc p rh="" cand="" sess="" caller=0
+  TAB_COUNTED=""; TAB_SESSION=""
   h="$(grep "^$var=" "$STATE" 2>/dev/null | head -1 | cut -d= -f2-)"; [ -n "$h" ] || return 1
   role="$(printf '%s' "$var" | tr 'A-Z_' 'a-z-')"
+  p="$(saved_pty "$var")"
   role_state "$var" "$role" "$h"; rc=$?
-  [ "$rc" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready."
-  [ "$rc" -eq 1 ] || return 0
-  p="$(saved_pty "$var")"; [ -n "$p" ] && rh="$(restored_handle "$p" "$(woke_old "$var")")"
-  [ -n "$rh" ]
-}
-# Whether any role of the saved team has a tab.  team_tabs_exist
-team_tabs_exist() {
-  local line
-  for line in $(cat "$STATE" 2>/dev/null); do tab_exists "${line%%=*}" && return 0; done
+  case "$rc" in
+    4) tab_unknown; return 1;;
+    0) if [ "$ROLE_DETACHED" = 1 ]; then sess="$h"; else cand="$h"; fi;;
+    2) cand="$h";;
+    3) sess="$h";;
+  esac
+  if [ -z "$cand" ] && [ -n "$p" ]; then
+    rh="$(restored_handle "$p" "$(woke_old "$var")")"
+    if [ -n "$rh" ]; then
+      role_alive "$role" "$rh"; rc=$?
+      case "$rc" in
+        4) tab_unknown; return 1;;
+        0|2|3) cand="$rh"; sess="";;
+      esac
+    fi
+  fi
+  if [ -n "$cand" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
+    if [ "$cand" = "$ORCA_TERMINAL_HANDLE" ]; then caller=1
+    elif [ -n "$p" ] && [ "$(pty_of_handle "$ORCA_TERMINAL_HANDLE")" = "$p" ]; then caller=1
+    fi
+    if [ "$caller" = 1 ] && [ -z "$(agent_pid_of_handle "$cand")" ] \
+       && { [ "$cand" = "$ORCA_TERMINAL_HANDLE" ] || [ -z "$(agent_pid_of_handle "$ORCA_TERMINAL_HANDLE")" ]; }; then cand=""; sess=""; fi
+  fi
+  if [ -n "$cand" ]; then TAB_COUNTED="$cand"; return 0; fi
+  TAB_SESSION="$sess"
   return 1
 }
+# A role whose tab state could not be read: the launch stops with today's error, or, when the caller only wants the report, it is
+# recorded as not counted.  tab_unknown
+tab_unknown() {
+  TAB_UNKNOWN=1; [ -n "${TAB_CODE:-}" ] || TAB_CODE="$ROLE_ALIVE_CODE"
+  [ "$TAB_NOFAIL" = 0 ] || return 0
+  fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready."
+}
+# Whether any role of the saved team has a counted tab: fills TEAM_TABS (each counted tab as VAR|handle, in orca-roles.env order) and
+# TEAM_SESSIONS (the roles found as sessions without a tab, same form).  team_tabs_exist
+team_tabs_exist() {
+  local line
+  TEAM_TABS=""; TEAM_SESSIONS=""
+  for line in $(cat "$STATE" 2>/dev/null); do
+    tab_exists "${line%%=*}" || true
+    [ -z "$TAB_COUNTED" ] || TEAM_TABS="$TEAM_TABS${line%%=*}|$TAB_COUNTED"$'\n'
+    [ -z "$TAB_SESSION" ] || TEAM_SESSIONS="$TEAM_SESSIONS${line%%=*}|$TAB_SESSION"$'\n'
+  done
+  [ -n "$TEAM_TABS" ]
+}
+# "<role id> (<handle>)" for each VAR|handle line of the list, in its order, joined by ", ".  tab_titles <list>
+tab_titles() {
+  local line out=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    out="${out:+$out, }$(printf '%s' "${line%%|*}" | tr 'A-Z_' 'a-z-') (${line#*|})"
+  done <<< "$1"
+  printf '%s' "$out"
+}
+set_aside_fail() {  # set_aside_fail <the file that failed>: nothing else is changed, nothing is deleted
+  rm -f "$NEWCFG" "$NEWCFG.tmp" "$NEWCFG.prev" "$NEWOVR" "$NEWOVR.x"
+  echo "ERROR: could not move the saved team's state to $SET_ASIDE_DIR: $1. Nothing else was changed."
+  exit 1
+}
+# Moves the saved team's files into <git dir>/orca-roles.set-aside/<UTC stamp>-<pid>/, each under its own name; nothing is deleted.
+# orca-roles.trees goes too, so no role of the new team opens in a pair tree of the old team's roles. The saved options, the mode, the
+# config, the work binding, the handoff records, the pair-tree registry (orca-roles.pairs) and the hidden roles' pid files stay in place.
+# Sets SET_ASIDE_DIR.  set_aside_team
+set_aside_team() {
+  local f
+  SET_ASIDE_DIR="$GITDIR/orca-roles.set-aside/$(date -u '+%Y%m%dT%H%M%SZ')-$$"
+  mkdir -p "$SET_ASIDE_DIR" 2>/dev/null || set_aside_fail "$SET_ASIDE_DIR"
+  for f in "$STATE" "$PTY" "$KICKED" "$TABS" "$GITDIR/orca-roles.planner-handles" "$SWITCH_FILE" "$FRONT_REOPEN_FILE" "$GITDIR/orca-roles.models" "$GITDIR/orca-roles.trees"; do
+    [ -e "$f" ] || continue
+    mv "$f" "$SET_ASIDE_DIR/" 2>/dev/null || set_aside_fail "$(basename "$f")"
+  done
+  for f in "$GITDIR"/orca-roles-opencode-*.session; do
+    [ -e "$f" ] || continue
+    mv "$f" "$SET_ASIDE_DIR/" 2>/dev/null || set_aside_fail "$(basename "$f")"
+  done
+  return 0
+}
+# --new-team: sets this worktree's saved team aside (it is not deleted) once none of its saved roles has a real tab, then opens a
+# new team in the worktree's saved mode; --confirm-no-tabs skips the check and only names the tabs it still found.
+if [ "$NEW_TEAM" = 1 ]; then
+  if [ ! -s "$STATE" ]; then
+    echo "No saved team in this worktree: nothing to set aside; the team starts."
+  else
+    for f in "$GITDIR/orca-roles.kickoff.d"/*; do
+      [ -f "$f" ] && kill -0 "$(basename "$f")" 2>/dev/null && fail "ERROR: the previous launch's kickoff is still running (pid $(basename "$f")): try again in a moment. Nothing was changed."
+    done
+    NEW_TABS=""; NEW_SESSIONS=""
+    if [ "$LISTOK" = 1 ]; then   # fills TEAM_TABS and TEAM_SESSIONS; a state 4 is only recorded (reported below)
+      TAB_NOFAIL=1; TAB_UNKNOWN=0; TAB_CODE=""
+      team_tabs_exist || true
+      NEW_TABS="$(tab_titles "$TEAM_TABS")"; NEW_SESSIONS="$(tab_titles "$TEAM_SESSIONS")"
+    fi
+    if [ "$CONFIRM_NO_TABS" = 0 ]; then
+      if [ "$LISTOK" != 1 ]; then
+        fail "ERROR: --new-team: cannot tell whether this worktree's saved team still has open tabs ('orca terminal list' failed). Run it again once Orca is ready, or add --confirm-no-tabs if you closed them. Nothing was changed."
+      fi
+      [ "$TAB_UNKNOWN" = 0 ] || fail "ERROR: --new-team: cannot tell whether this worktree's saved team still has open tabs (Orca is not ready ($TAB_CODE)). Run it again once Orca is ready, or add --confirm-no-tabs if you closed them. Nothing was changed."
+      [ -z "$NEW_TABS" ] || fail "ERROR: --new-team: these tabs of this worktree's saved team are open: $NEW_TABS. Close them and run roles --new-team again (or add --confirm-no-tabs if they are not this team's tabs). Nothing was changed."
+    else
+      [ -z "$NEW_TABS" ] || echo "Warning: --confirm-no-tabs: these tabs of the saved team were found and are left running: $NEW_TABS."
+    fi
+    [ -z "$NEW_SESSIONS" ] || echo "Orca keeps these sessions of the saved team running without a tab: $NEW_SESSIONS; they were left as they are (end one with orca terminal close --terminal <handle>)."
+    set_aside_team
+    echo "The saved team's state was moved to $SET_ASIDE_DIR (not deleted); a new team starts."
+    jq '.roles |= with_entries(select((.value.instanceOf // null) == null))' "$NEWCFG" > "$NEWCFG.newteam" && mv "$NEWCFG.newteam" "$NEWCFG" \
+      || fail "ERROR: could not rebuild the new team's configuration after setting the saved state aside. Nothing was opened."
+    LAZY_FIRST=""; LAZY_TASK=""; LAZY_BATCH=""; LAZY_HID=""
+    role_filter rebuild
+    FRESH=1; PREV_MODE=""
+  fi
+fi
 # A team opened by an earlier version of the kit keeps running that version in its open tabs: say so, so the user restarts it.
 # Each role's last provenance line records the .installed stamp of the kit that started it (agent.sh record_provenance).
 # Costs up to ~10 s per saved role whose tab is gone (role_alive retries); runs only when Orca answered (LISTOK).
@@ -632,15 +775,17 @@ if [ "$LISTOK" = 1 ] && [ -n "$KI_NOW" ] && [ -s "$STATE" ] && [ -s "$GITDIR/orc
 fi
 drop_role_lines() { local f; for f in "$STATE" "$PTY" "$KICKED" "$TABS"; do [ -f "$f" ] && { grep -v "^$1=" "$f" > "$f.tmp"; mv "$f.tmp" "$f"; }; done; return 0; }
 # A team opened by a kit that had no local coordinator (PLANNER= and no LOCAL_COORDINATOR= in the state) cannot be reused by this one: while
-# any of its tabs exists, the user closes them; with none, its state files go and the launch is a fresh one (it keeps the worktree's saved mode).
+# any real tab of it exists, the user closes them; with none, its state files move into orca-roles.set-aside/ and the launch is a fresh one
+# (it keeps the worktree's saved mode).
 if [ "$FRONT" = local-coordinator ] && [ -s "$STATE" ] && grep -q '^PLANNER=' "$STATE" && ! grep -q '^LOCAL_COORDINATOR=' "$STATE"; then
   [ "$LISTOK" = 1 ] || fail "ERROR: cannot tell whether this worktree's earlier team is still open: 'orca terminal list' failed; nothing was changed. Try again once Orca is ready."
   if team_tabs_exist; then
-    fail "ERROR: this worktree's team was opened by an earlier version of the kit: close its tabs and run roles again"
+    fail "ERROR: this worktree's team was opened by an earlier version of the kit and these of its tabs are open: $(tab_titles "$TEAM_TABS"). Close them and run roles again, or run roles --new-team to set the saved team aside and start a new one."
   fi
-  rm -f "$STATE" "$KICKED" "$GITDIR/orca-roles.planner-handles" "$PTY" "$TABS" "$SWITCH_FILE"
+  [ -z "$TEAM_SESSIONS" ] || echo "Orca keeps these sessions of the saved team running without a tab: $(tab_titles "$TEAM_SESSIONS"); they were left as they are (end one with orca terminal close --terminal <handle>)."
+  set_aside_team
   FRESH=1; PREV_MODE=""
-  echo "This worktree's earlier team has no open tabs: its saved state was removed and a new team starts."
+  echo "This worktree's earlier team has no open tabs: its saved state was moved to $SET_ASIDE_DIR (not deleted) and a new team starts."
   if [ "$REOPEN" = 1 ]; then echo "Nothing to reopen: run roles to start the team."; exit 0; fi
 fi
 FRONT_KEY_OLD=""; [ -f "$CFG" ] && [ -n "$PREV_MODE" ] && FRONT_KEY_OLD="$(front_launch_key "$CFG" "$PREV_MODE")"   # how the local coordinator's tab was started
