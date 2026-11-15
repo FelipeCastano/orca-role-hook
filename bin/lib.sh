@@ -1497,6 +1497,46 @@ kit_deny_rules() {
   local k="${KIT#/}" d
   while IFS= read -r d; do printf 'Edit(//%s/%s)\n' "$k" "$d" || :; done < <(kit_protected_paths)
 }
+# The folder Claude Code keeps a project's memory in (<config dir>/projects/<slug>/memory; the slug is the git root, or the cwd outside a
+# repository, with every character outside [a-zA-Z0-9] as -). Claude Code slugs the physical spelling, and in an Orca profile the projects
+# entry is a symlink to ~/.claude/projects, so a role started with nothing writes there through the link and its sensitive-file check asks.
+# The folder is printed only when it can be spelled exactly: a wrong slug would move the role's memory to an empty folder, which is worse
+# than today's dialog.  Never an error, never a folder created.  claude_memory_dir
+claude_memory_dir() {
+  local cfg proj common root slug uset
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  [ -d "$cfg/projects" ] || return 0
+  # Claude Code reads the kit's --settings (flagSettings) before the user settings, so the kit's folder would override a folder the user chose there
+  if [ -f "$cfg/settings.json" ]; then
+    uset="$(jq -c 'if type == "object" then {a: .autoMemoryDirectory} else {a: 0} end' "$cfg/settings.json" 2>/dev/null)" || return 0
+    [ "$uset" = '{"a":null}' ] || return 0
+  fi
+  proj="$(cd -P "$cfg/projects" 2>/dev/null && pwd -P)" || return 0
+  if common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+    case "$common" in
+      */.git) root="${common%/.git}"; root="${root:-/}";;
+      *) return 0;;   # a bare repository, a submodule's modules/ dir or a --separate-git-dir checkout: Claude Code does not slug it as a root
+    esac
+  else
+    root="$(pwd -P 2>/dev/null)" || return 0
+  fi
+  root="$(cd -P "$root" 2>/dev/null && pwd -P)" || return 0
+  # Claude Code sanitizes per UTF-16 code unit in JS and the shell per byte or per locale character: a non-ASCII root could get another slug
+  [ -z "$(printf '%s' "$root" | LC_ALL=C tr -d ' -~')" ] || return 0
+  slug="${root//[^a-zA-Z0-9]/-}"
+  [ "${#slug}" -le 200 ] || return 0   # longer slugs get a hash suffix there; copying that hash is not worth a wrong guess
+  printf '%s/%s/memory\n' "$proj" "$slug"
+}
+# The kit's --settings object with autoMemoryDirectory set to claude_memory_dir, so that Claude Code's built-in allowance for .md files in
+# that folder applies and the role writes its memory with no dialog; the object unchanged when there is no folder. No permission rule is
+# added: what opens is only that folder, and only for .md files.  claude_memory_settings <json object>
+claude_memory_settings() {
+  local d out
+  d="$(claude_memory_dir)"
+  if [ -z "$d" ]; then printf '%s\n' "${1:-}"; return 0; fi
+  out="$(jq -c --arg d "$d" '. + {autoMemoryDirectory: $d}' <<<"${1:-}" 2>/dev/null)" || out=""
+  printf '%s\n' "${out:-${1:-}}"
+}
 # A worker's message when its tab was reopened with its previous conversation (after a restart, or after its tab or its agent was lost).  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
   printf '%s' "You are back in a new tab with your previous conversation (your previous tab or its agent was lost, for example in a restart of the computer or of Orca); your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."

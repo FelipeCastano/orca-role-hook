@@ -72,6 +72,8 @@ add_list() {  # $1 field (array), $2 optional flag per element, $3 = path to exp
   done < <(rcfg "$CFG" "$ROLE" "$1" | jq -r '.[]?' 2>/dev/null)
 }
 
+unset ORCA_ROLES_SESSION_KIND   # coordinator.sh's mark (and any inherited one): a role's tab is never a coordinator session
+
 case "$AGENT" in
   claude)
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
@@ -142,9 +144,14 @@ case "$AGENT" in
     # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
     # extraArgs replaces this one and should carry its own "language". It also keeps superpowers out of the workers even when a project or the
     # user enables it (only those two plugin ids); a --settings in extraArgs replaces it whole.
-    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    # Both objects also carry autoMemoryDirectory (claude_memory_settings): Claude Code then names the role's memory folder and its .md writes need no dialog.
+    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings "$(claude_memory_settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')")
     # settings.superpowers = false: "off" also means off for a superpowers the user installed (the front role has no other kit --settings)
-    [ "$ROLE" = "$FRONT" ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    if [ "$ROLE" = "$FRONT" ]; then
+      FSET='{}'; [ "$SP_OFF" = 1 ] && FSET='{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}'
+      FSET="$(claude_memory_settings "$FSET")"
+      [ "$FSET" = '{}' ] || ARGS+=(--settings "$FSET")
+    fi
     # The role's advisor: a model adds Claude Code's hidden --advisor, off disables the tool, auto adds nothing
     ADVISOR="$(advisor_of "$CFG" "$ROLE")" || ADVISOR=""
     if [ -z "$ADVISOR" ]; then

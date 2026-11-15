@@ -44,7 +44,7 @@ jobs:
           - id: 7
             sections: "syntax config cleanup-msg project-config metrics usage-metrics modes restart reopen opencode new-role-repo install"
           - id: 8
-            sections: "clean custom-command mcp-gitdir launch-mode wizard prompts-misc agent-flags pair-tree models dispatch cli inbox on-done answer capacity capacity-contract"
+            sections: "clean custom-command mcp-gitdir launch-mode wizard prompts-misc agent-flags memory-dir pair-tree models dispatch cli inbox on-done answer capacity capacity-contract"
         # the 8 shards are balanced on the Ubuntu timings of the shards before them: the longest sections each get a shard of their own, the rest fills the others
     name: smoke-shard (ubuntu-latest, ${{ matrix.shard.id }})
     runs-on: ubuntu-latest
@@ -74,7 +74,7 @@ jobs:
       matrix:
         shard:
           - id: 1
-            sections: "rules output-rules loop clean custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim status metrics modes research-defaults role-notes prompts-misc dead-tab agent-flags wake trust-folder codex-custom new-role-repo install-flat install browser-login e2e-run pair-tree project-plugins cli"
+            sections: "rules output-rules loop clean custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim status metrics modes research-defaults role-notes prompts-misc dead-tab agent-flags memory-dir wake trust-folder codex-custom new-role-repo install-flat install browser-login e2e-run pair-tree project-plugins cli"
           - id: 2
             sections: "prompts config scratch launch-overrides launch-mode launch-add new-role-modes planner-skill composer-session composer-tab reopen worktree-select forget-trust prompt-paths kit-path checkpoint sync-base guard model-check models scholar team-status hidden test-run"
           - id: 3
