@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -76,7 +76,7 @@ SMOKE_SERIAL=(
 )
 smoke_serial() { local k; for k in "${SMOKE_SERIAL[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 # SMOKE_FIRST: the longest sections, longest first (median seconds of GitHub's macOS runs, Nov 2026); in a parallel run they start before the others, so none of them starts last. A stale order costs time, never a result
-SMOKE_FIRST=(launch launch-add launch-mode usage-metrics modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
+SMOKE_FIRST=(launch launch-add launch-mode usage-metrics usage-install usage-scheduler usage-pass modes install-flat reopen models install cli roles-yaml model-check project-plugins academic-research oracle dispatch worktree-select agent-flags)
 smoke_first() { local k; for k in "${SMOKE_FIRST[@]}"; do [ "$k" = "$1" ] && return 0; done; return 1; }
 smk_reap() {  # smk_reap: (INT/TERM in smoke_parallel) stops the running sections and waits up to 5 s for them, so their 'section … aborted' lines come before the total
   local k t
@@ -3317,6 +3317,71 @@ case "$1" in
   pr) proj_repo;;
   wc) wt_create nm --x y; echo "rc=$? WT=$WT WTID=$WTID";;
   rc) live_start tp; tpf() { :; }; run_check T1 tpf; run_check T1 tpf; echo "rc=$?";;
+  ra)  # the R1 rows of c_restart_after against a fake installed kit and fake last-roles.log lines
+    RK="$LD/rkit"; rm -rf "$RK"; mkdir -p "$RK/bin"; LASTLOG="$LD/ra-log"
+    LIVE_DIR="$LD"; REPORT="$LD/report-ra.md"; TIMINGS="$LD/timings-ra.tsv"; STATE="$LD/state-ra"
+    GD="$LD/gd"; rm -rf "$GD"; mkdir -p "$GD"
+    printf 'PLANNER=p1\nDEV=p2\n' > "$GD/orca-roles.env"
+    printf 'PLANNER=wt@@p1\nDEV=wt@@p2\n' > "$GD/orca-roles.pty"
+    KIT="$RK"; RW=keep; AFTER=0; WP=bad; ORDER=""
+    wt_terms() { [ "$AFTER" = 1 ] && printf 'h1\twt@@p1\tPlanner\tclaude\nh2\twt@@p2\tDev\tclaude\n'; return 0; }
+    pid_of_handle() { return 1; }
+    sleep() { :; }
+    roles_run() { if [ "$(grep -c '| R1.wakepath |' "$REPORT")" = 0 ]; then WP=after; else WP=before; fi; AFTER=1; cp "$LASTLOG" "$LIVE_DIR/last-roles.log"; }
+    kitw() { { printf 'KIT=/leaked/kit; RW=leaked;\n'; cat; } > "$KIT/bin/lib.sh"; }   # the fake kit also tries to clobber the harness
+    r1rows() {  # r1rows <label> <id regex>: the R1 rows of the run just made, a FAIL cut to its got/expected part
+      awk -F'|' -v l="$1" -v w="$2" '
+        $2 ~ ("^ R1\\.(" w ") $") {
+          for (i = 2; i <= 4; i++) gsub(/^ +| +$/, "", $i)
+          d = $4
+          if ($3 == "OK") d = ""
+          else if ($3 == "FAIL") sub(/^.*: got /, "got ", d)
+          printf "%s %s %s%s\n", l, $2, $3, (d == "" ? "" : " " d)
+        }' "$REPORT"
+    }
+    ra_run() {  # ra_run <label> <last-roles.log lines> <id regex>
+      printf '%s\n' "$2" > "$LASTLOG"; : > "$REPORT"; AFTER=0; WP=bad
+      c_restart_after R1 >/dev/null
+      ORDER="$ORDER$WP;"; r1rows "$1" "$3"
+    }
+    HELD='Orca kept the tab of Planner asleep after a restart; woke it.
+Orca kept the tab of Dev asleep after a restart; woke it.
+The previous tab of Planner (term_x) no longer exists; opening a new one with its conversation (1234abcd-2222-3333-4444-555555555555).
+Orca restored the tab of Dev after a restart (rs-dev); reopening it with its conversation (5678abcd-2222-3333-4444-555555555555).'
+    LOST='Orca kept the tab of Planner asleep after a restart; woke it.
+Orca kept the tab of Dev asleep after a restart; woke it.
+The previous tab of Planner (term_x) no longer exists; opening a new one.
+The tab of Dev could not be read from its restored tab (no session); not reopened, to keep it.
+Cannot wake tabs Orca kept asleep on this system (no runtime client: /gone); their roles are treated as closed.
+Orca restored the tab of Planner after a restart (rs-pl); its session could not be read; closing it and opening a new one.'
+    kitw <<'EOLIB'
+orca_app_node() { printf '%s\n' "/app/orca|/app/r-client.js"; }
+EOLIB
+    ra_run avail "$HELD" wakepath
+    kitw <<'EOLIB'
+orca_app_node() { printf '%s\n' "/app/orca|C:\inst\runtime-client.js|wsl"; }
+EOLIB
+    ra_run wsl "$HELD" wakepath
+    kitw <<'EOLIB'
+orca_app_node() { printf 'noise\n'; return 1; }
+orca_app_node_reason() { printf '%s\n' "the runtime client is missing: /gone"; }
+EOLIB
+    ra_run reason "$HELD" wakepath
+    kitw <<'EOLIB'
+orca_app_node() { return 1; }
+EOLIB
+    ra_run bare "$HELD" wakepath
+    printf 'if then\n' > "$KIT/bin/lib.sh"
+    ra_run broken "$HELD" wakepath
+    rm -f "$KIT/bin/lib.sh"
+    ra_run missing "$HELD" wakepath
+    kitw <<'EOLIB'
+orca_app_node() { printf '%s\n' "/app/orca|/app/r-client.js"; }
+EOLIB
+    ra_run kept "$HELD" 'wakepath|memory|lost|wake'
+    ra_run lost "$LOST" 'wakepath|memory|lost|wake'
+    printf 'leak %s %s %s\n' "$RW" "$KIT" "$(command -v orca_app_node || echo none)"
+    printf 'order %s\n' "$ORDER";;
 esac
 EOS
 ylive() { env PATH="$YL/bin:$YU/bin:$PATH" ROOT="$ROOT" LD="$YLP/ld" LH="$YLP/home" FAKE_LOG="$YL/log" FAKE_REPOS="$YL/repos.json" FAKE_WTC="$YL/wtc.json" bash "$YL/probe.sh" "$@" 2>&1; }
@@ -3327,9 +3392,9 @@ PROJL="$YLP/ld/project"
 jq -nc --arg a "$(yunc live/ld/project)" '{result:{repos:[{id:"r0",path:"/elsewhere"},{id:"r1",path:$a},{id:"r2",path:$a}]}}' > "$YL/repos.json"
 check "live lib proj_repo: the repo whose path (UNC converted) is the throwaway project gives id:<id> (the first one)" "$(ylive pr)" "id:r1"
 jq -nc --arg a "$PROJL" '{result:{repos:[{id:"r9",path:$a}]}}' > "$YL/repos.json"
-check "live lib proj_repo: a Linux path matches too" "$(ylive pr)" "id:r9"
+M="$(ylive pr)"
 jq -nc '{result:{repos:[{id:"r0",path:"/elsewhere"}]}}' > "$YL/repos.json"
-check "live lib proj_repo: no listed repo with that path -> path:<project>" "$(ylive pr)" "path:$PROJL"
+check "live lib proj_repo: a Linux path matches too, and no listed repo with that path -> path:<project>" "$M:$(ylive pr)" "id:r9:path:$PROJL"
 printf 'not json' > "$YL/repos.json"
 check "live lib proj_repo: an unreadable list -> path:<project>" "$(ylive pr)" "path:$PROJL"
 jq -nc --arg a "$PROJL" '{result:{repos:[{id:"r9",path:$a}]}}' > "$YL/repos.json"
@@ -3342,6 +3407,24 @@ check "live lib wt_create: the UNC worktree path comes back as a Linux path" "$(
 rm -f "$YLP/ld/timings-tp.tsv" "$YLP/ld/state-tp" "$YLP/ld/report-tp.md"; M="$(ylive rc)"
 check "live lib timings: live_start appends one '# run' line and the Timings header bullet, run_check twice appends one '<id> <seconds> <ask seconds> <end>' line" "$M:$(grep -c '^# run	' "$YLP/ld/timings-tp.tsv"):$(grep -c '^- Timings: .*/timings-tp.tsv$' "$YLP/ld/report-tp.md"):$(grep -cE '^T1	[0-9]+	0	[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$' "$YLP/ld/timings-tp.tsv"):$(wc -l < "$YLP/ld/timings-tp.tsv" | tr -d ' ')" "(T1 already done in an earlier run)
 rc=0:1:1:1:2"
+# R1 (tests/live/lib.sh c_restart_after): the wake-path INFO row and the memory/lost counts, against fake installed kit libs and fake last-roles.log lines
+RAV="$(ylive ra | sed "s#$YLP#Y#g" | LC_ALL=C sort)"
+check "live lib c_restart_after: R1.wakepath is an INFO row before roles_run with one text per case (available with the client path and never the WSL '|wsl' suffix; unavailable with the kit's reason; unavailable without a reason function; unknown when the kit's lib.sh is missing or unparsable) and no harness variable or kit function leaks out of it; R1.memory counts both conversation-keeping wordings and R1.lost counts 'opening a new one.' at the end of the line, 'could not be read' and 'treated as closed' once per line, never a bare 'no longer exists' or 'opening a new one with its conversation'; R1.wake unchanged" "$RAV" "avail R1.wakepath INFO wake path available: /app/r-client.js
+bare R1.wakepath INFO wake path unavailable (the installed kit gives no reason)
+broken R1.wakepath INFO wake path unknown: could not load Y/ld/rkit/bin/lib.sh
+kept R1.lost OK
+kept R1.memory OK
+kept R1.wake OK
+kept R1.wakepath INFO wake path available: /app/r-client.js
+leak keep Y/ld/rkit none
+lost R1.lost FAIL got [4], expected [0]
+lost R1.memory FAIL got [0], expected [2]
+lost R1.wake OK
+lost R1.wakepath INFO wake path available: /app/r-client.js
+missing R1.wakepath INFO wake path unknown: could not load Y/ld/rkit/bin/lib.sh
+order before;before;before;before;before;before;before;before;
+reason R1.wakepath INFO wake path unavailable: the runtime client is missing: /gone
+wsl R1.wakepath INFO wake path available: C:\inst\runtime-client.js"
 # error class: a project whose orca.yaml path is a directory (fails for any user, root included)
 mkdir "$YA/ro/orca.yaml"; printf '%s\n' "$(jq -c '.result.repos += [{displayName:"ro",path:($d+"/ro"),kind:"git",gitUsername:"SECRET-USER"}]' --arg d "$YA" "$YA/list.json")" > "$YA/list.json"
 yallrun --all; rmdir "$YA/ro/orca.yaml"
@@ -5324,14 +5407,14 @@ check "composer: a main checkout is never taken for a new worktree" "$(grep -c '
 sec_dead_tab() {
 # A tab whose agent is gone (Ctrl+C) counts as dead: roles closes it and opens a new one; custom agents are not checked
 DP="$TMP/dproj"; mkdir -p "$DP" "$TMP/dbin"; git -C "$DP" init -q -b main
-printf 'LOCAL_COORDINATOR=t-lc\nPLANNER=t-pl\nDEV=t-dev\nCU=t-cu\nTST=t-orp\n' > "$DP/.git/orca-roles.env"
+printf 'LOCAL_COORDINATOR=t-lc\nPLANNER=t-pl\nDEV=t-dev\nCU=t-cu\nCX=t-cx\nTST=t-orp\n' > "$DP/.git/orca-roles.env"
 DLOG="$TMP/dorca.log"; : > "$DLOG"
 cat > "$TMP/dbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$DLOG"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
-  "terminal show") case "\$*" in *t-dev*|*t-cu*) echo '{"result":{"terminal":{"agentIdentity":null}}}';; *t-orp*) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
+  "terminal show") case "\$*" in *t-dev*|*t-cu*|*t-cx*) echo '{"result":{"terminal":{"agentIdentity":null}}}';; *t-orp*) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
 esac
 exit 0
 EOS
@@ -5339,18 +5422,27 @@ chmod +x "$TMP/dbin/orca"
 cat > "$KIT/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "cu": { "title": "Custom", "agent": "custom", "command": "x" }, "tst": { "title": "Tst" } } }
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "cu": { "title": "Custom", "agent": "custom", "command": "x" }, "cx": { "title": "Cx", "agent": "codex" }, "tst": { "title": "Tst" } } }
 J
-for r in cu tst; do : > "$KIT/prompts/programmer/$r.md"; done   # fake roles need a prompt file to be launched (removed at the end of the section)
-touch "$TMP/nopid.t-dev" "$TMP/nopid.t-orp"
-OUT="$(cd "$DP" && HOME="$TMP/home" PATH="$TMP/dbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
-case "$OUT" in *"The agent in the tab of Dev (t-dev) is gone"*) echo "ok   dead agent: detected in a live tab";; *) echo "FAIL dead agent: $OUT"; FAIL=1;; esac
+for r in cu cx tst; do : > "$KIT/prompts/programmer/$r.md"; done   # fake roles need a prompt file to be launched (removed at the end of the section)
+touch "$TMP/nopid.t-dev" "$TMP/nopid.t-orp" "$TMP/nopid.t-cx"
+# records: Dev's tab (state 2) and Tst's (state 3) have a conversation in the kit's records, behind a cli transcript of this worktree
+DPJ="$TMP/dproj-projects"; rm -rf "$DPJ"; mkdir -p "$DPJ" "$KIT/state/session-handles"
+DPD="$DPJ/$(printf '%s' "$(cd "$DP" && pwd -P)" | tr '/.' '--')"; mkdir -p "$DPD"
+SR_DDEV=4d5e6f70-8192-4a3b-8c4d-5e6f708192a3; SR_DORP=5e6f7081-92a3-4b4c-8d5e-6f708192a3b4; SR_DCX=6f708192-a3b4-4c5d-8e6f-708192a3b4c5
+printf 't-dev\n' > "$KIT/state/session-handles/$SR_DDEV"; printf 't-orp\n' > "$KIT/state/session-handles/$SR_DORP"; printf 't-cx\n' > "$KIT/state/session-handles/$SR_DCX"
+printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$DPD/$SR_DDEV.jsonl"
+printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$DPD/$SR_DORP.jsonl"
+printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$DPD/$SR_DCX.jsonl"
+OUT="$(cd "$DP" && HOME="$TMP/home" PATH="$TMP/dbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLAUDE_PROJECTS="$DPJ" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
+check "dead agent (state 2): the session in its record is resumed (its conversation line)" "$(printf '%s\n' "$OUT" | grep -cxF "The agent in the tab of Dev (t-dev) is gone; closing that tab and opening a new one with its conversation ($SR_DDEV)."):$(grep -c -- "agent.sh' dev --resume $SR_DDEV --json" "$DLOG")" "1:1"
 check "dead agent: its old tab is closed" "$(grep -c 'terminal close --terminal t-dev --tab' "$DLOG")" "1"
-check "dead agent: a new tab replaces it" "$(cut -d= -f2 "$DP/.git/orca-roles.env" | tr '\n' ' ')" "t-lc t-pl h-Dev t-cu h-Tst "
+check "dead agent: a new tab replaces it" "$(cut -d= -f2 "$DP/.git/orca-roles.env" | tr '\n' ' ')" "t-lc t-pl h-Dev t-cu h-Cx h-Tst "
 check "dead agent: custom agents are not checked" "$(grep -c 'terminal close --terminal t-cu' "$DLOG" || true)" "0"
-case "$OUT" in *"The tab of Tst (t-orp) was closed but Orca kept its session running"*) echo "ok   orphaned session: detected";; *) echo "FAIL orphaned: $OUT"; FAIL=1;; esac
+check "dead agent (state 2, codex): a record for its handle is not resumed (codex keeps today's reopen)" "$(printf '%s\n' "$OUT" | grep -cxF "The agent in the tab of Cx (t-cx) is gone; closing that tab and opening a new one."):$(grep -c "agent.sh' cx --json" "$DLOG"):$(grep -c -- "agent.sh' cx --resume" "$DLOG" || true):$(grep -c "$SR_DCX" "$DLOG" || true)" "1:1:0:0"
+check "orphaned session (state 3): the session in its record is resumed (its conversation line)" "$(printf '%s\n' "$OUT" | grep -cxF "The tab of Tst (t-orp) was closed but Orca kept its session running; ending it and opening a new one with its conversation ($SR_DORP)."):$(grep -c -- "agent.sh' tst --resume $SR_DORP --json" "$DLOG")" "1:1"
 check "orphaned session: ended" "$(grep -c 'terminal close --terminal t-orp' "$DLOG")" "1"
-rm -f "$TMP/nopid.t-dev" "$TMP/nopid.t-orp"
+rm -f "$TMP/nopid.t-dev" "$TMP/nopid.t-orp" "$TMP/nopid.t-cx"
 # a live claude or codex process wins over Orca's flags: orphaned or without agentIdentity but with a process -> kept (the orphaned one says so once), no close, no create; no process -> closed and reopened as before; a custom agent is never looked up
 DK="$TMP/dkeep"; mkdir -p "$DK" "$TMP/dkbin"; git -C "$DK" init -q -b main
 printf 'LOCAL_COORDINATOR=t-lc\nPLANNER=t-ok\nDEV=t-op-live\nTST=t-op-dead\nAA=t-ei-live\nBB=t-ei-dead\nCU=t-oc\n' > "$DK/.git/orca-roles.env"
@@ -5402,7 +5494,7 @@ drl "$TMP/home/.orca-roles/bin/launch.sh" >/dev/null || true
 check "relaunching back to back with every earlier claude tab flagged orphaned while its agent runs: the second launch ends none of Planner, Tst, Aa or Bb (nothing closed or reopened for them), reopens the role that was closed, and the custom role flagged orphaned is ended and reopened as before" "$DRA:$DRC:$(grep -c 'terminal close --terminal h-\(Planner\|Tst\|Aa\|Bb\)' "$DRL" || true):$(grep -c -- '--title \(Planner\|Tst\|Aa\|Bb\)' "$DRL" || true):$(grep -c -- '--title Dev' "$DRL" || true):$(grep -c 'terminal close --terminal h-Cu' "$DRL" || true):$(grep -c -- '--title Cu' "$DRL" || true)" "7:1:0:4:2:1:2"
 check "E1: non-Claude workers run Orca's commands in the foreground" "$(worker_msg "$KIT/config.json" cu | grep -c 'in the foreground')" "1"
 check "E1: Claude workers get no extra instruction" "$(worker_msg "$KIT/config.json" dev | grep -c 'in the foreground' || true)" "0"
-rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/tst.md" "$KIT/prompts/programmer/aa.md" "$KIT/prompts/programmer/bb.md"
+rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/cx.md" "$KIT/prompts/programmer/tst.md" "$KIT/prompts/programmer/aa.md" "$KIT/prompts/programmer/bb.md"
 }
 
 sec_agent_flags() {
@@ -5790,6 +5882,7 @@ sec_restart() {
 RP="$TMP/rproj"; rm -rf "$RP" "$TMP/rbin"; mkdir -p "$RP" "$TMP/rbin"; git -C "$RP" init -q -b main
 printf 'LOCAL_COORDINATOR=old-lc\nPLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' > "$RP/.git/orca-roles.env"
 printf 'LOCAL_COORDINATOR=wt@@p0\nPLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' > "$RP/.git/orca-roles.pty"
+mkdir -p "$TMP/rpair/role"; RPT="$(cd "$TMP/rpair/role" && pwd -P)"; printf 'DEV=%s\n' "$RPT" > "$RP/.git/orca-roles.trees"   # Dev runs in a pair tree: its record is looked up under that folder, not under the worktree root
 RLOG="$TMP/rorca.log"; : > "$RLOG"
 cat > "$TMP/rbin/orca" <<EOS
 #!/bin/sh
@@ -5810,6 +5903,15 @@ cat > "$KIT/config.json" <<'J'
   "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" } } }
 J
 : > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
+# the kit's session records: Dev's old handle (D8's fallback of the listed branch, filed under its pair tree only), Tst's
+# (the no-tab branch) and the Planner's restored tab (whose live session must still win over its record)
+RPJ="$TMP/rproj-projects"; rm -rf "$RPJ"; mkdir -p "$RPJ" "$KIT/state/session-handles"
+RPD="$RPJ/$(printf '%s' "$(cd "$RP" && pwd -P)" | tr '/.' '--')"; mkdir -p "$RPD"
+TRD="$RPJ/$(printf '%s' "$RPT" | tr '/.' '--')"; mkdir -p "$TRD"
+SR_DEV=1d2c3b4a-5f6e-4071-8293-a4b5c6d7e8f9; SR_TST=2e3d4c5b-6071-4182-93a4-b5c6d7e8f901; SR_PL=3f4e5d6c-7182-4293-a4b5-c6d7e8f90123
+printf 'old-dev\n' > "$KIT/state/session-handles/$SR_DEV"; printf 'old-tst\n' > "$KIT/state/session-handles/$SR_TST"; printf 'rs-pl\n' > "$KIT/state/session-handles/$SR_PL"
+for x in "$SR_TST" "$SR_PL"; do printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$RPD/$x.jsonl"; done
+printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$TRD/$SR_DEV.jsonl"   # Dev's transcript sits only under its pair tree's projects folder
 # the mode cannot change under a team Orca restored after a restart (new handles, same ptyId)
 PRB="$TMP/restart-pr-prompts"; rm -rf "$PRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$PRB"
 mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"; cp "$KIT/config.json" "$RP/.git/orca-roles.config.json"
@@ -5818,16 +5920,22 @@ OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHEC
 check "restart: restored tabs block a mode change; nothing saved, closed or opened" "$RC:$(grep -cE 'terminal (close|create)' "$RLOG" || true):$(cat "$RP/.git/orca-roles.env" "$RP/.git/orca-roles.pty" "$RP/.git/orca-roles.config.json" | cksum):$([ -e "$RP/.git/orca-roles.overrides.json" ] && echo ovr)" "1:0:$HB:"
 case "$OUT" in *"ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: "*) echo "ok   restart: the mode change is refused while the restored tabs exist";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$PRB" ] || cp -R "$PRB" "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
-OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
+OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_CLAUDE_PROJECTS="$RPJ" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
 case "$OUT" in *"Orca restored the tab of Planner after a restart (rs-pl) without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
-case "$OUT" in *"Orca restored the tab of Dev after a restart (rs-dev), but its session could not be read"*) echo "ok   restart: restored tab without a readable session starts fresh";; *) echo "FAIL restart dev: $OUT"; FAIL=1;; esac
-case "$OUT" in *"The previous tab of Tst (old-tst) no longer exists"*) echo "ok   restart: a tab Orca did not restore starts fresh";; *) echo "FAIL restart tst: $OUT"; FAIL=1;; esac
+case "$OUT" in *"Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation ($SR_DEV)"*) echo "ok   restart: a restored tab whose live session is unreadable takes the record of its old handle (D8)";; *) echo "FAIL restart dev: $OUT"; FAIL=1;; esac
+case "$OUT" in *"The previous tab of Tst (old-tst) no longer exists; opening a new one with its conversation ($SR_TST)."*) echo "ok   restart: a tab Orca did not restore takes the record of its saved handle";; *) echo "FAIL restart tst: $OUT"; FAIL=1;; esac
 check "restart: the restored tabs are closed, nothing else" "$(grep -E 'terminal close' "$RLOG" | sed 's/ --tab --json//' | tr '\n' ' ')" "terminal close --terminal rs-lc terminal close --terminal rs-pl terminal close --terminal rs-dev "
-check "restart: the local coordinator and the Planner reopen with --resume of their sessions and the kit's launcher" "$(grep -c "agent.sh' local-coordinator --resume aaaaaaaa-2222-3333-4444-555555555555 --json" "$RLOG"):$(grep -c "agent.sh' planner --resume 11111111-2222-3333-4444-555555555555 --json" "$RLOG")" "1:1"
-check "restart: Dev reopens without --resume" "$(grep -c "agent.sh' dev --json" "$RLOG")" "1"
+check "restart: the local coordinator and the Planner reopen with --resume of their live sessions and the kit's launcher" "$(grep -c "agent.sh' local-coordinator --resume aaaaaaaa-2222-3333-4444-555555555555 --json" "$RLOG"):$(grep -c "agent.sh' planner --resume 11111111-2222-3333-4444-555555555555 --json" "$RLOG")" "1:1"
+check "restart: a pair-tree role (its orca-roles.trees line) reopens with --resume of the session in its record, filed only under the pair tree's projects folder; the Planner's record is ignored (its live session wins): neither is resumed with the record's id" "$(grep -c "agent.sh' dev --resume $SR_DEV --json" "$RLOG"):$(grep -c "$SR_PL" "$RLOG" || true)" "1:0"
 check "restart: new handles saved" "$(cut -d= -f2 "$RP/.git/orca-roles.env" | tr '\n' ' ')" "new-Localcoordinator new-Planner new-Dev new-Tst "
 check "restart: new terminal identities saved" "$(cut -d= -f2 "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "wt@@n0 wt@@n1 wt@@n2 wt@@n3 "
-poll nonempty "$TMP/rkick.args"; check "restart: kickoff gets the resumed and the remembered roles" "$(cut -d" " -f2- "$TMP/rkick.args" | sed "s#$RP/.git#GD#g")" "GD/orca-roles.env GD/orca-roles.config.json  local-coordinator planner dev tst  dev tst  local-coordinator planner "
+poll nonempty "$TMP/rkick.args"; check "restart: kickoff gets the remembered roles only (Dev and Tst come from their records now) and the reused ones" "$(cut -d" " -f2- "$TMP/rkick.args" | sed "s#$RP/.git#GD#g")" "GD/orca-roles.env GD/orca-roles.config.json  local-coordinator planner dev tst   local-coordinator planner dev tst "
+# B1 (the other side): the role's folder decides; the same record filed only under the worktree root's folder is not resumed for a pair-tree role
+printf 'LOCAL_COORDINATOR=old-lc\nPLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' > "$RP/.git/orca-roles.env"
+printf 'LOCAL_COORDINATOR=wt@@p0\nPLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' > "$RP/.git/orca-roles.pty"
+mv "$TRD/$SR_DEV.jsonl" "$RPD/$SR_DEV.jsonl"; : > "$RLOG"
+OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_CLAUDE_PROJECTS="$RPJ" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
+check "restart: a pair-tree role's record filed only under the worktree root's folder is not resumed (the pair tree's folder is searched, not the root's)" "$(grep -c "agent.sh' dev --resume" "$RLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'Orca restored the tab of Dev after a restart (rs-dev), but its session could not be read; closing it and opening a new one\.' || true)" "0:1"
 M4="$(planner_msg "$KIT/config.json" "planner dev" "$RP/.git/orca-roles.env" "" "" 2)"
 case "$M4" in *"you are BACK after a restart, with your previous conversation"*"Coming back with your memory"*) echo "ok   planner_msg: back with memory";; *) echo "FAIL planner_msg memory: $M4"; FAIL=1;; esac
 case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in "You are back in a new tab with your previous conversation ("*"Your terminal handle is now new-Dev"*"do not continue it on your own"*) echo "ok   worker_back_msg";; *) echo "FAIL worker_back_msg"; FAIL=1;; esac
@@ -5836,6 +5944,63 @@ printf 'PLANNER=a\nDEV=b\n' > "$RP/.git/orca-roles.env"; printf 'PLANNER=wt@@a\n
 (cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" "$TMP/home/.orca-roles/bin/close-role.sh" dev >/dev/null 2>&1)
 check "close-role.sh: drops the identity of the closed role" "$(cat "$RP/.git/orca-roles.pty" | tr '\n' ' ')" "PLANNER=wt@@a "
 rm -f "$KIT/prompts/programmer/tst.md"
+# session_of_record (c1): the kit's records and the Claude transcripts behind them, on a scratch kit and projects folder
+SRS="$TMP/srec"; rm -rf "$SRS"; mkdir -p "$SRS/kit/state/session-handles" "$SRS/kit-norec" "$SRS/folder" "$SRS/folder_x" "$SRS/home/.claude/projects" "$SRS/projects/other" "$SRS/emptyproj"
+SRF="$(cd "$SRS/folder" && pwd -P)"; SRF2="$(cd "$SRS/folder_x" && pwd -P)"
+SRD="$SRS/projects/$(printf '%s' "$SRF" | tr '/.' '--')"; mkdir -p "$SRD"
+SRDEC="$(sed -n '/^session_of_record() {/,/^}/p' "$KIT/bin/launch.sh")"
+[ -n "$SRDEC" ] || echo "FAIL session_of_record: not found in bin/launch.sh"
+srec() {  # srec <handle> <folder> [kit] [projects] [home] [claude_config_dir]: session_of_record from the tree under test
+  ( set -u; KIT="${3:-$SRS/kit}"; HOME="${5:-$SRS/home}"; unset ORCA_ROLES_CLAUDE_PROJECTS CLAUDE_CONFIG_DIR
+    [ -z "${4-}" ] || export ORCA_ROLES_CLAUDE_PROJECTS="$4"
+    [ -z "${6-}" ] || export CLAUDE_CONFIG_DIR="$6"
+    eval "$SRDEC"; session_of_record "$1" "$2" ) 2>/dev/null; }
+srrec() { printf '%s\n' "$2" > "$SRS/kit/state/session-handles/$1"; }
+srcli() { printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$1"; }
+S_A1=11111111-1111-4111-8111-111111111111; S_B2=22222222-2222-4222-8222-222222222222; S_C3=33333333-3333-4333-8333-333333333333
+S_D4=44444444-4444-4444-8444-444444444444; S_E5=55555555-5555-4555-8555-555555555555; S_F6=66666666-6666-4666-8666-666666666666
+S_G7=77777777-7777-4777-8777-777777777777; S_H8=88888888-8888-4888-8888-888888888888
+S_J1=1a1a1a1a-1a1a-41a1-81a1-1a1a1a1a1a1a; S_K2=2b2b2b2b-2b2b-42b2-82b2-2b2b2b2b2b2b; S_L4=4c4c4c4c-4c4c-44c4-84c4-4c4c4c4c4c4c
+S_M5=5d5d5d5d-5d5d-45d5-85d5-5d5d5d5d5d5d; S_N1=6e6e6e6e-6e6e-46e6-86e6-6e6e6e6e6e6e; S_O2=7f7f7f7f-7f7f-47f7-87f7-7f7f7f7f7f7f
+S_P3=8a8a8a8a-8a8a-48a8-88a8-8a8a8a8a8a8a; S_Q4=9b9b9b9b-9b9b-49b9-89b9-9b9b9b9b9b9b
+# one handle (h1): a fresh sdk-cli session (newest), a cli transcript with no user line, a record with no transcript,
+# one whose transcript is in another project folder, a prefix record, .swept, <id>.tmp.123 and names not shaped like a session id
+srrec "$S_A1" h1; srcli "$SRD/$S_A1.jsonl"; touch -t 202601010101 "$SRS/kit/state/session-handles/$S_A1"
+srrec "$S_B2" h1; printf '{"type":"user","message":{"role":"user"},"entrypoint":"sdk-cli"}\n' > "$SRD/$S_B2.jsonl"; touch -t 202601010404 "$SRS/kit/state/session-handles/$S_B2"
+srrec "$S_C3" h1; printf '{"type":"assistant","message":{"role":"assistant"},"entrypoint":"cli"}\n' > "$SRD/$S_C3.jsonl"; touch -t 202601010303 "$SRS/kit/state/session-handles/$S_C3"
+srrec "$S_D4" h1; touch -t 202601010202 "$SRS/kit/state/session-handles/$S_D4"
+srrec "$S_E5" h1; srcli "$SRS/projects/other/$S_E5.jsonl"; touch -t 202601010230 "$SRS/kit/state/session-handles/$S_E5"
+srrec "$S_F6" h1-long; srcli "$SRD/$S_F6.jsonl"; touch -t 202601010505 "$SRS/kit/state/session-handles/$S_F6"
+printf 'h1\n' > "$SRS/kit/state/session-handles/$S_G7.swept"; printf 'h1\n' > "$SRS/kit/state/session-handles/$S_H8.tmp.123"
+printf 'h1\n' > "$SRS/kit/state/session-handles/zzzzzzzz-1111-4111-8111-111111111111"; printf 'h1\n' > "$SRS/kit/state/session-handles/shortname"
+srrec "$S_J1" h2; srcli "$SRD/$S_J1.jsonl"; touch -t 202601010606 "$SRS/kit/state/session-handles/$S_J1"
+srrec "$S_K2" h2; printf '{"type":"user","message":{"role":"user"},"entrypoint":"sdk-cli"}\n' > "$SRD/$S_K2.jsonl"; touch -t 202601010707 "$SRS/kit/state/session-handles/$S_K2"
+srrec "$S_L4" h3; srcli "$SRD/$S_L4.jsonl"; touch -t 202601010808 "$SRS/kit/state/session-handles/$S_L4"
+srrec "$S_M5" h3; srcli "$SRD/$S_M5.jsonl"; touch -t 202601010909 "$SRS/kit/state/session-handles/$S_M5"
+SCFD="$SRS/cfg/projects/$(printf '%s' "$SRF" | tr '/.' '--')"; SHMD="$SRS/home/.claude/projects/$(printf '%s' "$SRF" | tr '/.' '--')"; mkdir -p "$SCFD" "$SHMD"
+srrec "$S_N1" h4; printf '{"type":"user","message":{"role":"user"},"entrypoint":"sdk-cli"}\n' > "$SCFD/$S_N1.jsonl"; srcli "$SHMD/$S_N1.jsonl"
+srrec "$S_O2" h5; srcli "$SHMD/$S_O2.jsonl"
+SFX="$SRS/projects/$(printf '%s' "$SRF2" | tr -c 'A-Za-z0-9\n' '-')"; mkdir -p "$SFX"
+srrec "$S_P3" h6; srcli "$SFX/$S_P3.jsonl"
+srrec "$S_Q4" h7; srcli "$SHMD/$S_Q4.jsonl"
+S1=""; S1RC=0; S2=""; S2RC=0; S3=""; S3RC=0; S4=""
+S1="$(srec "" "$SRF" "$SRS/kit" "$SRS/projects")" || S1RC=$?; S2="$(srec h1 "" "$SRS/kit" "$SRS/projects")" || S2RC=$?
+S3="$(srec h1 "$SRF" "$SRS/kit-norec" "$SRS/projects")" || S3RC=$?; S4="$(srec nobody "$SRF" "$SRS/kit" "$SRS/projects")" || true
+check "session_of_record: nothing (status 0) for an empty handle, an empty folder, a missing records directory, and a handle no record holds" "${S1RC}:${S1}:${S2RC}:${S2}:${S3RC}:${S3}:${S4}" "0::0::0::"
+check "session_of_record: skips the newest sdk-cli session, a cli transcript with no user line, a record with no transcript, one whose transcript is in another project folder, a prefix record, .swept, <id>.tmp.<pid> and names not shaped like a session id; the cli record with a user line is printed" "$(srec h1 "$SRF" "$SRS/kit" "$SRS/projects")|$(srec h2 "$SRF" "$SRS/kit" "$SRS/projects")" "$S_A1|$S_J1"
+check "session_of_record: several qualifying records for a handle -> the newest by ls -t" "$(srec h3 "$SRF" "$SRS/kit" "$SRS/projects")" "$S_M5"
+check "session_of_record: projects dirs in order, the first one holding the transcript decides (sdk-cli there overrides a cli copy in HOME), HOME/.claude/projects as the fallback, a duplicate CLAUDE_CONFIG_DIR looked at once, the fallback folder encoding, and ORCA_ROLES_CLAUDE_PROJECTS alone when set" "$(srec h4 "$SRF" "$SRS/kit" "$SRS/projects" "$SRS/home" "$SRS/cfg")|$(srec h5 "$SRF" "$SRS/kit" "" "$SRS/home")|$(srec h5 "$SRF" "$SRS/kit" "" "$SRS/home" "$SRS/home/.claude")|$(srec h6 "$SRF2" "$SRS/kit" "$SRS/projects")|$(srec h7 "$SRF" "$SRS/kit" "$SRS/emptyproj" "$SRS/home")" "|$S_O2|$S_O2|$S_P3|"
+# A1: each transcript line is judged on its own, so a line cut off by a kill does not hide the record's user turn
+S_R5=aaaaaaaa-0000-4000-8000-00000000000a; S_S6=bbbbbbbb-0000-4000-8000-00000000000b; S_T7=cccccccc-0000-4000-8000-00000000000c
+S_U8=dddddddd-0000-4000-8000-00000000000d; S_V9=eeeeeeee-0000-4000-8000-00000000000e; S_W1=ffffffff-0000-4000-8000-00000000000f
+srrec "$S_R5" h8; printf '%s\n%s' '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}' '{"type":"assistant","mess' > "$SRD/$S_R5.jsonl"
+srrec "$S_S6" h9; printf '%s\n%s\n' '{"type":"assistant","mess' '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}' > "$SRD/$S_S6.jsonl"
+srrec "$S_T7" h10; printf '%s\n%s' '{"x":"{\"type\":\"user\"}","entrypoint":"cli"}' '{"type":"user","mess' > "$SRD/$S_T7.jsonl"
+srrec "$S_U8" h11; printf '%s\n%s' '{"type":"assistant","message":{"role":"assistant"},"entrypoint":"cli"}' '{"type":"assistant","mess' > "$SRD/$S_U8.jsonl"
+srrec "$S_V9" h12; printf '%s\n%s' '{"type":"user","message":{"role":"user"},"entrypoint":"sdk-cli"}' '{"type":"assistant","mess' > "$SRD/$S_V9.jsonl"
+srrec "$S_W1" h13; printf '%s\n%s\n' '0' '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}' > "$SRD/$S_W1.jsonl"
+check "session_of_record: a cut-off last line, a cut-off line before the user line, and a non-object JSON line before it do not hide the record's user turn" "$(srec h8 "$SRF" "$SRS/kit" "$SRS/projects")|$(srec h9 "$SRF" "$SRS/kit" "$SRS/projects")|$(srec h13 "$SRF" "$SRS/kit" "$SRS/projects")" "$S_R5|$S_S6|$S_W1"
+check "session_of_record: user text only inside an unparseable line, a cli transcript with no user line (one cut off), and an sdk-cli transcript with a user line and a cut-off line do not qualify" "$(srec h10 "$SRF" "$SRS/kit" "$SRS/projects")|$(srec h11 "$SRF" "$SRS/kit" "$SRS/projects")|$(srec h12 "$SRF" "$SRS/kit" "$SRS/projects")" "||"
 # WSL-safe state writes: a ptyId with backslashes (\\wsl.localhost\Ubuntu\...) is kept byte for byte by launch.sh's state_set and kickoff.sh's kicked_set, which still replace an existing line and keep the others
 WV='x::\\wsl.localhost\Ubuntu\home\a@@1'; WV2='y::\\wsl.localhost\Ubuntu\home\b\n\t@@2'
 { echo 'set -euo pipefail'; echo "KIT='$ROOT'"; echo '. "$KIT/bin/lib.sh"'; sed -n '/^state_set() {/,/^}/p' "$ROOT/bin/launch.sh"; sed -n '/^kicked_set() {/,/^}/p' "$ROOT/bin/kickoff.sh"; echo 'state_set "$1" DEV "$2"; state_set "$1" TESTER "$3"; state_set "$1" DEV "$2"; STATE="$4/orca-roles.env"; kicked_set dev "$2"; kicked_set e2e-tester "$3"; kicked_set dev "$2"'; } > "$TMP/wsl-state.sh"
@@ -5877,9 +6042,9 @@ cat > "$KIT/config.json" <<'J'
 J
 : > "$KIT/prompts/programmer/tst.md"   # removed at the end of the section
 echo '{"terminals":[]}' > "$TMP/olist"
-ol() {  # ol <args...>; env: OTH (ORCA_TERMINAL_HANDLE), OREL (ORCA_ROLES_RELAUNCH); runs launch.sh in the scratch repo
+ol() {  # ol <args...>; env: OTH (ORCA_TERMINAL_HANDLE), OREL (ORCA_ROLES_RELAUNCH), OPROJ (ORCA_ROLES_CLAUDE_PROJECTS); runs launch.sh in the scratch repo
   rm -f "$TMP/okick.args" "$TMP/okick.env" "$TMP/okick.busy" "$TMP/okick.nosess" "$TMP/orl.args"; : > "$OLOG"
-  OUT="$(cd "$OP" && HOME="$TMP/home" PATH="$TMP/obin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" ORCA_WORKTREE_ID="${OWT-wt-fix}" ORCA_ROLES_RELAUNCH="${OREL:-}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/obin/${OSES:-session-of}" ORCA_ROLES_KICKOFF="$TMP/obin/kickoff" ORCA_ROLES_RELAUNCHER="$TMP/obin/relauncher" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
+  OUT="$(cd "$OP" && HOME="$TMP/home" PATH="$TMP/obin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" ORCA_WORKTREE_ID="${OWT-wt-fix}" ORCA_ROLES_RELAUNCH="${OREL:-}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLAUDE_PROJECTS="${OPROJ:-}" ORCA_ROLES_SESSION_OF="$TMP/obin/${OSES:-session-of}" ORCA_ROLES_KICKOFF="$TMP/obin/kickoff" ORCA_ROLES_RELAUNCHER="$TMP/obin/relauncher" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
 }
 ost() {  # ost <env text> <pty text>: the saved state of the team
   printf '%s' "$1" > "$OG/orca-roles.env"; printf '%s' "$2" > "$OG/orca-roles.pty"; printf 'LOCAL_COORDINATOR=old-pl\n' > "$OG/orca-roles.kicked"; rm -f "$OG/orca-roles.planner-handles" "$OG/orca-roles.overrides.json" "$OG/orca-roles.lock" "$OG/orca-roles-relaunch.log"; rmdir "$OG/orca-roles.lock" 2>/dev/null || true
@@ -6065,7 +6230,31 @@ K6="$K6|$([ "$(cat "$OG/orca-roles-kickoff.log" "$OG/orca-roles-kickoff.log.1" 2
 check "kickoff log: the first launch has no .log.1; the second keeps the first's lines in .log.1 and starts a new log; the third's .log.1 holds the second's lines only; a relauncher's launch leaves both kickoff files alone and appends to orca-roles-relaunch.log" "$K6" "KICK :none|KICK :KICK L1 |KICK :KICK L2 |same:OLD KICK "
 M6="$(for v in 1 ""; do for r in 2 1 0; do (export ORCA_ROLES_RELAUNCH=$v; planner_msg "$KIT/config.json" "local-coordinator dev" "$OG/orca-roles.env" "" "" $r | grep -c 'You were reopened by your own launch.sh --reopen (an Orca restart had left you without the kit.s settings)' || true); done; done | tr '\n' ' ')"
 check "planner_msg: the self-relaunch sentence only in the BACK message of a relaunched Planner" "$M6" "1 0 0 0 0 0 "
+# records: the front role's restored tab gets its session from the kit's record when no live process gives one (session_of_handle is empty)
+OPRJ="$TMP/orec-projects"; rm -rf "$OPRJ" "$KIT/state/session-handles"; mkdir -p "$OPRJ" "$KIT/state/session-handles"
+OREC=6a7b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d
+OPD="$OPRJ/$(printf '%s' "$(cd "$OP" && pwd -P)" | tr '/.' '--')"; mkdir -p "$OPD"
+printf 'rs-pl\n' > "$KIT/state/session-handles/$OREC"
+printf '{"type":"user","message":{"role":"user"},"entrypoint":"cli"}\n' > "$OPD/$OREC.jsonl"
+ogate() {  # ogate <ost file content or ''> <no agent pid: 1 yes, 0 no> <wait fails: fail|ok>: one launch run, printed as facts
+  rm -f "$TMP"/ost.* "$TMP"/och.* "$TMP"/ochn.* "$TMP"/ocf.* "$TMP/orl.args"
+  [ -z "$1" ] || printf '%s\n' "$1" > "$TMP/ost.rs-pl"
+  case "$2" in 0) rm -f "$TMP/nopid.rs-pl";; *) : > "$TMP/nopid.rs-pl";; esac
+  case "$3" in fail) : > "$TMP/owaitfail";; *) rm -f "$TMP/owaitfail";; esac
+  ost $'LOCAL_COORDINATOR=old-pl\nDEV=old-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@b\n'
+  echo '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"}]}' > "$TMP/olist"
+  OPROJ="$OPRJ" OTH=other-tab OSES=session-none ol
+  printf '%s:%s:%s:%s:%s' "$(printf '%s\n' "$OUT" | grep -cxF "Orca restored the tab of Local coordinator after a restart (rs-pl) without the kit's settings; reopening it with its conversation ($OREC).")" "$(printf '%s\n' "$OUT" | grep -c 'is busy: not reopened now')" "$(grep -c 'terminal close --terminal rs-pl --tab' "$OLOG")" "$(grep -c "agent.sh' local-coordinator --resume $OREC --json" "$OLOG")" "$(grep -c 'terminal wait --terminal rs-pl' "$OLOG" || true)"
+}
+G1="$(ogate noagent 1 ok)"; G2="$(ogate noagent 0 fail)"; G3="$(ogate '' 1 fail)"; rm -f "$TMP/owaitfail"
+check "records: the front role's restored tab with a record-derived sid is reopened at once, without the idle wait and without the busy line, when no agent process and no agentIdentity answer for it; a live agent pid or an agentIdentity keeps today's busy line and the tab" "$G1|$G2|$G3" "1:0:1:1:0|0:1:0:0:1|0:1:0:0:1"
+rm -f "$TMP"/ost.* "$TMP/orl.args"; : > "$TMP/nopid.rs-pl"; rm -f "$TMP/owaitfail"
+ost $'LOCAL_COORDINATOR=old-pl\nDEV=old-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@b\n'
+echo '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"}]}' > "$TMP/olist"
+OPROJ="$OPRJ" OTH=rs-pl OSES=session-none ol; sleep 0.3
+check "records: the front role's own tab keeps today's 'Cannot start ... relauncher' line (the record is not consulted), no relauncher is started and nothing is closed or resumed" "$RC:$(printf '%s\n' "$OUT" | grep -cxF "Cannot start the local coordinator's relauncher: its conversation could not be read from this tab (agent not claude, or a claude install that hides --resume); the local coordinator keeps working here without the kit's settings. Run roles from another terminal of this worktree if you want it reopened with them (it may then start without memory)."):$([ -e "$TMP/orl.args" ] && echo relauncher || echo none):$(grep -c 'terminal close --terminal rs-pl' "$OLOG" || true):$(grep -c -- "--resume $OREC" "$OLOG" || true)" "0:1:none:0:0"
 rm -f "$KIT/prompts/programmer/tst.md" "$TMP/owaitfail"
+rm -rf "$KIT/state/session-handles"
 }
 
 sec_wake() {
@@ -6087,6 +6276,36 @@ class RuntimeClient {
 }
 module.exports = { RuntimeClient, getDefaultUserDataPath: () => '/ud' };
 J
+mkdir -p "$TMP/wbin/new"
+cat > "$TMP/wbin/new/client.js" <<'J'
+const fs = require('fs');
+class RuntimeClient {
+  constructor(...a) { fs.appendFileSync(process.env.WLOG, 'new ' + JSON.stringify(a) + '\n'); }
+  async call(m, p) {
+    fs.appendFileSync(process.env.WLOG, 'call ' + m + ' ' + JSON.stringify(p) + '\n');
+    return { result: { reveal: { navigated: true } } };
+  }
+}
+module.exports = { RuntimeClient };
+J
+printf "module.exports = { getDefaultUserDataPath: () => '/ud2' };\n" > "$TMP/wbin/new/metadata.js"
+printf 'module.exports = { RuntimeClient: class {} };\n' > "$TMP/wbin/only.js"
+printf "module.exports = { getDefaultUserDataPath: () => '/ud' };\n" > "$TMP/wbin/norc.js"
+mkdir -p "$TMP/wbin/prefer" "$TMP/wbin/nonfn"
+cp "$TMP/wbin/rc.js" "$TMP/wbin/prefer/client.js"
+printf "module.exports = { getDefaultUserDataPath: () => '/ud9' };\n" > "$TMP/wbin/prefer/metadata.js"
+cat > "$TMP/wbin/nonfn/client.js" <<'J'
+const fs = require('fs');
+class RuntimeClient {
+  constructor(...a) { fs.appendFileSync(process.env.WLOG, 'new ' + JSON.stringify(a) + '\n'); }
+  async call(m, p) {
+    fs.appendFileSync(process.env.WLOG, 'call ' + m + ' ' + JSON.stringify(p) + '\n');
+    return { result: { reveal: { navigated: true } } };
+  }
+}
+module.exports = { RuntimeClient, getDefaultUserDataPath: '/not-a-function' };
+J
+printf "module.exports = { getDefaultUserDataPath: () => '/ud3' };\n" > "$TMP/wbin/nonfn/metadata.js"
 wk() {  # wk <WMODE> <args...>: prints exit code:stdout bytes:stderr
   : > "$WOLOG"; local rc=0; WLOG="$WOLOG" WMODE="$1" node "$KIT/bin/wake-tab.cjs" "${@:2}" > "$TMP/wout" 2> "$TMP/werr" || rc=$?
   printf '%s:%s:%s' "$rc" "$(wc -c < "$TMP/wout" | tr -d ' ')" "$(tr '\n' '|' < "$TMP/werr")"
@@ -6095,35 +6314,64 @@ if command -v node >/dev/null 2>&1; then
   W1="$(wk ok "$TMP/wbin/rc.js" wt tab leaf)|$(tr '\n' ' ' < "$WOLOG")"
   W1="$W1|$(wk false "$TMP/wbin/rc.js" wt tab leaf)|$(wk empty "$TMP/wbin/rc.js" wt tab leaf)|$(wk throw "$TMP/wbin/rc.js" wt tab leaf)"
   W1="$W1|$(wk ok "$TMP/wbin/rc.js" wt tab)|$(wk ok "$TMP/wbin/rc.js" wt tab leaf extra)|$(wk ok)|$(wk ok "$TMP/wbin/none.js" wt tab leaf | cut -c1-30)"
-  check "wake-tab.cjs: reveal is called once with exactly worktreeId, tabId and leafId and exit 0 prints nothing; navigated false or no result -> 1 with 'Orca did not wake the tab'; a throw -> 1 with its code and message on one line; 3 or 5 arguments or none -> 1 with the usage; a client that cannot be loaded -> 1, one line" "$W1" \
-"0:0:|new [\"/ud\",null,null,null] call terminal.reveal {\"worktreeId\":\"wt\",\"tabId\":\"tab\",\"leafId\":\"leaf\"} |1:0:Orca did not wake the tab||1:0:Orca did not wake the tab||1:0:runtime_unavailable boom second||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:MODULE_NOT_FOUND Cannot fi"
+  W1="$W1|$(wk ok "$TMP/wbin/new/client.js" wt tab leaf)|$(tr '\n' ' ' < "$WOLOG")"
+  W1="$W1|$(wk ok "$TMP/wbin/only.js" wt tab leaf | cut -c1-30)|$(wk ok "$TMP/wbin/norc.js" wt tab leaf)"
+  check "wake-tab.cjs: reveal is called once with exactly worktreeId, tabId and leafId and exit 0 prints nothing; navigated false or no result -> 1 with 'Orca did not wake the tab'; a throw -> 1 with its code and message on one line; 3 or 5 arguments or none -> 1 with the usage; a client that cannot be loaded -> 1, one line; a client that exports only RuntimeClient takes getDefaultUserDataPath from the metadata.js next to it; a module without RuntimeClient, or one whose sibling metadata.js is missing -> 1, one line" "$W1" \
+"0:0:|new [\"/ud\",null,null,null] call terminal.reveal {\"worktreeId\":\"wt\",\"tabId\":\"tab\",\"leafId\":\"leaf\"} |1:0:Orca did not wake the tab||1:0:Orca did not wake the tab||1:0:runtime_unavailable boom second||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:usage: wake-tab.cjs <runtime-client.js> <worktreeId> <tabId> <leafId>||1:0:MODULE_NOT_FOUND Cannot fi|0:0:|new [\"/ud2\",null,null,null] call terminal.reveal {\"worktreeId\":\"wt\",\"tabId\":\"tab\",\"leafId\":\"leaf\"} |1:0:MODULE_NOT_FOUND Cannot fi|1:0:error the runtime client module does not export RuntimeClient and getDefaultUserDataPath|"
+  W2="$(wk ok "$TMP/wbin/prefer/client.js" wt tab leaf)|$(tr '\n' ' ' < "$WOLOG")"
+  W2="$W2|$(wk ok "$TMP/wbin/nonfn/client.js" wt tab leaf)|$(tr '\n' ' ' < "$WOLOG")"
+  check "wake-tab.cjs: a client module that exports getDefaultUserDataPath keeps it even when the metadata.js next to it exports another; a client whose getDefaultUserDataPath is not a function takes that sibling's function" "$W2" \
+  "0:0:|new [\"/ud\",null,null,null] call terminal.reveal {\"worktreeId\":\"wt\",\"tabId\":\"tab\",\"leafId\":\"leaf\"} |0:0:|new [\"/ud3\",null,null,null] call terminal.reveal {\"worktreeId\":\"wt\",\"tabId\":\"tab\",\"leafId\":\"leaf\"} "
 else echo "ok   wake-tab.cjs: skipped (no node on this machine)"; fi
 # 2. the lib helpers: the app binary found from the 'orca' on the PATH, wake_tab's exit codes and stdout contract, tabs_of_handle
 A="$TMP/wapp"
-mkdir_app() {  # mkdir_app <name>: <name>.app with the CLI, the binary (a script that logs how it was run) and the runtime client
-  mkdir -p "$A/$1.app/Contents/Resources/bin" "$A/$1.app/Contents/MacOS" "$A/$1.app/Contents/Resources/app.asar.unpacked/out/cli"
+mkdir_app() {  # mkdir_app <name>: <name>.app with the CLI, the binary (a script that logs how it was run) and both runtime client layouts
+  local c="$A/$1.app/Contents/Resources/app.asar.unpacked/out/cli"
+  mkdir -p "$A/$1.app/Contents/Resources/bin" "$A/$1.app/Contents/MacOS" "$c/runtime"
   printf '#!/bin/sh\necho real-cli\n' > "$A/$1.app/Contents/Resources/bin/orca"; chmod +x "$A/$1.app/Contents/Resources/bin/orca"
   printf '#!/bin/sh\necho "NODE=$ELECTRON_RUN_AS_NODE $*" >> "%s"\necho noise\n[ "${WFAKE_RC:-0}" = 0 ] || { printf "first line\\nsecond line\\n" >&2; exit "$WFAKE_RC"; }\n' "$WOLOG" > "$A/$1.app/Contents/MacOS/Orca"; chmod +x "$A/$1.app/Contents/MacOS/Orca"
-  : > "$A/$1.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+  : > "$c/runtime-client.js"; : > "$c/runtime/client.js"; : > "$c/runtime/metadata.js"
 }
-XBIN="$A/X.app/Contents/MacOS/Orca"; XJS="$A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
-mkdir_app X; mkdir_app Y; mkdir_app Z; rm "$A/Y.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"; chmod -x "$A/Z.app/Contents/MacOS/Orca"
-mkdir -p "$A/rel" "$A/abs" "$A/chain" "$A/plain" "$A/norc" "$A/noexe"
+cli_of() { printf '%s/%s.app/Contents/Resources/app.asar.unpacked/out/cli' "$A" "$1"; }
+for n in X Y Z W V U T N D E; do mkdir_app "$n"; done
+rm -rf "$(cli_of Y)/runtime"; chmod -x "$A/Z.app/Contents/MacOS/Orca"
+rm "$(cli_of W)/runtime/metadata.js"; rm "$(cli_of V)/runtime/client.js"
+rm -rf "$(cli_of U)/runtime" "$(cli_of U)/runtime-client.js"; rm "$(cli_of T)/runtime/metadata.js" "$(cli_of T)/runtime-client.js"
+rm "$(cli_of N)/runtime-client.js"
+rm -f "$(cli_of D)/runtime/client.js" "$(cli_of D)/runtime/metadata.js"; mkdir -p "$(cli_of D)/runtime/client.js" "$(cli_of D)/runtime/metadata.js"
+rm -f "$(cli_of E)/runtime/client.js" "$(cli_of E)/runtime/metadata.js" "$(cli_of E)/runtime-client.js"; mkdir -p "$(cli_of E)/runtime/client.js" "$(cli_of E)/runtime/metadata.js"
+mkdir -p "$A/rel" "$A/abs" "$A/chain" "$A/newonly" "$A/plain" "$A/yold" "$A/nometa" "$A/noclient" "$A/neither" "$A/incomplete" "$A/noexe" "$A/dirs" "$A/dirsnoold"
 ln -s ../X.app/Contents/Resources/bin/orca "$A/rel/orca"; ln -s "$A/X.app/Contents/Resources/bin/orca" "$A/abs/orca"; ln -s ../rel/orca "$A/chain/orca"
+ln -s ../N.app/Contents/Resources/bin/orca "$A/newonly/orca"
 printf '#!/bin/sh\necho plain\n' > "$A/plain/orca"; chmod +x "$A/plain/orca"
-ln -s ../Y.app/Contents/Resources/bin/orca "$A/norc/orca"; ln -s ../Z.app/Contents/Resources/bin/orca "$A/noexe/orca"
-same_file() { [ "$1" -ef "$2" ]; }
-an() {  # an <dir on the PATH>: orca_app_node's output and status
+ln -s ../Y.app/Contents/Resources/bin/orca "$A/yold/orca"; ln -s ../W.app/Contents/Resources/bin/orca "$A/nometa/orca"
+ln -s ../V.app/Contents/Resources/bin/orca "$A/noclient/orca"; ln -s ../U.app/Contents/Resources/bin/orca "$A/neither/orca"
+ln -s ../T.app/Contents/Resources/bin/orca "$A/incomplete/orca"; ln -s ../Z.app/Contents/Resources/bin/orca "$A/noexe/orca"
+ln -s ../D.app/Contents/Resources/bin/orca "$A/dirs/orca"; ln -s ../E.app/Contents/Resources/bin/orca "$A/dirsnoold/orca"
+an() {  # an <dir on the PATH>: orca_app_node's status, output (the app name, the client under out/cli) and reason
   local o r=0 ob orcjs; o="$(PATH="$A/$1:$PATH" orca_app_node)" || r=$?
   ob="${o%%|*}"; orcjs="${o##*|}"
-  if [ -n "$o" ] && same_file "$ob" "$XBIN" && same_file "$orcjs" "$XJS"; then o="X-app"; fi
+  case "$ob" in "$A"/*.app/Contents/MacOS/Orca) o="${ob%/Contents/MacOS/Orca}"; o="${o##*/}"; o="${o%.app}|${orcjs#*/out/cli/}";; esac
+  printf '%s:%s:%s' "$r" "$o" "$(PATH="$A/$1:$PATH" orca_app_node_reason | sed "s#$A/[a-z]*/\.\./#A/#g; s#$A#A#g")"
+}
+anx() {  # anx: orca_app_node and its reason with a shell function named orca and no orca on the PATH
+  local o r=0; o="$(orca_app_node)" || r=$?
+  printf '%s:%s:%s' "$r" "$o" "$(orca_app_node_reason)"
+}
+AN="$(an rel) $(an abs) $(an chain) $(an newonly) $(an plain) $(an yold) $(an nometa) $(an noclient) $(an neither) $(an incomplete) $(an noexe) $(ORCA_CLI_BIN_DIR="$A/rel" an plain) $(orca() { :; }; an rel) $(orca() { :; }; PATH="$A/nodir:/usr/bin:/bin" anx)"
+MISSING() { printf "Orca's runtime client is missing: neither A/%s.app/Contents/Resources/app.asar.unpacked/out/cli/runtime/client.js with runtime/metadata.js nor A/%s.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js exists" "$1" "$1"; }
+check "orca_app_node: a relative link, an absolute one and a chain resolve to the app's binary and the new runtime client (runtime/client.js with runtime/metadata.js, also when the old file is absent); the old runtime-client.js alone; a plain script, an app with the new client but no runtime/metadata.js, or the metadata without the client, an old-only app, one without any client and one with a non-executable binary give nothing and 1; ORCA_CLI_BIN_DIR gives nothing and 1; a shell function named orca with the real link on the PATH still resolves the app, and alone gives nothing and 1; orca_app_node_reason gives one line for each failure and nothing on success" "$AN" \
+  "0:X|runtime/client.js: 0:X|runtime/client.js: 0:X|runtime/client.js: 0:N|runtime/client.js: 1::the orca on the PATH (A/plain/orca) is not inside an Orca app 0:Y|runtime-client.js: 0:W|runtime-client.js: 0:V|runtime-client.js: 1::$(MISSING U) 1::$(MISSING T) 1::Orca's binary A/Z.app/Contents/MacOS/Orca is not executable 1::the orca on the PATH (A/plain/orca) is not inside an Orca app 0:X|runtime/client.js: 1::no orca command on the PATH"
+an_node() {  # an_node <dir on the PATH>: orca_app_node's status and output only, as `an`
+  local o r=0 ob orcjs; o="$(PATH="$A/$1:$PATH" orca_app_node)" || r=$?
+  ob="${o%%|*}"; orcjs="${o##*|}"
+  case "$ob" in "$A"/*.app/Contents/MacOS/Orca) o="${ob%/Contents/MacOS/Orca}"; o="${o##*/}"; o="${o%.app}|${orcjs#*/out/cli/}";; esac
   printf '%s:%s' "$r" "$o"
 }
-AN="$(an rel) $(an abs) $(an chain) $(an plain) $(an norc) $(an noexe) $(ORCA_CLI_BIN_DIR="$A/rel" an plain) $(orca() { :; }; an rel) $(orca() { :; }; PATH="$A/nodir:/usr/bin:/bin" orca_app_node; echo "$?")"
-check "orca_app_node: a relative link, an absolute one and a chain resolve to the app's binary and runtime client; a plain script, an app without its runtime client, one with a non-executable binary and ORCA_CLI_BIN_DIR give nothing and 1; a shell function named orca with the real link on the PATH still resolves the app, and alone gives nothing and 1" "$AN" "0:X-app 0:X-app 0:X-app 1: 1: 1: 1: 0:X-app 1"
+check "orca_app_node: runtime/client.js and runtime/metadata.js count as the new client only when both are files; directories of those names are not the new layout (the old runtime-client.js is used, else nothing and 1)" "$(an_node dirs):$(an_node dirsnoold)" "0:D|runtime-client.js:1:"
 wt() {  # wt <PATH dir> [VAR=value...]: wake_tab wt-1 tab-1 leaf-1 with the real path; prints status:stdout:the line the fake binary logged
   local d="$1" o r=0; shift; : > "$WOLOG"; o="$( (export PATH="$A/$d:$PATH" ${1+"$@"}; wake_tab wt-1 tab-1 leaf-1) 2>/dev/null)" || r=$?
-  printf '%s:%s:%s' "$r" "$o" "$(sed "s#$KIT#KIT#; s#$A/[a-z]*/\.\./#A/#; s#$A#A#" "$WOLOG" | tr '\n' ' ')"
+  printf '%s:%s:%s' "$r" "$(printf '%s' "$o" | sed "s#$A#A#g")" "$(sed "s#$KIT#KIT#; s#$A/[a-z]*/\.\./#A/#; s#$A#A#" "$WOLOG" | tr '\n' ' ')"
 }
 printf '#!/bin/sh\necho "H:$*"; exit "${HRC:-0}"\n' > "$TMP/wbin/hook"; chmod +x "$TMP/wbin/hook"
 WH="$(for c in 0 1 2 7; do wt plain ORCA_ROLES_WAKE="$TMP/wbin/hook" HRC=$c; echo; done | tr '\n' ' ')"
@@ -6152,9 +6400,9 @@ exit 0
 EOS
 chmod +x "$TMP/wbin/orca"
 TH="$(for h in h-ok h-split h-noleaf h-emptyleaf h-fail; do (PATH="$TMP/wbin:$PATH"; r=0; o="$(tabs_of_handle "$h")" || r=$?; echo "$r:$o"); done | tr '\n' ' ')"
-check "wake_tab: the hook replaces the helper with the same arguments, 0 -> 0, 2 -> 2, any other code -> 1, stdout passed through; without the hook the app binary runs in node mode (ELECTRON_RUN_AS_NODE=1) with wake-tab.cjs, the runtime client and the three ids, its stdout is dropped on success and only the first stderr line is the reason on failure; without an app it is 2 with no output. tabs_of_handle prints the first object with both ids, nothing when either is missing or empty or the call fails, always status 0" \
+check "wake_tab: the hook replaces the helper with the same arguments, 0 -> 0, 2 -> 2, any other code -> 1, stdout passed through; without the hook the app binary runs in node mode (ELECTRON_RUN_AS_NODE=1) with wake-tab.cjs, the runtime client and the three ids, its stdout is dropped on success and only the first stderr line is the reason on failure; without an app it is 2 with the reason on stdout. tabs_of_handle prints the first object with both ids, nothing when either is missing or empty or the call fails, always status 0" \
   "$WH|$(wt rel WFAKE_RC=0)|$(wt rel WFAKE_RC=3)|$(wt plain)|$TH" \
-  "0:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: 2:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: |0::NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js wt-1 tab-1 leaf-1 |1:first line:NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js wt-1 tab-1 leaf-1 |2::|0:T1 L1 0:T2 L2 0: 0: 0: "
+  "0:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: 2:H:wt-1 tab-1 leaf-1: 1:H:wt-1 tab-1 leaf-1: |0::NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime/client.js wt-1 tab-1 leaf-1 |1:first line:NODE=1 KIT/bin/wake-tab.cjs A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime/client.js wt-1 tab-1 leaf-1 |2:the orca on the PATH (A/plain/orca) is not inside an Orca app:|0:T1 L1 0:T2 L2 0: 0: 0: "
 # 2b. WSL (Orca for Windows): Orca.exe found through orca-ide's ORCA_WIN_LAUNCHER line, run from its own folder with the node-mode variable passed through WSLENV; fake wslpath, orca-ide, /proc/version and Orca.exe
 WS="$TMP/wwsl"; rm -rf "$WS"; mkdir -p "$WS/bin" "$WS/ide" "$WS/root/Users/u/AppData/Local/Programs/orca"
 printf '#!/bin/sh\necho plain\n' > "$WS/bin/orca"; chmod +x "$WS/bin/orca"
@@ -6179,42 +6427,47 @@ wsl_ide() {  # wsl_ide <launcher value, or - for no launcher line>
 WLAUNCH='C:\Users\u\AppData\Local\Programs\orca\resources\bin\orca.exe'
 printf 'Linux version 5.15.0-microsoft-standard-WSL2\n' > "$WS/ver"; printf 'Linux version 6.1 generic\n' > "$WS/ver-linux"; printf 'Linux version 5.15 Microsoft\n' > "$WS/ver-caps"
 wsl_ide "$WLAUNCH"
-wwk() {  # wwk <orca_app_node|wake_tab> <version file> [VAR=value...]: runs it in the WSL fakes (wake_tab with wt-1 tab-1 leaf-1); prints status:stdout
+wwk() {  # wwk <orca_app_node|orca_app_node_reason|wake_tab> <version file> [VAR=value...]: runs it in the WSL fakes (wake_tab with wt-1 tab-1 leaf-1); prints status:stdout
   local fn="$1" ver="$2" o r=0; shift 2; : > "$WOLOG"
-  o="$( (unset WSLENV; export PATH="$WS/bin:/usr/bin:/bin" WS_ROOT="$WS/root" ORCA_ROLES_PROC_VERSION="$ver" ORCA_CLI_COMMAND="" ORCA_WSL_CLI_DIR="$WS/ide" ${1+"$@"}; if [ "$fn" = wake_tab ]; then wake_tab wt-1 tab-1 leaf-1; else orca_app_node; fi) 2>/dev/null)" || r=$?
+  o="$( (unset WSLENV; export PATH="$WS/bin:/usr/bin:/bin" WS_ROOT="$WS/root" ORCA_ROLES_PROC_VERSION="$ver" ORCA_CLI_COMMAND="" ORCA_WSL_CLI_DIR="$WS/ide" ${1+"$@"}; if [ "$fn" = wake_tab ]; then wake_tab wt-1 tab-1 leaf-1; elif [ "$fn" = orca_app_node_reason ]; then orca_app_node_reason; else orca_app_node; fi) 2>/dev/null)" || r=$?
   printf '%s:%s' "$r" "$o"
 }
 WSP="$(cd "$WS" && pwd -P)"
 wwlog() { sed "s#$WSP/root#R#g" "$WOLOG" | tr '\n' ' '; }
 WINJS='C:\Users\u\AppData\Local\Programs\orca\resources\app.asar.unpacked\out\cli\runtime-client.js'
+WINJSN='C:\Users\u\AppData\Local\Programs\orca\resources\app.asar.unpacked\out\cli\runtime\client.js'
 WINKIT='\\wsl.localhost\Ubuntu'"$(printf '%s' "$KIT" | tr / '\\')"'\bin\wake-tab.cjs'
 WRX="R/Users/u/AppData/Local/Programs/orca/Orca.exe"
+WREASON="Orca for Windows was not found through orca-ide's ORCA_WIN_LAUNCHER line"
 wnr() { sed "s#$WS/root#R#"; }
-WN1="$(wwk orca_app_node "$WS/ver" | wnr)"
+WN1="$(wwk orca_app_node "$WS/ver" | wnr)"; WN1R="$(wwk orca_app_node_reason "$WS/ver")"
 WN2="$(wwk orca_app_node "$WS/ver-caps" | wnr)"
 WN3="$(wwk orca_app_node "$WS/ver-linux"):$(wwk orca_app_node "$WS/nover")"
 wsl_ide 'C:\Users\u\AppData\Local\Programs\orca\RESOURCES\BIN\ORCA.EXE'; WN4="$(wwk orca_app_node "$WS/ver" | wnr)"
 wsl_ide 'C:\Users\u\AppData\Local\Programs\orca\resources\bin\other.exe'; WN5="$(wwk orca_app_node "$WS/ver")"
 wsl_ide 'C:\Users\u\AppData\Local\Programs\gone\resources\bin\orca.exe'; WN6="$(wwk orca_app_node "$WS/ver")"
-wsl_ide -; WN7="$(wwk orca_app_node "$WS/ver")"
+wsl_ide -; WN7="$(wwk orca_app_node "$WS/ver")"; WN7R="$(wwk orca_app_node_reason "$WS/ver")"
 wsl_ide "$WLAUNCH"; chmod -x "$WSEXE"; WN8="$(wwk orca_app_node "$WS/ver")"; chmod +x "$WSEXE"
 WN9="$(wwk orca_app_node "$WS/ver" ORCA_WSL_CLI_DIR="$WS/none")"
 WN10="$(PATH="$A/rel:$WS/bin:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$WS/ver" ORCA_WSL_CLI_DIR="$WS/ide" orca_app_node | sed "s#$A#A#g; s#A/rel/\.\./#A/#g")"
-check "orca_app_node on WSL: Orca.exe's Linux path, the runtime client as a Windows path and '|wsl' from orca-ide's ORCA_WIN_LAUNCHER line (the launcher's suffix and the kernel's 'microsoft' in any case); nothing and 1 for a kernel without it or a missing version file, a launcher that does not end in \\resources\\bin\\orca.exe, an install without Orca.exe, no launcher line, a non-executable Orca.exe, no orca-ide; the macOS layout still wins when it is found" \
-  "$WN1|$WN2|$WN3|$WN4|$WN5|$WN6|$WN7|$WN8|$WN9|$WN10" \
-  "0:$WRX|$WINJS|wsl|0:$WRX|$WINJS|wsl|1::1:|0:$WRX|$WINJS|wsl|1:|1:|1:|1:|1:|A/X.app/Contents/MacOS/Orca|A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime-client.js"
+WL="$WS/root/Users/u/AppData/Local/Programs/orca/resources/app.asar.unpacked/out/cli"; mkdir -p "$WL/runtime"; : > "$WL/runtime/client.js"
+WN11="$(wwk orca_app_node "$WS/ver" | wnr)"; rm -rf "$WL/runtime"
+check "orca_app_node on WSL: Orca.exe's Linux path, the new runtime client (runtime/client.js) when wslpath finds it and the old runtime-client.js otherwise, and '|wsl' from orca-ide's ORCA_WIN_LAUNCHER line (the launcher's suffix and the kernel's 'microsoft' in any case); nothing and 1 for a kernel without it or a missing version file, a launcher that does not end in \\resources\\bin\\orca.exe, an install without Orca.exe, no launcher line, a non-executable Orca.exe, no orca-ide; the macOS layout still wins when it is found; orca_app_node_reason gives the WSL line for every failure and nothing on success" \
+  "$WN1|$WN2|$WN3|$WN4|$WN5|$WN6|$WN7|$WN8|$WN9|$WN10|$WN11|$WN1R|$WN7R" \
+  "0:$WRX|$WINJS|wsl|0:$WRX|$WINJS|wsl|1::1:|0:$WRX|$WINJS|wsl|1:|1:|1:|1:|1:|A/X.app/Contents/MacOS/Orca|A/X.app/Contents/Resources/app.asar.unpacked/out/cli/runtime/client.js|0:$WRX|$WINJSN|wsl|0:|0:$WREASON"
 wsl_ide "$WLAUNCH"
 ww() { local r; r="$(wwk wake_tab "$WS/ver" "$@")"; printf '%s:%s' "$r" "$(wwlog)"; }
 WXL="NODE=1 WSLENV=ELECTRON_RUN_AS_NODE CWD=R/Users/u/AppData/Local/Programs/orca $WINKIT $WINJS wt-1 tab-1 leaf-1 "
 WW1="$(ww)"
 WW2="$(ww WSLENV=FOO/p:BAR)|$(ww WSLENV=A:ELECTRON_RUN_AS_NODE/u:B)|$(ww WSLENV=ELECTRON_RUN_AS_NODE)|$(ww WSLENV=ELECTRON_RUN_AS_NODE_X)|$(ww WSLENV=XELECTRON_RUN_AS_NODE/u)"
 WW3="$(ww WFAKE_RC=3)"
+WNOMAC="the orca on the PATH ($WS/bin/orca) is not inside an Orca app"
 WW4="$(wwk wake_tab "$WS/ver-linux")|$(wwk wake_tab "$WS/ver-caps" | cut -c1-2)"
 RL_STUB='bounded_run() { echo "LIM:$1:$2" >&2; return 124; }'
 WW5="$( (unset WSLENV; export PATH="$WS/bin:/usr/bin:/bin" WS_ROOT="$WS/root" ORCA_ROLES_PROC_VERSION="$WS/ver" ORCA_CLI_COMMAND="" ORCA_WSL_CLI_DIR="$WS/ide"; eval "$RL_STUB"; r=0; o="$(wake_tab a b c)" || r=$?; echo "$r:$o"; PATH="$A/rel:$PATH"; r=0; o="$(wake_tab a b c)" || r=$?; echo "$r:$o") | tr '\n' ' ')"
-check "wake_tab on WSL: Orca.exe runs from its own folder with ELECTRON_RUN_AS_NODE=1, WSLENV carrying the name (appended to what is there, kept when already listed with or without a /flag, not fooled by a longer or prefixed name), the wake-tab.cjs path and the runtime client as Windows paths and the three ids; stdout dropped, status 0; a failure is 1 with the first stderr line; a kernel without 'microsoft' is 2 with nothing run, 'Microsoft' works; both the WSL and the macOS call go through bounded_run 30 labelled wake-tab (a 124 is 1 with its message)" \
+check "wake_tab on WSL: Orca.exe runs from its own folder with ELECTRON_RUN_AS_NODE=1, WSLENV carrying the name (appended to what is there, kept when already listed with or without a /flag, not fooled by a longer or prefixed name), the wake-tab.cjs path and the runtime client as Windows paths and the three ids; stdout dropped, status 0; a failure is 1 with the first stderr line; a kernel without 'microsoft' is 2 with the reason, 'Microsoft' works; both the WSL and the macOS call go through bounded_run 30 labelled wake-tab (a 124 is 1 with its message)" \
   "$WW1|$WW2|$WW3|$WW4|$WW5" \
-  "0::$WXL|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=FOO/p:BAR:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=A:ELECTRON_RUN_AS_NODE/u:B}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE_X:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=XELECTRON_RUN_AS_NODE/u:ELECTRON_RUN_AS_NODE}|1:first line:${WXL}|2:|0:|1:LIM:30:wake-tab 1:LIM:30:wake-tab "
+  "0::$WXL|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=FOO/p:BAR:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=A:ELECTRON_RUN_AS_NODE/u:B}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=ELECTRON_RUN_AS_NODE_X:ELECTRON_RUN_AS_NODE}|0::${WXL/WSLENV=ELECTRON_RUN_AS_NODE/WSLENV=XELECTRON_RUN_AS_NODE/u:ELECTRON_RUN_AS_NODE}|1:first line:${WXL}|2:$WNOMAC|0:|1:LIM:30:wake-tab 1:LIM:30:wake-tab "
 # 3. launch.sh against the fake orca and the fake wake hook (it appends the woken tab to the terminal list, as Orca does)
 cat > "$TMP/wbin/wake" <<EOS
 #!/bin/sh
@@ -6315,20 +6568,24 @@ wst "$WALL_E" "$WALL_P" "$WALL_T"; : > "$TMP/wlistfail"; OTH=other wl; M="$M g:$
 check "wake: nothing is woken (no hook call, no switch back) when every saved tab is already in the list, there are no saved tab ids, a role's line has no leaf, no saved ptyId, no handle in the state, the state file is empty, the role is disabled in a launch that does not change the mode, or the terminal list could not be read; only the role with the full line and ptyId is woken" "$M" " a:0:0 b:0:0 c:1:1 d:1:1 e:0:0 f:0:0 g:0:0"
 # 5. a wake that fails, or that is unavailable: the role is treated as closed and a new tab opened as before; the sentence for "unavailable" prints once
 WNOWAKE='Cannot wake tabs Orca kept asleep on this system; their roles are treated as closed.'
+WNOWAKE_MSG='Cannot wake tabs Orca kept asleep on this system (no such tab); their roles are treated as closed.'
+WNOWAKE_APP="Cannot wake tabs Orca kept asleep on this system (the orca on the PATH ($TMP/wbin/orca) is not inside an Orca app); their roles are treated as closed."
 WNOID='Cannot wake tabs Orca kept asleep: this launch has no worktree id (ORCA_WORKTREE_ID is not set); their roles are treated as closed.'
 F=""
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 1 > "$TMP/wrc.tab-dev"; echo 'no such tab' > "$TMP/wmsg.tab-dev"
 OTH=other wl; F="a:$RC:$(wev):$(wn 'Could not wake the tab of Dev (no such tab); it is treated as closed.'):$(wn "$WNOWAKE")"
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 2 > "$TMP/wrc.tab-pl"
 OTH=other wl; F="$F b:$RC:$(wev):$(wn "$WNOWAKE")"
+wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 2 > "$TMP/wrc.tab-pl"; echo 'no such tab' > "$TMP/wmsg.tab-pl"
+OTH=other wl; F="$F b2:$RC:$(wev):$(wn "$WNOWAKE_MSG")"
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; echo 2 > "$TMP/wrc.tab-dev"
 OTH=other wl; F="$F c:$RC:$(wev):$(wn "$WNOWAKE")"
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1
 OWT='' OTH=other wl; F="$F d:$RC:$(wev):$(wn "$WNOWAKE"):$(wn "$WNOID")"
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"
-WHOOK='' OTH=other wl; F="$F e:$RC:$(wev):$(wn "$WNOWAKE")"
-check "wake failures: a hook failure for one role -> 'Could not wake the tab of <Title> (<reason>); it is treated as closed.', the others still woken, a new tab opened for it, the switch back made; unavailable (2) on the first role or on the second, a worktree that is not 'id:...' -> its own sentence naming ORCA_WORKTREE_ID (and not the 'on this system' one), or no app to call -> the sentence once, the remaining roles left alone (no more hook calls), every role opened new, and the switch back only when a tab was woken" "$F" \
-"a:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1:0 b:0:W:tab-pl create:Planner create:Dev create:Tst :1 c:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1 d:0:create:Planner create:Dev create:Tst :0:1 e:0:create:Planner create:Dev create:Tst :1"
+WHOOK='' OTH=other wl; F="$F e:$RC:$(wev):$(wn "$WNOWAKE_APP")"
+check "wake failures: a hook failure for one role -> 'Could not wake the tab of <Title> (<reason>); it is treated as closed.', the others still woken, a new tab opened for it, the switch back made; unavailable (2) on the first role, with or without a reason on stdout, or on the second, a worktree that is not 'id:...' -> its own sentence naming ORCA_WORKTREE_ID (and not the 'on this system' one), or no app to call -> the sentence naming the cause once, the remaining roles left alone (no more hook calls), every role opened new, and the switch back only when a tab was woken" "$F" \
+"a:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1:0 b:0:W:tab-pl create:Planner create:Dev create:Tst :1 b2:0:W:tab-pl create:Planner create:Dev create:Tst :1 c:0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner create:Dev create:Tst :1 d:0:create:Planner create:Dev create:Tst :0:1 e:0:create:Planner create:Dev create:Tst :1"
 # 6. waiting for the woken tabs: the list must show the tab, its session must be readable (claude), it must be idle (claude, codex); a tab that never shows up is treated as closed, one that shows up but is not ready stops the launch with nothing opened
 WB=1; R=""
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1
@@ -11826,6 +12083,12 @@ uminst; Z4="$UIRC:$([ -e "$UH/.orca-roles/metrics" ] && echo wrote || echo none)
 jq '.settings.metrics.enabled = true' "$UH/.orca-roles/config.json" > "$UM/hcfg.json"; cp "$UM/hcfg.json" "$UH/.orca-roles/config.json"; uminst; Y4="$([ -e "$UH/.orca-roles/metrics/worktrees.jsonl" ] && echo wrote || echo none)"
 check "usage metrics: the same runs write with settings.metrics.enabled true or absent, and with it false nothing is written: launch.sh (also on a launch over an open team and the relauncher's), dispatch.sh (the saved copy of the worktree's configuration, and the kit's when the worktree has none; every outcome) and install.sh" "$Y1 $Y2 $Y4|$Z1|$Z2|$Z3|$Z4" "wrote wrote wrote|none|none none none none none|none none|0:none"
 check "usage metrics: an install run with metrics on reaches the suite's no-op orca first on the PATH, never the user's real Orca" "$(grep -c '^worktree list --limit 1000 --json$' "$NOORCA/calls.log" | tr -d ' ' | sed 's/^[1-9][0-9]*$/called/')" "called"
+}
+sec_usage_install() {
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
+write_launch_config
+UH="$UM/ih"; mkdir -p "$UH/.orca-roles"; jq '.settings.metrics.enabled = true' "$ROOT/config.default.json" > "$UH/.orca-roles/config.json"
 # install.sh also maps Orca's worktrees that have a kit team (<git dir>/orca-roles.env), found with 'orca worktree list'; a fake orca on the PATH, never the real one
 IW="$UM/iw"; rm -rf "$IW"; mkdir -p "$IW/fo"
 for n in A B D E F; do mkdir -p "$IW/$n"; git -C "$IW/$n" init -q; done
@@ -11835,8 +12098,8 @@ IWP() { (cd "$IW/$1" && pwd -P); }
 printf '%s\n' "{\"ok\":true,\"result\":{\"worktrees\":[{\"path\":\"$IW/A\"},{\"path\":\"$IW/B\"},{\"path\":\"$IW/nope\"},{\"path\":\"$IW/D\"},{\"path\":\"$IW/E\"},{\"path\":5},{\"path\":null},{\"id\":\"x\"},{\"path\":\"$IW/F\"}],\"truncated\":true}}" > "$IW/fo/list.json"
 printf '#!/bin/bash\necho "$*" >> "%s/calls.log"\ncase "$FO_MODE" in\n  ok) cat "%s/list.json";;\n  fail) exit 1;;\n  junk) echo "not json {";;\n  hang) sleep 30;;\nesac\n' "$IW/fo" "$IW/fo" > "$IW/fo/orca"; chmod +x "$IW/fo/orca"
 IWNP=""; IFS=: read -r -a IWDIRS <<< "$PATH"; for d in "${IWDIRS[@]}"; do [ -x "$d/orca" ] || IWNP="$IWNP:$d"; done; IWNP="${IWNP#:}"
-iwhome() { IH="$IW/h"; rm -rf "$IH"; mkdir -p "$IH/.orca-roles/metrics"; cp "$UH/.orca-roles/config.json" "$IH/.orca-roles/config.json"; printf '%s\n' "$(IWP D)" > "$IH/.orca-roles/trusted.list"; printf '%s\n' "{\"ts\":\"2026-10-01T00:00:00Z\",\"path\":\"$IW/E\",\"physical\":\"$(IWP E)\",\"project\":\"E\",\"task\":\"old\"}" > "$IH/.orca-roles/metrics/worktrees.jsonl"; }
-iwinst() { if (cd "$UM" && HOME="$IH" PATH="$1" FO_MODE="$2" bash "$ROOT/install.sh" </dev/null >"$IW/out" 2>&1); then IWRC=0; else IWRC=$?; fi; }
+iwhome() { IH="${1:-$IW/h}"; rm -rf "$IH"; mkdir -p "$IH/.orca-roles/metrics"; cp "$UH/.orca-roles/config.json" "$IH/.orca-roles/config.json"; printf '%s\n' "$(IWP D)" > "$IH/.orca-roles/trusted.list"; printf '%s\n' "{\"ts\":\"2026-10-01T00:00:00Z\",\"path\":\"$IW/E\",\"physical\":\"$(IWP E)\",\"project\":\"E\",\"task\":\"old\"}" > "$IH/.orca-roles/metrics/worktrees.jsonl"; }
+iwinst() { if (cd "$UM" && HOME="$IH" PATH="$1" FO_MODE="$2" bash "$ROOT/install.sh" </dev/null >"${IWOUT:-$IW/out}" 2>&1); then IWRC=0; else IWRC=$?; fi; }
 iwj() { jq -r '[.project, .task] | join("/")' "$IH/.orca-roles/metrics/worktrees.jsonl" 2>/dev/null | sort | tr '\n' ' '; }
 iwhome; : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; V1="$IWRC:$(iwj)"; L1="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; M0="$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)"; iwinst "$IW/fo:$PATH" ok; V2="$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"; V3="$(sort -u "$IW/fo/calls.log" | tr '\n' '|')"; M1="$(grep -c '^orca-roles was updated and its prompts changed:' "$IW/out" || true)"
 I5E="orca-roles was updated and its prompts changed: these worktrees have a kit team, and one that is still open runs the old prompts. Before its next set, tell its local coordinator that the kit was updated, so it runs restart-coordinator.sh --workers: $(IWP D), $IW/A, $IW/E, $IW/F"
@@ -11854,13 +12117,22 @@ iwhome; jq '.settings.metrics.enabled = false' "$IH/.orca-roles/config.json" > "
 awk '!d && /  prompts\// { sub(/^[0-9a-f]+/, "0000000000000000000000000000000000000000"); d=1 } { print }' "$IH/.orca-roles/.manifest" > "$IW/m.new" && mv "$IW/m.new" "$IH/.orca-roles/.manifest"
 : > "$IW/fo/calls.log"; iwinst "$IW/fo:$PATH" ok; M6="$(iwi5):$(wc -l < "$IH/.orca-roles/metrics/worktrees.jsonl" | tr -d ' ')"
 check "install: Orca's worktrees with orca-roles.env and not mapped are mapped once (project, task from the worktree's configuration or its folder name); listed in trusted.list too, already mapped, with no orca-roles.env, not a directory or a non-string path -> no line; a second install adds nothing; only 'worktree list --limit 1000 --json' is called; a first install and one with no prompt change print no I5 line; an update that changed a prompts/ file prints it once, as the last line, trusted.list's worktrees first then Orca's, no folder twice, and still asks 'worktree list' once; only a bin/ change prints no line; a prompts/ file the update added or removed prints it again; with metrics off it still prints and maps nothing" "$V1:$L1:$V2:$V3:$M0:$M1:$M2:$M3:$M4:$M5:$M6:$IWRC:$(grep -c '^worktree list --limit 1000 --json$' "$IW/fo/calls.log" || true)" "0:A/ta D/D E/old F/F :4:4:worktree list --limit 1000 --json|:0:0:1:i5:1:last:0:other:1:1:i5:1:1:i5:1:1:i5:1:1:0:1"
+iwhome "$IW/hh"; t0=$SECONDS; ( IWOUT="$IW/out.hang"; iwinst "$IW/fo:$PATH" hang; printf '%s' "$IWRC:$(iwj):$([ $((SECONDS - t0)) -lt 25 ] && echo capped || echo slow)" > "$IW/w4" ) & IWBG=$!
 iwhome; iwinst "$IW/fo:$PATH" fail; W1="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
 iwhome; iwinst "$IW/fo:$PATH" junk; W2="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
 iwhome; iwinst "$IWNP" ok; W3="$IWRC:$(iwj):$(grep -c 'parse error\|jq:' "$IW/out" || true)"
-iwhome; t0=$SECONDS; iwinst "$IW/fo:$PATH" hang; W4="$IWRC:$(iwj):$([ $((SECONDS - t0)) -lt 25 ] && echo capped || echo slow)"
+wait "$IWBG" || true; W4="$(cat "$IW/w4" 2>/dev/null || true)"
 check "install: orca failing, printing non-JSON, absent from the PATH or hanging (capped at 10 s) -> the install goes on (exit 0), the trusted worktree is still mapped, nothing printed by the block" "$W1|$W2|$W3|$W4" "0:D/D E/old :0|0:D/D E/old :0|0:D/D E/old :0|0:D/D E/old :capped"
 iwhome; jq '.settings.metrics.enabled = false' "$IH/.orca-roles/config.json" > "$IW/c.json"; cp "$IW/c.json" "$IH/.orca-roles/config.json"; rm -rf "$IH/.orca-roles/metrics"; iwinst "$IW/fo:$PATH" ok
 check "install: metrics disabled -> Orca's worktrees are not mapped and nothing is written" "$IWRC:$([ -e "$IH/.orca-roles/metrics" ] && echo wrote || echo none)" "0:none"
+}
+sec_usage_pass() {
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
+write_launch_config
+UMR="$UM/svc"; mkdir -p "$UMR"; git -C "$UMR" init -q -b main; git -C "$UMR" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+for w in devgd-300 devia-251; do git -C "$UMR" worktree add -q -b "b-$w" "$UM/wt/$w"; done
+UMA="$UM/wt/devgd-300"; UMB="$UM/wt/devia-251"; UMPB="$(cd "$UMB" && pwd -P)"; UMPA="$(cd "$UMA" && pwd -P)"
 # the transcript parser (usage-metrics.sh --once / --report) on fixture transcripts: temp kit, ORCA_ROLES_CLAUDE_PROJECTS and HOME, never the real ones
 PK="$UM/pk"; PC="$UM/cp"; PM="$PK/metrics"; PD="$PC/-w-a-devgd-300"
 HC="$UM/hermetic.json"; jq '.settings.metrics.otlpEndpoint = "http://127.0.0.1:1/v1/metrics" | .settings.metrics.prometheusUrl = "http://127.0.0.1:1"' "$ROOT/config.default.json" > "$HC"   # the passes never reach the real collector or Prometheus
@@ -12654,50 +12926,6 @@ OCD1="$(for p in 'orca_roles.agent' 'orca_roles_agent' 'unsplit' 'opencode' 'pai
 RMO="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
 OCD2="$(for p in 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'update time' 'no continuation' 'drops one trailing' 'remembered' 'orca_roles_agent="opencode"'; do umsay "$(grep -ciF -- "$p" <<< "$RMO" || true)"; done | tr '\n' ':' | sed 's/:$//')"
 check "usage docs OpenCode: the header docstring names the orca_roles.agent resource attribute and the orca_roles_agent source label, the unsplit by-type cost, OpenCode sessions, pair trees, their update time and the lack of continuation; the README's Usage metrics section tells the sources apart by orca_roles_agent (with a query example), lists unsplit in the cost_by_type types, states the update time and the lack of continuation, the role's trailing -<digits>, and covers OpenCode sessions, pair trees and the remembered owner" "$OCD1|$OCD2" "yes:yes:yes:yes:yes:yes:yes:yes|yes:yes:yes:yes:yes:yes:yes:yes:yes"
-# the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
-SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
-for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
-printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$SB/pybin/python3"; chmod +x "$SB/pybin/python3"
-sinst() {  # sinst <home> [VAR=value ...]: installs from the clone into <home> with the fake scheduler; SOUT, SRC
-  local h="$1"; shift; mkdir -p "$h"
-  if SOUT="$(cd "$UM" && env HOME="$h" PATH="$SB/pybin:$SB/rbin:$PATH" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$SLOG" "$@" bash "$ROOT/install.sh" </dev/null 2>&1)"; then SRC=0; else SRC=$?; fi
-}
-scfg() { mkdir -p "$1/.orca-roles"; jq "$2" "$ROOT/config.default.json" > "$1/.orca-roles/config.json"; }   # scfg <home> <jq edit>: the user's config before the install
-sl() { grep -c "$1" "$SLOG" 2>/dev/null || true; }
-splist() { python3 -I -c 'import json, plistlib, sys; print(json.dumps(plistlib.load(open(sys.argv[1], "rb")), sort_keys=True))' "$1" 2>/dev/null || true; }
-MACOS=ORCA_ROLES_SCHEDULER_OS=Darwin; LINUX=ORCA_ROLES_SCHEDULER_OS=Linux; SU="$(id -u)"; SL=com.orca-roles.usage-metrics
-H1="$SB/h1"; PL="$H1/Library/LaunchAgents/$SL.plist"; : > "$SLOG"
-sinst "$H1" "$MACOS"
-EXP="$(jq -cnS --arg h "$H1" --arg py "$SB/pybin/python3" --arg l "$SL" '{Label: $l, ProgramArguments: ["/bin/bash", "\($h)/.orca-roles/bin/usage-metrics.sh", "--once"], EnvironmentVariables: {ORCA_ROLES_PYTHON: $py, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: $h}, StartInterval: 60, RunAtLoad: true, Nice: 10, ProcessType: "Background", StandardOutPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log", StandardErrorPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log"}')"
-S1="$SRC:$([ "$(splist "$PL" | jq -cS . 2>/dev/null)" = "$EXP" ] && echo plist):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every 60 s (launchd)\.$' || true)"
-S2="$(cat "$SLOG" | sed "s#$H1#H#g")"
-sinst "$H1" "$MACOS"; S3="$SRC:$(sl 'launchctl bootout'):$(sl 'launchctl bootstrap'):$(find "$H1/Library/LaunchAgents" -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
-HA="$SB/h&amp<m>"; sinst "$HA" "$MACOS"; S4="$SRC:$(splist "$HA/Library/LaunchAgents/$SL.plist" | jq -r '.EnvironmentVariables.HOME + "|" + .ProgramArguments[1]' 2>/dev/null || true)"
-check "usage scheduler macOS: install writes the LaunchAgent (label, /bin/bash, the kit's script with --once, the absolute python3 found on PATH, the minimal PATH, HOME, StartInterval 60, RunAtLoad, Nice 10, Background, the launchd log) and prints the line; it runs launchctl bootout then bootstrap (gui/<uid>/<label> and gui/<uid> <plist>) once; a second install leaves one plist and runs the pair once more; a home with & < > in its name gives a valid plist with the right paths" "$S1|$S2|$S3|$S4" "0:plist:1|launchctl bootout gui/$SU/$SL
-launchctl bootstrap gui/$SU H/Library/LaunchAgents/$SL.plist|0:2:2:1|0:$HA|$HA/.orca-roles/bin/usage-metrics.sh"
-: > "$SLOG"; scfg "$SB/h1" '.settings.metrics.enabled = false'; sinst "$SB/h1" "$MACOS"
-D1="$SRC:$([ -e "$PL" ] && echo plist || echo gone):$(sl 'launchctl bootout gui/'):$(sl 'launchctl bootstrap'):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled\.$' || true)"
-: > "$SLOG"; sinst "$SB/h1" "$MACOS"; D2="$SRC:$(wc -c < "$SLOG" | tr -d ' ')"
-rm -rf "$SB/h0"; scfg "$SB/h0" '.settings.metrics.enabled = false'; : > "$SLOG"; sinst "$SB/h0" "$MACOS"; D3="$SRC:$(wc -c < "$SLOG" | tr -d ' '):$([ -e "$SB/h0/Library" ] && echo lib || echo nolib)"
-check "usage scheduler: with settings.metrics.enabled false the install runs launchctl bootout and removes the plist when there is one, says metrics are off, and does nothing when there is none (no log, no LaunchAgents folder)" "$D1|$D2|$D3" "0:gone:1:0:1|0:0|0:0:nolib"
-HL="$SB/hl"; rm -rf "$HL"; mkdir -p "$HL"; printf '0 5 * * * echo mine\n' > "$SLOG.crontab"; : > "$SLOG"
-CL="* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash $HL/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics"
-sinst "$HL" "$LINUX"; C1="$SRC:$(cat "$SLOG.crontab" | sed "s#$HL#H#g"):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every minute (cron)\.$' || true):$([ -e "$HL/Library" ] && echo plist || echo noplist)"
-sinst "$HL" "$LINUX"; C2="$(grep -c 'orca-roles usage-metrics' "$SLOG.crontab"):$(grep -c 'echo mine' "$SLOG.crontab"):$([ "$(sed -n 2p "$SLOG.crontab")" = "$CL" ] && echo exact || echo notexact)"
-scfg "$HL" '.settings.metrics.enabled = false'; sinst "$HL" "$LINUX"; C3="$(cat "$SLOG.crontab"):$(printf '%s\n' "$SOUT" | grep -c 'Usage metrics: off' || true)"
-: > "$SLOG"; sinst "$HL" "$LINUX"; C4="$(sl 'crontab -')"
-rm -f "$SLOG.crontab"; scfg "$HL" '.settings.metrics.enabled = true'; sinst "$HL" "$LINUX" ORCA_ROLES_SCHEDULER=fake-nocron; C5="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no crontab found; run .*usage-metrics.sh --once yourself or schedule it\.$' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
-check "usage scheduler Linux: one marker line in the user's crontab next to their own line (every minute, absolute python3 and bash and script, output discarded), not duplicated by a second install, removed when disabled (their line kept, nothing run when there is no line), no crontab -> a message, exit 0 and nothing written; no plist on Linux" "$C1|$C2|$C3|$C4|$C5" "0:0 5 * * * echo mine
-* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash H/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics:1:noplist|1:1:exact|0 5 * * * echo mine:1|0|0:1:nocron"
-rm -rf "$SB/hr"; sinst "$SB/hr" "$MACOS"; RP="$SB/hr/Library/LaunchAgents/$SL.plist"
-PE="$(splist "$RP" | jq -r '.EnvironmentVariables | "\(.HOME)\n\(.ORCA_ROLES_PYTHON)\n\(.PATH)"')"; PH="$(printf '%s\n' "$PE" | sed -n 1p)"; PH="${PH:-$SB/nohome}"; PP="$(printf '%s\n' "$PE" | sed -n 2p)"; PA="$(printf '%s\n' "$PE" | sed -n 3p)"
-rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"
-env -i HOME="$PH" PATH="$PA" ORCA_ROLES_PYTHON="$PP" /bin/bash "$PH/.orca-roles/bin/usage-metrics.sh" --once >"$SB/run.out" 2>&1 && RN=0 || RN=$?; RR1="$RN:$(wc -c < "$SB/run.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
-rm -rf "$PH/.orca-roles/metrics"; rm -f "$SLOG.crontab"; sinst "$SB/hr" "$LINUX"; LN="$(grep 'orca-roles usage-metrics' "$SLOG.crontab" 2>/dev/null | sed 's/^\* \* \* \* \* //' || true)"
-env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; RR2="$RN:$(wc -c < "$SB/run2.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
-check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
-SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
-check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
 # backfill: a fake docker first on PATH (records every call; discovery, compose, tar, promtool simulated) and the fake Prometheus HTTP server; never anything real
 FD="$UM/fdock"; BH="$UM/bh"
 fdreset() { rm -rf "$FD" "$BH"; mkdir -p "$FD/bin" "$FD/compose" "$BH"; : > "$FD/docker.log"; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\nother\tprom/prometheus-extra:1\no2\tbitnami/prometheus:1\no3\tnotprom/prometheus\nweb\tnginx\n' > "$FD/ps.txt"
@@ -12824,6 +13052,54 @@ K1="$(sk '**Usage metrics** (background, kit-wide; README → Usage metrics)'):$
 check "usage docs skill: the team skill's Usage metrics part tells the Planner to answer cost questions with --report, to run --backfill with --dry-run first and only after the user says yes (never --yes on its own), not to set allowRemote for the user, how to turn the metrics off, and that organization-managed OpenTelemetry settings are separate" "$K1" "1:1:1:1:1:1:1:1"
 set -e
 fstop
+}
+sec_usage_scheduler() {
+UM="$TMP/um"; MD="$KIT/metrics"; rm -rf "$UM" "$MD"; mkdir -p "$UM/bin" "$UM/wt"
+unset XDG_DATA_HOME ORCA_ROLES_OPENCODE_DB   # every pass below reads the temp HOME, never the real OpenCode store
+# the scheduler in install.sh: only through the fake seam (a recording launchctl and crontab first on PATH prove nothing real is called)
+SB="$UM/sched"; rm -rf "$SB"; mkdir -p "$SB/rbin" "$SB/pybin"; SLOG="$SB/log"
+for t in launchctl crontab; do printf '#!/bin/sh\necho "%s $*" >> "%s/real.log"\nexit 1\n' "$t" "$SB" > "$SB/rbin/$t"; chmod +x "$SB/rbin/$t"; done
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$SB/pybin/python3"; chmod +x "$SB/pybin/python3"
+sinst() {  # sinst <home> [VAR=value ...]: installs from the clone into <home> with the fake scheduler; SOUT, SRC
+  local h="$1"; shift; mkdir -p "$h"
+  if SOUT="$(cd "$UM" && env HOME="$h" PATH="$SB/pybin:$SB/rbin:$PATH" ORCA_ROLES_SCHEDULER=fake ORCA_ROLES_SCHEDULER_LOG="$SLOG" "$@" bash "$ROOT/install.sh" </dev/null 2>&1)"; then SRC=0; else SRC=$?; fi
+}
+scfg() { mkdir -p "$1/.orca-roles"; jq "$2" "$ROOT/config.default.json" > "$1/.orca-roles/config.json"; }   # scfg <home> <jq edit>: the user's config before the install
+sl() { grep -c "$1" "$SLOG" 2>/dev/null || true; }
+splist() { python3 -I -c 'import json, plistlib, sys; print(json.dumps(plistlib.load(open(sys.argv[1], "rb")), sort_keys=True))' "$1" 2>/dev/null || true; }
+MACOS=ORCA_ROLES_SCHEDULER_OS=Darwin; LINUX=ORCA_ROLES_SCHEDULER_OS=Linux; SU="$(id -u)"; SL=com.orca-roles.usage-metrics
+H1="$SB/h1"; PL="$H1/Library/LaunchAgents/$SL.plist"; : > "$SLOG"
+sinst "$H1" "$MACOS"
+EXP="$(jq -cnS --arg h "$H1" --arg py "$SB/pybin/python3" --arg l "$SL" '{Label: $l, ProgramArguments: ["/bin/bash", "\($h)/.orca-roles/bin/usage-metrics.sh", "--once"], EnvironmentVariables: {ORCA_ROLES_PYTHON: $py, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: $h}, StartInterval: 60, RunAtLoad: true, Nice: 10, ProcessType: "Background", StandardOutPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log", StandardErrorPath: "\($h)/.orca-roles/metrics/usage-metrics.launchd.log"}')"
+S1="$SRC:$([ "$(splist "$PL" | jq -cS . 2>/dev/null)" = "$EXP" ] && echo plist):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every 60 s (launchd)\.$' || true)"
+S2="$(cat "$SLOG" | sed "s#$H1#H#g")"
+sinst "$H1" "$MACOS"; S3="$SRC:$(sl 'launchctl bootout'):$(sl 'launchctl bootstrap'):$(find "$H1/Library/LaunchAgents" -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
+HA="$SB/h&amp<m>"; sinst "$HA" "$MACOS"; S4="$SRC:$(splist "$HA/Library/LaunchAgents/$SL.plist" | jq -r '.EnvironmentVariables.HOME + "|" + .ProgramArguments[1]' 2>/dev/null || true)"
+check "usage scheduler macOS: install writes the LaunchAgent (label, /bin/bash, the kit's script with --once, the absolute python3 found on PATH, the minimal PATH, HOME, StartInterval 60, RunAtLoad, Nice 10, Background, the launchd log) and prints the line; it runs launchctl bootout then bootstrap (gui/<uid>/<label> and gui/<uid> <plist>) once; a second install leaves one plist and runs the pair once more; a home with & < > in its name gives a valid plist with the right paths" "$S1|$S2|$S3|$S4" "0:plist:1|launchctl bootout gui/$SU/$SL
+launchctl bootstrap gui/$SU H/Library/LaunchAgents/$SL.plist|0:2:2:1|0:$HA|$HA/.orca-roles/bin/usage-metrics.sh"
+RP="$PL"
+PE="$(splist "$RP" | jq -r '.EnvironmentVariables | "\(.HOME)\n\(.ORCA_ROLES_PYTHON)\n\(.PATH)"')"; PH="$(printf '%s\n' "$PE" | sed -n 1p)"; PH="${PH:-$SB/nohome}"; PP="$(printf '%s\n' "$PE" | sed -n 2p)"; PA="$(printf '%s\n' "$PE" | sed -n 3p)"
+rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"
+env -i HOME="$PH" PATH="$PA" ORCA_ROLES_PYTHON="$PP" /bin/bash "$PH/.orca-roles/bin/usage-metrics.sh" --once >"$SB/run.out" 2>&1 && RN=0 || RN=$?; RR1="$RN:$(wc -c < "$SB/run.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
+: > "$SLOG"; scfg "$SB/h1" '.settings.metrics.enabled = false'; sinst "$SB/h1" "$MACOS"
+D1="$SRC:$([ -e "$PL" ] && echo plist || echo gone):$(sl 'launchctl bootout gui/'):$(sl 'launchctl bootstrap'):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: off (settings.metrics.enabled is false); nothing is scheduled\.$' || true)"
+: > "$SLOG"; sinst "$SB/h1" "$MACOS"; D2="$SRC:$(wc -c < "$SLOG" | tr -d ' ')"
+rm -rf "$SB/h0"; scfg "$SB/h0" '.settings.metrics.enabled = false'; : > "$SLOG"; sinst "$SB/h0" "$MACOS"; D3="$SRC:$(wc -c < "$SLOG" | tr -d ' '):$([ -e "$SB/h0/Library" ] && echo lib || echo nolib)"
+check "usage scheduler: with settings.metrics.enabled false the install runs launchctl bootout and removes the plist when there is one, says metrics are off, and does nothing when there is none (no log, no LaunchAgents folder)" "$D1|$D2|$D3" "0:gone:1:0:1|0:0|0:0:nolib"
+HL="$SB/hl"; rm -rf "$HL"; mkdir -p "$HL"; printf '0 5 * * * echo mine\n' > "$SLOG.crontab"; : > "$SLOG"
+CL="* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash $HL/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics"
+sinst "$HL" "$LINUX"; C1="$SRC:$(cat "$SLOG.crontab" | sed "s#$HL#H#g"):$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: recorded every minute (cron)\.$' || true):$([ -e "$HL/Library" ] && echo plist || echo noplist)"
+sinst "$HL" "$LINUX"; C2="$(grep -c 'orca-roles usage-metrics' "$SLOG.crontab"):$(grep -c 'echo mine' "$SLOG.crontab"):$([ "$(sed -n 2p "$SLOG.crontab")" = "$CL" ] && echo exact || echo notexact)"
+PH="$HL"; rm -rf "$PH/.orca-roles/metrics"; mkdir -p "$PH/.claude/projects"; LN="$(grep 'orca-roles usage-metrics' "$SLOG.crontab" 2>/dev/null | sed 's/^\* \* \* \* \* //' || true)"
+env -i HOME="$PH" PATH="$PA" sh -c "$LN" >"$SB/run2.out" 2>&1 && RN=0 || RN=$?; RR2="$RN:$(wc -c < "$SB/run2.out" | tr -d ' '):$([ -s "$PH/.orca-roles/metrics/state.json" ] && echo state || echo nostate)"
+scfg "$HL" '.settings.metrics.enabled = false'; sinst "$HL" "$LINUX"; C3="$(cat "$SLOG.crontab"):$(printf '%s\n' "$SOUT" | grep -c 'Usage metrics: off' || true)"
+: > "$SLOG"; sinst "$HL" "$LINUX"; C4="$(sl 'crontab -')"
+rm -f "$SLOG.crontab"; scfg "$HL" '.settings.metrics.enabled = true'; sinst "$HL" "$LINUX" ORCA_ROLES_SCHEDULER=fake-nocron; C5="$SRC:$(printf '%s\n' "$SOUT" | grep -c '^Usage metrics: no crontab found; run .*usage-metrics.sh --once yourself or schedule it\.$' || true):$([ -e "$SLOG.crontab" ] && echo cron || echo nocron)"
+check "usage scheduler Linux: one marker line in the user's crontab next to their own line (every minute, absolute python3 and bash and script, output discarded), not duplicated by a second install, removed when disabled (their line kept, nothing run when there is no line), no crontab -> a message, exit 0 and nothing written; no plist on Linux" "$C1|$C2|$C3|$C4|$C5" "0:0 5 * * * echo mine
+* * * * * ORCA_ROLES_PYTHON=$SB/pybin/python3 /bin/bash H/.orca-roles/bin/usage-metrics.sh --once >/dev/null 2>&1 # orca-roles usage-metrics:1:noplist|1:1:exact|0 5 * * * echo mine:1|0|0:1:nocron"
+check "usage scheduler: what it schedules works as the scheduler runs it: the plist's command with its own environment (minimal PATH, ORCA_ROLES_PYTHON, no jq needed) and the cron line's command both exit 0 with no output and write the metrics state" "$RR1|$RR2" "0:0:state|0:0:state"
+SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
+check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
 }
 
 [ $# -gt 0 ] || set -- $SECTIONS
