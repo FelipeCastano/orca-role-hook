@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -458,8 +458,8 @@ rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no co
 rule R10 "$ROOT/prompts/coordinator.md" 'Start it only when the user asks for an audit, never on your own or on a schedule'
 rule R10 "$ROOT/prompts/coordinator.md" "The one terminal you create yourself is the Auditor's tab"
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
-rule R10 "$PD/local-coordinator.md" '**Compact the Planner only when its context is large.** When you read a Planner `worker_done`, release its dispatch (`worker-release`), then run `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."` before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms' '^\*\*Compact the Planner only when its context is large'
-rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: do not compact after it, nor after a later Planner report that comes before the set'"'"'s commits; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner only when its context is large'
+rule R10 "$PD/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
+rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: after it, and after a later Planner report that comes before the set'"'"'s commits, run `on-done.sh` without `--role planner`; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead with that `compact-role.sh` command. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead with that `compact-role.sh` command.' '^\*\*Compact the Planner only when its context is large'
 rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'in the foreground with a Bash timeout of 600000 ms, and wait for it to finish (about 40 s): the Planner'"'"'s cache is still warm then (for a Planner that does not run on claude, the same command cleans it instead). Never dispatch to the Planner while it runs; never compact it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
 rule R10 "$ROOT/bin/dispatch.sh" 'POLLS="${ORCA_ROLES_DISPATCH_POLLS:-15}"'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
@@ -894,10 +894,10 @@ for m in programmer pr-reviewer academic-research quick; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 71500, academic-research 52000, pr-reviewer 36000, quick 42700 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 73432, academic-research 53706, pr-reviewer 37723, quick 44343 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer quick; do
-  case "$m" in programmer) lcap=71500;; academic-research) lcap=52000;; quick) lcap=42700;; *) lcap=36000;; esac
+  case "$m" in programmer) lcap=73432;; academic-research) lcap=53706;; quick) lcap=44343;; *) lcap=37723;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
@@ -8090,7 +8090,7 @@ check "coordinator prompt: marks the worktree before creating it, checks the loc
 check "coordinator prompt: the task is created before the worktree, the marker before orca worktree create" "$(awk '/task-create --spec/ && !t{t=NR} /> "\$d\/<name>"/{m=NR} /^   Then `orca worktree create/{c=NR} END{print (t && m && c && t < m && m < c) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "ordered"
 check "coordinator prompt: the worktree name is restricted, its basename is checked after creation, the marker goes once the role is sent" "$(grep -c '\^\[a-z0-9\]\[a-z0-9-\]{0,39}\$' "$ROOT/prompts/coordinator.md") $(grep -c 'basename of that path equals `<name>`; if not, tell the user.*do not rename anything' "$ROOT/prompts/coordinator.md") $(grep -c 'removes the marker once it has sent the local coordinator its role message' "$ROOT/prompts/coordinator.md")" "1 1 1"
 check "coordinator prompt: dispatches to the local coordinator's existing tab (handle from LOCAL_COORDINATOR=, PLANNER= never read, no dispatch to a Planner), never a second agent, and never talks to workers" "$(grep -c 'worker-start --task <task_id> --terminal <local coordinator handle> --worktree id:<worktree id>' "$ROOT/prompts/coordinator.md") $(grep -c 'Do not use `worker-start --worktree new-\*`' "$ROOT/prompts/coordinator.md") $(grep -c 'never talk to the workers below a local coordinator' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'with the `LOCAL_COORDINATOR=<handle>` line (never read `PLANNER=`)' "$ROOT/prompts/coordinator.md") $(grep -c 'PLANNER=' "$ROOT/prompts/coordinator.md") $(grep -c -E '(--terminal|--to) <planner' "$ROOT/prompts/coordinator.md" || true)" "1 1 1 1 1 0"
-check "coordinator prompt: never blocks on check --wait (Orca's notice, ack until 0, waiter_exists), answers sends with reply, never reads tabs for questions, checks again after asking the user, forgets a released worktree, asks with context first" "$(grep -c 'Never block waiting for the local coordinators.*only for the Runs bound to this tab.*An unacknowledged batch stops further notices.*never read its tab to find a question.*Do not use .check --wait., a background wait or sleep loops, even if the orchestration guide suggests them: Orca allows one wait per Run (a second fails with .waiter_exists.)' "$ROOT/prompts/coordinator.md") $(grep -c 'writes to your Run with `send`: a `question` is handled like an `ask`, and a `status` that closes its task like a `worker_done`. Answer either with `orca orchestration reply --id <msg_id>' "$ROOT/prompts/coordinator.md") $(grep -c 'As soon as the user answers, `check` again before anything else' "$ROOT/prompts/coordinator.md") $(grep -c 'Otherwise `worker-release`.*remove `orca-roles.coordinator` from the worktree.s git dir' "$ROOT/prompts/coordinator.md") $(awk '/^- \*\*Context before a question\.\*\*/{c=NR} /^- \*\*Questions from a local coordinator\.\*\*/{q=NR} END{print (c && q && c < q) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 1 1 ordered"
+check "coordinator prompt: never blocks on check --wait (Orca's notice, ack until 0, waiter_exists), answers sends with answer.sh, never reads tabs for questions, checks again after asking the user, forgets a released worktree, asks with context first" "$(grep -c 'Never block waiting for the local coordinators.*only for the Runs bound to this tab.*An unacknowledged batch stops further notices.*never read its tab to find a question.*Do not use .check --wait., a background wait or sleep loops, even if the orchestration guide suggests them: Orca allows one wait per Run (a second fails with .waiter_exists.)' "$ROOT/prompts/coordinator.md") $(grep -c 'writes to your Run with `send`: a `question` is handled like an `ask`, and a `status` that closes its task like a `worker_done`. Answer either with `~/.orca-roles/bin/answer.sh --id <msg_id>' "$ROOT/prompts/coordinator.md") $(grep -c 'As soon as the user answers, `check` again before anything else' "$ROOT/prompts/coordinator.md") $(grep -c 'Otherwise `worker-release`.*remove `orca-roles.coordinator` from the worktree.s git dir' "$ROOT/prompts/coordinator.md") $(awk '/^- \*\*Context before a question\.\*\*/{c=NR} /^- \*\*Questions from a local coordinator\.\*\*/{q=NR} END{print (c && q && c < q) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 1 1 ordered"
 check "coordinator prompt: after the worker-start delivery to the local coordinator it runs dispatch.sh --check-only with --run (one Enter if the brief stayed unsent, else a 'Dispatch not started' status to the coordinator; the Run's mail watcher), before the local coordinator's wait" "$(grep -c '^5\. Dispatch it to the local coordinator: .*worker-start --task <task_id> --terminal <local coordinator handle> --worktree id:<worktree id> --json.\. Right after, run .~/.orca-roles/bin/dispatch.sh --check-only --task <task_id> --to <local coordinator handle> --run <run_id>.: it works in the background, sends one Enter if the brief stayed unsent in the local coordinator.s composer and, if the local coordinator still does not start, sends you one .status. "Dispatch not started"' "$ROOT/prompts/coordinator.md")" "1"
 check "coordinator prompt: status comes from team-status per worktree (no message, tick or question to a local coordinator when it answers), a stopped worktree is told to the user with feature, worktree, since when and the Planner's last message, a waiting Planner at once, and a 'Dispatch not started' status is looked at with team-status" "$(grep -c -F -e '- **Status comes from `team-status`.** When you report to the user, or the user asks how a feature is going, run `~/.orca-roles/bin/team-status.sh <worktree folder>` for each worktree you manage and answer from it: send no message, tick or question to a local coordinator when it already answers; ask the local coordinator only for a detail only it knows.' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'all `done`, `failed` or `interrupted` while its dispatch has no `worker_done` has stopped: tell the user which feature and worktree, since when and the local coordinator'"'"'s last message' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'A local coordinator `waiting` (a dialog in its tab needs the user): tell the user at once.' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'A `status` "Dispatch not started": look at that worktree with `team-status` and tell the user.' "$ROOT/prompts/coordinator.md")" "1 1 1 1"
 check "coordinator prompt: questions on the project's rules go to the user, never settled by the coordinator" "$(grep -c -F -e '- Project rules: a question about the project'"'"'s own rules or conventions' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'Never settle it yourself, even when the code or the other features suggest an answer.' "$ROOT/prompts/coordinator.md") $(awk '/^  - Doubts:/{d=NR} /^  - Project rules:/{p=NR} /^  - Anything that leaves the worktree/{l=NR} END{print (d && p && l && d < p && p < l) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 ordered"
@@ -11197,6 +11197,7 @@ cat > "$DS/bin/orca" <<EOS
 echo "\$*" >> "$DSL"
 case "\$1 \$2" in
   "orchestration dispatch") cat "$DS/dispatch.json"; [ ! -e "$DS/dispatch.err" ] || cat "$DS/dispatch.err" >&2; exit "\$(cat "$DS/dispatch.rc")";;
+  "orchestration task-create") cat "$DS/tc.json"; [ ! -e "$DS/tc.err" ] || cat "$DS/tc.err" >&2; exit "\$(cat "$DS/tc.rc")";;
   "worktree ps") [ ! -e "$DS/ps.mail" ] || { cat "$DS/ps.mail"; exit 0; }; n=\$(( \$(cat "$DS/pscount" 2>/dev/null || echo 0) + 1 )); echo \$n > "$DS/pscount"; mode="\$(cat "$DS/mode")"
     if { [ "\$mode" = early ] && [ \$n -ge 2 ]; } || { [ "\$mode" = enter ] && [ -e "$DS/entered" ]; } || { [ "\$mode" = lateenter ] && [ -e "$DS/entered" ] && [ \$n -ge \$(( \$(cat "$DS/entered") + 3 )) ]; }; then cat "$DS/ps.started"; else cat "$DS/ps.idle"; fi;;
   "terminal show") cat "$DS/show.json";;
@@ -11213,6 +11214,7 @@ chmod +x "$DS/bin/orca"
 printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"done","prompt":"Read the role message"}]}]}}' > "$DS/ps.idle"
 printf '{"ok":true,"result":{"worktrees":[{"path":"/x","agents":[{"paneKey":"tab-w:leaf-w","state":"working","prompt":"do task_abc123 now"}]}]}}' > "$DS/ps.started"
 printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$DS/dispatch.json"; echo 0 > "$DS/dispatch.rc"; echo 0 > "$DS/send.rc"
+printf '{"ok":true,"result":{"status":"ready","taskId":"task_created"}}' > "$DS/tc.json"; echo 0 > "$DS/tc.rc"
 # the mail watcher's Orca (dispatch.sh --run starts it): an empty mailbox and no open dispatch by default, so a watcher started by a dispatch ends at once
 printf '{"ok":true,"result":{"messages":[]}}' > "$DS/inbox.json"; printf '{"ok":true,"result":{"workers":[]}}' > "$DS/wl.none"; printf '{"ok":true,"result":{"workers":[{"taskId":"t1","dispatchStatus":"dispatched"}]}}' > "$DS/wl.open"; cp "$DS/wl.none" "$DS/wl.json"
 printf '{"ok":true,"result":{"run":{"id":"run_m","coordinator_handle":"h-co"}}}' > "$DS/run.json"
@@ -11222,7 +11224,7 @@ printf '{"result":{"terminal":{"tabId":"tab-w","leafId":"leaf-w","preview":"> [P
 dsrun() {  # dsrun <mode> <pasted|plain> <args...>: runs dispatch.sh from the scratch repo and waits for its checker; RC, OUT, and the elapsed whole seconds of the call itself (DT)
   local mode="$1" show="$2" t0; shift 2
   echo "$mode" > "$DS/mode"; cp "$DS/show.$show" "$DS/show.json"; rm -f "$DS/entered" "$DS/pscount" "$DSG/orca-roles-dispatch.log"; : > "$DSL"
-  t0=$SECONDS; if OUT="$(cd "${DDIR:-$DS/proj}" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=2 ORCA_ROLES_STATE="${DSTATE:-}" ORCA_ROLES_CONFIG="${DSCFG:-}" "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
+  t0=$SECONDS; if OUT="$(cd "${DDIR:-$DS/proj}" && HOME="$TMP/home" PATH="$DS/bin:$PATH" ORCA_TERMINAL_HANDLE=h-me ORCA_ROLES_DISPATCH_TICK="${DTICK:-0.1}" ORCA_ROLES_DISPATCH_POLLS="${DPOLLS:-5}" ORCA_ROLES_MAIL_TICK=0.05 ORCA_ROLES_MAIL_MAX=2 ORCA_ROLES_STATE="${DSTATE:-}" ORCA_ROLES_CONFIG="${DSCFG:-}" ORCA_ROLES_LAUNCH="${DSLAUNCH:-}" ORCA_ROLES_OPEN_TICK="${DOTICK:-}" ORCA_ROLES_OPEN_WAIT="${DOWAIT:-}" "$ROOT/bin/dispatch.sh" "$@" 2>"$DS/err")"; then RC=0; else RC=$?; fi; DT=$((SECONDS - t0))
   local n=0; if [ -z "${DNOCHECKER:-}" ]; then   # the checker ends with one closing line in the log (a pgrep could run before it has even started)
     until grep -qE 'started$|told |could not tell|not checked' "$DSG/orca-roles-dispatch.log" 2>/dev/null || [ "$n" -ge 100 ]; do sleep 0.2; n=$((n + 1)); done
     n=0; while [ -n "$(ds_pids watch)" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
@@ -11379,7 +11381,7 @@ mw() {  # mw <none|open>: one watcher of run_m in the foreground (looks every 0.
 }
 EMPTY="$(printf 'old\\n\xe2\x9d\xaf \\n-- auto')"; IDLE='"state":"done","stateStartedAt":0'
 mbox "$(mmsg m1 null 0 60)" "$(mmsg m2 '"2026-11-03T16:00:00Z"' 0 60)" "$(mmsg m3 null 1 60)" "$(mmsg m5 null 0 60 run_x)"; mtab claude "$EMPTY"; mps "$IDLE"
-MMAX=10 mw none; M1="$MW"; MN="$(dsc 'terminal send --terminal h-co --text You have 1 unread orchestration message(s) that Orca did not announce. Run `orca orchestration check --run run_m`. --enter --json')"
+MMAX=10 mw none; M1="$MW"; MN="$(dsc 'terminal send --terminal h-co --text You have 1 unread orchestration message(s) that Orca did not announce. Run `~/.orca-roles/bin/inbox.sh --run run_m`. --enter --json')"
 MKEEP=1 MMAX=10 mw none; M2="$MW"
 mps '"state":"working","workingMode":"monitoring","mainAgent":{"state":"done","stateStartedAt":0},"stateStartedAt":0'; MMAX=10 mw none; M3="$MW"
 M4=""; for f in '"state":"working","stateStartedAt":0' '"state":"waiting","stateStartedAt":0' '"state":"done","interrupted":true,"stateStartedAt":0' RECENT; do [ "$f" != RECENT ] || f="\"state\":\"done\",\"stateStartedAt\":$(( ($(date +%s) - 1) * 1000 ))"; mps "$f"; mw open; M4="$M4 $MW"; done
@@ -11400,9 +11402,184 @@ rm -f "$DS/ps.mail"; mbox
 check "dispatch.sh mail watcher: one notice (exact text) for a message neither delivered nor read after 20 s, to the Run's coordinator, once per message; none for delivered, read, other-Run or younger messages; only to a Claude tab at rest (also 'working' while monitoring with its main agent done) with an empty composer; three failed sends then gives up; it ends with no open dispatch and nothing pending, else at its time limit, which a later start request renews (a live hidden run or an open dispatch keeps it), or after 20 unanswered looks; a lock naming a reused pid does not hold it, and a second start while one lives starts nothing; no dispatch.sh process of the section is left once its watchers ended" \
   "$M1|$MN|$M2|$M3|$M4|$M5|$M6|$M7|$M8|$M9|$M10|left:$DSLEFT" \
   "1:started/noticed 1 (m1) to h-co/ended: no task in flight/|1|0:started/ended: no task in flight/|1:started/noticed 1 (m1) to h-co/ended: no task in flight/| 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/ 0:started/not announced: m1; no notice yet: not at rest/ended: time limit/|0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: composer not empty/ended: time limit/ 0:started/not announced: m1; no notice yet: not a Claude tab/ended: time limit/|0:started/ended: time limit/|3:started/notice to h-co failed (1)/notice to h-co failed (2)/notice to h-co failed (3)/gave up on m1/ended: no task in flight/|0:started/ended: time limit/ 0:started/ended: time limit/|0:started/ended: Orca did not answer 20 times/|1:started/ended: no task in flight/:nolock|left:0"
+# --role <id> and --spec-file <file> (d1): the handle comes from the team state (the first <VAR>=<handle> line, <id> upper-cased with - as _), before any task is created
+DUSAGE="Usage: dispatch.sh (--task <task_id> | --spec-file <file>) (--to <handle> | --role <id> [--open]) [--run <run_id>] | --check-only --task <task_id> --to <handle> [--run <run_id>] | --mail --run <run_id>"
+printf 'PLANNER=h-pl\nCODE_REVIEWER=h-cr\nRESEARCHER_2=h-r2\nE2E_TESTER=h-e2e\n' > "$DS/t/roles.env"
+R1=""
+for id in planner code-reviewer researcher-2 e2e-tester; do
+  DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role "$id"
+  R1="$R1 $id:$RC:$(sed -n 's/^orchestration dispatch --task task_abc123 --to \([^ ]*\).*/\1/p' "$DSL"):$(dsc 'orchestration task-create'):$(wc -l < "$DS/err" | tr -d ' ')"
+done
+DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner --run run_r
+R1="$R1 run:$RC:$(dsc 'orchestration dispatch --task task_abc123 --to h-pl --run run_r'):$(dsc 'orchestration dispatch')"
+check "dispatch.sh --role: the state line of the role gives the handle (planner -> PLANNER, code-reviewer -> CODE_REVIEWER, the instance researcher-2 -> RESEARCHER_2, e2e-tester -> E2E_TESTER), it is dispatched as --to would with --run passed on, nothing is printed on stderr and no task is created" "$R1" " planner:0:h-pl:0:0 code-reviewer:0:h-cr:0:0 researcher-2:0:h-r2:0:0 e2e-tester:0:h-e2e:0:0 run:0:1:1"
+printf 'DEV_2=h-d2\nREVIEWER=h-rv\n' > "$DS/t/roles2.env"; printf 'DEV=\n' > "$DS/t/roles3.env"
+R2=""
+for c in "dev:$DS/t/roles2.env" "planner:$DS/t/roles2.env" "review:$DS/t/roles2.env" "dev:$DS/t/roles3.env"; do
+  id="${c%%:*}"; sf="${c#*:}"
+  DSTATE="$sf" DNOCHECKER=1 dsrun early plain --task task_abc123 --role "$id"
+  R2="$R2|$RC:$([ "$(cat "$DS/err")" = "dispatch.sh: no handle for role $id in the team state; open it with --open." ] && echo line || cat "$DS/err"):$(dsc 'orchestration dispatch'):$(dsc 'orchestration task-create'):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"
+done
+check "dispatch.sh --role: a role absent from the state, a line with an empty value and an id that only prefixes another variable (dev does not match DEV_2, review does not match REVIEWER) are exit 4 with the named line on stderr, nothing on stdout and no task-create or dispatch" "$R2" "|4:line:0:0:0|4:line:0:0:0|4:line:0:0:0|4:line:0:0:0"
+# --spec-file: task-create as handoff.sh reads it, then the created line and today's dispatch
+mkdir -p "$DS/spec dir"; SC="$DS/spec dir/brief one.md"; printf 'do it\n' > "$SC"
+DNOCHECKER=1 dsrun early plain --spec-file "$SC" --to h-w --run run_s
+R3="$RC:$(dsc "orchestration task-create --spec-file $SC --task-title h-w: brief one.md --run run_s --json"):$(dsc 'orchestration dispatch --task task_created --to h-w --run run_s --inject --json'):$([ "$OUT" = "dispatch.sh: task task_created created from $SC for h-w"$'\n'"$EXP_JSON" ] && echo out || printf '%s' "$OUT" | tr '\n' '/'):$(wc -l < "$DS/err" | tr -d ' ')"
+DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --run run_s
+R3="$R3|$RC:$(dsc "orchestration task-create --spec-file $SC --task-title planner: brief one.md --run run_s --json"):$(dsc 'orchestration dispatch --task task_created --to h-pl --run run_s'):$([ "$OUT" = "dispatch.sh: task task_created created from $SC for planner (h-pl)"$'\n'"$EXP_JSON" ] && echo out || printf '%s' "$OUT" | tr '\n' '/')"
+check "dispatch.sh --spec-file: a readable file with spaces in its path is created with the titled task (the handle with --to, the role id with --role), its created line goes to stdout before Orca's dispatch JSON, then it dispatches as --task does; nothing on stderr" "$R3" "0:1:1:out:0|0:1:1:out"
+spec2() {  # spec2 <args...>: one spec-file refusal; "<rc>:<stderr lines>:<task-create calls>:<dispatch calls>"
+  DNOCHECKER=1 dsrun early plain "$@"
+  printf '%s:%s:%s:%s' "$RC" "$(wc -l < "$DS/err" | tr -d ' ')" "$(dsc 'orchestration task-create')" "$(dsc 'orchestration dispatch')"
+}
+R4="$(spec2 --spec-file "$DS/spec dir/nope.md" --to h-w --run run_s)|$(spec2 --spec-file "$SC" --to h-w)|$(spec2 --spec-file "$SC" --task task_abc123 --to h-w --run run_s)|$(spec2 --spec-file "$DS/spec dir" --to h-w --run run_s)"
+check "dispatch.sh --spec-file: a missing file, an unreadable one (a folder), no --run and --task together are exit 2 with the usage line and nothing called" "$R4" "2:1:0:0|2:1:0:0|2:1:0:0|2:1:0:0"
+tc5() {  # tc5 <task-create stdout> [rc]: one spec-file call against that answer; "<rc>|<last stderr line>|<dispatch calls>|<created lines>"
+  printf '%s' "$1" > "$DS/tc.json"; echo "${2:-0}" > "$DS/tc.rc"
+  DNOCHECKER=1 dsrun early plain --spec-file "$SC" --to h-w --run run_s
+  printf '%s|%s|%s|%s' "$RC" "$(tail -n 1 "$DS/err")" "$(dsc 'orchestration dispatch')" "$(printf '%s' "$OUT" | grep -c 'created from' || true)"
+}
+R5="$(tc5 '{"ok":false,"error":{"code":"x"}}' 1)|$(tc5 '{"ok":false,"error":{"code":"x"}}')|$(tc5 '{"ok":true,"result":{"status":"pending","taskId":"t"}}')|$(tc5 '{"ok":true,"result":{"status":"ready"}}')|$(tc5 '{"ok":true,"result":{"status":"ready","taskId":""}}')"
+E5="5|dispatch.sh: task-create failed for $SC; nothing dispatched.|0|0"
+check "dispatch.sh --spec-file: task-create exiting non-zero, ok false, a status other than ready, no taskId and an empty taskId are exit 5 with the named last stderr line, no created line and no dispatch" "$R5" "$E5|$E5|$E5|$E5|$E5"
+printf 'tc: boom\n' > "$DS/tc.err"; printf '{"ok":false,"error":{"code":"x"}}' > "$DS/tc.json"; echo 1 > "$DS/tc.rc"
+DNOCHECKER=1 dsrun early plain --spec-file "$SC" --to h-w --run run_s
+check "dispatch.sh --spec-file: on failure Orca's stderr and its captured stdout come on stderr before the named line" "$RC:$(cat "$DS/err" | tr '\n' '/'):$(dsc 'orchestration dispatch')" "5:tc: boom/{\"ok\":false,\"error\":{\"code\":\"x\"}}/dispatch.sh: task-create failed for $SC; nothing dispatched./:0"
+rm -f "$DS/tc.err"; printf '{"ok":true,"result":{"status":"ready","taskId":"task_created"}}' > "$DS/tc.json"; echo 0 > "$DS/tc.rc"
+# the combination family: exit 2, the usage line, nothing called
+comb() {  # comb <args...>: "<rc>:<stderr lines>:<task-create>:<dispatch>:<terminal show>"
+  DNOCHECKER=1 dsrun early plain "$@"
+  printf '%s:%s:%s:%s:%s' "$RC" "$(wc -l < "$DS/err" | tr -d ' ')" "$(dsc 'orchestration task-create')" "$(dsc 'orchestration dispatch')" "$(dsc 'terminal show')"
+}
+DSTATE=""; DSCFG=""   # the role cases above set them as prefixes of a function call, which bash keeps afterwards
+R6="$(comb --task task_abc123 --to h-w --role planner)|$(comb --task task_abc123)|$(comb --task task_abc123 --to h-w --open)|$(comb --check-only --task task_abc123 --to h-w --role planner)|$(comb --check-only --task task_abc123 --to h-w --spec-file "$SC" --run run_s)|$(comb --check-only --task task_abc123 --to h-w --run run_c2 --open)|$(comb --mail --run run_c2 --role planner)|$(comb --mail --run run_c2 --spec-file "$SC")|$(comb --mail --run run_c2 --open)"
+check "dispatch.sh: --to with --role, neither target, --open without --role, and --check-only or --mail with --role, --spec-file or --open are exit 2 with the usage line and nothing called (no task-create, no dispatch, no terminal show)" "$R6" "2:1:0:0:0|2:1:0:0:0|2:1:0:0:0|2:1:0:0:0|2:1:0:0:0|2:1:0:0:0|2:1:0:0:0|2:1:0:0:0|2:1:0:0:0"
+DNOCHECKER=1 dsrun early plain --open --task task_abc123 --to h-w
+check "dispatch.sh: the usage line names the new forms (--spec-file, --role, --open) and the old ones" "$RC:$(cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch')" "2:$DUSAGE:0:0"
+# --open (d2): launch.sh --open first, then wait for the role message (the state's handle in orca-roles.kicked), then create and dispatch
+cat > "$DS/launch" <<EOS
+#!/bin/sh
+echo "\$*" >> "$DS/launch.calls"
+[ ! -e "$DS/launch.out" ] || cat "$DS/launch.out"
+[ ! -e "$DS/launch.rc" ] || exit "\$(cat "$DS/launch.rc")"
+[ ! -x "$DS/launch.do" ] || "$DS/launch.do" >/dev/null 2>&1
+exit 0
+EOS
+chmod +x "$DS/launch"
+OPENPID=$$   # a live pid for the kickoff files (dispatch.sh only asks kill -0)
+openc() {  # openc <name>: resets the launch stub's files for one case
+  rm -f "$DS/launch.rc" "$DS/launch.do" "$DS/launch.out"; : > "$DS/launch.calls"; rm -f "$DSG/orca-roles.kicked"; rm -rf "$DSG/orca-roles.kickoff.d"
+  printf 'All roles are already open.\n' > "$DS/launch.out"
+}
+openc 1; printf 'PLANNER=h-pl\n' > "$DS/t/open1.env"; printf 'PLANNER=h-pl\n' > "$DSG/orca-roles.kicked"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open1.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner --open
+O1="$RC:$(dsc 'orchestration dispatch --task task_abc123 --to h-pl'):$(wc -l < "$DS/launch.calls" | tr -d ' '):$(tr '\n' '/' < "$DS/launch.calls"):$([ "$(printf '%s' "$OUT" | head -1)" = "All roles are already open." ] && echo out):$(wc -l < "$DS/err" | tr -d ' ')"
+check "dispatch.sh --open: a role already open in the state and in orca-roles.kicked is dispatched on the first look, with one launch.sh --open call whose output is passed through, and nothing on stderr" "$O1" "0:1:1:--open planner/:out:0"
+openc 2; rm -f "$DS/launch.out"; mkdir -p "$DSG/orca-roles.kickoff.d"
+cat > "$DS/launch.do" <<EOS
+#!/bin/sh
+printf 'PLANNER=h-np\n' > "$DS/t/open2.env"
+echo planner > "$DSG/orca-roles.kickoff.d/$OPENPID"
+( sleep 0.25; printf 'PLANNER=h-np\n' > "$DSG/orca-roles.kicked" ) &
+EOS
+chmod +x "$DS/launch.do"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open2.env" DOTICK=0.1 DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --open --run run_s
+O2="$RC:$(dsc "orchestration task-create --spec-file $SC --task-title planner: brief one.md --run run_s"):$(dsc 'orchestration dispatch --task task_created --to h-np --run run_s'):$([ "$OUT" = "dispatch.sh: task task_created created from $SC for planner (h-np)"$'\n'"$EXP_JSON" ] && echo out || printf '%s' "$OUT" | tr '\n' '/'):$(wc -l < "$DS/err" | tr -d ' ')"
+check "dispatch.sh --open: while a kickoff runs, it waits for the state's handle (h-np, not the old one) in orca-roles.kicked and only then creates the task for that handle and dispatches it, the launch output passed through" "$O2" "0:1:1:out:0"
+openc 3; printf 'PLANNER=h-pl\n' > "$DS/t/open3.env"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open3.env" DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --open --run run_s
+O3="$RC:$([ "$(cat "$DS/err")" = 'dispatch.sh: planner was not reached (no role message sent); nothing created or dispatched.' ] && echo line || cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch'):$(wc -l < "$DS/launch.calls" | tr -d ' ')"
+check "dispatch.sh --open: no kickoff running and no kicked line is exit 6 with the named line, after the one launch call, with no task-create and no dispatch" "$O3" "6:line:0:0:1"
+openc 4; printf 'PLANNER=h-new\n' > "$DS/t/open4.env"; printf 'PLANNER=h-old\n' > "$DSG/orca-roles.kicked"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open4.env" DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --open --run run_s
+O4="$RC:$([ "$(cat "$DS/err")" = 'dispatch.sh: planner was not reached (no role message sent); nothing created or dispatched.' ] && echo line || cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch')"
+check "dispatch.sh --open: a kicked line that names an older handle than the state's, with no kickoff running, is exit 6 with the named line and nothing created or dispatched" "$O4" "6:line:0:0"
+openc 5; printf 'PLANNER=h-pl\n' > "$DS/t/open5.env"; mkdir -p "$DSG/orca-roles.kickoff.d"; echo planner > "$DSG/orca-roles.kickoff.d/$OPENPID"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open5.env" DOTICK=0.1 DOWAIT=0.3 DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --open --run run_s
+O5="$RC:$([ "$(cat "$DS/err")" = 'dispatch.sh: planner is not ready after 0.3 s; nothing created or dispatched. Dispatch once "Roles reopened" names it.' ] && echo line || cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch')"
+check "dispatch.sh --open: a kickoff that runs past ORCA_ROLES_OPEN_WAIT is exit 6 with the named line giving the seconds, with nothing created or dispatched" "$O5" "6:line:0:0"
+openc 6; printf 'PLANNER=h-pl\n' > "$DS/t/open6.env"; printf "ERROR: --open: 'planner' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed.\n" > "$DS/launch.out"; echo 1 > "$DS/launch.rc"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open6.env" DOTICK=0.1 DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --open --run run_s
+O6="$RC:$([ "$OUT" = "ERROR: --open: 'planner' is hidden: it has no tab; the local coordinator runs it with hidden-role.sh. Nothing was changed." ] && echo out || printf '%s' "$OUT" | tr '\n' '/'):$([ "$(cat "$DS/err")" = 'dispatch.sh: launch.sh --open planner failed (exit 1); nothing created or dispatched.' ] && echo line || cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch'):$(wc -l < "$DS/launch.calls" | tr -d ' ')"
+check "dispatch.sh --open: launch.sh --open exiting 1 passes its message through on stdout and is exit 6 with the named line, before any wait, with no task-create and no dispatch" "$O6" "6:out:line:0:0:1"
+rm -rf "$DSG/orca-roles.kickoff.d" "$DS/launch.calls" "$DS/launch.do" "$DS/launch.out" "$DS/t/open1.env" "$DS/t/open2.env" "$DS/t/open3.env" "$DS/t/open4.env" "$DS/t/open5.env" "$DS/t/open6.env" "$DSG/orca-roles.kicked"
+# a failed dispatch in the new forms is exit 1 (never Orca's status); the old form keeps Orca's status
+echo 7 > "$DS/dispatch.rc"; printf '{"ok":false,"error":{"code":"dispatch_failed"}}' > "$DS/dispatch.json"; FJ2="$(cat "$DS/dispatch.json")"
+DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner
+X1="$RC:$([ "$OUT" = "$FJ2" ] && echo same):$(dsc 'orchestration dispatch --task task_abc123 --to h-pl --inject --json')"
+DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --run run_s
+X2="$RC:$([ "$OUT" = "dispatch.sh: task task_created created from $SC for planner (h-pl)"$'\n'"$FJ2" ] && echo out):$(dsc 'orchestration dispatch --task task_created --to h-pl --run run_s --inject --json'):$(wc -l < "$DS/err" | tr -d ' ')"
+openc 8; printf 'PLANNER=h-pl\n' > "$DS/t/open8.env"; printf 'PLANNER=h-pl\n' > "$DSG/orca-roles.kicked"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open8.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner --open
+X4="$RC:$([ "$OUT" = "All roles are already open."$'\n'"$FJ2" ] && echo out):$(dsc 'orchestration dispatch --task task_abc123 --to h-pl --inject --json')"
+DSTATE=""; DNOCHECKER=1 dsrun early plain --task task_abc123 --to h-w
+X3="$RC:$([ "$OUT" = "$FJ2" ] && echo same || echo other)"
+check "dispatch.sh: a non-zero exit of orca orchestration dispatch in the new forms (--role, --spec-file, --open) prints Orca's output and is exit 1, never Orca's own status (7 here; with --spec-file the created line comes first), while the old --task --to form keeps Orca's status" "$X1|$X2|$X4|$X3" "1:same:1|1:out:1:0|1:out:1|7:same"
+echo 0 > "$DS/dispatch.rc"; printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$DS/dispatch.json"; rm -rf "$DSG/orca-roles.kickoff.d" "$DS/launch.calls" "$DS/launch.do" "$DS/launch.out" "$DS/t/open8.env" "$DSG/orca-roles.kicked"
+# a missing value for each of the four options: exit 2 with the whole (new) usage line, nothing called
+MV=""
+for a in --role --spec-file --to --task; do
+  DSTATE=""; DNOCHECKER=1 dsrun early plain "$a"
+  MV="$MV|$RC:$([ "$(cat "$DS/err")" = "$DUSAGE" ] && echo usage || { head -1 "$DS/err"; }):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch'):$(printf '%s' "$OUT" | wc -c | tr -d ' ')"
+done
+check "dispatch.sh: an option with no value (--role, --spec-file, --to, --task) is exit 2 with the new usage line on stderr alone, nothing on stdout and no task-create or dispatch" "$MV" "|2:usage:0:0:0|2:usage:0:0:0|2:usage:0:0:0|2:usage:0:0:0"
+# the handle is resolved before the task is created: no state handle, no task
+printf 'DEV=h-d\n' > "$DS/t/norole.env"
+DSTATE="$DS/t/norole.env" DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --run run_s
+check "dispatch.sh --spec-file --role: a role with no handle in the state is exit 4 with the named line before any task-create, so no task is created and nothing dispatched" "$RC:$([ "$(cat "$DS/err")" = 'dispatch.sh: no handle for role planner in the team state; open it with --open.' ] && echo line || cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch'):$(printf '%s' "$OUT" | wc -c | tr -d ' ')" "4:line:0:0:0"
+# the team state's location and its first line: the git dir's file by default, ORCA_ROLES_STATE first, the first matching line wins
+printf 'PLANNER=h-git\n' > "$DSG/orca-roles.env"; printf 'PLANNER=h-env\n' > "$DS/t/prec.env"; printf 'PLANNER=h-first\nPLANNER=h-second\n' > "$DS/t/dup.env"
+state_h() { sed -n 's/^orchestration dispatch --task task_abc123 --to \([^ ]*\).*/\1/p' "$DSL"; }
+DSTATE="" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner; S1="$RC:$(state_h)"
+DSTATE="$DS/t/prec.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner; S2="$RC:$(state_h)"
+DSTATE="$DS/t/dup.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner; S3="$RC:$(state_h)"
+DSTATE=""; rm -f "$DSG/orca-roles.env"
+check "dispatch.sh --role: the handle comes from the git dir's orca-roles.env by default, ORCA_ROLES_STATE takes precedence over it, and the first of two lines for the same variable wins" " $S1 $S2 $S3" " 0:h-git 0:h-env 0:h-first"
+# what counts as a created task beyond the spec's examples: Orca's exit must be 0 too, and ok, status and taskId are strict
+tc5b() {  # tc5b <task-create stdout> [rc]: "<rc>:<dispatch calls>:<created lines>:<named last stderr line|other>"
+  printf '%s' "$1" > "$DS/tc.json"; echo "${2:-0}" > "$DS/tc.rc"
+  DSTATE=""; DNOCHECKER=1 dsrun early plain --spec-file "$SC" --to h-w --run run_s
+  printf '%s:%s:%s:%s' "$RC" "$(dsc 'orchestration dispatch')" "$(printf '%s' "$OUT" | grep -c 'created from' || true)" "$([ "$(tail -n 1 "$DS/err")" = "dispatch.sh: task-create failed for $SC; nothing dispatched." ] && echo line || echo other)"
+}
+E5b="$(tc5b '{"ok":true,"result":{"status":"ready","taskId":"task_created"}}' 4)|$(tc5b '{"ok":true,"result":{"status":"ready","taskId":null}}')|$(tc5b '{"ok":true,"result":{"status":"ready","taskId":7}}')|$(tc5b '{"result":{"status":"ready","taskId":"t"}}')|$(tc5b '{"ok":"true","result":{"status":"ready","taskId":"t"}}')|$(tc5b '{"ok":true,"result":{"taskId":"t"}}')"
+check "dispatch.sh --spec-file: task-create exiting 0 is required as well (a ready answer with exit 4 is failure), and a null or numeric taskId, an ok missing or the string \"true\", and a status missing are each exit 5 with the named line, no created line and no dispatch" "$E5b" "5:0:0:line|5:0:0:line|5:0:0:line|5:0:0:line|5:0:0:line|5:0:0:line"
+printf '{"ok":true,"result":{"status":"ready","taskId":"task_created"}}' > "$DS/tc.json"; echo 0 > "$DS/tc.rc"
+# the exit 3 rule still applies to the new forms: Orca exits 0 with no dispatch, after the created line for --spec-file
+printf '%s' '{"ok":true,"result":{"dispatch":null}}' > "$DS/dispatch.json"
+DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --spec-file "$SC" --role planner --run run_s
+T3="$RC:$([ "$(tail -1 "$DS/err")" = 'dispatch.sh: no dispatch was created for task_created on h-pl (orca exited 0); see Orca'"'"'s output above.' ] && echo line):$(dsc 'worktree ps'):$(printf '%s' "$OUT" | head -1 | grep -c 'created from' || true)"
+DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner
+T4="$RC:$([ "$(cat "$DS/err")" = 'dispatch.sh: no dispatch was created for task_abc123 on h-pl (orca exited 0); see Orca'"'"'s output above.' ] && echo line || echo other):$(dsc 'worktree ps'):$([ "$OUT" = '{"ok":true,"result":{"dispatch":null}}' ] && echo same || echo other)"
+DSTATE=""
+check "dispatch.sh: the exit 3 rule applies to --spec-file --role too (Orca exits 0 with a null dispatch: the created line on stdout, Orca's JSON, the named line on stderr, no checker) and to --task --role, which prints Orca's JSON alone" "$T3|$T4" "3:line:0:1|3:line:0:same"
+printf '{"ok":true,"result":{"dispatch":{"id":"d1","assignee_pane_key":"tab-w:leaf-w","creator_handle":"h-planner"}}}' > "$DS/dispatch.json"
+# the metrics event of a --role dispatch still names the role through role_of_handle
+rm -rf "$KIT/metrics"; DSTATE="$DS/t/roles.env" DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner
+check "dispatch.sh --role: the metrics event of the dispatch names the role the handle belongs to (role_of_handle), as the --to form does" "$RC:$(jq -r 'select(.event == "dispatch") | .role' "$KIT/metrics/events.jsonl" 2>/dev/null)" "0:planner"
+DSTATE=""
+# --open keeps waiting while the kickoff lives when the kicked line names another handle, and gives up the wait as soon as it matches
+openc 7; printf 'PLANNER=h-np2\n' > "$DS/t/open7.env"; mkdir -p "$DSG/orca-roles.kickoff.d"; echo planner > "$DSG/orca-roles.kickoff.d/$OPENPID"; printf 'PLANNER=h-old\n' > "$DSG/orca-roles.kicked"
+cat > "$DS/launch.do" <<EOS
+#!/bin/sh
+pwd -P > "$DS/launch.cwd"
+( sleep 0.15; printf 'PLANNER=h-np2\n' > "$DSG/orca-roles.kicked" ) &
+EOS
+chmod +x "$DS/launch.do"; DBP="$(cd "$DS/proj" && pwd -P)"
+DSLAUNCH="$DS/launch" DSTATE="$DS/t/open7.env" DOTICK=0.05 DOWAIT=5 DNOCHECKER=1 dsrun early plain --task task_abc123 --role planner --open
+check "dispatch.sh --open: a kicked line naming an older handle while the kickoff lives is not a failure, it keeps waiting until the state's handle appears and then dispatches it; the call ends well before ORCA_ROLES_OPEN_WAIT, after one launch.sh --open run from the current folder" "$RC:$(dsc 'orchestration dispatch --task task_abc123 --to h-np2'):$(dsc 'orchestration dispatch'):$(wc -l < "$DS/launch.calls" | tr -d ' '):$([ "$(cat "$DS/launch.cwd")" = "$DBP" ] && echo cwd):$([ "$DT" -lt 5 ] && echo fast):$(wc -l < "$DS/err" | tr -d ' ')" "0:1:1:1:cwd:fast:0"
+rm -rf "$DSG/orca-roles.kickoff.d" "$DS/launch.calls" "$DS/launch.do" "$DS/launch.out" "$DS/launch.cwd" "$DS/t/open7.env" "$DSG/orca-roles.kicked"
+# a spec file that cannot be read (mode 000) is refused; a relative path is read from the current folder
+printf 'x\n' > "$DS/proj/rel brief.md"; chmod 000 "$DS/proj/rel brief.md"
+DSTATE="" DNOCHECKER=1 dsrun early plain --spec-file "$DS/proj/rel brief.md" --to h-w --run run_s
+U1="$RC:$([ "$(cat "$DS/err")" = "$DUSAGE" ] && echo usage || cat "$DS/err"):$(dsc 'orchestration task-create'):$(dsc 'orchestration dispatch')"
+chmod 644 "$DS/proj/rel brief.md"
+DSTATE="" DNOCHECKER=1 dsrun early plain --spec-file "rel brief.md" --to h-w --run run_s
+U2="$RC:$(dsc 'orchestration task-create --spec-file rel brief.md --task-title h-w: rel brief.md --run run_s --json'):$(dsc 'orchestration dispatch --task task_created --to h-w --run run_s')"
+rm -f "$DS/proj/rel brief.md"
+check "dispatch.sh --spec-file: a file that exists but cannot be read is exit 2 with the usage line and nothing called, and a relative path is resolved from the current folder" "$U1|$U2" "2:usage:0:0|0:1:1"
 # the four local coordinator prompts carry the same assign line and silent-worker bullet
 PM=""; for m in programmer academic-research pr-reviewer quick; do f="$ROOT/prompts/$m/local-coordinator.md"
-  PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --to <handle> --run <run_id>`\( (the Planner.s tasks too)\)\{0,1\}: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
+  PM="$PM $m:$(grep -c '^- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --role <id> --run <run_id>`.*see "The team".*: it checks in the background' "$f"):$(grep -c 'Watch for silent workers.\*\* Whenever you read your messages or the user asks for the status, run `~/.orca-roles/bin/team-status.sh --run <run_id>`' "$f"):$(grep -c 'undelivered. -> the brief sits unsent in its tab: send Enter once' "$f"):$(grep -c 'orchestration dispatch --\|worker-start --task' "$f" || true)"
 done
 check "local coordinator prompts (programmer, academic-research, pr-reviewer, quick): the same assign line (dispatch.sh) and the same silent-worker bullet (team-status.sh --run: waiting, stopped without reporting, undelivered), no worker-start --task left" "$PM" " programmer:1:1:1:0 academic-research:1:1:1:0 pr-reviewer:1:1:1:0 quick:1:1:1:0"
 L1="$(grep '^- Assign with `~/.orca-roles/bin/dispatch.sh' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer,quick}/local-coordinator.md | sed -e 's/^[^:]*://' -e "s/ (the Planner's tasks too)//" | sort -u | wc -l | tr -d ' ')"; L2="$(grep 'Watch for silent workers' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer,quick}/local-coordinator.md | sed 's/^[^:]*://' | sort -u | wc -l | tr -d ' ')"
@@ -11411,7 +11588,7 @@ L3=""; for blk in '/^## Written reports$/{f=1} f{print} /^11\. /{if (f) exit}' '
   d="$(for m in programmer academic-research pr-reviewer quick; do { awk "$blk" "$ROOT/prompts/$m/local-coordinator$lf.md"; [ -z "$ls" ] || awk -v t="## $ls" '$0 == t {f=1} /^## /{if ($0 != t) f=0} f' "$ROOT/prompts/$m/local-coordinator.md"; } | { if [ "$m" = pr-reviewer ]; then sed 's/except a role opened per task (see "The team")\.$/except a role opened per task or per batch and an instance (see "The team")./'; else cat; fi; } | cksum; done | sort -u | wc -l | tr -d ' ')"; [ "$(awk "$blk" "$ROOT/prompts/programmer/local-coordinator$lf.md" | wc -l)" -gt 0 ] || d=empty   # a vanished start marker gives empty, equal blocks
   L3="$L3$d"
 done
-check "local coordinator prompts: the assign line and the silent-worker bullet are word for word the same in the four modes, and so are the shared blocks (Written reports, Managing the kit, Choosing and switching the mode, the neutral part of Working under a coordinator, the Create line and the 15 lines from Assign to the worker-release one, where pr-reviewer's bullet 15 keeps its own \"except a role opened per task\" ending)" "$L1:$L2:$L3" "1:1:111111"
+check "local coordinator prompts: the assign line and the silent-worker bullet are word for word the same in the four modes, and so are the shared blocks (Written reports, Managing the kit, Choosing and switching the mode, the neutral part of Working under a coordinator, the Create line and the 15 lines from Assign to the worker_done one, where pr-reviewer's bullet 15 keeps its own \"except a role opened per task\" ending)" "$L1:$L2:$L3" "1:1:111111"
 SF="$(grep -c -F -x -e '  - When the user asks how the work is going, answer from `~/.orca-roles/bin/team-status.sh --run <run_id>`; send no message or question to a worker when it already answers; ask the worker only for a detail only it knows.' "$ROOT/prompts/programmer/local-coordinator.md" "$ROOT"/prompts/{academic-research,pr-reviewer,quick}/local-coordinator.md | tr '\n' ' ')"
 check "local coordinator prompts: the status-first sentence (answer from team-status --run, no message or question to a worker when it already answers) is word for word in the four modes, once each" "$SF" "$(printf '%s/prompts/programmer/local-coordinator.md:1 %s/prompts/academic-research/local-coordinator.md:1 %s/prompts/pr-reviewer/local-coordinator.md:1 %s/prompts/quick/local-coordinator.md:1 ' "$ROOT" "$ROOT" "$ROOT" "$ROOT")"
 # the dispatch-show rule: the same line in the four local coordinator prompts (in place of the old claim bullet, last of its section) and the coordinator's shorter one in Limits
@@ -11442,6 +11619,21 @@ G5="$(grep -c -x -F -e "$DG" "$ROOT/prompts/coordinator.md" || true):$(awk -v l=
 check "the Orca stop-notice rule: the four local coordinator prompts hold the same line word for word, once each, right after the silent-worker bullet, and prompts/coordinator.md holds its own line once inside ## The loop between the 'worker_done from a local coordinator' and the 'Send follow-ups' bullets; both keep the 'errored, needs-input or exited is always told' sentence and the 'stopReason and the last line of that output' clause" "$R5|$G5" " programmer:1:after:1:1 academic-research:1:after:1:1 pr-reviewer:1:after:1:1 quick:1:after:1:1 same:4|1:loop:1:1"
 check "docs: the README troubleshooting row and the skill's row name dispatch.sh (or worker-start) for terminal_handle_stale, the README says the Planner and the coordinator answer status questions from team-status and describes the coordinator's check-only and team-status step, the skill's section 10 too; the README describes the mail watcher (its paragraph and the troubleshooting row), dispatch.sh's exit 3 and the OpenCode waits" "$(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c '^| `dispatch.sh` (or `worker-start`) fails with `terminal_handle_stale`' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'would fail with `terminal_handle_stale`' "$ROOT/README.md") $(grep -c 'The local coordinator and the coordinator answer status questions from it, without messaging the roles' "$ROOT/README.md") $(grep -c 'it runs `dispatch.sh --check-only` on the local coordinator' "$ROOT/README.md") $(grep -c 'Status and start checks' "$ROOT/plugin/skills/team/SKILL.md") $(grep -c 'gets one notice typed into the Run.s coordinator tab' "$ROOT/README.md") $(grep -c 'the kit.s mail watcher types the notice itself when the tab is idle' "$ROOT/README.md") $(grep -c 'When Orca exits 0 but creates no dispatch (no dispatch id in its output), `dispatch.sh` still prints Orca.s output, adds the line' "$ROOT/README.md") $(grep -c 'waits up to 60 s for the worker.s tab to be idle (an OpenCode worker: up to 30 s)' "$ROOT/README.md") $(grep -c 'it waits until each Claude, Codex or OpenCode worker has answered its role message (an OpenCode one right after its role message, up to 30 s)' "$ROOT/README.md")" "1 1 1 1 1 1 1 1 1 1 1"
 ds_reap; SMK_REAP_HOOK=""
+# spec-batch3 p1: the prompts dispatch with dispatch.sh's new options
+D1='- Assign with `~/.orca-roles/bin/dispatch.sh --task <task_id> --role <id> --run <run_id>` (`--spec-file <file>` in place of `--task` creates the task from that file first, with no `--deps`; a Dev task under the oracle keeps its own `task-create` with the `spec-sha256` line; `--to <handle>` in place of `--role` for a handle that is no role of your team; `--open` opens a role that is not open yet, see "The team"): it checks in the background'
+D4=' After a `dispatch.sh --open` that exited 0, the "Roles reopened" message about that role only updates the handles: dispatch nothing on it.'
+D7='Only `~/.orca-roles/bin/dispatch.sh` with `--role <id>` or `--to <handle>` for your workers'
+D8='(`~/.orca-roles/bin/dispatch.sh --spec-file <file> --role planner --run <run_id>`, or `task-create` and then `dispatch.sh --task <task_id> --role planner --run <run_id>`)'
+D10='Before a role'"'"'s first task (for one opened per task, before each of its tasks; for one opened per batch, before its first task of each batch) dispatch that task with `--open`, from the worktree and without asking the user, in the foreground with a Bash timeout of 600000 ms: `~/.orca-roles/bin/dispatch.sh --open --role <id> --spec-file <file> --run <run_id>` (or `--task <task_id>`). It runs `launch.sh --open <id>`, waits until the role got its role message and dispatches, in one call; the kit'"'"'s `status` "Roles reopened" that follows only updates the handles. Exit 6 means nothing was created or dispatched: if its last line says the role is not ready yet, end your turn and dispatch once "Roles reopened" names the role as opened; otherwise (`launch.sh --open` failed, or the role was not reached) tell the user that line and dispatch nothing to that role.'
+D10B='before a role'"'"'s first task (for one opened per task, before each of its tasks) dispatch that task with `--open`, from the worktree and without asking the user, in the foreground with a Bash timeout of 600000 ms: `~/.orca-roles/bin/dispatch.sh --open --role <id> --spec-file <file> --run <run_id>` (or `--task <task_id>`); it runs `launch.sh --open <id>`, waits until the role got its role message and dispatches, in one call, and the kit'"'"'s `status` "Roles reopened" that follows only updates the handles; exit 6 means nothing was created or dispatched: if its last line says the role is not ready yet, end your turn and dispatch once "Roles reopened" names the role as opened, otherwise tell the user that line and dispatch nothing to that role.'
+DP=""; for m in programmer quick academic-research pr-reviewer; do DP="$DP$(grep -c -F -e "$D1" "$ROOT/prompts/$m/local-coordinator.md" || true)"; done
+check "dispatch: the four local coordinator prompts assign with dispatch.sh --role (--spec-file, --to in place of --role, --open) and keep the oracle task-create exception" "$DP" "1111"
+DP=""; for m in programmer quick academic-research pr-reviewer; do DP="$DP$(grep -c -F -e "$D4" "$ROOT/prompts/$m/local-coordinator.md" || true)"; done
+check "dispatch: the four 'Roles reopened' bullets add that an --open that exited 0 only updates the handles" "$DP" "1111"
+DP=""; for m in programmer quick academic-research pr-reviewer; do DP="$DP$(grep -c -F -e "$D7" "$ROOT/prompts/$m/local-coordinator.md" || true)"; done
+check "dispatch: the four Limits bullets allow dispatch.sh with --role or --to for the coordinator's workers, and programmer's says the Planner too" "$DP:$(grep -c -F -e '(the Planner too).' "$ROOT/prompts/programmer/local-coordinator.md" || true)" "1111:1"
+check "dispatch: the Planner task lines of programmer and academic-research name dispatch.sh --spec-file --role planner, or task-create then --role planner" "$(grep -c -F -e "$D8" "$ROOT/prompts/programmer/local-coordinator.md" || true):$(grep -c -F -e "$D8" "$ROOT/prompts/academic-research/local-coordinator.md" || true)" "1:1"
+check "dispatch: Opening a role (programmer, quick, academic-research) and pr-reviewer's paragraph dispatch with --open in one call, wait for the role message and read exit 6" "$(grep -c -F -e "$D10" "$ROOT/prompts/programmer/local-coordinator-team.md" || true):$(grep -c -F -e "$D10" "$ROOT/prompts/quick/local-coordinator-team.md" || true):$(grep -c -F -e "$D10" "$ROOT/prompts/academic-research/local-coordinator-team.md" || true):$(grep -c -F -e "$D10B" "$ROOT/prompts/pr-reviewer/local-coordinator.md" || true)" "1:1:1:1"
 }
 
 sec_hidden() {
@@ -12001,6 +12193,262 @@ done
 bcr; BR="$BR$BRC:$(printf '%s' "$BERR" | grep -c . | sed 's/^[1-9][0-9]*$/y/' || true)"
 bcr "$BD/r6" --ref "$BBASE" --timeout 1.5 -- true; BR="$BR|$BRC"
 check "basecheck: a command that does not print smoke lines -> format unknown, no class lines, empty tsv, counts all zero, the exits in the JSON, exit 0 and one stderr line; a timeout on both sides -> timedOut on each, no class lines, exit 0, one stderr line, no process left; refusals (a <dir> inside the worktree, a foreign non-empty dir, a bad ref, a missing overlay, an overlay outside the worktree and a symlink overlay -> exit 1 with a message and nothing run; '--' with no command -> exit 1; no arguments -> usage, exit 2, nothing run; the worktree unchanged, a bad --timeout refused" "$U1|$U2|refuse:$BR:$(bstate)" "0:1:unknown 4 4 0 false false:empty:1:PASSED t1|0:1:unknown true true 124 0:1:0:empty|refuse:1:1:none:1:1:none:1:1:none:1:1:none:1:1:none:1:1:none:1:1:none:2:y|1:$B0"
+}
+
+mb_setup() {  # mb_setup: a fake orca that serves queued batches to check, inbox JSON and chosen exits for worker-release/reply/send, logging every call
+MB="$TMP/msg"; rm -rf "$MB"; mkdir -p "$MB/check" "$MB/bin"; : > "$MB/log"
+cat > "$MB/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$MB/log"
+case "\$*" in
+  "orchestration check"*)
+    n=\$(cat "$MB/n" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" > "$MB/n"
+    if [ -f "$MB/failat" ] && [ "\$n" = "\$(cat "$MB/failat")" ]; then echo "orca: failed"; exit 3; fi
+    f=\$(ls "$MB/check" 2>/dev/null | sort | sed -n "\${n}p")
+    if [ -n "\$f" ]; then cat "$MB/check/\$f"; else echo '{"ok":true,"result":{"deliveryId":null,"messages":[]}}'; fi ;;
+  "orchestration inbox"*) [ -f "$MB/inbox.json" ] && cat "$MB/inbox.json" ;;
+  "orchestration worker-release"*) [ -f "$MB/release.out" ] && cat "$MB/release.out"; exit \$(cat "$MB/release.rc" 2>/dev/null || echo 0) ;;
+  "orchestration reply"*) [ -f "$MB/reply.out" ] && cat "$MB/reply.out"; exit \$(cat "$MB/reply.rc" 2>/dev/null || echo 0) ;;
+  "orchestration send"*) [ -f "$MB/send.out" ] && cat "$MB/send.out"; exit \$(cat "$MB/send.rc" 2>/dev/null || echo 0) ;;
+esac
+exit 0
+EOS
+chmod +x "$MB/bin/orca"
+}
+mb_batch() { local n; n="$(ls "$MB/check" 2>/dev/null | wc -l | tr -d ' ')"; printf '%s' "$2" > "$MB/check/$(printf '%02d' $((n + 1)))-$1"; }
+mb_rec() {  # mb_rec <id> <type> <from> <to> <subject> <body> <payload JSON>
+jq -c -n --arg id "$1" --arg type "$2" --arg from "$3" --arg to "$4" --arg subj "$5" --arg body "$6" --argjson payload "$7" \
+  '{id: $id, run_id: "run_x", delivery_contract: "current_delivery", from_handle: $from, to_handle: $to, subject: $subj, body: $body,
+    type: $type, priority: "normal", thread_id: null, payload: $payload, created_at: "2026-11-14T18:00:00Z", delivered_at: null}'
+}
+
+sec_inbox() {
+mb_setup
+MBR="$TMP/msgstate"; printf 'DEV=t2\nRESEARCHER_2=t9\n' > "$MBR"
+INS="$ROOT/bin/inbox.sh"
+inb() { ( cd "$TMP" && HOME="$TMP/home" PATH="$MB/bin:$PATH" ORCA_ROLES_STATE="$MBR" "$INS" "$@" ); }
+inb_nostate() { ( cd "$TMP" && HOME="$TMP/home" PATH="$MB/bin:$PATH" env -u ORCA_ROLES_STATE "$INS" "$@" ); }
+IBIG="$(printf 'x%.0s' $(seq 1 5000))"
+mb_batch b1 "$(jq -c -n --argjson a "$(mb_rec msg_a worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done. all good' '{"taskId":"task_a","dispatchId":"ctx_abc","outcome":"succeeded","reportPath":"/r/a.md"}')" \
+  --argjson b "$(mb_rec msg_b status t9 run:run_x 'Roles reopened' "$IBIG" null)" '{ok: true, result: {runId: "run_x", deliveryId: "d7", messages: [$a, $b]}}')"
+mb_batch b2 "$(jq -c -n --argjson c "$(mb_rec msg_c custom_note t22 run:run_x 'plan: ready' 'note body' null)" '{ok: true, result: {runId: "run_x", deliveryId: null, messages: [$c]}}')"
+mb_batch b3 '{"ok":true,"result":{"runId":"run_x","deliveryId":null,"messages":[]}}'
+try inb
+check "inbox: exit 0 and the count line" "$RC:$(printf '%s\n' "$OUT" | grep -c '^inbox: 3 message(s)$')" "0:1"
+check "inbox: one header per message" "$(printf '%s\n' "$OUT" | grep -c "$(printf '^[a-z_]*\t')")" "3"
+check "inbox: worker_done header fields, report path, no body" "$(printf '%s\n' "$OUT" | sed -n 1p):$(printf '%s\n' "$OUT" | grep -c '^  Done\. all good$')" \
+  "$(printf 'worker_done\tdev\tt2\tVERDICT: ACCEPTED\tACCEPTED\tsucceeded\t/r/a.md\tmsg_a\ttask_a\tctx_abc'):0"
+check "inbox: a 5000-character body is cut at 2000 with its id and to_handle" \
+  "$(printf '%s\n' "$OUT" | grep -c '^  … (cut at 2000 characters; whole: orca orchestration inbox --terminal run:run_x --full --json, id msg_b)$'):$(printf '%s\n' "$OUT" | awk 'length($0) == 2002' | wc -l | tr -d ' ')" "1:1"
+check "inbox: an unknown type is printed with its body, prefix handle not a role, no verdict" "$(printf '%s\n' "$OUT" | grep '^custom_note'):$(printf '%s\n' "$OUT" | grep -c '^  note body$')" \
+  "$(printf 'custom_note\t-\tt22\tplan: ready\t-\t-\t-\tmsg_c\t-\t-'):1"
+check "inbox: a researcher role from the state, verdict from the subject only" "$(printf '%s\n' "$OUT" | sed -n 2p | cut -f2,5)" "$(printf 'researcher-2\t-')"
+check "inbox: deliveryId d7 is acked once, null batches never" "$(grep -c -- '--ack d7' "$MB/log"):$(cat "$MB/log")" \
+  "1:$(printf 'orchestration check --json --full\norchestration check --ack d7 --json --full\norchestration check --json --full\n')"
+mb_setup
+mb_batch b1 "$(jq -c -n --argjson a "$(mb_rec msg_v status term_x run:run_x 'x VERDICT: ACCEPTED' v null)" \
+  --argjson b "$(mb_rec msg_r worker_done t2 run:run_x 'VERDICT: REJECTED (rules)' "$(printf 'Done.\nReport: /r/b.md')" '{"dispatchId":"ctx_b"}')" '{ok: true, result: {deliveryId: null, messages: [$a, $b]}}')"
+mb_batch e '{"ok":true,"result":{"deliveryId":null,"messages":[]}}'
+try inb
+check "inbox: a VERDICT: not at the subject start is -, a body Report: line gives the path and no body" \
+  "$(printf '%s\n' "$OUT" | sed -n 1p | cut -f5):$(printf '%s\n' "$OUT" | sed -n 3p | cut -f5,7):$(printf '%s\n' "$OUT" | grep -c '^  Done\.$')" \
+  "$(printf -- '-:REJECTED (rules)\t/r/b.md:0')"
+# spec-batch2 i1 / plan D3: a worker_done that names no report has its body printed (payload as object or as a JSON string)
+mb_setup
+mb_batch b1 "$(jq -c -n --argjson a "$(mb_rec msg_po worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done. pathless object body' '{"taskId":"task_o","dispatchId":"ctx_o","outcome":"succeeded"}')" \
+  --argjson b "$(mb_rec msg_ps worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done. pathless string body' null | jq -c --arg p '{"taskId":"task_s","dispatchId":"ctx_s","outcome":"succeeded"}' '.payload = $p')" '{ok: true, result: {deliveryId: null, messages: [$a, $b]}}')"
+mb_batch e '{"ok":true,"result":{"deliveryId":null,"messages":[]}}'
+try inb
+check "inbox: a worker_done with neither reportPath nor a Report: line prints its body, payload as object and as JSON string" \
+  "$RC:$(printf '%s\n' "$OUT" | grep -c '^  Done\. pathless object body$'):$(printf '%s\n' "$OUT" | grep -c '^  Done\. pathless string body$'):$(printf '%s\n' "$OUT" | awk -F'\t' '$1 == "worker_done" && $7 == "-" { n++ } END { print n + 0 }'):$(printf '%s\n' "$OUT" | grep -c '^inbox: 2 message(s)$')" \
+  "0:1:1:2:1"
+mb_setup
+mb_batch b1 "$(jq -c -n --argjson a "$(mb_rec msg_2k status t2 run:run_x s "$(printf 'y%.0s' $(seq 1 2000))" null)" \
+  --argjson b "$(mb_rec msg_2k1 status t2 run:run_x s "$(printf 'y%.0s' $(seq 1 2001))" null)" '{ok: true, result: {deliveryId: null, messages: [$a, $b]}}')"
+mb_batch e '{"ok":true,"result":{"deliveryId":null,"messages":[]}}'
+try inb
+check "inbox: a body of exactly 2000 characters is not cut, 2001 is cut with its id" \
+  "$(printf '%s\n' "$OUT" | grep -c '^  … (cut at 2000 characters; whole: orca orchestration inbox --terminal run:run_x --full --json, id msg_2k1)$'):$(printf '%s\n' "$OUT" | grep -c 'id msg_2k)$'):$(printf '%s\n' "$OUT" | awk 'length($0) == 2002' | wc -l | tr -d ' ')" "1:0:2"
+rm -f "$MB/n"; try inb_nostate
+check "inbox: no team state gives - in the role column" "$RC:$(printf '%s\n' "$OUT" | sed -n 1p | cut -f2)" "0:-"
+mb_setup; mb_batch bad 'not json at all'
+try inb
+check "inbox: an unreadable batch prints its raw output and exits 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^inbox: could not read a batch; its raw output follows.$'):$(printf '%s\n' "$OUT" | grep -c '^not json at all$'):$(printf '%s\n' "$OUT" | tail -1)" \
+  "1:1:1:inbox: 0 message(s)"
+mb_setup; mb_batch part '{"ok":true,"result":{"deliveryId":"d9","messages":5}}'
+try inb
+check "inbox: a batch with readable deliveryId is acked and the loop goes on" "$RC:$(grep -c -- '--ack d9' "$MB/log"):$(printf '%s\n' "$OUT" | grep -c '^inbox: could not read a batch')" "1:1:1"
+mb_setup; echo 1 > "$MB/failat"
+try inb
+check "inbox: a failing check prints its output and exits 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^orca: failed$'):$(printf '%s\n' "$OUT" | grep -c '^inbox: orca orchestration check failed (exit 3).$')" "1:1:1"
+mb_setup; mb_batch b1 "$(jq -c -n --argjson a "$(mb_rec msg_a status t2 run:run_x s b null)" '{ok: true, result: {deliveryId: "d7", messages: [$a]}}')"; echo 2 > "$MB/failat"
+try inb
+check "inbox: a failed ack is named and exits 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^inbox: ack of d7 failed.$')" "1:1"
+mb_setup; mb_batch e '{"ok":true,"result":{"deliveryId":null,"messages":[]}}'
+try inb --run run_x
+check "inbox: --run reaches every check" "$RC:$(cat "$MB/log")" "0:$(printf 'orchestration check --run run_x --json --full\n')"
+try inb --bogus 2>/dev/null
+check "inbox: a bad option exits 2" "$RC" "2"
+# spec-batch3 p1: the prompts read messages with inbox.sh
+IM2='read your messages without waiting: `~/.orca-roles/bin/inbox.sh`. It reads every batch with `orca orchestration check` until none is left, acknowledges a batch that carries a `delivery_id` as it goes (the same `orca orchestration check --ack <delivery_id> --json` you would run), and prints one line per message (type, role, sender, subject, verdict, outcome, report path, message id, task id, dispatch id) and the body of every message but a `worker_done` that names a report (a body over 2000 characters is cut, with the command that shows it whole). What it printed is read: handle every line before you end your turn. If it exits 1, read its last lines: a batch it could not parse is printed raw, and a failed ack is retried once by hand.'
+IM11A='It also reads with `~/.orca-roles/bin/inbox.sh`, which reads and acknowledges every batch:'
+IM11B='`~/.orca-roles/bin/inbox.sh` (if it says an ack failed with `consumer_fenced`, that batch is from before the restart: run `inbox.sh` again and its messages come back in a new batch), then `orca orchestration inbox` if you need history.'
+IM12='or with `~/.orca-roles/bin/inbox.sh` in your own Run outside one.'
+IM13='read without waiting: `~/.orca-roles/bin/inbox.sh`, which reads every batch with `orca orchestration check` (marking it read) until none is left, acknowledges a batch that carries a `delivery_id` (an older Orca) as it goes, and prints one line per message and the body of every message but a `worker_done` that names a report, so a report sent without a file shows its body (a body over 2000 characters is cut, with the command that shows it whole; its role column is `-` here: the sender'"'"'s handle and the task tell you which local coordinator wrote); handle every line before you end your turn.'
+IM10C='(`~/.orca-roles/bin/inbox.sh --run <run_id>`)'
+IP=""; for m in programmer quick academic-research pr-reviewer; do IP="$IP$(grep -c -F -e "$IM2" "$ROOT/prompts/$m/local-coordinator.md" || true)"; done
+check "inbox: the four local coordinator prompts read their messages with inbox.sh (every batch, the ack it runs itself, one line per message, the bodies, a 2000-character cut and exit 1)" "$IP" "1111"
+IP=""; for m in programmer quick academic-research pr-reviewer; do IP="$IP$(grep -c -F -e "$IM11A" "$ROOT/prompts/$m/local-coordinator-resume.md" || true):$(grep -c -F -e "$IM11B" "$ROOT/prompts/$m/local-coordinator-resume.md" || true):"; done
+check "inbox: the four resume prompts read and acknowledge every batch with inbox.sh, both items, and keep the consumer_fenced fallback and the inbox history" "$IP" "1:1:1:1:1:1:1:1:"
+IP=""; for m in programmer quick academic-research pr-reviewer; do IP="$IP$(grep -c -F -e "$IM12" "$ROOT/prompts/$m/local-coordinator-under-coordinator.md" || true)"; done
+check "inbox: the four under-coordinator prompts read their own Run with inbox.sh" "$IP" "1111"
+check "inbox: the global coordinator reads with inbox.sh (the ack, the bodies and its role column) and programmer's Phase 1 reads an abandoned dispatch's late report with inbox.sh --run" "$(grep -c -F -e "$IM13" "$ROOT/prompts/coordinator.md" || true):$(grep -c -F -e "$IM10C" "$ROOT/prompts/programmer/local-coordinator.md" || true)" "1:1"
+}
+
+sec_on_done() {
+mb_setup
+ODR="$TMP/msg/report.md"; ODC="$MB/canary"; ODK="$MB/compact"
+printf '#!/bin/sh\necho "canary $*" >> "%s/canary.log"\necho "canary: 0 reports checked, 0 without the Done marker"\n[ -f "%s/canary.rc" ] && exit $(cat "%s/canary.rc")\nexit 0\n' "$MB" "$MB" "$MB" > "$ODC"; chmod +x "$ODC"
+printf '#!/bin/sh\necho "compact $*" >> "%s/compact.log"\n[ -f "%s/compact.out" ] && cat "%s/compact.out"\n[ -f "%s/compact.rc" ] && exit $(cat "%s/compact.rc")\nexit 0\n' "$MB" "$MB" "$MB" "$MB" "$MB" > "$ODK"; chmod +x "$ODK"
+od_run() { ( cd "$TMP" && HOME="$TMP/home" PATH="$MB/bin:$PATH" ORCA_ROLES_CANARY="$ODC" ORCA_ROLES_COMPACT="$ODK" "$ROOT/bin/on-done.sh" "$@" ); }
+od_inbox() {  # od_inbox <record...>: the on-done inbox holding them
+jq -c -n --argjson m "$(printf '%s\n' "$@" | jq -s -c '.')" '{ok: true, result: {messages: $m}}' > "$MB/inbox.json"
+}
+cat > "$ODR" <<'R'
+# Report
+
+The two Decisions: were taken earlier.
+
+needs: research: /s/brief.md
+more research
+
+The step needs: more time
+
+- needs: plan-audit: /s/audit.md
+
+### Implementation decisions
+- x
+#### Note
+note line
+### Next steps
+- something later
+## Tests
+
+## Next
+
+## Decisions
+1. one
+2. two
+
+**Decisions:** none
+R
+od_inbox "$(mb_rec msg_r1 worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done.' "$(jq -c -n --arg p "$ODR" '{taskId: "task_a", dispatchId: "ctx_abc", outcome: "succeeded", reportPath: $p}')")"
+try od_run --dispatch ctx_abc --run run_x
+cat > "$TMP/msg/want" <<'W'
+needs: research: /s/brief.md
+more research
+- needs: plan-audit: /s/audit.md
+### Implementation decisions
+- x
+#### Note
+note line
+## Decisions
+1. one
+2. two
+
+**Decisions:** none
+W
+printf '%s\n' "$OUT" | sed -n '2,$p' > "$TMP/msg/got"
+check "on-done: exit 0, the report line and its needs/Decisions blocks only" "$RC:$(printf '%s\n' "$OUT" | sed -n 1p | sed "s|$ODR|PATH|"):$(diff -q "$TMP/msg/want" "$TMP/msg/got" >/dev/null 2>&1 && echo same || echo differs)" "0:report: PATH:same"
+check "on-done: release then canary, no compaction without --role" "$(grep -c '^orchestration worker-release --dispatch ctx_abc --json$' "$MB/log"):$(grep -c '^canary --run run_x$' "$MB/canary.log"):$([ -e "$MB/compact.log" ] && echo compacted || echo none)" "1:1:none"
+try od_run --dispatch ctx_abc --run run_x --role planner --no-release
+CHECKINSTR='Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest.'
+check "on-done: --role planner passes the literal instructions; a no-op line is hidden" "$RC:$(grep -c "^compact planner --if-above 200000 --instructions $CHECKINSTR$" "$MB/compact.log"):$(printf '%s\n' "$OUT" | grep -c 'not compacted'):$(grep -c 'worker-release' "$MB/log")" "0:1:0:1"
+echo 'compact-role: planner context 100 tokens, at most 200000: not compacted' > "$MB/compact.out"
+try od_run --dispatch ctx_abc --run run_x --role planner --no-release
+check "on-done: a one-line ': not compacted' from compact-role prints nothing" "$(printf '%s\n' "$OUT" | grep -c 'not compacted')" "0"
+: > "$MB/compact.out"; echo 5 > "$MB/compact.rc"; rm -f "$MB/compact.log"
+try od_run --dispatch ctx_abc --run run_x --role planner --no-release
+check "on-done: a failing compaction adds its line and exits 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^on-done: compact-role.sh failed (exit 5).$'):$(printf '%s\n' "$OUT" | grep -c '^report: ')" "1:1:1"
+rm -f "$MB/compact.out" "$MB/compact.rc"
+echo 'release: no such dispatch' > "$MB/release.out"; echo 4 > "$MB/release.rc"; : > "$MB/canary.log"
+try od_run --dispatch ctx_abc --run run_x
+check "on-done: a failed release is one line, the rest still runs, exit 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^on-done: worker-release failed (exit 4): release: no such dispatch$'):$(grep -c '^canary --run run_x$' "$MB/canary.log"):$(printf '%s\n' "$OUT" | grep -c '^report: ')" "1:1:1:1"
+rm -f "$MB/release.out" "$MB/release.rc"
+echo 9 > "$MB/canary.rc"
+try od_run --dispatch ctx_abc --run run_x --no-release
+check "on-done: a failing canary prints its lines and exits 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^canary: 0 reports checked, 0 without the Done marker$')" "1:1"
+rm -f "$MB/canary.rc"
+od_inbox "$(mb_rec msg_n worker_done t2 run:run_x 'VERDICT: ACCEPTED' "$(printf 'Done.\nReport: %s' "$ODR")" '{"taskId":"task_a","dispatchId":"ctx_abc","outcome":"succeeded"}')"
+try od_run --dispatch ctx_abc --run run_x --no-release
+check "on-done: a body 'Report: ' line is the path" "$RC:$(printf '%s\n' "$OUT" | sed -n 1p | sed "s|$ODR|PATH|")" "0:report: PATH"
+od_inbox "$(mb_rec msg_o worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done. no path here' '{"taskId":"task_a","dispatchId":"ctx_abc"}')"
+try od_run --dispatch ctx_abc --run run_x --no-release
+check "on-done: a worker_done without a path prints its body in place, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c '^report: none in msg_o; its body follows:$'):$(printf '%s\n' "$OUT" | grep -c '^  Done. no path here$'):$([ -s "$ODC" ] && echo ok)" "0:1:1:ok"
+od_inbox "$(mb_rec msg_p worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done.' '{"taskId":"task_a","dispatchId":"ctx_abc","reportPath":"/nonexistent/report.md"}')"
+try od_run --dispatch ctx_abc --run run_x --no-release
+check "on-done: an unreadable report line and exit 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^report: /nonexistent/report.md (not readable)$')" "1:1"
+od_inbox "$(mb_rec msg_q worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done.' '{"taskId":"task_a","dispatchId":"ctx_other","reportPath":"/r/a.md"}')"
+try od_run --dispatch ctx_abc --run run_x --no-release
+check "on-done: another dispatch's worker_done is not the report" "$RC:$(printf '%s\n' "$OUT" | grep -c '^report: none found for ctx_abc$')" "1:1"
+od_inbox "$(mb_rec old worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done.' '{"dispatchId":"ctx_abc","reportPath":"/old"}')" "$(mb_rec new worker_done t2 run:run_x 'VERDICT: ACCEPTED' 'Done.' "$(jq -c -n --arg p "$ODR" '{dispatchId: "ctx_abc", reportPath: $p}')")"
+try od_run --dispatch ctx_abc --run run_x --no-release
+check "on-done: the newest worker_done of the dispatch wins" "$(printf '%s\n' "$OUT" | sed -n 1p | sed "s|$ODR|PATH|")" "report: PATH"
+: > "$MB/log"
+try od_run --dispatch ctx_abc 2>/dev/null; check "on-done: missing --run is a usage error" "$RC:$(wc -l < "$MB/log" | tr -d ' ')" "2:0"
+try od_run --dispatch ctx_abc --run run_x --role tester 2>/dev/null; check "on-done: --role takes only planner" "$RC:$(wc -l < "$MB/log" | tr -d ' ')" "2:0"
+try od_run --dispatch ctx_abc --run run_x --bogus 2>/dev/null; check "on-done: an unknown option exits 2, nothing run" "$RC:$(wc -l < "$MB/log" | tr -d ' ')" "2:0"
+# spec-batch3 p1: the prompts run on-done.sh after each worker_done
+OD5='- After each `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id>` with the dispatch id `inbox.sh` printed for it, in the foreground with a Bash timeout of 600000 ms: it releases the dispatch, runs `canary.sh` (see "Report marker") and prints the report path with its `needs:` and Decisions lines (for a report sent without a file, its body); open the report for anything else. If the role has immediate work, add `--no-release` and reuse its tab. It exits 1 when a step failed or the canary found something: its lines say which.'
+OD6='`on-done.sh` runs `~/.orca-roles/bin/canary.sh --run <run_id>` after each `worker_done` and prints its lines only when it finds something:'
+OD9A='When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when'
+OD9B='The one exception is a `close` report: after it, and after a later Planner report that comes before the set'"'"'s commits, run `on-done.sh` without `--role planner`;'
+OD9C=' with that `compact-role.sh` command'
+OP=""; for m in programmer quick academic-research pr-reviewer; do OP="$OP$(grep -c -F -e "$OD5" "$ROOT/prompts/$m/local-coordinator.md" || true):$(grep -c -F -e "$OD6" "$ROOT/prompts/$m/local-coordinator.md" || true):"; done
+check "on-done: the four local coordinator prompts run on-done.sh with the dispatch id inbox.sh printed (--no-release for immediate work, exit 1) and their Report marker says on-done.sh runs canary.sh and prints its lines only when it finds something" "$OP" "1:1:1:1:1:1:1:1:"
+check "on-done: programmer's compaction runs on-done.sh --role planner, the close-report exception uses on-done.sh without --role then, and both deferred paths name the compact-role.sh command" "$(grep -c -F -e "$OD9A" "$ROOT/prompts/programmer/local-coordinator.md" || true):$(grep -c -F -e "$OD9B" "$ROOT/prompts/programmer/local-coordinator.md" || true):$(grep -o -F -e "$OD9C" "$ROOT/prompts/programmer/local-coordinator.md" | wc -l | tr -d ' ')" "1:1:2"
+}
+
+sec_answer() {
+mb_setup
+ANS="$ROOT/bin/answer.sh"
+ans() { ( cd "$TMP" && HOME="$TMP/home" PATH="$MB/bin:$PATH" "$ANS" "$@" ); }
+ans_inbox() { jq -c -n --argjson m "$(printf '%s\n' "$@" | jq -s -c '.')" '{ok: true, result: {messages: $m}}' > "$MB/inbox.json"; }
+Q="$(mb_rec msg_q question dispatch:ctx_abc run:run_x 'Question' 'Which way?' '{"taskId":"task_a","dispatchId":"ctx_abc","question":"Which way?","options":["A","B"]}')"
+ans_inbox "$Q"
+: > "$MB/log"; try ans --id msg_q --body 'answer text'
+check "answer: reply then send to the asking dispatch, exit 0" "$RC:$(cat "$MB/log")" "0:$(printf 'orchestration reply --id msg_q --body answer text --json\norchestration inbox --json --full --limit 2000\norchestration send --to dispatch:ctx_abc --subject Answer to msg_q --body answer text --json\n')"
+: > "$MB/log"; ans_inbox "$Q" "$(mb_rec msg_r status run:run_x dispatch:ctx_new 'Re: Question' 'answer text' null)"
+printf '%s' "$(jq -c '.result.messages[1] |= . + {thread_id: "msg_q"}' "$MB/inbox.json")" > "$MB/inbox.json"
+: > "$MB/log"; try ans --id msg_q --body 'answer text'
+check "answer: the reply record's dispatch wins over the question's" "$RC:$(grep -c -- '--to dispatch:ctx_new' "$MB/log"):$(grep -c -- '--to dispatch:ctx_abc' "$MB/log")" "0:1:0"
+: > "$MB/log"; ans_inbox "$Q"; echo 4 > "$MB/send.rc"; try ans --id msg_q --body 'answer text'
+check "answer: a failed send is named, the reply stands, exit 0" "$RC:$(printf '%s\n' "$OUT" | grep -c '^answer: send to dispatch:ctx_abc failed (exit 4); the reply was delivered.$'):$(grep -c '^orchestration reply' "$MB/log")" "0:1:1"
+rm -f "$MB/send.rc"
+ans_inbox "$(mb_rec msg_t question term_e58651d2-8a33-412a-8097-8eaec7e9efd7 run:run_x 'a status question' 'body' null)"
+: > "$MB/log"; try ans --id msg_t --body 'yes'
+check "answer: a question from a term_ handle is reply only" "$RC:$(printf '%s\n' "$OUT" | grep -c '^answer: msg_t was not asked from a dispatch; reply only.$'):$(grep -c '^orchestration send' "$MB/log")" "0:1:0"
+: > "$MB/log"; try ans --id msg_absent --body 'yes'
+check "answer: an id outside the inbox window is reply only" "$RC:$(printf '%s\n' "$OUT" | grep -c '^answer: msg_absent not found in the inbox; reply only.$'):$(grep -c '^orchestration send' "$MB/log")" "0:1:0"
+: > "$MB/log"; ans_inbox "$Q"; echo 1 > "$MB/reply.rc"; try ans --id msg_q --body 'answer text'
+check "answer: a failed reply sends nothing and exits 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^answer: reply to msg_q failed (exit 1); nothing sent.$'):$(grep -c '^orchestration send' "$MB/log")" "1:1:0"
+rm -f "$MB/reply.rc"
+: > "$MB/log"; try ans --id msg_q --body "$(printf 'line1\nline2')"
+check "answer: multi-line text reaches both calls unchanged" "$RC:$(grep -c 'line2' "$MB/log"):$(grep -c '^orchestration send --to dispatch:ctx_abc --subject Answer to msg_q --body line1$' "$MB/log")" "0:2:1"
+printf 'from the file\n' > "$TMP/msg/body.txt"; : > "$MB/log"; try ans --id msg_q --body-file "$TMP/msg/body.txt"
+check "answer: --body-file is the text" "$RC:$(grep -c -- '--body from the file' "$MB/log")" "0:2"
+: > "$MB/log"
+for AC in "--id msg_q" "--body x" "--id msg_q --body x --body-file /etc/hosts" "--id msg_q --body-file /nonexistent/x"; do
+  # shellcheck disable=SC2086
+  try ans $AC 2>/dev/null; [ "$RC" = 2 ] || echo "wrong exit for [$AC]: $RC"
+done > "$TMP/msg/usage.out"
+check "answer: usage errors exit 2 and call nothing" "$(wc -l < "$TMP/msg/usage.out" | tr -d ' '):$(wc -l < "$MB/log" | tr -d ' ')" "0:0"
+# spec-batch3 p1: the prompts answer with answer.sh
+AN3='  - Answer the `question` messages with `~/.orca-roles/bin/answer.sh --id <msg_id> --body "..."` (`--body-file <file>` for a long answer): it replies and, when the question was asked from a dispatch, sends the same text to that dispatch as a fallback in case the `reply`'"'"'s wake notice is lost (two askers, measured, did not resume after a `reply` on 2026-11-14, cause not reproduced; in a later test `reply` alone woke the asker). If you do not know the answer, ask the user and then answer with `answer.sh`.'
+AN13='Answer either with `~/.orca-roles/bin/answer.sh --id <msg_id> --body "..."`: it replies and, for a question asked from a dispatch, also sends the same text to that dispatch as a fallback in case the `reply`'"'"'s wake notice is lost (two local coordinators waited 28 and 63 min, measured, on 2026-11-14; in a later test `reply` alone woke the asker).'
+AP=""; for m in programmer quick academic-research pr-reviewer; do AP="$AP$(grep -c -F -e "$AN3" "$ROOT/prompts/$m/local-coordinator.md" || true)"; done
+check "answer: the four local coordinator prompts answer questions with answer.sh (--body, --body-file) and name its reply-plus-send fallback" "$AP" "1111"
+check "answer: the global coordinator answers a question or status with answer.sh and relays the user's answer with answer.sh, both bullets" "$(grep -c -F -e "$AN13" "$ROOT/prompts/coordinator.md" || true):$(grep -c -F -e 'relay the answer with `answer.sh`.' "$ROOT/prompts/coordinator.md" || true):$(grep -c -F -e 'Relay the answer with `answer.sh`.' "$ROOT/prompts/coordinator.md" || true)" "1:1:1"
 }
 
 sec_cli() {
