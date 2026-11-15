@@ -11065,7 +11065,7 @@ sec_tree_guard() {
 # tree-guard.sh: a snapshot of a worktree's state and the differences since it (throwaway repos under $TMP/tg)
 GD="$TMP/tg"; rm -rf "$GD"; mkdir -p "$GD/wt"; GW="$GD/wt"; GTOP="$(cd "$GW" && pwd -P)"
 gg() { git -C "$GW" "$@"; }
-gmtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+gmtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 tgx() { TGRC=0; TGOUT="$(cd "$1" && shift && HOME="$TMP/home" bash "$KIT/bin/tree-guard.sh" "$@" 2>"$GD/err")" || TGRC=$?; TGERR="$(cat "$GD/err")"; }
 gg init -q -b main; gg config user.email t@example.com; gg config user.name tester
 printf 'ign/\n' > "$GW/.gitignore"; mkdir -p "$GW/d" "$GW/tests" "$GW/tests2" "$GW/ign"
