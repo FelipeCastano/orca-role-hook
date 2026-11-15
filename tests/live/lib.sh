@@ -58,13 +58,20 @@ st_set() { local t="$STATE.tmp"; grep -v "^$1=" "$STATE" > "$t" 2>/dev/null; pri
 done_check() { [ "$(st_get "done.$1")" = 1 ]; }   # a check already run in an earlier run of the script is not run again
 mark_done() { st_set "done.$1" 1; }
 ask() {  # ask <text>: a step only the user can do; waits for Enter
-  printf '\n>>> %s\n>>> Press Enter when done (or type "skip" to skip this check): ' "$1"
+  printf '\n>>> %s\n>>> Press Enter to go on (or type "skip" to skip this check): ' "$1"
   local a t0=$SECONDS; read -r a < /dev/tty
   LIVE_ASK_S=$(( ${LIVE_ASK_S:-0} + SECONDS - t0 ))
   [ "$a" != skip ]
 }
 
 # ---------- environment ----------
+live_tty() {  # 0 when a person can type in this process's terminal: /dev/tty opens for reading (a run with no controlling terminal cannot, although the file exists). LIVE_TTY=1 says a usable terminal, LIVE_TTY=0 says none, unset or any other value detects it
+  case "${LIVE_TTY:-}" in
+    1) return 0;;
+    0) return 1;;
+  esac
+  ( : < /dev/tty ) 2>/dev/null
+}
 live_is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
 local_path() {  # a UNC path (Orca on Windows reports WSL paths that way) as a Linux path; any other path unchanged
   local c
@@ -186,11 +193,12 @@ wt_cleanup() {  # closes every tab of the throwaway worktree and removes it
 }
 
 # ---------- checks shared by mac.sh and wsl.sh ----------
-c_smoke_combo() {  # sections that failed together once (#29) must pass together
-  local id=$1 out rc
-  out="$(SMOKE_JOBS=1 "$LIVE_ROOT/tests/smoke.sh" launch launch-mode launch-add restart reopen wake worktree-select 2>&1)"; rc=$?
-  if [ $rc = 0 ] && printf '%s' "$out" | grep -q 'ALL OK'; then ok "$id" "smoke launch+launch-mode+launch-add+restart+reopen+wake+worktree-select together: ALL OK"
-  else fail "$id" "smoke sections together: rc=$rc"; attach "$id smoke" "$(printf '%s\n' "$out" | grep -E 'FAIL|aborted' | head -40)"; fi
+c_smoke_combo() {  # sections that failed together once (#29) must pass together; with the caller's SMOKE_JOBS, 1 when it is unset or empty
+  local id=$1 out rc jobs="${SMOKE_JOBS:-}"
+  [ -n "$jobs" ] || jobs=1
+  out="$(SMOKE_JOBS="$jobs" "$LIVE_ROOT/tests/smoke.sh" launch launch-mode launch-add restart reopen wake worktree-select 2>&1)"; rc=$?
+  if [ $rc = 0 ] && printf '%s' "$out" | grep -q 'ALL OK'; then ok "$id" "smoke launch+launch-mode+launch-add+restart+reopen+wake+worktree-select together (SMOKE_JOBS=$jobs): ALL OK"
+  else fail "$id" "smoke sections together (SMOKE_JOBS=$jobs): rc=$rc"; attach "$id smoke" "$(printf '%s\n' "$out" | grep -E 'FAIL|aborted' | head -40)"; fi
 }
 c_upgrade_no_roles() {  # upgrade_config on a user config without "roles" (#37: "null has no keys")
   local id=$1 t out rc
@@ -247,25 +255,85 @@ c_install_superpowers() {  # a fresh install into a temporary HOME: the real sup
     printf '%s' "$out" | grep -q 'installed' && ok "$id.status" "status after the install: installed" || fail "$id.status" "$out"
   else skip "$id.session" "claude is not installed"; fi
 }
-c_new_role_wizard() {  # the new-role wizard typed by a person (#28), in the temporary HOME of c_install_superpowers
-  local id=$1 t="$LIVE_DIR/home"
+c_new_role_wizard() {  # the new-role wizard (#28) in the temporary HOME of c_install_superpowers: typed by a person, or fed from an answer file when there is no usable terminal
+  local id=$1 t="$LIVE_DIR/home" w out last p d
   [ -x "$t/.orca-roles/bin/new-role.sh" ] || { skip "$id" "needs the temporary install of the superpowers check"; return; }
-  echo; echo ">>> The new-role wizard opens in a TEMPORARY kit ($t/.orca-roles); your kit is not touched."
-  echo ">>> Create a role with id 'live-probe', any title and description, mode programmer, agent claude; defaults for the rest."
-  HOME="$t" "$t/.orca-roles/bin/new-role.sh" < /dev/tty
-  if jq -e '.roles["live-probe"]' "$t/.orca-roles/config.json" >/dev/null 2>&1 && [ -s "$t/.orca-roles/roles/programmer/live-probe.md" ]; then
-    ok "$id" "the wizard created live-probe (config and prompt)"
-  else fail "$id" "no live-probe role in the temporary kit's config.json or roles/programmer/"; fi
+  if live_tty; then
+    echo; echo ">>> The new-role wizard opens in a TEMPORARY kit ($t/.orca-roles); your kit is not touched."
+    echo ">>> Create a role with id 'live-probe', any title and description, mode programmer, agent claude; defaults for the rest."
+    HOME="$t" "$t/.orca-roles/bin/new-role.sh" < /dev/tty
+    if jq -e '.roles["live-probe"]' "$t/.orca-roles/config.json" >/dev/null 2>&1 && [ -s "$t/.orca-roles/roles/programmer/live-probe.md" ]; then
+      ok "$id" "the wizard created live-probe (config and prompt)"
+    else fail "$id" "no live-probe role in the temporary kit's config.json or roles/programmer/"; fi
+    return
+  fi
+  # Without a terminal, one answer per question of bin/new-role.sh (a claude role in programmer mode only, the rest the defaults), read from a file
+  w="$(mktemp -d)"
+  {
+    printf '%s\n' 'live-probe'                                                          # Role id
+    printf '%s\n' 'Live Probe'                                                          # Tab title
+    printf '%s\n' 'A role created by the live checks to prove the new-role wizard works.'    # Description for the Planner
+    printf '%s\n' '2'                                                                   # In all modes or in one: one
+    printf '%s\n' '1'                                                                   # Mode (number): 1 = programmer
+    printf '%s\n' 'claude'                                                              # Agent
+    printf '\n'                                                                         # Model: the agent's default
+    printf '\n'                                                                         # Permission mode: auto
+    printf '\n'                                                                         # Add an MCP server: no
+    printf '\n'                                                                         # The role's MCP: none
+    printf '\n'                                                                         # Default allowed tools: yes
+    printf '\n'                                                                         # Extra folders: none
+    printf '\n'                                                                         # Extra CLI arguments: none
+    printf '\n'                                                                         # Environment variables: none
+    printf '\n'                                                                         # Role parameters: none
+    printf '\n'                                                                         # Place the tab after: the last role
+    printf '\n'                                                                         # Enable it now: yes
+    printf '%s\n' '1'                                                                   # Prompt: generate it from a few questions
+    printf '%s\n' 'Created by the live checks to prove the new-role wizard works.'      # The role's mission
+    printf '\n'                                                                         # Steps: none
+    printf '\n'                                                                         # Limits: none
+    printf '\n'                                                                         # Report: none
+    printf '\n'                                                                         # ACCEPTED/REJECTED verdict: no
+    printf '\n'                                                                         # Open it in the editor: no
+    printf '\n'                                                                         # Save: yes
+  } > "$w/answers"
+  HOME="$t" NEW_ROLE_TTY="$w/answers" "$t/.orca-roles/bin/new-role.sh" < /dev/null > "$w/out" 2>&1 & p=$!
+  ( n=0; while [ "$n" -lt 120 ] && kill -0 "$p" 2>/dev/null; do sleep 1; n=$((n + 1)); done
+    if kill -0 "$p" 2>/dev/null; then
+      : > "$w/timedout"; pkill -TERM -P "$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null
+      sleep 2; pkill -KILL -P "$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null
+    fi ) >/dev/null 2>&1 &
+  d=$!
+  wait "$p" 2>/dev/null || true
+  wait "$d" 2>/dev/null || true
+  out="$(cat "$w/out" 2>/dev/null)" || true
+  if [ -e "$w/timedout" ]; then fail "$id" "the wizard did not finish within 120 s (answers fed from a file)"
+  elif jq -e '.roles["live-probe"]' "$t/.orca-roles/config.json" >/dev/null 2>&1 && [ -s "$t/.orca-roles/roles/programmer/live-probe.md" ]; then
+    ok "$id" "the wizard created live-probe (config and prompt), answers fed from a file (no terminal)"
+  else
+    last="$(printf '%s\n' "$out" | grep . | tail -n 2)"
+    fail "$id" "no live-probe role in the temporary kit's config.json or roles/programmer/; the wizard's last 2 output lines: ${last:-(none)}"
+  fi
+  rm -rf "$w"
 }
-c_e2e() {  # the pinned E2E stack: install, a real login (cookie + localStorage), a flow against a real local app (#31)
+c_e2e() {  # the pinned E2E stack: install, a real login (cookie + localStorage), a flow against a real local app (#31); asks before opening the browser, and skips what needs a person when there is no terminal
   local id=$1 port=8765 app="$LIVE_DIR/app" out rc srv
   "$KIT/bin/e2e-browser.sh" check >/dev/null 2>&1 || { out="$("$KIT/bin/e2e-browser.sh" install 2>&1)" || { fail "$id.install" "$(printf '%s' "$out" | tail -2)"; return; }; }
   ok "$id.install" "the pinned Playwright stack is installed (e2e-browser.sh check)"
+  if ! live_tty; then
+    skip "$id.login" "needs a person to close the browser (no terminal)"
+    skip "$id.session" "needs a person to close the browser (no terminal)"
+    skip "$id.flow" "needs a person to close the browser (no terminal)"
+    LIVE_NOT_DONE=1   # nothing was checked: a later run with a terminal must ask for it again
+    return
+  fi
+  if ! ask "A browser opens at http://127.0.0.1:$port/ . When the page shows 'live-checks', CLOSE the browser window."; then
+    skip "$id.login" "skipped at the prompt"; skip "$id.session" "skipped at the prompt"; skip "$id.flow" "skipped at the prompt"
+    return
+  fi
   mkdir -p "$app"
   printf '%s\n' '<!doctype html><title>live</title><h1>live-checks</h1><script>document.cookie="live=1; path=/; max-age=86400"; localStorage.setItem("live","1")</script>' > "$app/index.html"
   (cd "$app" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) & srv=$!
   sleep 1
-  echo; echo ">>> A browser opens at http://127.0.0.1:$port/ . When the page shows 'live-checks', CLOSE the browser window."
   out="$(cd "$PROJ" && "$KIT/bin/browser-login.sh" "http://127.0.0.1:$port/" 2>&1)"; rc=$?
   [ $rc = 0 ] && ok "$id.login" "browser-login.sh saved a session ($(printf '%s' "$out" | grep -o 'Session saved:.*'))" || fail "$id.login" "$(printf '%s' "$out" | tail -2)"
   out="$(cd "$PROJ" && "$KIT/bin/e2e-browser.sh" session "http://127.0.0.1:$port/" 2>&1)"; rc=$?
@@ -474,10 +542,10 @@ restart_instructions() {
   echo ">>> Open Orca, open ONE terminal of this repo's main checkout (do not click the live-checks worktree's tabs) and run the same command again:"
   echo ">>>   $LIVE_ROOT/tests/live/$NAME.sh"
 }
-run_check() {  # run_check <id> <function> [args...]: runs a check once; a later run of the script skips it
+run_check() {  # run_check <id> <function> [args...]: runs a check once; a later run of the script skips it, unless the check set LIVE_NOT_DONE=1 (nothing was checked)
   done_check "$1" && { echo "($1 already done in an earlier run)"; return 0; }
-  LIVE_ASK_S=0; local t0=$SECONDS
-  "$2" "$1" "${@:3}"; mark_done "$1"
+  LIVE_ASK_S=0; LIVE_NOT_DONE=0; local t0=$SECONDS
+  "$2" "$1" "${@:3}"; [ "${LIVE_NOT_DONE:-0}" = 1 ] || mark_done "$1"
   { printf '%s\t%s\t%s\t%s\n' "$1" "$((SECONDS - t0))" "$LIVE_ASK_S" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TIMINGS"; } 2>/dev/null || live_tw
 }
 # The common sequence of mac.sh and wsl.sh: everything before the restart, then (on the next run) everything after it.

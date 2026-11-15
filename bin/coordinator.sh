@@ -45,4 +45,6 @@ elif [ "$ADVISOR" != auto ]; then
 fi
 # The message goes first: --add-dir takes several values and would swallow it as one more folder.
 if [ -n "$DEPTH" ]; then DEPTH_MSG=" Orca's nested worker depth is $DEPTH."; else DEPTH_MSG=" Orca's nested worker depth could not be read."; fi
+# Marks this Claude session as a global coordinator's: the SessionStart hook starts the reopen of the coordinated worktrees' teams when it comes back with a new handle.
+export ORCA_ROLES_SESSION_KIND=coordinator
 exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\".$DEPTH_MSG" ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts" "${ADV_ARGS[@]+"${ADV_ARGS[@]}"}"
