@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run cli"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -471,7 +471,7 @@ for p in tester code-reviewer; do
   GCO="$(grep -F 'git checkout' "$PD/$p.md" || true)"; [ -n "$GCO" ] && grep -vqE 'Never (use|run) .git checkout.' <<<"$GCO" && { echo "FAIL rules R11: $p.md mentions git checkout without forbidding it"; FAIL=1; }
 done
 rule R11 "$PD/code-reviewer.md" "Never edit Dev's or the Tester's files in any other way" '^- The reviewer verifies, it does not change'
-rule R11 "$PD/tester.md" 'crosscheck.sh tree <scratchDir>/base' '^7\. \*\*Base check'
+rule R11 "$PD/tester.md" 'crosscheck.sh basecheck <scratchDir>/base' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'report the base check as not run for that reason' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'Fails on the base before its body runs' '^   - \*\*Fails on the base before'
@@ -11833,6 +11833,151 @@ trc "test-run: with no HOME the command still runs and the log is not written" "
 TT="$ROOT/prompts/programmer/tester.md"; TCR="$ROOT/prompts/programmer/code-reviewer.md"
 trc "test-run: the Tester and Code-Reviewer prompts name the wrapper" "$(grep -c 'test-run.sh --role tester --' "$TT" | sed 's/^[1-9][0-9]*$/y/'):$(grep -c 'test-run.sh --role code-reviewer --' "$TCR" | sed 's/^[1-9][0-9]*$/y/'):$(grep -c 'Environment assignments go before it' "$TT" "$TCR" | tr '\n' ' '):$(grep -c -e '--role tester --label base-check --' "$TT"):$(grep -c -e '--role tester --label cross-check --' "$TT")" "y:y:$(printf '%s:1 %s:1 ' "$TT" "$TCR"):1:1"
 check "test-run: log file" "$TRF" ""
+}
+
+sec_tree_guard() {
+# tree-guard.sh: a snapshot of a worktree's state and the differences since it (throwaway repos under $TMP/tg)
+GD="$TMP/tg"; rm -rf "$GD"; mkdir -p "$GD/wt"; GW="$GD/wt"; GTOP="$(cd "$GW" && pwd -P)"
+gg() { git -C "$GW" "$@"; }
+gmtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+tgx() { TGRC=0; TGOUT="$(cd "$1" && shift && HOME="$TMP/home" bash "$KIT/bin/tree-guard.sh" "$@" 2>"$GD/err")" || TGRC=$?; TGERR="$(cat "$GD/err")"; }
+gg init -q -b main; gg config user.email t@example.com; gg config user.name tester
+printf 'ign/\n' > "$GW/.gitignore"; mkdir -p "$GW/d" "$GW/tests" "$GW/tests2" "$GW/ign"
+printf 'v1\n' > "$GW/d/a"; printf 'v1\n' > "$GW/d/b"; printf 't1\n' > "$GW/tests/x"; printf 'u1\n' > "$GW/tests2/x"
+gg add -A; gg commit -q -m init
+# usage, the = 2 refusals of arguments, and the header for -h/--help
+tgx "$GW"; U="none:$TGRC:[$TGOUT]:$(printf '%s' "$TGERR" | grep -c 'snapshot' || true):$(printf '%s' "$TGERR" | grep -c 'compare' || true)"
+tgx "$GW" bogus x; U="$U bogus:$TGRC:$(printf '%s' "$TGERR" | grep -c 'snapshot' || true):[$TGOUT]"
+tgx "$GW" snapshot; U="$U nofile:$TGRC"
+tgx "$GW" compare; U="$U cmpnoarg:$TGRC"
+tgx "$GW" compare "$GD/s" --bogus; U="$U badopt:$TGRC"
+tgx "$GW" -h; HN="$(printf '%s\n' "$TGOUT" | grep -c '^#' | sed 's/^[1-9][0-9]*$/y/')"; U="$U h:$TGRC:$HN:$(printf '%s\n' "$TGOUT" | grep -c 'snapshot' | sed 's/^[1-9][0-9]*$/y/' || true)"
+tgx "$GW" --help; U="$U help:$TGRC:$(printf '%s\n' "$TGOUT" | grep -c '^#' | sed 's/^[1-9][0-9]*$/y/'):$(printf '%s\n' "$TGOUT" | grep -vc '^#' || true):$(printf '%s\n' "$TGOUT" | grep -c 'compare' | sed 's/^[1-9][0-9]*$/y/' || true)"
+check "tree-guard: no subcommand, an unknown subcommand, a missing <file> and an unknown option -> usage on stderr, exit 2, nothing on stdout; -h and --help print the header on stdout, exit 0" "$U" "none:2:[]:1:1 bogus:2:1:[] nofile:2 cmpnoarg:2 badopt:2 h:0:y:y help:0:y:0:y"
+# snapshot of a clean tree, compare with no difference, from a subdirectory, an ignored file out of the state, the index not rewritten
+GST="$(cd "$GW" && GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 -uall --ignored | shasum)"
+touch -t 200101010000 "$GW/.git/index"; GIM="$(gmtime "$GW/.git/index")"
+tgx "$GW" snapshot "$GD/s"
+C="snap:$TGRC:[$TGOUT]:$(printf '%s\n' "$TGERR" | grep -cE '^tree-guard: snapshot of 0 changed path\(s\) at [0-9a-f]+$' || true):$([ -f "$GD/s" ] && echo file || echo none)"
+tgx "$GW" compare "$GD/s"; C="$C cmp:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+tgx "$GW/d" snapshot "$GD/s2"; C="$C sub:$TGRC:$(printf '%s\n' "$TGOUT" | grep -c . || true)"
+tgx "$GW/d" compare "$GD/s2"; C="$C subcmp:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+C="$C idx:$([ "$GIM" = "$(gmtime "$GW/.git/index")" ] && echo same || echo moved):st:$([ "$GST" = "$(cd "$GW" && GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 -uall --ignored | shasum)" ] && echo same || echo moved)"
+printf 'z\n' > "$GW/ign/z"; tgx "$GW" compare "$GD/s"; C="$C ign:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+check "tree-guard: snapshot of a clean tree (nothing on stdout, one summary line on stderr, the file written), compare same (0 allowed) exit 0, the same from a subdirectory, an ignored file change is no difference, and .git/index is not rewritten" "$C" "snap:0:[]:1:file cmp:0:tree-guard: same as the snapshot (0 allowed)| sub:0:0 subcmp:0:tree-guard: same as the snapshot (0 allowed)| idx:same:st:same ign:0:tree-guard: same as the snapshot (0 allowed)|"
+# every kind of change between two snapshots, and HEAD moved
+TGS=""
+tgsnap() { tgx "$GW" snapshot "$GD/s"; }
+tgafter() { tgx "$GW" compare "$GD/s"; TGS="$TGS$1=$(printf '%s\n' "$TGOUT" | sed '/^$/d;/^tree-guard: /d' | tr '\n' ','):$TGRC;"; }
+tgsnap; printf 'v2\n' > "$GW/d/a"; tgafter edit-tracked
+tgsnap; printf 'v3\n' > "$GW/d/a"; tgafter edit-again
+tgsnap; gg add d/a; tgafter git-add
+tgsnap; printf 'xx\n' > "$GW/u"; tgafter new-untracked
+tgsnap; printf 'yy\n' > "$GW/u"; tgafter same-size-untracked
+tgsnap; rm "$GW/d/b"; tgafter delete-tracked
+ln -s d/a "$GW/lk"; tgsnap; ln -sfn tests/x "$GW/lk"; tgafter symlink-retarget
+gg add -A; gg commit -q -m c1
+tgsnap; printf 'w\n' > "$GW/tests/x"; gg add -A; gg commit -q -m c2
+tgx "$GW" compare "$GD/s" --allow tests --allow d --allow u --allow lk
+check "tree-guard: one changed line and exit 1 for each kind of change (a tracked file edited, an already-changed file edited further, git add without a content change, a new untracked file, an untracked file edited to the same size, a tracked file deleted, a symlink retargeted), and HEAD moved (a commit) -> a head line and exit 1 even with every changed path allowed)" "$TGS|head=$(printf '%s\n' "$TGOUT" | grep -cE '^head [0-9a-f]+ -> [0-9a-f]+$' || true):$TGRC:$(printf '%s\n' "$TGOUT" | grep -c '^changed' || true):$(printf '%s\n' "$TGOUT" | grep -vc '^head ' || true)" "edit-tracked=changed d/a,:1;edit-again=changed d/a,:1;git-add=changed d/a,:1;new-untracked=changed u,:1;same-size-untracked=changed u,:1;delete-tracked=changed d/b,:1;symlink-retarget=changed lk,:1;|head=1:1:0:1"
+# --allow: a file, a folder, an absolute path, a folder boundary, mixed with a change outside, and the refused values
+printf 'c1\n' >> "$GW/d/a"; tgx "$GW" snapshot "$GD/s"
+printf 'c2\n' >> "$GW/d/a"; tgx "$GW" compare "$GD/s" --allow d/a; A="file:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+tgx "$GW" compare "$GD/s" --allow d; A="$A folder:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+tgx "$GW" compare "$GD/s" --allow "$GTOP/d/a"; A="$A abs:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+printf 'm\n' >> "$GW/tests/x"; printf 'm\n' >> "$GW/tests2/x"
+tgx "$GW" compare "$GD/s" --allow d --allow tests; A="$A mixed:$TGRC:$(printf '%s\n' "$TGOUT" | tr '\n' '|')"
+AB=""
+for v in "" "." "d/../d" "/etc/passwd" "$GD"; do tgx "$GW" compare "$GD/s" --allow "$v"; AB="$AB$TGRC:$(printf '%s' "$TGERR" | grep -c . || true):"; done
+tgx "$GW" compare "$GD/s" --allow; AB="$AB$TGRC:$(printf '%s' "$TGERR" | grep -c . || true)"
+check "tree-guard --allow: a file, a folder, a trailing-slash-free folder and an absolute path inside allow the change (allowed line, 'same as the snapshot (n allowed)', exit 0); tests allows tests/x but not tests2/x, and a mixed change reports only the outside one and exit 1; an empty value, '.', a '..' component, an absolute path outside the worktree and a missing value -> exit 2 with a message" "$A|$AB" "file:0:allowed d/a|tree-guard: same as the snapshot (1 allowed)| folder:0:allowed d/a|tree-guard: same as the snapshot (1 allowed)| abs:0:allowed d/a|tree-guard: same as the snapshot (1 allowed)| mixed:1:allowed d/a|allowed tests/x|changed tests2/x|tree-guard: 1 difference(s) outside the allowed paths||2:1:2:1:2:1:2:1:2:1:2:1"
+# leftover *.orca-bak (top level, an untracked folder, an ignored folder) and the refusals
+rm -f "$GD/s.n"; printf 'b\n' > "$GW/x.orca-bak"
+tgx "$GW" snapshot "$GD/s.n"
+L="top:$TGRC:$(printf '%s\n' "$TGOUT" | grep -c '^leftover x.orca-bak$' || true):$([ -e "$GD/s.n" ] && echo file || echo none):$(printf '%s' "$TGERR" | grep -c . || true)"
+mkdir -p "$GW/uf"; printf 'b\n' > "$GW/uf/y.orca-bak"; printf 'b\n' > "$GW/ign/z.orca-bak"
+tgx "$GW" snapshot "$GD/s.n"; L="$L three:$TGRC:$(printf '%s\n' "$TGOUT" | grep -c '^leftover ' || true):$([ -e "$GD/s.n" ] && echo file || echo none)"
+rm -f "$GW/x.orca-bak" "$GW/uf/y.orca-bak" "$GW/ign/z.orca-bak"
+tgx "$GW" snapshot "$GD/s"; L="$L ok:$TGRC"
+printf 'b\n' > "$GW/x.orca-bak"; printf 'b\n' > "$GW/uf/y.orca-bak"; printf 'b\n' > "$GW/ign/z.orca-bak"
+tgx "$GW" compare "$GD/s"; L="$L cmp:$TGRC:$(printf '%s\n' "$TGOUT" | grep -c '^leftover ' || true)"
+rm -f "$GW/x.orca-bak" "$GW/uf/y.orca-bak" "$GW/ign/z.orca-bak"
+tgx "$GW" snapshot "$GW/inside"; L="$L inside:$TGRC:$([ -e "$GW/inside" ] && echo file || echo none):$(printf '%s' "$TGERR" | grep -c . || true)"
+tgx "$GW" compare "$GD/nonexistent"; L="$L missing:$TGRC:$(printf '%s' "$TGERR" | grep -c . || true)"
+printf 'not a snapshot\n' > "$GD/foreign"; tgx "$GW" compare "$GD/foreign"; L="$L foreign:$TGRC:$(printf '%s' "$TGERR" | grep -c . || true)"
+GW2="$GD/wt2"; mkdir -p "$GW2"; git -C "$GW2" init -q -b main; printf 'a\n' > "$GW2/f"; git -C "$GW2" add -A; git -C "$GW2" -c user.email=t@example.com -c user.name=t commit -q -m i
+tgx "$GW2" snapshot "$GD/s2w"; tgx "$GW" compare "$GD/s2w"; L="$L other:$TGRC:$(printf '%s' "$TGERR" | grep -c . || true)"
+tgx "$GD" snapshot "$GD/s3"; L="$L norepo:$TGRC:$(printf '%s' "$TGERR" | grep -c . || true)"
+tgx "$GD" compare "$GD/s"; L="$L norepocmp:$TGRC:$(printf '%s' "$TGERR" | grep -c . || true)"
+check "tree-guard: a *.orca-bak at the top level, in an untracked folder and in an ignored folder -> snapshot lists each leftover, writes nothing, exit 1 and compare lists them; a snapshot file inside the worktree is refused (exit 1, nothing created); compare with a missing, foreign or another worktree's snapshot -> exit 3; outside a git worktree -> 1 and 3, each with a message" "$L" "top:1:1:none:1 three:1:3:none ok:0 cmp:1:3 inside:1:none:1 missing:3:1 foreign:3:1 other:3:1 norepo:1:1 norepocmp:3:1"
+# path names: spaces, non-ASCII, a leading -, a newline (quoted with C escapes)
+GNL="$(printf 'nl\nname')"
+printf 'p\n' > "$GW/a b.txt"; printf 'p\n' > "$GW/ü.txt"; printf 'p\n' > "$GW/-x.txt"; printf 'p\n' > "$GW/$GNL"
+tgx "$GW" snapshot "$GD/s"
+printf 'q\n' >> "$GW/a b.txt"; printf 'q\n' >> "$GW/ü.txt"; printf 'q\n' >> "$GW/-x.txt"; printf 'q\n' >> "$GW/$GNL"
+tgx "$GW" compare "$GD/s"
+check "tree-guard: paths with a space, non-ASCII characters, a leading '-' and a newline are each detected and printed (the newline one in double quotes with \\n, the others verbatim)" "$TGRC:$(printf '%s\n' "$TGOUT" | grep -c '^changed a b\.txt$' || true):$(printf '%s\n' "$TGOUT" | grep -c '^changed ü\.txt$' || true):$(printf '%s\n' "$TGOUT" | grep -c '^changed -x\.txt$' || true):$(printf '%s\n' "$TGOUT" | grep -c '^changed "nl\\nname"$' || true):$(printf '%s\n' "$TGOUT" | grep -c '^changed ' || true)" "1:1:1:1:1:4"
+# a submodule and an untracked nested repository are one directory entry, compared recursively
+SMR="$GD/smrepo"; mkdir -p "$SMR"; git -C "$SMR" init -q -b main; printf 's\n' > "$SMR/f"; git -C "$SMR" add -A; git -C "$SMR" -c user.email=t@example.com -c user.name=t commit -q -m i
+gg -c protocol.file.allow=always submodule add -q "$SMR" sm >/dev/null 2>&1; gg commit -q -m sub
+mkdir -p "$GW/nested"; git -C "$GW/nested" init -q -b main; printf 'n\n' > "$GW/nested/f"
+tgx "$GW" snapshot "$GD/s"
+printf 's2\n' > "$GW/sm/f"; tgx "$GW" compare "$GD/s"; D="sm-edit:$(printf '%s\n' "$TGOUT" | grep -c '^changed sm$' || true):$TGRC"
+tgx "$GW" snapshot "$GD/s"; printf 'n2\n' > "$GW/nested/f"; tgx "$GW" compare "$GD/s"; D="$D nested-edit:$(printf '%s\n' "$TGOUT" | grep -c '^changed nested/$' || true):$TGRC"
+tgx "$GW" snapshot "$GD/s"; git -C "$GW/sm" -c user.email=t@example.com -c user.name=t commit -qam c >/dev/null 2>&1; tgx "$GW" compare "$GD/s"; D="$D sm-commit:$(printf '%s\n' "$TGOUT" | grep -c '^changed sm$' || true):$TGRC"
+tgx "$GW" snapshot "$GD/s"; git -C "$GW/nested" add -A; git -C "$GW/nested" -c user.email=t@example.com -c user.name=t commit -qm c; tgx "$GW" compare "$GD/s"; D="$D nested-commit:$(printf '%s\n' "$TGOUT" | grep -c '^changed nested/$' || true):$TGRC"
+tgx "$GW" snapshot "$GD/s"; printf 'n3\n' > "$GW/nested/f"; tgx "$GW" compare "$GD/s" --allow nested/; D="$D allowed:$(printf '%s\n' "$TGOUT" | grep -c '^allowed nested/$' || true):$TGRC"
+check "tree-guard: a submodule and an untracked nested repository are one directory entry (sm, nested/), one changed line for a file edited in it and one for a commit inside it, and --allow matches that path" "$D" "sm-edit:1:1 nested-edit:1:1 sm-commit:1:1 nested-commit:1:1 allowed:1:0"
+}
+
+sec_basecheck() {
+# crosscheck.sh basecheck: a copy of the base ref with the Tester's files on top, the command run there and then here, each check classed (throwaway repo under $TMP/bc)
+BD="$TMP/bc"; rm -rf "$BD"; mkdir -p "$BD/wt"; BW="$BD/wt"
+bg() { git -C "$BW" "$@"; }
+bcr() { BRC=0; BOUT="$(cd "$BW" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" basecheck "$@" 2>"$BD/err")" || BRC=$?; BERR="$(cat "$BD/err")"; }
+bstate() { ( cd "$BW" && git rev-parse HEAD; GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 -uall --ignored; find . -path ./.git -prune -o -print | LC_ALL=C sort | while IFS= read -r f; do if [ -L "$f" ]; then echo "$f -> $(readlink "$f")"; elif [ -f "$f" ]; then echo "$f $(shasum < "$f" | cut -d' ' -f1)"; else echo "$f/"; fi; done ) | shasum | cut -d' ' -f1; }
+bg init -q -b main; bg config user.email t@example.com; bg config user.name tester
+mkdir -p "$BW/src" "$BW/tests"
+printf 'ok   keep\nFAIL changed: expected [1], got [0]\nFAIL pin: 1 != 2\nFAIL dup: expected [a], got [b]\nok   gone\nok   bad\n' > "$BW/src/lines"
+printf '#!/bin/sh\ncat src/lines\n' > "$BW/tests/t.sh"
+bg add -A; bg commit -q -m base; BBASE="$(bg rev-parse HEAD)"
+printf 'ok   keep\nok   changed\nok   dup\nok   dup\nFAIL bad: expected [h], got [w]\nok   new\n' > "$BW/src/lines"
+# every class, the order of stdout, the tsv with every check, the counts, the JSON, and the copy left in place
+bcr "$BD/copy" --ref "$BBASE" -- sh tests/t.sh
+BCLS="$(printf '%s\n' "$BOUT" | sed '$d')"; BJ="$(printf '%s\n' "$BOUT" | tail -n 1)"
+BDIR="$(printf '%s' "$BJ" | jq -r .dir || true)"; BDIRP="$(cd "$BD/copy" && pwd -P || true)"
+B1="$BRC|$(printf '%s' "$BCLS" | tr '\t' '=' | tr '\n' '/' || true)|$(printf '%s' "$BJ" | jq -r '"\(.format) \(.ref == "'"$BBASE"'") \(.dir == "'"$BDIRP"'") \(.backLinks) \(.base.exit) \(.here.exit) \(.base.timedOut) \(.here.timedOut)"' || true)|$(printf '%s' "$BJ" | jq -r '.counts | to_entries | map("\(.key)=\(.value)") | sort | join(",")' || true)|$(printf '%s' "$BJ" | jq -r '.table == "'"$BDIRP"'.basecheck.tsv"' || true)"
+B2="$(sed 's/\t/=/g' "$BDIR.basecheck.tsv" 2>/dev/null | tr '\n' '/' || true)|$(printf '%s' "$(cat "$BDIR.basecheck-base.log" 2>/dev/null)" | tr '\n' '/' || true)|$(printf '%s' "$(cat "$BDIR.basecheck-here.log" 2>/dev/null)" | tr '\n' '/' || true)|$([ ! "$BDIR.basecheck-base.log" -nt "$BDIR.basecheck-here.log" ] && echo ordered || echo unordered)"
+B3=0; ( cd "$BW" && HOME="$TMP/home" bash "$KIT/bin/crosscheck.sh" run "$BD/copy" --label again -- true >"$BD/run.json" 2>/dev/null ) || B3=$?
+check "basecheck: every class (fails on base / passes here, fails on base / silent here, absent on base / passes here, fails here, passes on base / absent here; passes on both only in the tsv and counts), the stdout order (the worktree log's, then the base-only ones), the tsv with every check, the JSON fields, both logs, the base run before the here run, and the copy left usable by 'run'" "$B1|$B2|run:$B3:$(jq -r '"\(.label) \(.exit)"' "$BD/run.json" 2>/dev/null || true)" "0|fails on base / passes here=changed/fails on base / passes here=dup/absent on base / passes here=dup/fails here=bad/absent on base / passes here=new/fails on base / silent here=pin: 1 != 2/passes on base / absent here=gone|smoke true true false 0 0 false false|absent on base / passes here=2,fails here=1,fails on base / passes here=2,fails on base / silent here=1,passes on base / absent here=1,passes on both=1|true|passes on both=keep/fails on base / passes here=changed/fails on base / passes here=dup/absent on base / passes here=dup/fails here=bad/absent on base / passes here=new/fails on base / silent here=pin: 1 != 2/passes on base / absent here=gone/|ok   keep/FAIL changed: expected [1], got [0]/FAIL pin: 1 != 2/FAIL dup: expected [a], got [b]/ok   gone/ok   bad|ok   keep/ok   changed/ok   dup/ok   dup/FAIL bad: expected [h], got [w]/ok   new|ordered|run:0:again 0"
+# --overlay on top of the copy: a check only the worktree's test file prints turns into passes on both; a second run replaces the copy; the worktree is unchanged
+printf '#!/bin/sh\ncat src/lines\nprintf "ok   ov\\n"\n' > "$BW/tests/t.sh"; B0="$(bstate)"
+printf 'stale\n' > "$BD/copy/stale"
+bcr "$BD/copy" --ref "$BBASE" --overlay tests/t.sh -- sh tests/t.sh
+BCLS="$(printf '%s\n' "$BOUT" | sed '$d')"; BJ="$(printf '%s\n' "$BOUT" | tail -n 1)"
+BDIR="$(printf '%s' "$BJ" | jq -r .dir || true)"
+check "basecheck --overlay: the copy gets the worktree's test file (the check it prints is passes on both, absent from stdout), a second basecheck on the same <dir> replaces the copy, and the worktree is unchanged" "$BRC:$(printf '%s' "$BOUT" | grep -c '	ov$' || true):$(printf '%s' "$BJ" | jq -r '.counts["passes on both"]'):$(printf '%s' "$BJ" | jq -r '.format'):$(grep -c '	ov$' "$BDIR.basecheck.tsv" || true):$([ -e "$BDIR/stale" ] && echo stale || echo gone):$([ "$B0" = "$(bstate)" ] && echo same || echo changed)" "0:0:2:smoke:1:gone:same"
+# non-smoke output (format unknown), timeouts on both sides, and their stderr line; both exit 0
+bcr "$BD/unk" --ref "$BBASE" -- sh -c 'echo PASSED t1; exit 4'
+BJ="$(printf '%s\n' "$BOUT" | tail -n 1)"; BUDIR="$(printf '%s' "$BJ" | jq -r .dir || true)"
+U1="$BRC:$(printf '%s\n' "$BOUT" | grep -c '^{' || true):$(printf '%s' "$BJ" | jq -r '"\(.format) \(.base.exit) \(.here.exit) \([.counts[]] | add) \(.base.timedOut) \(.here.timedOut)"' || true):$([ -s "$BUDIR.basecheck.tsv" ] && wc -c < "$BUDIR.basecheck.tsv" | tr -d ' ' || echo empty):$(printf '%s' "$BERR" | grep -c . || true):$(printf '%s' "$(cat "$BUDIR.basecheck-base.log" 2>/dev/null)" || true)"
+bcr "$BD/slow" --ref "$BBASE" --timeout 1 -- sleep 9.317
+BJ="$(printf '%s\n' "$BOUT" | tail -n 1)"; BSDIR="$(printf '%s' "$BJ" | jq -r .dir)"; U2E="$([ -s "$BSDIR.basecheck.tsv" ] && echo tsv || echo empty)"
+U2A="$(printf '%s\n' "$BOUT" | grep -c '^{' || true)"
+U2B="$(printf '%s' "$BJ" | jq -r '"\(.format) \(.base.timedOut) \(.here.timedOut) \(.base.exit) \([.counts[]] | add)"' || true)"
+U2C="$(printf '%s' "$BERR" | grep -c . || true)"
+U2D="$(pgrep -f 'sleep 9.317' | wc -l | tr -d ' ' || true)"
+U2="$BRC:$U2A:$U2B:$U2C:$U2D:$U2E"
+# refusals and usage: nothing run, the worktree unchanged
+BF="$BD/full"; mkdir -p "$BF"; printf 'x\n' > "$BF/f"; ln -s ../src/lines "$BD/lnk"
+BR=""
+for v in "$BW/inside|--ref|$BBASE" "$BF|--ref|$BBASE" "$BD/r1|--ref|nope" "$BD/r2|--ref|$BBASE|--overlay|tests/none" "$BD/r3|--ref|$BBASE|--overlay|../x" "$BD/r4|--ref|$BBASE|--overlay|$BD/lnk" "$BD/r5|--ref|$BBASE|--"; do
+  OLDIFS="$IFS"; IFS='|'; set -- $v; IFS="$OLDIFS"
+  bcr "$@"; BR="$BR$BRC:$(printf '%s' "$BERR" | grep -c . || true):$([ -e "$1.basecheck.tsv" ] || [ -e "$1.basecheck-base.log" ] && echo ran || echo none):"
+done
+bcr; BR="$BR$BRC:$(printf '%s' "$BERR" | grep -c . | sed 's/^[1-9][0-9]*$/y/' || true)"
+bcr "$BD/r6" --ref "$BBASE" --timeout 1.5 -- true; BR="$BR|$BRC"
+check "basecheck: a command that does not print smoke lines -> format unknown, no class lines, empty tsv, counts all zero, the exits in the JSON, exit 0 and one stderr line; a timeout on both sides -> timedOut on each, no class lines, exit 0, one stderr line, no process left; refusals (a <dir> inside the worktree, a foreign non-empty dir, a bad ref, a missing overlay, an overlay outside the worktree and a symlink overlay -> exit 1 with a message and nothing run; '--' with no command -> exit 1; no arguments -> usage, exit 2, nothing run; the worktree unchanged, a bad --timeout refused" "$U1|$U2|refuse:$BR:$(bstate)" "0:1:unknown 4 4 0 false false:empty:1:PASSED t1|0:1:unknown true true 124 0:1:0:empty|refuse:1:1:none:1:1:none:1:1:none:1:1:none:1:1:none:1:1:none:1:1:none:2:y|1:$B0"
 }
 
 sec_cli() {

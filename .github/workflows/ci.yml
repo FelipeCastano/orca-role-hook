@@ -40,7 +40,7 @@ jobs:
           - id: 5
             sections: "prompts flow loop jira-key usage-install usage-scheduler plugin-dirs forget-trust rounds browser-login review-skill project-plugins team-status"
           - id: 6
-            sections: "output-rules planner-msg scratch composer-title cli-shim launch-overrides new-role-modes composer-session remove-role composer-tab dead-tab trust-folder codex-custom prompt-paths install-flat kit-path coordinator e2e-run front-model crosscheck guard relaunch test-run"
+            sections: "output-rules planner-msg scratch composer-title cli-shim launch-overrides new-role-modes composer-session remove-role composer-tab dead-tab trust-folder codex-custom prompt-paths install-flat kit-path coordinator e2e-run front-model crosscheck guard relaunch test-run tree-guard basecheck"
           - id: 7
             sections: "syntax config cleanup-msg project-config metrics usage-metrics modes restart reopen opencode new-role-repo install"
           - id: 8
@@ -78,7 +78,7 @@ jobs:
           - id: 2
             sections: "prompts config scratch launch-overrides launch-mode launch-add new-role-modes planner-skill composer-session composer-tab reopen worktree-select forget-trust prompt-paths kit-path checkpoint sync-base guard model-check models scholar team-status hidden test-run"
           - id: 3
-            sections: "syntax planner-msg flow oracle cleanup-msg mcp mcp-placeholders roles-yaml launch usage-metrics usage-install usage-pass usage-scheduler academic-research wizard plugin-dirs orca-alias remove-role restart opencode install-migration coordinator rounds e2e-browser front-model crosscheck review-skill relaunch dispatch"
+            sections: "syntax planner-msg flow oracle cleanup-msg mcp mcp-placeholders roles-yaml launch usage-metrics usage-install usage-pass usage-scheduler academic-research wizard plugin-dirs orca-alias remove-role restart opencode install-migration coordinator rounds e2e-browser front-model crosscheck review-skill relaunch dispatch tree-guard basecheck"
         # 3 shards for the 3 CPUs of GitHub's macOS runners: one section per CPU, as the shards before the Ubuntu split
     name: smoke-shard (macos-latest, ${{ matrix.shard.id }})
     runs-on: macos-latest
