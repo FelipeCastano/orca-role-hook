@@ -3,6 +3,7 @@
 # for example) without touching the worktree. A copy lives in the worker's scratchDir and carries its own throwaway git repo.
 # Usage (from the worktree):  crosscheck.sh tree <dir> --ref <ref> [--overlay <file>...]
 #                             crosscheck.sh run <dir> --label <label> [--timeout <seconds>] -- <command> [<arg>...]
+#                             crosscheck.sh basecheck <dir> --ref <ref> [--overlay <file>...] [--timeout <seconds>] -- <command> [<arg>...]
 #                             crosscheck.sh export <dir> [--only <path>]... [--except <path>]...   |   crosscheck.sh apply [--replace] <dir> <patch>
 # tree: writes the files of <ref> (a commit, e.g. a checkpoint ref) into <dir>, outside the worktree: new, empty, or an earlier copy
 #   (replaced). Links the worktree's ignored dependencies (node_modules, .venv ...) instead of copying them; caches and build outputs
@@ -11,6 +12,11 @@
 # run: runs the command inside a copy made by tree, cut after --timeout seconds (default 600); its output goes to <dir>.<label>.log
 #   and one JSON line is printed: {label, dir, exit, seconds, timedOut, log, backLinks}. A timed-out run is an error, not a failing
 #   test. backLinks is true when tree warned that a linked entry points back into the worktree (an editable install, a workspace link).
+# basecheck: builds the copy as tree does, runs the command in the copy and then in the worktree (one after the other, each cut after
+#   --timeout seconds) and classifies every check the smoke runner (tests/smoke.sh) printed in both logs: one stdout line per check
+#   that is not "passes on both", then one JSON line {ref, dir, format, base, here, backLinks, counts, table}; every check goes to
+#   <dir>.basecheck.tsv. Classes: fails on base / passes here, fails on base / silent here, absent on base / passes here, fails here,
+#   passes on base / absent here and passes on both. Any other output, or a run cut at the timeout, leaves no per-check result.
 # export: prints, as a binary-safe patch, what changed in a copy since tree made it (new files included, links left out), limited to
 #   the --only paths and without the --except ones (literal paths of the project, files or folders). Nothing to export: empty output.
 # apply: applies a patch (e.g. one export printed) to a copy, all or nothing. An empty patch changes nothing.
@@ -19,7 +25,7 @@ set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 MARK=orca-crosscheck
 die() { echo "crosscheck.sh: $*" >&2; exit 1; }
-usage() { sed -n 4,6p "$0" >&2; exit 2; }
+usage() { sed -n 4,7p "$0" >&2; exit 2; }
 abs_dir() { (cd "$1" 2>/dev/null && pwd -P); }   # physical path of an existing directory
 phys_path() {   # physical path of a directory that may not exist yet: its nearest existing ancestor, resolved, plus the rest
   local p="$1" rest=""
@@ -29,6 +35,66 @@ phys_path() {   # physical path of a directory that may not exist yet: its neare
   printf '%s%s' "$(abs_dir "$p")" "$rest"
 }
 is_copy() { [ -f "$1/.git/$MARK" ]; }
+bc_count() {   # bc_count <class>: adds one to the class's counter
+  case "$1" in
+    "fails on base / passes here") C_FBP=$((C_FBP+1));;
+    "fails on base / silent here") C_FBS=$((C_FBS+1));;
+    "passes on both") C_PB=$((C_PB+1));;
+    "absent on base / passes here") C_ABP=$((C_ABP+1));;
+    "fails here") C_FH=$((C_FH+1));;
+    "passes on base / absent here") C_PBA=$((C_PBA+1));;
+  esac
+}
+build_copy() {   # build_copy <dir> <ref> [<overlay>...]: builds or replaces the copy and sets D, SHA, LINKS and NOVER; nothing on stdout
+  local DIR="$1" REF="$2" f rel p REPLACE
+  shift 2
+  local OVERLAYS=()
+  while [ $# -gt 0 ]; do OVERLAYS+=("$1"); shift; done
+  [ -n "$REF" ] || die "--ref <ref> is required"
+  SHA="$(git rev-parse --verify --quiet "$REF^{commit}")" || die "not a commit: $REF"
+  for f in ${OVERLAYS[@]+"${OVERLAYS[@]}"}; do
+    case "$f" in /*) rel="${f#"$TOP"/}"; [ "$rel" != "$f" ] || die "overlay outside the worktree: $f";; *) rel="$f";; esac
+    case "/$rel/" in */../*|*/./*) die "overlay path must not contain . or ..: $f";; esac
+    [ -f "$TOP/$rel" ] && [ ! -L "$TOP/$rel" ] || die "overlay is not a regular file of the worktree: $f"
+  done
+  REPLACE=0
+  if [ -e "$DIR" ] || [ -L "$DIR" ]; then
+    if [ -d "$DIR" ] && [ ! -L "$DIR" ] && is_copy "$DIR"; then REPLACE=1
+    else [ -d "$DIR" ] && [ -z "$(ls -A "$DIR" 2>/dev/null)" ] || die "$DIR exists and is neither empty nor a copy made by crosscheck.sh tree"; fi
+  fi
+  D="$(phys_path "$DIR")" || die "$DIR must not contain . or .. after its existing part"
+  case "$D/" in "$TOP"/*) die "$DIR is inside the worktree: use your scratchDir";; esac
+  case "$TOP/" in "$D"/*) die "$DIR contains the worktree";; esac
+  # an earlier copy is replaced (scratch folders are reused, never emptied by hand); rm -rf removes its links, not what they point to
+  if [ "$REPLACE" = 1 ]; then rm -rf "$D" || die "cannot remove the earlier copy in $DIR"; fi
+  mkdir -p "$D" || die "cannot create $DIR"
+  T="$(mktemp -d "${TMPDIR:-/tmp}/orca-crosscheck.XXXXXX")" || die "cannot create a temporary folder"
+  trap 'rm -rf "$T"' EXIT
+  # read-tree + checkout-index rather than git archive, which would drop export-ignore paths (often the tests)
+  GIT_INDEX_FILE="$T/index" git read-tree "$SHA" && GIT_INDEX_FILE="$T/index" git --work-tree="$D" checkout-index -a -f \
+    || die "cannot extract $REF into $DIR"
+  # ignored entries of the worktree whose parent exists in the copy: linked, never copied; caches and build outputs stay out (a run would write into the worktree's, or load its built code)
+  LINKS=()
+  while IFS= read -r p; do [ -n "$p" ] && LINKS+=("$p"); done < <(link_ignored_entries "$TOP" "$D")
+  g() { git -C "$D" -c user.name=crosscheck -c user.email=crosscheck@localhost -c core.hooksPath=/dev/null -c commit.gpgsign=false "$@"; }
+  g init -q || die "cannot create the copy's repo in $DIR"
+  for p in ${LINKS[@]+"${LINKS[@]}"}; do printf '/%s\n' "$p"; done >> "$D/.git/info/exclude"
+  g add -A && g commit -q --allow-empty --no-verify -m "$REF ($SHA)" || die "cannot commit the copy in $DIR"
+  printf '%s\n' "$SHA" > "$D/.git/$MARK"
+  # a linked entry that points back into the worktree (an editable Python install, a workspace package in node_modules) makes code run
+  # in the copy load the worktree's version: each one found is warned about and recorded, and run reports it
+  for p in ${LINKS[@]+"${LINKS[@]}"}; do
+    why="$(link_back_reason "$TOP" "$p")"
+    [ -n "$why" ] || continue
+    printf '%s: %s\n' "$p" "$why" >> "$D/.git/$MARK.back"
+    echo "crosscheck.sh: warning: $p links back into the worktree, $why: code run in this copy may load the worktree's version instead of the copy's" >&2
+  done
+  for f in ${OVERLAYS[@]+"${OVERLAYS[@]}"}; do
+    rel="${f#"$TOP"/}"
+    mkdir -p "$D/$(dirname "$rel")" && cp -p "$TOP/$rel" "$D/$rel" || die "cannot copy the overlay $rel"
+  done
+  NOVER=${#OVERLAYS[@]}
+}
 
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || die "run this from inside the worktree"
 TOP="$(abs_dir "$TOP")"
@@ -45,51 +111,9 @@ case "$CMD" in
         *) usage;;
       esac
     done
-    [ -n "$REF" ] || die "--ref <ref> is required"
-    SHA="$(git rev-parse --verify --quiet "$REF^{commit}")" || die "not a commit: $REF"
-    for f in ${OVERLAYS[@]+"${OVERLAYS[@]}"}; do
-      case "$f" in /*) rel="${f#"$TOP"/}"; [ "$rel" != "$f" ] || die "overlay outside the worktree: $f";; *) rel="$f";; esac
-      case "/$rel/" in */../*|*/./*) die "overlay path must not contain . or ..: $f";; esac
-      [ -f "$TOP/$rel" ] && [ ! -L "$TOP/$rel" ] || die "overlay is not a regular file of the worktree: $f"
-    done
-    REPLACE=0
-    if [ -e "$DIR" ] || [ -L "$DIR" ]; then
-      if [ -d "$DIR" ] && [ ! -L "$DIR" ] && is_copy "$DIR"; then REPLACE=1
-      else [ -d "$DIR" ] && [ -z "$(ls -A "$DIR" 2>/dev/null)" ] || die "$DIR exists and is neither empty nor a copy made by crosscheck.sh tree"; fi
-    fi
-    D="$(phys_path "$DIR")" || die "$DIR must not contain . or .. after its existing part"
-    case "$D/" in "$TOP"/*) die "$DIR is inside the worktree: use your scratchDir";; esac
-    case "$TOP/" in "$D"/*) die "$DIR contains the worktree";; esac
-    # an earlier copy is replaced (scratch folders are reused, never emptied by hand); rm -rf removes its links, not what they point to
-    if [ "$REPLACE" = 1 ]; then rm -rf "$D" || die "cannot remove the earlier copy in $DIR"; fi
-    mkdir -p "$D" || die "cannot create $DIR"
-    T="$(mktemp -d "${TMPDIR:-/tmp}/orca-crosscheck.XXXXXX")" || die "cannot create a temporary folder"
-    trap 'rm -rf "$T"' EXIT
-    # read-tree + checkout-index rather than git archive, which would drop export-ignore paths (often the tests)
-    GIT_INDEX_FILE="$T/index" git read-tree "$SHA" && GIT_INDEX_FILE="$T/index" git --work-tree="$D" checkout-index -a -f \
-      || die "cannot extract $REF into $DIR"
-    # ignored entries of the worktree whose parent exists in the copy: linked, never copied; caches and build outputs stay out (a run would write into the worktree's, or load its built code)
-    LINKS=()
-    while IFS= read -r p; do [ -n "$p" ] && LINKS+=("$p"); done < <(link_ignored_entries "$TOP" "$D")
-    g() { git -C "$D" -c user.name=crosscheck -c user.email=crosscheck@localhost -c core.hooksPath=/dev/null -c commit.gpgsign=false "$@"; }
-    g init -q || die "cannot create the copy's repo in $DIR"
-    for p in ${LINKS[@]+"${LINKS[@]}"}; do printf '/%s\n' "$p"; done >> "$D/.git/info/exclude"
-    g add -A && g commit -q --allow-empty --no-verify -m "$REF ($SHA)" || die "cannot commit the copy in $DIR"
-    printf '%s\n' "$SHA" > "$D/.git/$MARK"
-    # a linked entry that points back into the worktree (an editable Python install, a workspace package in node_modules) makes code run
-    # in the copy load the worktree's version: each one found is warned about and recorded, and run reports it
-    for p in ${LINKS[@]+"${LINKS[@]}"}; do
-      why="$(link_back_reason "$TOP" "$p")"
-      [ -n "$why" ] || continue
-      printf '%s: %s\n' "$p" "$why" >> "$D/.git/$MARK.back"
-      echo "crosscheck.sh: warning: $p links back into the worktree, $why: code run in this copy may load the worktree's version instead of the copy's" >&2
-    done
-    for f in ${OVERLAYS[@]+"${OVERLAYS[@]}"}; do
-      rel="${f#"$TOP"/}"
-      mkdir -p "$D/$(dirname "$rel")" && cp -p "$TOP/$rel" "$D/$rel" || die "cannot copy the overlay $rel"
-    done
+    build_copy "$DIR" "$REF" ${OVERLAYS[@]+"${OVERLAYS[@]}"}
     echo "$D"
-    echo "Copy of $REF ($(git rev-parse --short "$SHA")): ${#LINKS[@]} ignored entr$([ ${#LINKS[@]} = 1 ] && echo y || echo ies) linked, ${#OVERLAYS[@]} overlay file(s)." >&2
+    echo "Copy of $REF ($(git rev-parse --short "$SHA")): ${#LINKS[@]} ignored entr$([ ${#LINKS[@]} = 1 ] && echo y || echo ies) linked, $NOVER overlay file(s)." >&2
     ;;
   run)
     DIR="${1:-}"; [ -n "$DIR" ] || usage; shift
@@ -114,6 +138,102 @@ case "$CMD" in
     jq -nc --arg label "$LABEL" --arg dir "$D" --argjson exit "$RC" --argjson seconds "$(( $(date +%s) - START ))" --argjson timedOut "$TIMED" --arg log "$LOGF" \
       --argjson backLinks "$([ -s "$D/.git/$MARK.back" ] && echo true || echo false)" \
       '{label: $label, dir: $dir, exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log, backLinks: $backLinks}'
+    ;;
+  basecheck)
+    DIR=""; REF=""; TO=600; OVERLAYS=(); BCMD=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --ref) [ -n "${2:-}" ] || die "--ref needs a value"; REF="$2"; shift 2;;
+        --overlay) [ -n "${2:-}" ] || die "--overlay needs a file"; OVERLAYS+=("$2"); shift 2;;
+        --timeout) [ -n "${2:-}" ] || die "--timeout needs a value"; TO="$2"; shift 2;;
+        --) shift; BCMD=("$@"); break;;
+        -*) usage;;
+        *) [ -z "$DIR" ] || usage; DIR="$1"; shift;;
+      esac
+    done
+    [ -n "$DIR" ] || usage
+    case "$TO" in ''|*[!0-9]*|0) die "--timeout must be a positive number of seconds";; esac
+    [ ${#BCMD[@]} -gt 0 ] || die "no command after --"
+    build_copy "$DIR" "$REF" ${OVERLAYS[@]+"${OVERLAYS[@]}"}
+    BLOG="$D.basecheck-base.log"; HLOG="$D.basecheck-here.log"; TAB="$D.basecheck.tsv"
+    START="$(date +%s)"
+    BR=0; bounded_run --cd "$D" "$TO" base "${BCMD[@]}" > "$BLOG" 2>&1 < /dev/null || BR=$?
+    BTIMED=false; [ "$BOUNDED_TIMED" = 1 ] && BTIMED=true
+    BSEC=$(( $(date +%s) - START ))
+    START="$(date +%s)"
+    HR=0; bounded_run --cd "$TOP" "$TO" here "${BCMD[@]}" > "$HLOG" 2>&1 < /dev/null || HR=$?
+    HTIMED=false; [ "$BOUNDED_TIMED" = 1 ] && HTIMED=true
+    HSEC=$(( $(date +%s) - START ))
+    FMT=unknown
+    if grep -q -e '^ok   ' -e '^FAIL ' "$BLOG" "$HLOG"; then FMT=smoke; fi
+    WHY=""
+    if [ "$BTIMED" = true ] && [ "$HTIMED" = true ]; then WHY="both runs were cut at the timeout"
+    elif [ "$BTIMED" = true ]; then WHY="the base run was cut at the timeout"
+    elif [ "$HTIMED" = true ]; then WHY="the worktree run was cut at the timeout"
+    elif [ "$FMT" = unknown ]; then WHY="neither log has a smoke runner line (ok or FAIL)"
+    fi
+    C_FBP=0; C_FBS=0; C_PB=0; C_ABP=0; C_FH=0; C_PBA=0
+    : > "$TAB" || die "cannot write the table in $DIR"
+    if [ -n "$WHY" ]; then
+      echo "crosscheck.sh: basecheck: $WHY, so there is no per-check result (logs: $BLOG, $HLOG)" >&2
+    else
+      HERE_RES=(); HERE_NAME=(); HN=0; BASE_RES=(); BASE_NAME=(); BN=0
+      while IFS= read -r l || [ -n "$l" ]; do
+        case "$l" in
+          'ok   '*) HN=$((HN+1)); HERE_RES[HN]=P; HERE_NAME[HN]="${l#ok   }";;
+          'FAIL '*) HN=$((HN+1)); HERE_RES[HN]=F; l="${l#FAIL }"; case "$l" in *': expected ['*) l="${l%%: expected [*}";; esac; HERE_NAME[HN]="$l";;
+        esac
+      done < "$HLOG"
+      while IFS= read -r l || [ -n "$l" ]; do
+        case "$l" in
+          'ok   '*) BN=$((BN+1)); BASE_RES[BN]=P; BASE_NAME[BN]="${l#ok   }";;
+          'FAIL '*) BN=$((BN+1)); BASE_RES[BN]=F; l="${l#FAIL }"; case "$l" in *': expected ['*) l="${l%%: expected [*}";; esac; BASE_NAME[BN]="$l";;
+        esac
+      done < "$BLOG"
+      USED=()
+      i=1
+      while [ "$i" -le "$HN" ]; do
+        nm="${HERE_NAME[i]}"
+        k=1; j=1
+        while [ "$j" -lt "$i" ]; do
+          if [ "${HERE_NAME[j]}" = "$nm" ]; then k=$((k+1)); fi
+          j=$((j+1))
+        done
+        bj=0; c=0; j=1
+        while [ "$j" -le "$BN" ]; do
+          if [ "${BASE_NAME[j]}" = "$nm" ]; then
+            c=$((c+1))
+            if [ "$c" = "$k" ]; then bj=$j; break; fi
+          fi
+          j=$((j+1))
+        done
+        if [ "$bj" -gt 0 ]; then USED[bj]=1; bres="${BASE_RES[bj]}"; else bres=""; fi
+        if [ "${HERE_RES[i]}" = F ]; then cls="fails here"
+        elif [ "$bres" = F ]; then cls="fails on base / passes here"
+        elif [ "$bres" = P ]; then cls="passes on both"
+        else cls="absent on base / passes here"; fi
+        printf '%s\t%s\n' "$cls" "$nm" >> "$TAB"
+        bc_count "$cls"
+        [ "$cls" = "passes on both" ] || printf '%s\t%s\n' "$cls" "$nm"
+        i=$((i+1))
+      done
+      j=1
+      while [ "$j" -le "$BN" ]; do
+        if [ "${USED[j]:-0}" != 1 ]; then
+          if [ "${BASE_RES[j]}" = F ]; then cls="fails on base / silent here"; else cls="passes on base / absent here"; fi
+          printf '%s\t%s\n' "$cls" "${BASE_NAME[j]}" >> "$TAB"
+          bc_count "$cls"
+          printf '%s\t%s\n' "$cls" "${BASE_NAME[j]}"
+        fi
+        j=$((j+1))
+      done
+    fi
+    BJ="$(jq -nc --argjson exit "$BR" --argjson seconds "$BSEC" --argjson timedOut "$BTIMED" --arg log "$BLOG" '{exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log}')"
+    HJ="$(jq -nc --argjson exit "$HR" --argjson seconds "$HSEC" --argjson timedOut "$HTIMED" --arg log "$HLOG" '{exit: $exit, seconds: $seconds, timedOut: $timedOut, log: $log}')"
+    jq -nc --arg ref "$REF" --arg dir "$D" --arg format "$FMT" --argjson base "$BJ" --argjson here "$HJ" \
+      --argjson backLinks "$([ -s "$D/.git/$MARK.back" ] && echo true || echo false)" \
+      --argjson fbp "$C_FBP" --argjson fbs "$C_FBS" --argjson pb "$C_PB" --argjson abp "$C_ABP" --argjson fh "$C_FH" --argjson pba "$C_PBA" --arg table "$TAB" \
+      '{ref: $ref, dir: $dir, format: $format, base: $base, here: $here, backLinks: $backLinks, counts: {"fails on base / passes here": $fbp, "fails on base / silent here": $fbs, "passes on both": $pb, "absent on base / passes here": $abp, "fails here": $fh, "passes on base / absent here": $pba}, table: $table}'
     ;;
   export)
     DIR="${1:-}"; [ -n "$DIR" ] || usage; shift
@@ -171,6 +291,6 @@ case "$CMD" in
     [ -z "$RT" ] || rm -rf "$RT"
     echo "Applied $(basename "$PATCH") to $D" >&2
     ;;
-  -h|--help) sed -n 2,17p "$0"; exit 0;;
+  -h|--help) sed -n 2,23p "$0"; exit 0;;
   *) usage;;
 esac
