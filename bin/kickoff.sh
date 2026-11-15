@@ -21,11 +21,12 @@ trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
 # OpenCode: text typed before its TUI has painted goes to the tab's shell, and orca terminal send still reports it accepted. For a tab this
 # launch opened, wait until the screen shows the TUI (its footer's "ctrl+p" or its composer's "Ask anything"), once a second, at most
-# kickoffTimeoutSeconds and never more than 30 s; then send anyway, with one line.  oc_wait_screen <handle> <role>
+# kickoffTimeoutSeconds and never more than 30 s. 0 when the screen showed it, 1 when it gave up (kick() prints its own line for that).
+# oc_wait_screen <handle>
 oc_wait_screen() {
   local cap n=0; cap=$(( TIMEOUT_MS / 1000 )); [ "$cap" -le 30 ] || cap=30
   while ! { screen_of "$1" || true; } | grep -qE 'ctrl\+p|Ask anything'; do
-    if [ "$n" -ge "$cap" ]; then echo "$(title_of "$CFG" "$2"): its OpenCode screen showed no prompt after $cap s; sending its role anyway."; return 0; fi
+    [ "$n" -lt "$cap" ] || return 1
     sleep "${ORCA_ROLES_SCREEN_POLL:-1}"; n=$((n + 1))
   done
   return 0
@@ -198,15 +199,54 @@ kick() {  # $1 handle, $2 role, $3 message, [$4 "nokick": the message is not rec
       fi
     else break; fi
   done
-  local before rx ocm="" model; model="$(role_model "$CFG" "$2")"; rx="$(model_error_regex "$CFG" "$2" "$model")"
+  local before rx ocm="" model oc_ready=1 oc_started=0 oc_kind="" oc_sf="" oc_h="" oc_m="" cap=0 t=""; model="$(role_model "$CFG" "$2")"; rx="$(model_error_regex "$CFG" "$2" "$model")"
   if [ -n "$model" ] && [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then
     ocm="$(oc_model_state "$model")"
     [ "$ocm" != unknown ] || echo "$2: could not check that model $model exists (opencode models failed)"
   fi
-  if [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then case " $REUSED " in *" $2 "*) ;; *) oc_wait_screen "$1" "$2";; esac; fi
-  [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
-  if orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null; then
-    echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != "$FRONT" ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0
+  if [ "$(rstr "$CFG" "$2" agent)" = opencode ]; then
+    case " $REUSED " in
+      *" $2 "*) ;;   # a reused tab: typed below, as before
+      *)
+        t="$(title_of "$CFG" "$2")"
+        cap=$(( TIMEOUT_MS / 1000 )); [ "$cap" -le 30 ] || cap=30
+        oc_wait_screen "$1" || oc_ready=0
+        if [ "$2" != "$FRONT" ]; then
+          # The marker agent.sh leaves when it passed the message with --prompt=: honoured whatever the screen check said, and deleted
+          # either way, so a stale one never meets a later kick. A mismatch is the typed fallback, with one line naming why.
+          oc_kind=new; remembers "$2" && oc_kind=back
+          oc_sf="$(oc_started_file "$2")" || oc_sf=""
+          [ -z "$oc_sf" ] || [ -f "$oc_sf" ] || oc_sf=""
+          if [ -n "$oc_sf" ]; then
+            { IFS= read -r oc_h; IFS= read -r oc_m; } < "$oc_sf" 2>/dev/null || true
+            rm -f "$oc_sf"
+            [ -n "$oc_h" ] || oc_sf=""   # an empty marker counts as no marker
+          fi
+          if [ -n "$oc_sf" ] && [ "$oc_h" = "$1" ] && [ "$oc_m" = "$oc_kind" ]; then
+            oc_started=1
+            if [ "$oc_ready" = 1 ]; then echo "Prompt passed at start to $1"
+            else echo "$t: prompt passed at start to $1, but its OpenCode screen showed no prompt after $cap s; check that tab."; fi
+          else
+            [ "$oc_ready" = 1 ] || echo "$t: its OpenCode screen showed no prompt after $cap s; sending its role anyway."
+            if [ -z "$oc_sf" ]; then echo "$t: its start left no prompt marker: typing its role."
+            elif [ "$oc_h" != "$1" ]; then echo "$t: its start marker names another handle ($oc_h): typing its role."
+            else echo "$t: its start marker is another kind ($oc_m, not $oc_kind): typing its role."; fi
+          fi
+        elif [ "$oc_ready" = 0 ]; then
+          echo "$t: its OpenCode screen showed no prompt after $cap s; sending its role anyway."
+        fi
+        ;;
+    esac
+  fi
+  if [ "$oc_started" = 1 ]; then
+    # The message is already in OpenCode's argv: nothing is typed, and the error count starts from 0 (the screen was never sent it)
+    before=0; sent=0
+    [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != "$FRONT" ] || planner_history_add "$(dirname "$STATE")" "$1"
+  else
+    [ -z "$rx" ] || before="$(err_count "$1" "$rx")"
+    if orca terminal send --terminal "$1" --text "$3" --enter --json >/dev/null; then
+      echo "Prompt sent to $1"; [ "${4:-}" = nokick ] || kicked_set "$2" "$1"; [ "$2" != "$FRONT" ] || planner_history_add "$(dirname "$STATE")" "$1"; sent=0
+    fi
   fi
   case "$ocm" in
     present) record_model "$2" "$model";;
