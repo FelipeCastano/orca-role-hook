@@ -181,7 +181,16 @@ printf '#!/bin/sh\n[ -f "%s/ocpids.$1" ] && cat "%s/ocpids.$1"\nexit 0\n' "$TMP"
 printf '#!/bin/sh\ns="$1"; shift; printf "kill %%s %%s\\n" "$s" "$*" >> "${OC_KILLLOG:-%s/kill.log}"\n' "$TMP" > "$TMP/oc-kill"; chmod +x "$TMP/oc-kill"; export ORCA_ROLES_KILL="$TMP/oc-kill"; export ORCA_ROLES_REAP_WAIT=1   # signals are only logged, never sent from the suite
 export ORCA_ROLES_SUPERPOWERS_FETCH=skip   # install.sh must never reach the network from the suite (the fetch tests put a fake git first on the PATH and clear this)
 NOORCA="$TMP/noorca"; mkdir -p "$NOORCA"; printf '#!/bin/sh\necho "$*" >> "%s/calls.log"\necho '"'"'{"ok":true,"result":{"worktrees":[]}}'"'"'\n' "$NOORCA" > "$NOORCA/orca"; chmod +x "$NOORCA/orca"; : > "$NOORCA/calls.log"; PATH="$NOORCA:$PATH"   # a no-op orca first on the PATH: install.sh (which lists Orca's worktrees) and the other scripts never reach the user's real Orca from the suite; a check that needs another orca puts its own first
-cp -R "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh
+cp -RH "$ROOT/bin" "$ROOT/prompts" "$ROOT/config.default.json" "$KIT/"; chmod +x "$KIT"/bin/*.sh   # -H: guard and cli run a copy whose root links these; the kit needs real copies, or the stub below writes into the repo
+# close-role.sh runs one usage-metrics.sh --once before it deletes an OpenCode role's session (batch3): the kit's copy is a stub that only records the call, so no check reaches a collector from the fake HOME; it prints to both streams (a close that stops discarding them is caught) and exits with UM_STUB_RC
+cat > "$KIT/bin/usage-metrics.sh" <<'EOS'
+#!/bin/sh
+printf 'pass limit=%s args=%s\n' "${ORCA_ROLES_METRICS_LIMIT-unset}" "$*" >> "${OC_DELLOG:-/dev/null}"
+printf 'pass stdout\n'
+printf 'pass stderr\n' >&2
+exit "${UM_STUB_RC:-0}"
+EOS
+chmod +x "$KIT/bin/usage-metrics.sh"
 . "$KIT/bin/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; smk_tick "$1"; }
@@ -7411,7 +7420,7 @@ OCCFG=""
 OCSTATE="$OC/state.env"; OCLOG="$OC/seq.log"
 oc_close_setup() { printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_saved_1\n' > "$SF"; : > "$OCLOG"; rm -f "$OCLOG.pid"; }
 oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"; try ocrun close-role.sh dev
-check "opencode close-role: the delete runs in the worktree and BEFORE the tab close" "$RC:$(grep -n -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:delete ses_saved_1 PWD=WT SA=n DPC=unset|orca terminal close --terminal h-dev --tab --json|"
+check "opencode close-role: one metrics pass with ORCA_ROLES_METRICS_LIMIT=10 comes BEFORE the delete, which runs in the worktree and BEFORE the tab close; the pass prints to both streams and nothing of it reaches the close's output" "$RC:$(grep -c '^pass ' "$OCLOG"):$(grep -n -e '^pass ' -e '^delete ses_saved_1' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|'):$(grep -c -e 'pass stdout' -e 'pass stderr' <<<"$OUT" || true)" "0:1:pass limit=10 args=--once|delete ses_saved_1 PWD=WT SA=n DPC=unset|orca terminal close --terminal h-dev --tab --json|:0"
 CE1="$RC:$([ -e "$SF" ] && echo file):$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$([ -e "$OCG/orca-roles-mcp-dev.json" ] && echo mcp):$(cat "$OCSTATE")"
 # a Claude role's own close removes its leftover OpenCode configuration and its MCP file, calls no opencode, and leaves Dev's MCP file alone
 oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-cl.json"; printf '{}' > "$OCG/orca-roles-mcp-cl.json"; printf '{}' > "$OCG/orca-roles-mcp-dev.json"; try ocrun close-role.sh cl
@@ -7439,19 +7448,19 @@ oc_close_setup; printf '{}' > "$OCG/orca-roles-opencode-dev.json"; printf '909\n
 printf '#!/bin/sh\necho "orca $*" >> "%s"\ncase "$1 $2" in "terminal show") echo %s; exit 1;; esac\nexit 0\n' "$OCLOG" "'{\"ok\":false,\"error\":{\"code\":\"no_response\"}}'" > "$OC/abin/orca"; chmod +x "$OC/abin/orca"
 CE6=0; (cd "$OCW" && HOME="$TMP/home" PATH="$OC/abin:$OC/bin:$PATH" OC_KILLLOG="$OCLOG" OC_DELLOG="$OCLOG" ORCA_ROLES_STATE="$OCSTATE" ORCA_ROLES_CONFIG="$OC/cfg.json" "$TMP/home/.orca-roles/bin/close-role.sh" dev > "$OC/na.out" 2>&1) || CE6=$?
 rm -f "$TMP/ocpids.h-dev"
-CE6="$CE6:$(grep -c 'Orca did not answer about its tab (h-dev); nothing was changed.' "$OC/na.out" || true):$(grep -c '^kill ' "$OCLOG" || true):$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$(grep -c '^DEV=' "$OCSTATE" || true)"
+CE6="$CE6:$(grep -c 'Orca did not answer about its tab (h-dev); nothing was changed.' "$OC/na.out" || true):$(grep -c '^kill ' "$OCLOG" || true):$([ -e "$OCG/orca-roles-opencode-dev.json" ] && echo json):$(grep -c '^DEV=' "$OCSTATE" || true):$(grep -c '^pass ' "$OCLOG" || true)"
 # a claude role with a pid file for its handle: no scan, no kill
 oc_close_setup; printf '910\n' > "$TMP/ocpids.h-cl"
 OCKILL="$OCLOG"; try ocrun close-role.sh cl; OCKILL=""; rm -f "$TMP/ocpids.h-cl"
 CE7="$RC:$(grep -c '^kill ' "$OCLOG" || true)"
-check "opencode close-role: the session file, the role's OpenCode configuration and its MCP file are gone and the role's line left the state (also when Orca reports the tab stale: no close tried but its OpenCode process reaped); the OpenCode process left behind by a closed tab is ended (TERM after the close, its line) and none is reaped when Orca did not answer about the tab; a Claude role's close removes its own two files, calls no opencode and reaps nothing (Dev's MCP file kept); an instance's close removes its own files and its configuration entry, leaving Dev's files and session untouched" "$CE1|$CE2|$CE3|$CE4|$CE5|$CE6|$CE7" "0::::CL=h-cl|0:::devmcp:0|0:::true:devjson:devmcp:ses_saved_1|0::::0:CL=h-cl:1|0:after:1|1:1:0:json:1|0:0"
+check "opencode close-role: the session file, the role's OpenCode configuration and its MCP file are gone and the role's line left the state (also when Orca reports the tab stale: no close tried but its OpenCode process reaped); the OpenCode process left behind by a closed tab is ended (TERM after the close, its line) and none is reaped when Orca did not answer about the tab, which also gets no metrics pass; a Claude role's close removes its own two files, calls no opencode and reaps nothing (Dev's MCP file kept); an instance's close removes its own files and its configuration entry, leaving Dev's files and session untouched" "$CE1|$CE2|$CE3|$CE4|$CE5|$CE6|$CE7" "0::::CL=h-cl|0:::devmcp:0|0:::true:devjson:devmcp:ses_saved_1|0::::0:CL=h-cl:1|0:after:1|1:1:0:json:1:0|0:0"
 oc_close_setup; OCDELMODE=fail; try ocrun close-role.sh dev; OCDELMODE=""
 check "opencode close-role: a failing delete prints one line, still closes the tab and removes the file" "$RC:$(grep -c 'Could not delete OpenCode session ses_saved_1: opencode exited with 3' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file)" "0:1:1:"
 oc_close_setup; OCDELMODE=hang; OCTO=1; T0=$(date +%s); try ocrun close-role.sh dev; T1=$(date +%s); OCDELMODE=""; OCTO=""
 check "opencode close-role: a hanging delete is cut after the timeout; the tab is still closed and the file removed" "$RC:$(grep -c 'opencode: no answer in 1 s; stopped\.' <<<"$OUT"):$(grep -c '^orca terminal close' "$OCLOG"):$([ -e "$SF" ] && echo file):$([ $((T1 - T0)) -lt 15 ] && echo fast)" "0:1:1::fast"
 check "opencode close-role: the hung opencode process was killed" "$(kill -0 "$(cat "$OCLOG.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
 oc_close_setup; try ocrun close-role.sh cl
-check "opencode close-role: a claude role calls no opencode and leaves the file alone" "$RC:$(grep -c '^delete' "$OCLOG" || true):$(cat "$SF")" "0:0:ses_saved_1"
+check "opencode close-role: a claude role calls no opencode and takes no metrics pass, and leaves the file alone" "$RC:$(grep -c '^delete' "$OCLOG" || true):$(grep -c '^pass ' "$OCLOG" || true):$(cat "$SF")" "0:0:0:ses_saved_1"
 oc_close_setup; rm -f "$SF"; try ocrun close-role.sh dev
 check "opencode close-role: no saved session (user-owned), no delete" "$RC:$(grep -c '^delete' "$OCLOG" || true)" "0:0"
 oc_del_line() { oc_close_setup; rm -f "$OC/gone"; "$@" >/dev/null 2>&1 || true; { grep '^delete ses_saved_1' "$OCLOG" || true; } | sed "s#PWD=$OCWP#PWD=WT#"; }
@@ -7460,6 +7469,20 @@ oc_close_saved() { cp "$1" "$OCG/orca-roles.config.json"; oc_del_line oc_close_a
 D_NEVER="$(oc_del_line oc_close_as "$OC/cfg-never.json")"; D_SAVED="$(oc_close_saved "$OC/cfg-never.json" "")"
 D_WT="$(oc_close_saved "$OC/cfg-wt.json" "")"; rm -f "$OCG/orca-roles.config.json"
 check "opencode trust: close-role's delete under never ends SA=y DPC=1 with the trust from ORCA_ROLES_CONFIG, from the team's saved config (variable unset); worktree in the saved config gives SA=n DPC=unset" "$D_NEVER|$D_SAVED|$D_WT" "delete ses_saved_1 PWD=WT SA=y DPC=1|delete ses_saved_1 PWD=WT SA=y DPC=1|delete ses_saved_1 PWD=WT SA=n DPC=unset"
+# the metrics pass runs once per invocation, at the deletion point: several OpenCode roles share it, a Claude role closed first is not a trigger, metrics off is none, and a failing pass changes nothing
+oc_close_setup; printf 'DEV=h-dev\nTESTER=h-te\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_t_1\n' > "$OCG/orca-roles-opencode-tester.session"; try ocrun close-role.sh dev tester
+check "opencode close-role pass: two OpenCode roles in one invocation take one pass only, before the first delete" "$RC:$(grep -c '^pass ' "$OCLOG" || true):$(grep -n -e '^pass ' -e '^delete ' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:1:pass limit=10 args=--once|delete ses_saved_1 PWD=WT SA=n DPC=unset|delete ses_t_1 PWD=WT SA=n DPC=unset|"
+rm -f "$OCG/orca-roles-opencode-tester.session"
+oc_close_setup; try ocrun close-role.sh cl dev
+check "opencode close-role pass: a Claude role closed first in the same invocation takes no pass; the one pass comes before the OpenCode role's delete" "$RC:$(grep -c '^pass ' "$OCLOG" || true):$(grep -n -e '^pass ' -e '^delete ' -e '^orca terminal close' "$OCLOG" | cut -d: -f2- | sed "s#PWD=$OCWP#PWD=WT#" | tr '\n' '|')" "0:1:orca terminal close --terminal h-cl --tab --json|pass limit=10 args=--once|delete ses_saved_1 PWD=WT SA=n DPC=unset|orca terminal close --terminal h-dev --tab --json|"
+jq '.settings.metrics.enabled = false' "$OC/cfg.json" > "$OC/cfg-off.json"
+oc_close_setup; OCCFG="$OC/cfg-off.json" try ocrun close-role.sh dev; OCCFG=""
+OC_OFF="$(grep -c '^pass ' "$OCLOG" || true):$(grep -c '^delete ' "$OCLOG" || true):$(grep -c '^orca terminal close' "$OCLOG" || true)"
+oc_close_setup; try ocrun close-role.sh dev
+check "opencode close-role pass: settings.metrics.enabled false (the enabled config beside it gives one) takes no pass, and the delete and the tab close still run" "$(grep -c '^pass ' "$OCLOG" || true):$OC_OFF" "1:0:1:1"
+oc_close_setup; try ocrun close-role.sh dev; OCPOK="$OUT"
+oc_close_setup; UM_STUB_RC=7 try ocrun close-role.sh dev; unset UM_STUB_RC
+check "opencode close-role pass: a pass that exits 7 and prints to stdout and stderr is ignored and its output discarded: the same lines and exit status as a quiet pass, the tab closed, the session file removed" "$([ "$OUT" = "$OCPOK" ] && echo same):$RC:$(grep -c '^pass ' "$OCLOG" || true):$(grep -c '^delete ' "$OCLOG" || true):$(grep -c '^orca terminal close' "$OCLOG" || true):$([ -e "$SF" ] && echo file):$(grep -c -e 'pass stdout' -e 'pass stderr' <<<"$OUT" || true)" "same:0:1:1:1::0"
 # clean.sh: /new, then the newest session of THIS worktree created after /new becomes the role's session; the old one is deleted
 printf 'DEV=h-dev\nCL=h-cl\n' > "$OCSTATE"; printf 'ses_old\n' > "$SF"; : > "$OCLOG"
 cat > "$OC/list.json" <<J
@@ -8405,7 +8428,7 @@ sed 's/^sec_syntax() {$/&\
 echo "$SMOKE_UNBOUND_PROBE"/' "$ROOT/tests/smoke.sh" > "$GR/tests/smoke.sh"
 check "guard: the probe is injected into the copy" "$(cmp -s "$ROOT/tests/smoke.sh" "$GR/tests/smoke.sh" && echo same || echo changed)" "changed"
 try bash -c 'bash "$0" syntax 2>&1' "$GR/tests/smoke.sh"
-check "guard: unbound variable inside a section -> exit non-zero, no ALL OK" "$([ "$RC" != 0 ] && echo nonzero):$(printf '%s\n' "$OUT" | grep -c '^ALL OK')" "nonzero:0"
+check "guard: unbound variable inside a section -> exit non-zero, no ALL OK, and the child suite left the repo's bin/usage-metrics.sh alone" "$([ "$RC" != 0 ] && echo nonzero):$(printf '%s\n' "$OUT" | grep -c '^ALL OK'):$(grep -cF 'UM_STUB_RC' "$ROOT/bin/usage-metrics.sh" || true)" "nonzero:0:0"
 check "guard: it died on the probe" "$(printf '%s\n' "$OUT" | grep -c 'SMOKE_UNBOUND_PROBE: unbound variable')" "1"
 try bash "$ROOT/tests/smoke.sh" syntax
 check "guard: the same section unmodified -> exit 0 with ALL OK" "$RC:$(printf '%s\n' "$OUT" | grep -c '^ALL OK')" "0:1"
@@ -12175,6 +12198,23 @@ umreset "$UMB"; uml "$UMB" >/dev/null || true; rm -rf "$MD"; echo stale > "$UM/s
 try uml "$UMB"; E1="$RC:$(umev)"; E1F="$(jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null | sort -u | tr '\n' ' ' || true)"
 rm -rf "$MD"; rm -f "$UM"/st.*; UM_RELAUNCH=1 try uml "$UMB"; E2="$RC:$(umev)"
 check "usage metrics: events of a launch over an open team: launch, reopened for the role whose tab is gone, detached-kept for the tab Orca flags detached while its agent runs (a launch run by the relauncher adds relaunch with the local-coordinator role); every line has exactly ts, worktree, event and role" "$E1:$E1F|$E2" '0:launch: reopened:dev detached-kept:deployer :["event","role","ts","worktree"] |0:launch: relaunch:local-coordinator '
+# a launch that opens tabs, a role opened on demand and an instance: one launch line per role whose tab the run opened
+cp "$KIT/config.json" "$UM/umkit.cfg"; UMKG="$(umgd "$UMB")"; : > "$UM/umkeys"
+jq '.roles.dev.open = "per-task" | .roles.dev.maxInstances = 3 | .settings.scaling = {"maxExtraInstances": 4, "maxLoad": 1000, "minFreeMemoryMB": 0}' "$UM/umkit.cfg" > "$KIT/config.json"
+umlr() { jq -c "$1" "$MD/events.jsonl" 2>/dev/null | wc -l | tr -d ' ' || true; }
+umcrt() { grep -c '^terminal create' "$UM/orca.log" 2>/dev/null || true; }
+umkeys() { jq -cS 'keys' "$MD/events.jsonl" 2>/dev/null >> "$UM/umkeys" || true; }
+umrun() {  # umrun <launch line filter> [launch.sh args]: exit code, events, launch lines matching the filter, tabs created, of that run alone
+  local f="$1"; shift
+  rm -rf "$MD"; : > "$UM/orca.log"; try uml "$UMB" "$@"; umkeys
+  printf '%s:%s:%s:%s' "$RC" "$(umev)" "$(umlr "select(.event == \"launch\" and $f)")" "$(umcrt)"
+}
+umreset "$UMB"; Q1="$(umrun '.role == ""')"; Q2="$(umrun '.role == ""' --open dev)"
+sed 's/^\([A-Z_0-9]*\)=.*/\1=old/' "$UMKG/orca-roles.kicked" > "$UM/umkicked"; cp "$UM/umkicked" "$UMKG/orca-roles.kicked"
+Q3="$(umrun '.role != ""')"
+echo stale > "$UM/st.h-Dev"; Q4="$(umrun '.role == ""')"; Q5="$(umrun '.role == ""' --add dev)"
+cp "$UM/umkit.cfg" "$KIT/config.json"; rm -f "$UM/st.h-Dev"
+check "usage metrics: a launch that opens tabs writes one launch line per role whose tab it opened, in the order the tabs were opened and with its base role (a per-task role it did not open gets none); --open and --add of one role write that role only and never the instance id; a run whose tabs are only reused (their role message sent again after a context clear) writes one launch with no role and none for them; a reopened role is reopened, not a launch; every line has exactly ts, worktree, event and role" "$Q1|$Q2|$Q3|$Q4|$Q5:$(sort -u "$UM/umkeys" | tr '\n' ' ')" '0:launch:local-coordinator launch:planner launch:deployer :0:3|0:launch:dev :0:1|0:launch: :0:0|0:launch: reopened:dev :1:1|0:launch:dev :0:1:["event","role","ts","worktree"] '
 # dispatch.sh: its events by role (the handle's role in the worktree's orca-roles.env), with a fake orca whose checker waits are shortened
 UMG="$(umgd "$UMB")"; UMT="task_um$$"; mkdir -p "$UM/dbin"; umreset "$UMB"
 printf 'DEV=h-w\nOC=h-oc\nRESEARCHER_2=h-r2\n' > "$UMG/orca-roles.env"; echo '{"roles":{"dev":{},"oc":{"agent":"opencode"},"researcher":{},"researcher-2":{"instanceOf":"researcher"}}}' > "$UMG/orca-roles.config.json"
@@ -12340,7 +12380,8 @@ UP="$ROOT/bin/usage_prices.json"
 upb="$(awk '/^  "claude-fable-5-2": \{$/{s=1} s{print} s && /^  \},?$/{exit}' "$UP" | tr '\n' '|')"
 UPOS="$(jq -r '.models | keys_unsorted as $k | [(($k | index("claude-fable-5-2")) - ($k | index("claude-fable-5-1"))), (($k | index("claude-mythos-5")) - ($k | index("claude-fable-5-2")))] | join("/")' "$UP" 2>/dev/null || true)"
 UPM="$(jq -r '[.version, .unit, (.source | (contains("Claude Code 2.1.311 model catalog") and contains("; the claude-fable-5-2 row comes from the Claude Code 2.1.325 catalog"))), (.note | contains("longest id")), (.models["claude-fable-5-2"] | has("longPrompt"))] | join("|")' "$UP" 2>/dev/null || true)"
-check "usage parse: claude-fable-5-2 has its own row in usage_prices.json (1M input, output and cache read price at 8/40/0.2, 48.2 the session; a [1m] id and a dated id at 8; cache writes at 10 for 5m and 16 for 1h; a web search at 0.01), while claude-fable-5-1 keeps 10/50 with its own 0.25 cache read and claude-fable-5 keeps 1.0, claude-mythos-5-1 stays 10/0.25 and claude-fable-6 is unpriced: without the row all of them fall to the claude-fable-5 longest prefix (10/50/1.0); the file is valid JSON, version, unit and note unchanged, source carries the catalog sentence, and the row sits between claude-fable-5-1 and claude-mythos-5 with its neighbours' 1-space indentation and field order and no longPrompt" "$(jq -e . "$UP" >/dev/null 2>&1 && echo valid)|$(usf pi '[.models["claude-fable-5-2"].costByType.input, .models["claude-fable-5-2"].costByType.output, .models["claude-fable-5-2"].costByType.cacheRead, .models["claude-fable-5-2"].costByType.cacheWrite, .models["claude-fable-5-2"].costByType.webSearch, .models["claude-fable-5-2"].cost] | map(tostring) | join("/")')|$(usf pj '.cost')|$(usf pl '.cost')|$(usf pm '[.cost, (.unpriced | join(","))] | join("/")')|$(usf pk '[.models["claude-fable-5-1"].costByType.input, .models["claude-fable-5-1"].costByType.output, .models["claude-fable-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pn '.models["claude-fable-5"].costByType.cacheRead')|$(usf po '[.models["claude-mythos-5-1"].costByType.input, .models["claude-mythos-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pp '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pq '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pr '.models["claude-fable-5-2"].costByType.webSearch')|$UPOS|$UPM|$upb" 'valid|8/40/0.2/0/0/48.2|8|8|0/claude-fable-6|10/50/0.25|1|10/0.25|10|16|0.01|1/1|2.1.311|USD per million tokens (webSearch: USD per request)|true|true|false|  "claude-fable-5-2": {|   "input": 8.0,|   "output": 40.0,|   "cacheWrite5m": 10.0,|   "cacheWrite1h": 16.0,|   "cacheRead": 0.2,|   "webSearch": 0.01|  },|'
+UPAL="$(jq -r '[(.unpricedAliases | keys_unsorted | join(",")), ([.models | keys[] | select(startswith("litellmi/"))] | length), (.unpricedAliases | to_entries | map("\(.key)=\(.value.model)/\(.value.checked)/\(.value | keys | join("+"))") | join(",")), (keys_unsorted | join(",")), (.unpricedAliases | to_entries | map(.value | has("input") or has("output") or has("cacheWrite5m") or has("cacheRead")) | any)] | join("|")' "$UP" 2>/dev/null || true)"
+check "usage parse: claude-fable-5-2 has its own row in usage_prices.json (1M input, output and cache read price at 8/40/0.2, 48.2 the session; a [1m] id and a dated id at 8; cache writes at 10 for 5m and 16 for 1h; a web search at 0.01), while claude-fable-5-1 keeps 10/50 with its own 0.25 cache read and claude-fable-5 keeps 1.0, claude-mythos-5-1 stays 10/0.25 and claude-fable-6 is unpriced: without the row all of them fall to the claude-fable-5 longest prefix (10/50/1.0); the file is valid JSON, version, unit and note unchanged, source carries the catalog sentence, and the row sits between claude-fable-5-1 and claude-mythos-5 with its neighbours' 1-space indentation and field order and no longPrompt; unpricedAliases holds the three litellmi/aitire aliases in order after models, each model unknown and checked 2026-11-14 with no price field, and no .models key starts with litellmi/" "$(jq -e . "$UP" >/dev/null 2>&1 && echo valid)|$(usf pi '[.models["claude-fable-5-2"].costByType.input, .models["claude-fable-5-2"].costByType.output, .models["claude-fable-5-2"].costByType.cacheRead, .models["claude-fable-5-2"].costByType.cacheWrite, .models["claude-fable-5-2"].costByType.webSearch, .models["claude-fable-5-2"].cost] | map(tostring) | join("/")')|$(usf pj '.cost')|$(usf pl '.cost')|$(usf pm '[.cost, (.unpriced | join(","))] | join("/")')|$(usf pk '[.models["claude-fable-5-1"].costByType.input, .models["claude-fable-5-1"].costByType.output, .models["claude-fable-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pn '.models["claude-fable-5"].costByType.cacheRead')|$(usf po '[.models["claude-mythos-5-1"].costByType.input, .models["claude-mythos-5-1"].costByType.cacheRead] | map(tostring) | join("/")')|$(usf pp '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pq '.models["claude-fable-5-2"].costByType.cacheWrite')|$(usf pr '.models["claude-fable-5-2"].costByType.webSearch')|$UPOS|$UPM|$upb|$UPAL" 'valid|8/40/0.2/0/0/48.2|8|8|0/claude-fable-6|10/50/0.25|1|10/0.25|10|16|0.01|1/1|2.1.311|USD per million tokens (webSearch: USD per request)|true|true|false|  "claude-fable-5-2": {|   "input": 8.0,|   "output": 40.0,|   "cacheWrite5m": 10.0,|   "cacheWrite1h": 16.0,|   "cacheRead": 0.2,|   "webSearch": 0.01|  },||litellmi/aitire/coder,litellmi/aitire/deepseek,litellmi/aitire/chat-fast|0|litellmi/aitire/coder=unknown/2026-11-14/checked+model,litellmi/aitire/deepseek=unknown/2026-11-14/checked+model,litellmi/aitire/chat-fast=unknown/2026-11-14/checked+model|source,version,unit,note,models,unpricedAliases|false'
 umsum() { (cd "$PM" && cksum sessions-*.jsonl 2>/dev/null | tr '\n' ' ') || true; jq -cS 'del(.lastPass)' "$PM/state.json" 2>/dev/null | cksum || true; }
 umcount() { cat "$PM"/sessions-*.jsonl 2>/dev/null | wc -l | tr -d ' ' || true; }
 N0="$(umcount)"; B0="$(umsum)"; sleep 1; umpass; A0="$UPRC:$([ "$(umsum)" = "$B0" ] && echo same):$([ "$(umcount)" = "$N0" ] && echo nonew)"
@@ -12482,18 +12523,18 @@ sess("ses_orca_Dev_179", "/w/a/devgd-300", 1794574750000, 1794574800003)
 sess("ses_orca_dev_179x", "/w/a/devgd-300", 1794574750000, 1794574800004)
 sess("ses_orca__179", "/w/a/devgd-300", 1794574750000, 1794574800005)
 msg(dev, 1, "user", 1794574750000, {"text": "Your task ID is: task_0123abcd"})
-turn(dev, 2, 1794574752000, 0.01, 1000, 100, 200, 50, [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "ls"}}, "time": {"ran": 1000, "completed": 1500}}])
-turn(dev, 3, 1794574754000, 0.02, 2000, 200, 400, 100, [{"type": "tool", "name": "edit", "state": {"status": "error", "input": {}}, "time": {"ran": 2000, "completed": 2100}}, {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject \"ACCEPTED\" --task-id task_0123abcd"}}, "time": {"ran": 3000, "completed": 5000}}])
+turn(dev, 2, 1794574752000, 0.01, 1000, 100, 200, 50, [{"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": "ls"}}, "time": {"ran": 1000, "completed": 1500}}])
+turn(dev, 3, 1794574754000, 0.02, 2000, 200, 400, 100, [{"type": "tool", "name": "edit", "state": {"status": "error", "input": {}}, "time": {"ran": 2000, "completed": 2100}}, {"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject \"ACCEPTED\" --task-id task_0123abcd"}}, "time": {"ran": 3000, "completed": 5000}}])
 msg(res, 1, "user", 1794577043000, {"text": "Your task ID is: task_0123abcd"})
-turn(res, 2, 1794577045000, 0.005, 10, 2, 0, 0, [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "pwd"}}, "time": {"ran": 0, "completed": 100}}])
+turn(res, 2, 1794577045000, 0.005, 10, 2, 0, 0, [{"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": "pwd"}}, "time": {"ran": 0, "completed": 100}}])
 turn(res, 3, 1794577047000, 0.015, 20, 3, 0, 0, [])
 msg(t3, 1, "user", 1794574760000, {"text": "Your task ID is: task_beefbeef"})
 msg(t3, 2, "assistant", 1794574762000, {"cost": "9", "tokens": {"input": 10, "output": 1}, "content": [
   {"type": "text", "text": "x"},
-  {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "echo hi"}}, "time": {"ran": 5000, "completed": 1000}},
+  {"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": "echo hi"}}, "time": {"ran": 5000, "completed": 1000}},
   {"type": "tool", "name": "read", "state": {"status": "error"}}]})
 msg(t3, 3, "assistant", 1794574764000, {"content": [
-  {"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject REJECTED --task-id task_ffffffff"}}, "time": {"ran": 0, "completed": 250}}]})
+  {"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": "orca orchestration send --from t --type worker_done --subject REJECTED --task-id task_ffffffff"}}, "time": {"ran": 0, "completed": 250}}]})
 c.execute("insert into session_message values (?,?,?,?,?)", (t3, 4, "assistant", 1794574763000, "{not json"))
 msg(t3, 5, "idle", 1794574766000, {})
 msg(t3, 6, "user", 1794574767000, {"text": "plain"})
@@ -12502,9 +12543,9 @@ c.close()
 ' "$OCDB"
  OC0="$(cksum < "$OCDB")"
  ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC1="$UPRC:$(ocn):$(ocnid ses_orca_dev_17945747508474019665):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
- OCDEV="$(usf ses_orca_dev_17945747508474019665 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.cacheRead, .tokens.cacheCreation, .tokens.thinking, .maxContext, .costState, .cost, (.unpriced | join(",")), .models["openai/gpt-5"].turns, .tools.bash.calls, .tools.bash.seconds, .tools.edit.calls, .tools.edit.errors, .tools.edit.seconds, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
- OCRES="$(usf ses_orca_researcher-2_1794577043 '[.agent, .orca_roles_role, .task, .project, .turns, .tokens.input, .tokens.output, .costState, .maxContext, .tools.bash.calls, .tools.bash.seconds, (.workerDone | length)] | join("|")')"
- OCT3="$(usf ses_orca_tester-3_1794574760 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.thinking, .maxContext, (.costState // "null"), .cost, (.unpriced | join(",")), (.models | keys | join(",")), .tools.bash.calls, .tools.bash.seconds, .tools.read.calls, .tools.read.errors, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
+ OCDEV="$(usf ses_orca_dev_17945747508474019665 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.cacheRead, .tokens.cacheCreation, .tokens.thinking, .maxContext, .costState, .cost, (.unpriced | join(",")), .models["openai/gpt-5"].turns, .tools.shell.calls, .tools.shell.seconds, .tools.edit.calls, .tools.edit.errors, .tools.edit.seconds, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
+ OCRES="$(usf ses_orca_researcher-2_1794577043 '[.agent, .orca_roles_role, .task, .project, .turns, .tokens.input, .tokens.output, .costState, .maxContext, .tools.shell.calls, .tools.shell.seconds, (.workerDone | length)] | join("|")')"
+ OCT3="$(usf ses_orca_tester-3_1794574760 '[.agent, .orca_roles_role, .task, .turns, .tokens.input, .tokens.output, .tokens.thinking, .maxContext, (.costState // "null"), .cost, (.unpriced | join(",")), (.models | keys | join(",")), .tools.shell.calls, .tools.shell.seconds, .tools.read.calls, .tools.read.errors, (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), .first, .last] | join("|")')"
  OCN="$(usf ses_abc .session_id)$(usf ses_orca_re3_f1-final-check_179 .session_id)"
  OCX="$(for s in ses_orca_Dev_179 ses_orca_dev_179x ses_orca__179; do o="$(usf "$s" .session_id)"; printf '%s,' "${o:-none}"; done)"
  ON0="$(ocn)"
@@ -12513,6 +12554,165 @@ c.close()
  OC0="$(cksum < "$OCDB")"
  ORCA_ROLES_OPENCODE_DB="$OCDB" umpass; OC3="$UPRC:$(( $(ocn) - ON0 )):$(ocnid ses_orca_dev_17945747508474019665):$(ocnid ses_orca_researcher-2_1794577043):$([ "$(cksum < "$OCDB")" = "$OC0" ] && echo same)"
  check "usage parse: OpenCode sessions of the kit (ses_orca_<role>_<digits>) are read from OpenCode's store read-only into the same daily file marked \"agent\":\"opencode\": a mapped worktree gives the task, the role comes from the id, the token sums, two turns, max context, the tool calls/errors/seconds, the worker_done verdict with the seconds from the task prompt, the first and last message times and OpenCode's cost estimate as costState; a model without provider or id is \"unknown\", listed once as unpriced, an assistant without tokens is no turn (its tools still count), a tool whose completed time is before its ran time has no seconds, a cost that is not a number is not summed (no estimate: costState null), a bad JSON row and an idle row are skipped, a worker_done whose task id no prompt names has no seconds, and first/last are the message times; the non-kit id ses_abc and the kit-shaped ids that are not the pattern (ses_orca_re3_f1-final-check_179, ses_orca_Dev_179, ses_orca_dev_179x, ses_orca__179) give no row; a store missing, empty, without session_v2 or not a database logs one line for a bad store and none for a missing one, exits 0 and leaves the Claude rows as they were; a second pass with nothing changed writes no row, a new time_updated writes one row for that session only; the store bytes never change" "$OCMISS|$OCEMPTY|$OCNOSCH|$OCNOTDB|$OCLR|$OCDEV|$OCRES|$OCT3|$OCN|$OCX|$OC1|$OC2|$OC3" "0:0:0|0:0:1|0:0:2|0:0:3|1|1000000|-|opencode|dev|devgd-292|2|3000|300|600|150|30|2500|0.03|0.03|openai/gpt-5|2|2|2.5|1|1|0.1|ACCEPTED:4|2026-11-13T12:59:10.000Z|2026-11-13T12:59:14.000Z|opencode|researcher-2|||2|30|5|0.02|20|1|0.1|0|opencode|tester-3|devgd-292|1|10|1|0|10|null|0|unknown|unknown|2|0.25|1|1|REJECTED:null|2026-11-13T12:59:20.000Z|2026-11-13T12:59:27.000Z||none,none,none,|0:3:1:same|0:0|0:1:2:1:same"
+ # batch1 fixtures (s1, s2, s3, s7): one temporary OpenCode store read by the checks below, every part in OpenCode's real shapes
+ OBN="$UM/ocbatch.db"; rm -f "$OBN"
+ python3 -I - "$OBN" <<'PYE'
+import json, sqlite3, sys, time
+c = sqlite3.connect(sys.argv[1])
+c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+c.execute("create table session_message (session_id text, seq integer, type text, time_created integer, data text)")
+def sess(sid, d, t):
+    c.execute("insert into session_v2 values (?,?,?,?)", (sid, d, t, t + 5000))
+def msg(sid, seq, typ, t, d):
+    c.execute("insert into session_message values (?,?,?,?,?)", (sid, seq, typ, t, d if isinstance(d, str) else json.dumps(d)))
+def turn(sid, seq, t, prov, mid, cost, content):
+    msg(sid, seq, "assistant", t, {"model": {"id": mid, "providerID": prov}, "cost": cost, "tokens": {"input": 10, "output": 1, "cache": {"read": 0, "write": 0}}, "content": content})
+def part(name, status, inp=None, content=None, meta=None, err=None, ran=0, done=None):
+    st = {"status": status}
+    if inp is not None: st["input"] = inp
+    if content is not None: st["content"] = content
+    if meta is not None: st["metadata"] = meta
+    if err is not None: st["error"] = err
+    return {"type": "tool", "name": name, "state": st, "time": {"ran": ran, "completed": ran + 1000 if done is None else done}}
+W, T = "/w/a/devgd-300", int(time.time() * 1000) - 200000
+SEND = "orca orchestration send --from t --type worker_done"
+# s1: shell and bash worker_done, a read with that command, edit/write lines, commits with metadata.exit
+s1 = "ses_orca_dev_1794600001"; sess(s1, W, T)
+msg(s1, 1, "user", T, {"text": "Your task ID is: task_a1b2c3d4"})
+turn(s1, 2, T + 12000, "openai", "gpt-5", 0.01, [
+    part("shell", "completed", {"command": SEND + ' --subject "verify: ACCEPTED" --task-id task_a1b2c3d4'}),
+    part("read", "completed", {"path": "/x", "command": SEND + ' --subject "VERDICT: REJECTED" --task-id task_a1b2c3d4'}),
+    part("shell", "completed", {"command": "orca orchestration status"}),
+    part("edit", "completed", {"path": "a", "oldString": "one", "newString": "a\nb\nc"}),
+    part("edit", "error", {"path": "b", "oldString": "p\nq", "newString": "y\nz"}),
+    part("edit", "completed", {"path": "c", "oldString": 5, "newString": ["q"]}),
+    part("write", "completed", {"path": "d", "content": "a\nb"}),
+    part("write", "running", {"path": "e", "content": "a\nb\nc"}),
+    part("write", "error", {"path": "f", "content": "a"}),
+    part("write", "completed", {"path": "g", "content": 7}),
+])
+msg(s1, 3, "user", T + 30000, {"text": "Your task ID is: task_b2c3d4e5"})
+turn(s1, 4, T + 42000, "openai", "gpt-5", 0.02, [
+    part("bash", "completed", {"command": SEND + ' --subject "VERDICT: REJECTED" --task-id task_b2c3d4e5'}),
+    part("shell", "completed", {"command": "git commit -m x"}, [{"type": "text", "text": " 1 file changed, 4 insertions(+), 2 deletions(-)"}], {"exit": 0}),
+    part("shell", "completed", {"command": "cd x && git commit -m y"}, [{"type": "text", "text": " 2 files changed, 10 insertions(+)"}, {"type": "file", "path": "f"}], {"exit": 0}),
+    part("shell", "error", {"command": "git commit -m z"}, [{"type": "text", "text": " 9 files changed, 99 insertions(+)"}], {"exit": 0}, {"type": "x", "message": "boom"}),
+    part("shell", "completed", {"command": "git commit -m w"}, [{"type": "text", "text": " 9 files changed, 9 insertions(+)"}], {"exit": 1}),
+    part("shell", "completed", {"command": "git commit -m v"}, [{"type": "text", "text": " 9 files changed, 9 insertions(+)"}], {}),
+    part("shell", "completed", {"command": "git commit -m u"}, [{"type": "text", "text": " 9 files changed, 9 insertions(+)"}], {"exit": True}),
+    part("shell", "running", {"command": "git commit -m t"}, None, {"exit": 0}),
+    part("read", "completed", {"path": "/x", "command": "git commit -m s"}, [{"type": "text", "text": " 9 files changed, 9 insertions(+)"}], {"exit": 0}),
+    part("shell", "completed", {"command": "git status"}, [{"type": "text", "text": " 9 files changed, 99 insertions(+)"}], {"exit": 0}),
+    part("bash", "completed", {"command": "git commit -m r"}, [{"type": "text", "text": " 1 file changed, 1 insertion(+)"}], {"exit": 0}),
+    part("shell", "completed", {"command": "git commit --amend"}, None, {"exit": 0}),
+    part("shell", "completed", {"command": "git commit -m q"}, [{"type": "text", "text": " 9 files changed, 9 insertions(+)"}], {"exit": 0.0}),
+    part("shell", "completed", {"command": "git commit -m p"}, [{"type": "text", "text": " 9 files changed, 9 insertions(+)"}], {"exit": "0"}),
+    part("shell", "completed", "/usr/bin/git commit --amend", None, {"exit": 0}),
+    {"type": "tool", "name": "shell"},
+])
+# s2: compactions; the running one is updated in place to completed further down
+s2 = "ses_orca_dev_1794600002"; sess(s2, W, T)
+msg(s2, 1, "user", T, {"text": "go"})
+turn(s2, 2, T + 1000, "openai", "gpt-5", 0.01, [])
+msg(s2, 3, "compaction", T + 2000, {"id": "c1", "type": "compaction", "status": "completed", "reason": "auto", "summary": "s", "time": {"created": T + 2000}, "model": "gpt-5", "native": False, "cost": 0.5, "tokens": {"input": 999, "output": 999}})
+msg(s2, 4, "compaction", T + 3000, {"id": "c2", "type": "compaction", "status": "failed", "error": "x", "cost": 0.4, "tokens": {"input": 777}})
+msg(s2, 5, "compaction", T + 4000, {"id": "c3", "type": "compaction", "status": "running"})
+msg(s2, 6, "compaction", T + 5000, '"not an object"')
+msg(s2, 7, "compaction", T + 6000, [1, 2])
+msg(s2, 8, "compaction", T + 7000, {"id": "c4"})
+msg(s2, 9, "idle", T + 7500, {})
+s2b = "ses_orca_dev_1794600003"; sess(s2b, W, T)
+msg(s2b, 1, "user", T, {"text": "go"})
+turn(s2b, 2, T + 1000, "openai", "gpt-5", 0.01, [])
+# s3: output size and shell command type
+s3a = "ses_orca_dev_1794600011"; sess(s3a, W, T)
+msg(s3a, 1, "user", T, {"text": "go"})
+turn(s3a, 2, T + 1000, "openai", "gpt-5", 0.01, [
+    part("shell", "completed", {"command": "ls"}, [{"type": "text", "text": "héllo"}, {"type": "text", "text": "ab"}, {"type": "file", "path": "f", "bytes": 999}, {"type": "text", "text": 5}], {"exit": 0}),
+    part("subagent", "completed", {}, [{"type": "text", "text": "xyz"}]),
+])
+s3b = "ses_orca_dev_1794600012"; sess(s3b, W, T)
+msg(s3b, 1, "user", T, {"text": "go"})
+turn(s3b, 2, T + 1000, "openai", "gpt-5", 0.01, [part("shell", "error", {"command": "cat"}, None, None, {"type": "x", "message": "boom"})])
+s3c = "ses_orca_dev_1794600013"; sess(s3c, W, T)
+msg(s3c, 1, "user", T, {"text": "go"})
+turn(s3c, 2, T + 1000, "openai", "gpt-5", 0.01, [part("shell", "error", {"command": "jq"}, None, None, "boom!!")])
+s3d = "ses_orca_dev_1794600014"; sess(s3d, W, T)
+msg(s3d, 1, "user", T, {"text": "go"})
+turn(s3d, 2, T + 1000, "openai", "gpt-5", 0.01, [
+    part("shell", "completed", {"command": "cd /x && git status"}),
+    part("shell", "completed", {"command": "FOO=1 /usr/bin/python3 a.py"}),
+    part("shell", "completed", {"command": "export A=1; orca orchestration send --type worker_done"}),
+    part("shell", "completed", {"command": "cd /x"}),
+    part("shell", "completed", {"command": "echo \"unterminated"}),
+    part("shell", "completed", {}),
+    part("shell", "completed", {"command": ""}),
+    part("shell", "completed", {"command": 5}),
+    part("shell", "completed", {"command": "pushd /x"}),
+    part("shell", "completed", {"command": "source /x"}),
+    part("shell", "completed", {"command": "set -e"}),
+    part("shell", "completed", {"command": ". /x"}),
+    part("shell", "completed", {"command": "cd /x && export A=1 && set -e"}),
+    part("shell", "completed", {"command": "./bin/tool --x"}),
+    part("shell", "completed", {"command": "cd /x && pushd /y"}),
+    part("shell", "completed", {"command": "VAR=1 cd /x && git log"}),
+    part("shell", "completed", {"command": "git status && python3 x"}),
+    part("bash", "completed", {"command": "/bin/git status"}),
+    part("edit", "completed", {"path": "a", "oldString": "a", "newString": "b"}),
+])
+s3e = "ses_orca_dev_1794600015"; sess(s3e, W, T)
+msg(s3e, 1, "user", T, {"text": "go"})
+turn(s3e, 2, T + 1000, "openai", "gpt-5", 0.01, [part("shell", "completed", {"command": "t%03d" % i}) for i in range(1, 52)])
+# s7: an unpriced alias
+s7 = "ses_orca_dev_1794600016"; sess(s7, W, T)
+msg(s7, 1, "user", T, {"text": "go"})
+turn(s7, 2, T + 1000, "litellmi", "aitire/coder", 0.02, [])
+c.commit()
+c.close()
+PYE
+ kses b1cl "$W" "$RM"
+ ORCA_ROLES_OPENCODE_DB="$OBN" umpass
+ OB1="$UPRC"
+ O1="$(usf ses_orca_dev_1794600001 '[ (.workerDone | map("\(.verdict):\(.seconds)") | join(",")), (.lines | "\(.added)/\(.removed)/\(.source)"), (.commits | "\(.count)/\(.insertions)/\(.deletions)"), ("\(.maxContextAdvisor)/\(.maxContextAdvisor | type)") ] | join("|")')"
+ check "usage parse OpenCode: a shell or bash worker_done send with a preamble for its task adds the verdict and its seconds, a read part with that command and any other tool or command never do; lines come from a completed edit (newString, oldString) and a completed write (content), and a write or edit that is error or running or carries a non-string field adds nothing; commits count a shell or bash git commit that completed with metadata.exit the int 0 (an error, running, no exit, exit 1, true, 0.0 or \"0\", another tool, a non-commit and a state.input that is not a dict add nothing), with insertions and deletions from its text items and 0 when it has none" "$O1" "ACCEPTED:12,REJECTED:12|5/1/edits|4/15/2|0/number"
+ O2A="$(usf ses_orca_dev_1794600002 '[.compactions, .tokens.input, .cost, (.models | keys | join(",")), .turns, .userMessages] | join("/")')"
+ O2C="$(usf ses_orca_dev_1794600003 '.compactions')"
+ python3 -I - "$OBN" <<'PYE'
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("update session_message set data = ? where session_id = ? and seq = 5", (json.dumps({"id": "c3", "type": "compaction", "status": "completed", "cost": 0.3, "tokens": {"input": 5}}), "ses_orca_dev_1794600002"))
+c.execute("update session_v2 set time_updated = ? where id = ?", (1794600010000, "ses_orca_dev_1794600002"))
+c.commit()
+c.close()
+PYE
+ ORCA_ROLES_OPENCODE_DB="$OBN" umpass
+ O2B="$(usf ses_orca_dev_1794600002 '[.compactions, .tokens.input, .cost, (.models | keys | join(",")), .turns, .userMessages] | join("/")')"
+ check "usage parse OpenCode compactions: a completed compaction row counts, a failed, running, status-less or non-object row and every other row type does not, and a session with none counts 0; an in-place running -> completed update with a new time_updated counts once more; the compaction's own cost and tokens never reach the session" "$OB1:$O2A|$O2C|$UPRC:$O2B" "0:1/10/0.01/openai/gpt-5/1/1|0|0:2/10/0.01/openai/gpt-5/1/1"
+ O3A="$(usf ses_orca_dev_1794600011 '[.tools.shell.outputBytes, .tools.subagent.outputBytes, (.commands | keys | join(",")), (.commands.ls | "\(.calls)/\(.errors)/\(.outputBytes)")] | join("/")')"
+ O3B="$(usf ses_orca_dev_1794600012 '[.tools.shell.outputBytes, (.commands.cat | "\(.calls)/\(.errors)/\(.outputBytes)")] | join("/")')"
+ O3C="$(usf ses_orca_dev_1794600013 '[.tools.shell.outputBytes, (.commands.jq | "\(.calls)/\(.errors)/\(.outputBytes)")] | join("/")')"
+ O3D="$(usf ses_orca_dev_1794600014 '[.commands | to_entries | sort_by(.key) | map("\(.key)=\(.value.calls)/\(.value.errors)/\(.value.outputBytes)") | join(",")] | join("")')"
+ O3E="$(usf ses_orca_dev_1794600015 '[(.commands | keys | length), ([.commands | keys[] | select(. != "other")] | length), .commands.other.calls, (.commands | has("t050") | tostring), (.commands | has("t051") | tostring), ([.commands[].calls] | add)] | join("/")')"
+ O3F="$(usf b1cl '[(.commands | type), (.tools.Bash | has("outputBytes")), (.tools.Bash | has("bytes")), (.maxContextAdvisor | type)] | join("/")')"
+ O7="$(usf ses_orca_dev_1794600016 '[.models["litellmi/aitire/coder"].turns, (.unpriced | index("litellmi/aitire/coder")), .costPriced, .cost, .costState, (.commands | type), (.commands | length)] | join("/")')"
+ check "usage parse OpenCode: every tool entry gets outputBytes, the UTF-8 size of its text items (a file or non-string text item counts 0) plus its error object's message or a string error, and shell parts also count per command type; the type is the basename of the first word after VAR=value that is not cd/pushd/export/set/source/., the first of those when all are, unparsed when it cannot be tokenised and unknown when the command is missing, empty or not a string; at most 50 types, the next ones under other, which does not count toward the 50; a Claude row gets neither key" "$O3A|$O3B|$O3C|$O3D|$O3E|$O3F" "8/3/ls/1/0/8|4/1/1/4|6/1/1/6|.=1/0/0,cd=3/0/0,git=4/0/0,orca=1/0/0,pushd=1/0/0,python3=1/0/0,set=1/0/0,source=1/0/0,tool=1/0/0,unknown=3/0/0,unparsed=1/0/0|51/50/1/true/false/51|null/false/false/number"
+ jq '.ocSessions |= map_values(del(.commands) | del(.maxContextAdvisor) | .tools |= map_values(del(.outputBytes) | del(.bytes)))' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+ ORCA_ROLES_OPENCODE_DB="$OBN" umpass
+ O3G="$(jq -r '[(.ocSessions | length), (.ocSessions | [to_entries[].value | has("commands") or ([.tools[] | has("outputBytes") or has("bytes")] | any)] | any)] | join("/")' "$PM/state.json" 2>/dev/null):$UPRC:$(grep -c 'push failed\|opencode pass failed\|pass failed' "$PM/usage-metrics.log" 2>/dev/null || true)"
+ check "usage parse OpenCode: a session held in state.json by an earlier version (tool entries without outputBytes, no commands, no maxContextAdvisor) never fails a pass or its push and a missing field counts 0" "$O3G" "$(jq -r '.ocSessions | length' "$PM/state.json" 2>/dev/null)/false:0:0"
+ python3 -I - "$OBN" <<'PYE'
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+sid = "ses_orca_dev_1794600011"
+c.execute("insert into session_message values (?,?,?,?,?)", (sid, 3, "assistant", 1794600006000, json.dumps({"model": {"id": "gpt-5", "providerID": "openai"}, "tokens": {"input": 5, "output": 1}, "content": [{"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": "pwd"}, "content": [{"type": "text", "text": "abcd"}]}}]})))
+c.execute("update session_v2 set time_updated = ? where id = ?", (1794600009000, sid))
+c.commit()
+c.close()
+PYE
+ ORCA_ROLES_OPENCODE_DB="$OBN" umpass
+ O3H="$(usf ses_orca_dev_1794600011 '[(.commands.pwd | "\(.calls)/\(.outputBytes)"), (.tools.shell.outputBytes)] | join("/")')"
+ check "usage parse OpenCode: the next read of a held session rewrites it whole with outputBytes and commands" "$UPRC:$O3H" "0:1/4/12"
+ check "usage parse: an OpenCode model of an unpriced alias stays in unpriced with no priced cost, its cost stays OpenCode's own estimate, and a session with no shell part has an empty commands object" "$O7" "1/0/0/0.02/0.02/object/0"
 # pair trees (a1): a session whose cwd is in a pair tree gets the task and project of the worktree that owns it (the map is remembered)
 umpk
 PR="$UMR"; PT="$UM/ptree"; PT2="$UM/ptree2"; PT4="$UM/ptree4"; W2="$UM/wt/devgd-400"
@@ -12857,7 +13057,7 @@ elif cmd == "msg":
 elif cmd == "turn":
     sid, seq, off, prov, mid, cost, inp, out, rd, wr, tool = sys.argv[3:14]
     if tool.startswith("@"):
-        content = [{"type": "tool", "name": "bash", "state": {"status": "completed", "input": {"command": tool[1:]}}, "time": {"ran": 1000, "completed": 2500}}]
+        content = [{"type": "tool", "name": "shell", "state": {"status": "completed", "input": {"command": tool[1:]}}, "time": {"ran": 1000, "completed": 2500}}]
     elif tool == "-":
         content = []
     else:
@@ -12934,6 +13134,71 @@ ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCF1="$(fposts):$(grep -c 'GET .*ses_orca_
 oc turn "$oc4" 3 -3 openai gpt-5 0.01 50 1 0 0 -; oc upd "$oc4" -3; umcfg 127.0.0.1 0.0.0.0 false
 ORCA_ROLES_OPENCODE_DB="$OCP" umpass; OCF2="$(fposts):$(grep -c 'GET .*ses_orca_' "$UM/fs/req.log" 2>/dev/null || true)"
 check "usage push OpenCode: a session is pushed although Prometheus answers errors, and although prometheusUrl is not on this machine without allowRemote; no request asks Prometheus for a series or a query naming its ses_orca_ id" "$OCF1|$OCF2" "1:0|2:0"
+ # the Claude tool names in the push for an OpenCode session (s5) and maxContext without the advisor's own request (s8)
+ umpk; freset; umcfg
+ OCP5="$UM/ocs5.db"; rm -f "$OCP5"
+ python3 -I - "$OCP5" <<'PYE'
+import json, sqlite3, sys, time
+c = sqlite3.connect(sys.argv[1])
+c.execute("create table session_v2 (id text primary key, directory text, time_created integer, time_updated integer)")
+c.execute("create table session_message (session_id text, seq integer, type text, time_created integer, data text)")
+sid = "ses_orca_dev_1794600051"
+now = int(time.time() * 1000)
+c.execute("insert into session_v2 values (?,?,?,?)", (sid, "/w/a/devgd-300", now - 40000, now - 20000))
+def msg(seq, typ, off, d):
+    c.execute("insert into session_message values (?,?,?,?,?)", (sid, seq, typ, now + off * 1000, json.dumps(d)))
+def part(name, status, inp, ran, done, err=None):
+    st = {"status": status, "input": inp}
+    if err is not None: st["error"] = err
+    return {"type": "tool", "name": name, "state": st, "time": {"ran": ran, "completed": done}}
+msg(1, "user", -50, {"text": "go"})
+msg(2, "assistant", -40, {"model": {"id": "gpt-5", "providerID": "openai"}, "cost": 0.01, "tokens": {"input": 10, "output": 1}, "content": [
+    part("shell", "completed", {"command": "ls"}, 1000, 1500),
+    part("shell", "completed", {"command": "pwd"}, 0, 1000),
+    part("shell", "error", {"command": "x"}, 0, 500, {"type": "x", "message": "boom"}),
+    part("bash", "completed", {"command": "ls"}, 0, 2000),
+    part("subagent", "completed", {}, 0, 0),
+    part("read", "completed", {"path": "/x"}, 0, 0),
+    part("edit", "completed", {"path": "a", "oldString": "a", "newString": "b"}, 0, 0),
+    part("write", "completed", {"path": "b", "content": "x"}, 0, 0),
+    part("grep", "completed", {}, 0, 0),
+    part("glob", "completed", {}, 0, 0),
+]})
+c.commit()
+c.close()
+PYE
+ ps1 s5c 400 300
+ ORCA_ROLES_OPENCODE_DB="$OCP5" umpass
+ S5A="$(ocmet 1 ses_orca_dev_1794600051 'select(.name == "orca_roles.tool.calls") | [.sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"] | sort | join(",")')"
+ S5B="$(ocmet 1 ses_orca_dev_1794600051 'select(.name == "orca_roles.tool.errors") | [.sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"] | sort | join(",")')"
+ S5C="$(ocmet 1 ses_orca_dev_1794600051 'select(.name == "orca_roles.tool.duration") | [.sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"] | sort | join(",")')"
+ S5D="$(usf ses_orca_dev_1794600051 '.tools | keys | join(",")')"
+ S5E="$(ocmet 1 ses_orca_dev_1794600051 'select(.name == "orca_roles.tool.calls") | [.sum.dataPoints[] | select(any(.attributes[]; .key == "tool" and (.value.stringValue == "shell" or .value.stringValue == "bash")))] | length')"
+ S5F="$(ocmet 1 s5c 'select(.name == "orca_roles.tool.calls") | [.sum.dataPoints[] | "\([.attributes[] | .value.stringValue] | join("/"))=\(.asDouble)"] | sort | join(",")'):$(usf s5c '.tools | keys | join(",")')"
+ S5G="$(pbody 1 '[(tostring | test("outputBytes")), (tostring | test("\"commands\""))] | join("/")')"
+ check "usage push OpenCode tool names: the pushed tool series uses the Claude name (shell and bash merged into one Bash point with the sums of both, read/edit/write/grep/glob mapped, subagent unchanged), the store row keeps the raw names, no shell or bash point exists, and the store-only outputBytes and commands are never pushed; a Claude session's Bash series is unchanged" "$S5A|$S5B|$S5C|$S5D|$S5E|$S5F|$S5G" "Bash=4,Edit=1,Glob=1,Grep=1,Read=1,Write=1,subagent=1|Bash=1,Edit=0,Glob=0,Grep=0,Read=0,Write=0,subagent=0|Bash=4,Edit=0,Glob=0,Grep=0,Read=0,Write=0,subagent=0|bash,edit,glob,grep,read,shell,subagent,write|0|Bash=1:Bash|false/false"
+ umpk; freset; umcfg
+ W="/w/a/devgd-300/src"
+ s8s() { local f="$PD/$1.jsonl"; pu "$f" "$(umts -300)" "$W" "go"; pa "$f" "$(umts -290)" "$W" "$1-m1" claude-haiku-4-5 "$2" '[{"type":"text","text":"x"}]'; }
+ s8s maxc '{"input_tokens":4,"cache_read_input_tokens":346222,"cache_creation_input_tokens":4613,"iterations":[{"type":"message","input_tokens":2,"cache_read_input_tokens":171333,"cache_creation_input_tokens":3556},{"type":"advisor_message","input_tokens":161200,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"model":"claude-fable-5-2"},{"type":"message","input_tokens":2,"cache_read_input_tokens":174889,"cache_creation_input_tokens":1057}]}'
+ s8s maxn '{"input_tokens":1000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":500}'
+ s8s maxs '{"input_tokens":7,"iterations":"x"}'
+ s8s maxe '{"input_tokens":7,"iterations":[]}'
+ s8s maxo '{"input_tokens":7,"iterations":[{"type":"advisor_message","input_tokens":5000},{"type":"advisor_message","input_tokens":200000}]}'
+ s8s maxf '{"input_tokens":7,"iterations":[{"type":"message"},{"type":"message","cache_creation_input_tokens":3},{"input_tokens":200}]}'
+ s8s maxx '{"input_tokens":11,"iterations":[5,{"type":"advisor_message","input_tokens":9}]}'
+ s8s maxg '{"input_tokens":7,"iterations":[{"type":"message","input_tokens":"1000","cache_read_input_tokens":null}]}'
+ s8s maxl '{"input_tokens":1,"iterations":[{"type":"advisor_message","input_tokens":100000}]}'
+ pa "$PD/maxl.jsonl" "$(umts -280)" "$W" maxl-m2 claude-haiku-4-5 '{"input_tokens":1,"iterations":[{"type":"message","input_tokens":500000}]}' '[{"type":"text","text":"x"}]'
+ umpass
+ S8A="$(for s in maxc maxn maxs maxe maxo maxf maxx maxg maxl; do printf '%s ' "$(usf "$s" '[.maxContext, .maxContextAdvisor] | join("/")')"; done)"
+ S8B="$(usf maxc '[.tokens.input, .tokens.cacheRead, .tokens.cacheCreation, .turns, .models["claude-haiku-4-5"].turns, (.cost == .models["claude-haiku-4-5"].cost)] | join("/")')"
+ S8C="$(rmof 1 maxc '.scopeMetrics[0].metrics[] | select(.name == "orca_roles.context.max") | .gauge.dataPoints[0].asDouble'):$(pbody 1 '[.resourceMetrics[].scopeMetrics[].metrics[] | select(.name | test("advisor"))] | length'):$(pbody 1 'tostring | test("maxContextAdvisor")')"
+ jq 'del(.sessions.maxc.maxContextAdvisor)' "$PM/state.json" > "$PM/state.tmp" && mv "$PM/state.tmp" "$PM/state.json"
+ pa "$PD/maxc.jsonl" "$(umts -5)" "$W" maxc-m2 claude-haiku-4-5 '{"input_tokens":2}' '[{"type":"text","text":"x"}]'
+ umpass
+ S8D="$(usf maxc '[.maxContext, .maxContextAdvisor] | join("/")'):$UPRC"
+ check "usage parse maxContext without the advisor request: the context candidate of a line with iterations is the largest sum over its non-advisor entries (an entry without type counts as one, missing or non-numeric fields 0) and only the advisor entries raise maxContextAdvisor; no iterations, a value that is not a list, an empty one, only advisor entries or no dict entry fall back to today's top-level sum, and a line with a larger top-level sum does not lower the mark; token counts, cost and model rows keep the top-level usage; a session restored without maxContextAdvisor passes and treats it as 0, keeping its maxContext; the push keeps orca_roles.context.max on maxContext and pushes no advisor series" "$S8A|$S8B|$S8C|$S8D" "175948/161200 3500/0 7/0 7/0 7/200000 200/0 11/9 0/0 500000/100000 |4/346222/4613/1/1/true|175948:0:false|175948/0:0"
 # the held sessions of state.json: ocSessions holds a session only while it is pending
 umpk; freset; umcfg; OCP="$UM/ocp10.db"; rm -f "$OCP"; oc() { python3 -I "$UM/ocp.py" "$OCP" "$@"; }; oc init
 ochas() { jq -r --arg s "$1" '.ocSessions | has($s)' "$PM/state.json" 2>/dev/null || true; }
@@ -13067,10 +13332,10 @@ check "usage push OpenCode dashboard: every metric selector of panels 7 (cost pe
 # the header docstring and README state what an OpenCode push is (C12)
 UMDOC="$(python3 -I -c 'import sys; print(open(sys.argv[1]).read().split("\"\"\"")[1])' "$ROOT/bin/usage_metrics.py")"
 umsay() { case "$1" in 0) echo no;; *) echo yes;; esac; }
-OCD1="$(for p in 'orca_roles.agent' 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'time_updated' 'no continuation' 'remembered'; do umsay "$(grep -ciF -- "$p" <<< "$UMDOC" || true)"; done | tr '\n' ':' | sed 's/:$//')"
+OCD1="$(for p in 'orca_roles.agent' 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'time_updated' 'no continuation' 'remembered' 'not reported' 'cache_write_tokens' 'cache_created_input_tokens' 'litellmi' 'reasoning' 'thinking' 'maxContextAdvisor'; do umsay "$(grep -ciF -- "$p" <<< "$UMDOC" || true)"; done | tr '\n' ':' | sed 's/:$//')"
 RMO="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
-OCD2="$(for p in 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'update time' 'no continuation' 'drops one trailing' 'remembered' 'orca_roles_agent="opencode"'; do umsay "$(grep -ciF -- "$p" <<< "$RMO" || true)"; done | tr '\n' ':' | sed 's/:$//')"
-check "usage docs OpenCode: the header docstring names the orca_roles.agent resource attribute and the orca_roles_agent source label, the unsplit by-type cost, OpenCode sessions, pair trees, their update time and the lack of continuation; the README's Usage metrics section tells the sources apart by orca_roles_agent (with a query example), lists unsplit in the cost_by_type types, states the update time and the lack of continuation, the role's trailing -<digits>, and covers OpenCode sessions, pair trees and the remembered owner" "$OCD1|$OCD2" "yes:yes:yes:yes:yes:yes:yes:yes|yes:yes:yes:yes:yes:yes:yes:yes:yes"
+OCD2="$(for p in 'orca_roles_agent' 'unsplit' 'opencode' 'pair' 'update time' 'no continuation' 'drops one trailing' 'remembered' 'orca_roles_agent="opencode"' 'not reported' 'cache_write_tokens' 'cache_created_input_tokens' 'litellmi' 'reasoning' 'thinking' 'maxContextAdvisor' 'unpricedAliases' '2026-11-14' 'aitire/coder' 'aitire/deepseek' 'aitire/chat-fast' 'Bash' 'shell'; do umsay "$(grep -ciF -- "$p" <<< "$RMO" || true)"; done | tr '\n' ':' | sed 's/:$//')"
+check "usage docs OpenCode: the header docstring names the orca_roles.agent resource attribute and the orca_roles_agent source label, the unsplit by-type cost, OpenCode sessions, pair trees, their update time and the lack of continuation; the README's Usage metrics section tells the sources apart by orca_roles_agent (with a query example), lists unsplit in the cost_by_type types, states the update time and the lack of continuation, the role's trailing -<digits>, and covers OpenCode sessions, pair trees and the remembered owner; the docstring and the README both say that through the litellmi provider (LiteLLM) cache writes are not reported and name cache_write_tokens and cache_created_input_tokens, and that output excludes reasoning, which is in thinking; the README lists the three unpriced aliases with their date and unpricedAliases, the Claude tool names of the push table and maxContextAdvisor in the store fields" "$OCD1|$OCD2" "yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes|yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes:yes"
 # backfill: a fake docker first on PATH (records every call; discovery, compose, tar, promtool simulated) and the fake Prometheus HTTP server; never anything real
 FD="$UM/fdock"; BH="$UM/bh"
 fdreset() { rm -rf "$FD" "$BH"; mkdir -p "$FD/bin" "$FD/compose" "$BH"; : > "$FD/docker.log"; printf 'prom1\tquay.io/prom/prometheus:v2.54.1\nother\tprom/prometheus-extra:1\no2\tbitnami/prometheus:1\no3\tnotprom/prometheus\nweb\tnginx\n' > "$FD/ps.txt"
@@ -13189,9 +13454,9 @@ RM="$(awk '/^### Usage metrics$/{s=1;next} /^### /{s=0} s' "$ROOT/README.md")"
 rd() { printf '%s\n' "$RM" | grep -cF -e "$1" || true; }
 RK="$(for k in enabled otlpEndpoint prometheusUrl intervalSeconds retentionDays allowRemote prometheusContainer; do printf '%s ' "$(printf '%s\n' "$RM" | grep -c "^  | \`$k\` |" || true)"; done)"
 R1="$(grep -c '^### Usage metrics$' "$ROOT/README.md" || true):$(grep -c '^| `metrics` | The kit.s \[usage metrics\](#usage-metrics): ' "$ROOT/README.md" || true):$(grep -cF 'Only the global config is read by the background pass' "$ROOT/README.md" || true):$RK"
-R2="$(rd '**Never** prompts, tool inputs or tool outputs'):$(rd 'It makes no model call and uses no tokens'):$(rd 'Only to loopback addresses unless `allowRemote` is `true`'):$(rd '/.orca-roles/grafana/orca-roles-usage.json'):$(rd 'usage-metrics.sh --backfill --since 2026-10-01 --dry-run'):$(rd 'A real run (`--yes`, only after you agreed)'):$(rd '/prometheus-backups/prometheus-data-<time>.tgz'):$(rd 'prints how to undo it')"
+R2="$(rd '**Never** prompts, tool inputs or tool outputs'):$(rd 'It makes no model call and uses no tokens'):$(rd 'Only to loopback addresses unless `allowRemote` is `true`'):$(rd '/.orca-roles/grafana/orca-roles-usage.json'):$(rd 'usage-metrics.sh --backfill --since 2026-10-01 --dry-run'):$(rd 'A real run (`--yes`, only after you agreed)'):$(rd '/prometheus-backups/prometheus-data-<time>.tgz'):$(rd 'prints how to undo it'):$(rd '`close-role.sh` first runs one pass (cut at 20 s) so the session'\''s numbers are kept after OpenCode'\''s copy is deleted; when the scheduled pass is running at that moment, the session keeps the figures of the last pass.')"
 R3="$(grep -cF "If your organization manages Claude Code's settings" "$ROOT/README.md" || true):$(grep -cF 'managed settings of your organization can override where Claude Code sends it' "$ROOT/README.md" || true)"
-check "usage docs README: the Usage metrics section and the settings table row exist (every settings.metrics key has its row), it says that prompts, tool inputs and outputs are never recorded, that it uses no tokens, that the push stays on this machine unless allowRemote, where the dashboard is, that backfill starts with --dry-run and a real run needs the user's yes and takes a backup with an undo, and the OpenTelemetry paragraphs say organization-managed settings can send Claude Code's telemetry elsewhere" "$R1|$R2|$R3" "1:1:1:1 1 1 1 1 1 1 |1:1:1:1:1:1:1:1|2:1"
+check "usage docs README: the Usage metrics section and the settings table row exist (every settings.metrics key has its row), it says that prompts, tool inputs and outputs are never recorded, that it uses no tokens, that the push stays on this machine unless allowRemote, where the dashboard is, that backfill starts with --dry-run and a real run needs the user's yes and takes a backup with an undo, that closing an OpenCode role runs one pass cut at 20 s before OpenCode's copy is deleted (and what happens when the scheduled pass runs at that moment), and the OpenTelemetry paragraphs say organization-managed settings can send Claude Code's telemetry elsewhere" "$R1|$R2|$R3" "1:1:1:1 1 1 1 1 1 1 |1:1:1:1:1:1:1:1:1|2:1"
 SK="$ROOT/plugin/skills/team/SKILL.md"; sk() { grep -cF -e "$1" "$SK" || true; }
 K1="$(sk '**Usage metrics** (background, kit-wide; README → Usage metrics)'):$(sk 'usage-metrics.sh --report [--task <id>] [--since YYYY-MM-DD] [--json]'):$(sk 'Always run `usage-metrics.sh --backfill --since <date> --dry-run` first'):$(sk 'only after the user says yes'):$(sk 'Never add `--yes` on your own'):$(sk 'do not set it for them'):$(sk '`settings.metrics.enabled: false`'):$(sk 'Organization-managed settings can send Claude Code'\''s OpenTelemetry elsewhere')"
 check "usage docs skill: the team skill's Usage metrics part tells the Planner to answer cost questions with --report, to run --backfill with --dry-run first and only after the user says yes (never --yes on its own), not to set allowRemote for the user, how to turn the metrics off, and that organization-managed OpenTelemetry settings are separate" "$K1" "1:1:1:1:1:1:1:1"

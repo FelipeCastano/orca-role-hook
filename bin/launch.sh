@@ -1027,7 +1027,9 @@ done
 if metrics_enabled "$CFG"; then   # what the metrics pass cannot read itself: the worktree's project and task, and the kit's events
   MTOP="$(git_here toplevel)" && MPHYS="$(cd "$MTOP" && pwd -P)" || { MTOP="$PWD"; MPHYS="$(pwd -P)"; }
   metrics_worktree "$MTOP" "$(project_name .)" "$(metrics_task "$CFG" "$MTOP")"
-  metrics_event "$MPHYS" launch ""
+  OPENED=""; for id in $NEW; do case " $REUSED $REMEMBERED $RESUMED " in *" $id "*) continue;; esac; OPENED="$OPENED $id"; done   # only a tab this run opened is a launch: a reused, reopened or kept one is not
+  [ -n "$OPENED" ] || metrics_event "$MPHYS" launch ""
+  for id in $OPENED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" launch "${b:-$id}"; done
   [ "${ORCA_ROLES_RELAUNCH:-}" != 1 ] || metrics_event "$MPHYS" relaunch "$FRONT"
   for id in $REMEMBERED $RESUMED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" reopened "${b:-$id}"; done
   for id in $KEPT_DETACHED; do b="$(instance_base "$CFG" "$id")"; metrics_event "$MPHYS" detached-kept "${b:-$id}"; done

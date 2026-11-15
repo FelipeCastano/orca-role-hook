@@ -22,7 +22,7 @@ resolve() {  # <role|title|handle> → role id
   done
 }
 
-RC=0
+RC=0; MPASS=""
 for x in "$@"; do
   id="$(resolve "$x")"
   [ -n "$id" ] || { echo "There is no role '$x' open in this workspace. Roles: $(echo $IDS)" >&2; RC=1; continue; }
@@ -35,7 +35,14 @@ for x in "$@"; do
     echo "$t: Orca did not answer about its tab ($h); nothing was changed."; RC=1; continue
   fi
   # An OpenCode role's session stays in OpenCode's store after its tab is gone: delete it first (closing the tab ends its turn)
-  [ "$(rstr "$CFG" "$id" agent)" = opencode ] && oc_session_delete "$id" "$GITDIR"
+  if [ "$(rstr "$CFG" "$id" agent)" = opencode ]; then
+    # One pass keeps the figures of a session whose delete ends them; once per invocation, and it never waits for a pass already running
+    if [ -z "$MPASS" ] && metrics_enabled "$CFG"; then
+      MPASS=1
+      bounded_run --quiet 20 "usage metrics pass" env ORCA_ROLES_METRICS_LIMIT=10 "$KIT/bin/usage-metrics.sh" --once >/dev/null 2>&1
+    fi
+    oc_session_delete "$id" "$GITDIR"
+  fi
   if [ "$src" -eq 0 ]; then
     if printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1; then
       # a session Orca keeps without a tab (orphaned) is ended like launch.sh does: the plain close first, --tab only when that fails
