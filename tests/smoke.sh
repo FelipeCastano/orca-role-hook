@@ -4049,19 +4049,20 @@ try lkl id:AAA; R2="$(printf '%s' "$OUT" | grep -c '^Warning: this folder was la
 try lkl id:BBB; R3="$RC:$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before as worktree id:AAA and now as id:BBB; if Orca lists it twice, its tabs may be duplicated.$'):$(cat "$LKG/orca-roles.wtid")"
 try lkl active; R4="$(printf '%s' "$OUT" | grep -c '^Warning: this folder was launched before' || true):$(cat "$LKG/orca-roles.wtid")"
 check "launch: a changed worktree id warns (and is saved), the same id or 'active' does not" "$R1:$R2:$R3:$R4" "0:0:0:0:1:id:BBB:0:id:BBB"
-# a team opened by the Planner-first layout (PLANNER= and no LOCAL_COORDINATOR=): refused while one of its tabs exists, nothing written; with every tab closed its files are removed and a fresh programmer team opens
+# a team opened by the Planner-first layout (PLANNER= and no LOCAL_COORDINATOR=): refused while one of its real tabs exists, naming it, nothing written; with every tab closed its files move to orca-roles.set-aside/ and a fresh programmer team opens
 lkreset; printf 'PLANNER=p1\nDEV=d1\nDEPLOYER=x1\n' > "$LKG/orca-roles.env"; printf 'PLANNER=pty1\nDEV=pty2\nDEPLOYER=pty3\n' > "$LKG/orca-roles.pty"; cp "$KIT/config.json" "$LKG/orca-roles.config.json"; echo alive > "$LK/show.d1"; B="$(lksum)"
-OLE='ERROR: this worktree'"'"'s team was opened by an earlier version of the kit: close its tabs and run roles again'
+OLE='ERROR: this worktree'"'"'s team was opened by an earlier version of the kit and these of its tabs are open: dev (d1). Close them and run roles again, or run roles --new-team to set the saved team aside and start a new one.'
 try lkl; O1="$RC:$(printf '%s\n' "$OUT" | grep -cxF "$OLE"):$(lkcnt 'create|close'):$([ "$(lksum)" = "$B" ] && echo same || echo CHANGED)"
 try lkl --reopen; O1="$O1|$RC:$(printf '%s\n' "$OUT" | grep -cxF "$OLE"):$([ "$(lksum)" = "$B" ] && echo same || echo CHANGED)"
-rm -f "$LK/show.d1"; try lkl; O2="$RC:$(printf '%s\n' "$OUT" | grep -cF "$OLE"):$(lkcnt create):$(cut -d= -f1 "$LKG/orca-roles.env" | tr '\n' ' ')"
-check "launch: a team of the Planner-first layout with a live tab is refused (plain run and --reopen) and nothing is written; with every tab closed the old files are removed and a fresh team opens with the local coordinator first" "$O1|$O2" "1:1:0:same|1:1:same|0:0:4:LOCAL_COORDINATOR PLANNER DEV DEPLOYER "
-# the same old-layout team whose handles are all dead: a tab restored by Orca under another handle (found by its saved ptyId) still refuses; with none, --reopen cleans up and says there is nothing to reopen
+rm -f "$LK/show.d1"; try lkl; O2="$RC:$(printf '%s\n' "$OUT" | grep -cF "$OLE"):$(lkcnt create):$(cut -d= -f1 "$LKG/orca-roles.env" | tr '\n' ' '):$([ "$(cat "$LKG"/orca-roles.set-aside/*/orca-roles.env "$LKG"/orca-roles.set-aside/*/orca-roles.pty 2>/dev/null | cksum)" = "$B" ] && echo moved || echo LOST)"
+check "launch: a team of the Planner-first layout with a live tab is refused (plain run and --reopen), naming the tab, and nothing is written; with every tab closed the old files move to orca-roles.set-aside/ and a fresh team opens with the local coordinator first" "$O1|$O2" "1:1:0:same|1:1:same|0:0:4:LOCAL_COORDINATOR PLANNER DEV DEPLOYER :moved"
+# the same old-layout team whose handles are all dead: a tab restored by Orca under another handle (found by its saved ptyId) still refuses; with none, --reopen sets its state aside and says there is nothing to reopen
 lkreset; printf 'PLANNER=p1\nDEV=d1\n' > "$LKG/orca-roles.env"; printf 'PLANNER=pty1\nDEV=pty2\n' > "$LKG/orca-roles.pty"; cp "$KIT/config.json" "$LKG/orca-roles.config.json"; B="$(lksum)"
-printf '{"terminals":[{"handle":"rs-pl","ptyId":"pty1","title":"x"}]}\n' > "$LK/list.json"
-try lkl --reopen; O3="$RC:$(printf '%s\n' "$OUT" | grep -cxF "$OLE"):$(lkcnt 'create|close'):$([ "$(lksum)" = "$B" ] && echo same || echo CHANGED)"
-rm -f "$LK/list.json"; try lkl --reopen; O3="$O3|$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Nothing to reopen: run roles to start the team.' || true):$(lkcnt create):$(ls "$LKG"/orca-roles.env "$LKG"/orca-roles.pty 2>/dev/null | wc -l | tr -d ' ' || true)"
-check "launch: an old-layout team whose tab Orca restored under another handle is refused on --reopen, nothing written; with every tab gone --reopen removes its state, opens nothing and says there is nothing to reopen" "$O3" "1:1:0:same|0:1:0:0"
+printf '{"terminals":[{"handle":"rs-pl","ptyId":"pty1","title":"x"}]}\n' > "$LK/list.json"; echo alive > "$LK/show.rs-pl"
+OLR='ERROR: this worktree'"'"'s team was opened by an earlier version of the kit and these of its tabs are open: planner (rs-pl). Close them and run roles again, or run roles --new-team to set the saved team aside and start a new one.'
+try lkl --reopen; O3="$RC:$(printf '%s\n' "$OUT" | grep -cxF "$OLR"):$(lkcnt 'create|close'):$([ "$(lksum)" = "$B" ] && echo same || echo CHANGED)"
+rm -f "$LK/list.json" "$LK/show.rs-pl"; try lkl --reopen; O3="$O3|$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Nothing to reopen: run roles to start the team.' || true):$(lkcnt create):$(ls "$LKG"/orca-roles.env "$LKG"/orca-roles.pty 2>/dev/null | wc -l | tr -d ' ' || true):$([ "$(cat "$LKG"/orca-roles.set-aside/*/orca-roles.env "$LKG"/orca-roles.set-aside/*/orca-roles.pty 2>/dev/null | cksum)" = "$B" ] && echo moved || echo LOST)"
+check "launch: an old-layout team whose tab Orca restored under another handle is refused on --reopen, naming it, nothing written; with every tab gone --reopen sets its state aside (not deleted), opens nothing and says there is nothing to reopen" "$O3" "1:1:0:same|0:1:0:0:moved"
 lkreset
 fast_poll lkkickgone   # the background kickoffs finish before the temporary directory is deleted
 # ask start and mode choice: the real kickoff.sh with a fake orca whose h-* tabs are alive; the tab 'restored' has the Planner's saved ptyId under another handle
@@ -4202,6 +4203,190 @@ check "launch: an academic-research suggestion in a folder that is not a git rep
 # asking creates nothing in the project: the academic-research folders wait for the choice
 akreset; aksetting '.settings.mode = "academic-research"'; akrun; S1="$RC:$(akmark):$(printf '%s\n' "$OUT" | grep -cxF 'Mode: not chosen yet (suggested: academic-research)' || true):$(printf '%s\n' "$OUT" | grep -c '^Mode: academic-research\|^Phase:' || true):$(find "$AK/proj" -mindepth 1 -maxdepth 1 -not -name .git | wc -l | tr -d ' '):$(akasks)"
 check "launch: an ask start with academic-research suggested does not create the academic folders in the project, and the local coordinator receives the ask message" "$S1" "0:marker:1:0:0:1"
+# batch1: only a real tab of the saved team counts (s1) and roles --new-team (s2). The suite's own orca is not used here: this fake
+# answers 'terminal show' from $NT/show.<handle> (no file = stale, a raw JSON starting with {"ok":false is a failure) and gives an agent
+# process (ORCA_ROLES_AGENT_PID) only to the handles with an alive.<handle> file; the fake config opens Lcoord, Planner, Dev, Deployer.
+NT="$TMP/nt"; rm -rf "$NT"; mkdir -p "$NT/bin" "$NT/proj"; git -C "$NT/proj" init -q; NTG="$NT/proj/.git"; NTL="$NT/orca.log"; : > "$NTL"
+cp "$KIT/config.json" "$NT/cfg.orig"
+cat > "$NT/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$NTL"
+case "\$1 \$2" in
+  "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
+  "terminal list") [ -f "$NT/listfail" ] && exit 1; cat "$NT/list.json" 2>/dev/null || echo '{"terminals":[]}';;
+  "terminal show") f="$NT/show.\$4"; if [ -f "\$f" ]; then cat "\$f"; case "\$(cat "\$f")" in '{"ok":false'*) exit 1;; esac; exit 0; fi
+    case "\$4" in h-*) echo "{\"result\":{\"terminal\":{\"ptyId\":\"pty-\$4\",\"agentIdentity\":\"claude\"}}}";; *) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; esac;;
+esac
+exit 0
+EOS
+chmod +x "$NT/bin/orca"
+printf '#!/bin/sh\n[ -f "%s/alive.$1" ] && echo 4242\nexit 0\n' "$NT" > "$NT/agent"; chmod +x "$NT/agent"
+printf '#!/bin/sh\nexit 0\n' > "$NT/bin/kickoff"; chmod +x "$NT/bin/kickoff"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "local-coordinator": { "title": "Lcoord" }, "planner": { "title": "Planner" },
+             "dev": { "title": "Dev", "open": "per-batch", "maxInstances": 2 },
+             "tester": { "title": "Tester", "open": "first-use" }, "deployer": { "title": "Deployer" } } }
+J
+ntl() { (cd "$NT/proj" && env -u ORCA_WORKTREE_ID -u ORCA_ROLES_STATE -u ORCA_ROLES_CONFIG HOME="$TMP/home" PATH="$NT/bin:$PATH" ORCA_ROLES_AGENT_PID="$NT/agent" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$NT/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+ntreset() { rm -rf "$NTG"/orca-roles.* "$NT"/show.* "$NT"/list.json "$NT"/listfail "$NT"/alive.*; : > "$NTL"; }
+ntstate() { printf '%s' "$1" > "$NTG/orca-roles.env"; printf '%s' "$2" > "$NTG/orca-roles.pty"; cp "$KIT/config.json" "$NTG/orca-roles.config.json"; }
+ntcnt() { grep -cE "^terminal $1" "$NTL" || true; }
+ntshow() { printf '%s\n' "$2" > "$NT/show.$1"; }
+ntdir() { ls -d "$NTG"/orca-roles.set-aside/*/ 2>/dev/null | head -1 || true; }
+ntsum() { cat "$NTG/orca-roles.env" "$NTG/orca-roles.pty" 2>/dev/null | cksum; }
+ntref() { printf "ERROR: this worktree's team was opened by an earlier version of the kit and these of its tabs are open: %s. Close them and run roles again, or run roles --new-team to set the saved team aside and start a new one." "$1"; }
+ntmoved() { printf "This worktree's earlier team has no open tabs: its saved state was moved to %s (not deleted) and a new team starts." "$1"; }
+ntcase() {  # ntcase <refusal tabs|->: the rc, the exact refusal line, the exact s1 move line, the creates, the closes, the state, the saved roles
+  local ref="$1" d out
+  d="$(ntdir)"; d="${d%/}"
+  if [ "$ref" = - ]; then out=0; else out="$(printf '%s\n' "$OUT" | grep -cxF "$(ntref "$ref")" || true)"; fi
+  if [ -z "$d" ]; then d=0; else d="$(printf '%s\n' "$OUT" | grep -cxF "$(ntmoved "$d")" || true)"; fi
+  printf '%s:%s:%s:%s:%s:%s:%s' "$RC" "$out" "$d" "$(ntcnt create)" "$(ntcnt close)" "$([ "$(ntsum)" = "$NTSAVED" ] && echo same || echo changed)" "$(cut -d= -f1 "$NTG/orca-roles.env" 2>/dev/null | tr '\n' ' ')"
+}
+NT_ALIVE='{"result":{"terminal":{"agentIdentity":"claude"}}}'
+NT_ORPH='{"result":{"terminal":{"orphaned":true,"agentIdentity":"claude"}}}'
+NT_NOAG='{"result":{"terminal":{"ptyId":"pty1"}}}'
+NT_RT='{"ok":false,"error":{"code":"runtime_unavailable"}}'
+# C1: the plain terminal that runs roles is never a tab of the saved team, by its handle or by the role's saved ptyId, unless an agent runs
+# in it; C4: a saved tab in state 0 (its agent runs) or 2 (no agent) still counts. Nothing written, opened or closed on a refusal.
+NT1=""
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow p1 "$NT_ALIVE"; NTSAVED="$(ntsum)"
+ORCA_TERMINAL_HANDLE=p1 try ntl; NT1="$(ntcase -)"
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow p1 "$NT_ALIVE"; : > "$NT/alive.p1"; NTSAVED="$(ntsum)"
+ORCA_TERMINAL_HANDLE=p1 try ntl; NT1="$NT1|$(ntcase 'planner (p1)')"
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow p1 "$NT_NOAG"; ntshow ct "$NT_NOAG"; printf '{"terminals":[{"handle":"ct","ptyId":"pty1","title":"x"}]}\n' > "$NT/list.json"; NTSAVED="$(ntsum)"
+ORCA_TERMINAL_HANDLE=ct try ntl; NT1="$NT1|$(ntcase -)"
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow p1 "$NT_NOAG"; ntshow ct "$NT_NOAG"; : > "$NT/alive.ct"; printf '{"terminals":[{"handle":"ct","ptyId":"pty1","title":"x"}]}\n' > "$NT/list.json"; NTSAVED="$(ntsum)"
+ORCA_TERMINAL_HANDLE=ct try ntl; NT1="$NT1|$(ntcase 'planner (p1)')"
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow d1 "$NT_ALIVE"; : > "$NT/alive.d1"; NTSAVED="$(ntsum)"
+try ntl; NT1="$NT1|$(ntcase 'dev (d1)')"
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow d1 "$NT_ALIVE"; NTSAVED="$(ntsum)"
+try ntl; NT1="$NT1|$(ntcase 'dev (d1)')"
+check "C1+C4 s1: the calling terminal with the old Planner's saved handle, or a different, new handle that shares the saved ptyId of a saved handle still answering as a tab without its agent (state 2), does not count while no agent runs in that tab (the old team is moved aside and a new one opens); with an agent in it, or with a saved tab in state 0 or 2, it is refused naming exactly that tab, nothing written, opened or closed" "$NT1" "0:0:1:4:0:changed:LOCAL_COORDINATOR PLANNER DEV DEPLOYER |1:1:0:0:0:same:PLANNER DEV |0:0:1:4:0:changed:LOCAL_COORDINATOR PLANNER DEV DEPLOYER |1:1:0:0:0:same:PLANNER DEV |1:1:0:0:0:same:PLANNER DEV |1:1:0:0:0:same:PLANNER DEV "
+# C2: a session Orca keeps without a tab (state 3, or state 0 with ROLE_DETACHED=1) is named with its saved handle and left running; it is
+# never in the refusal list.
+NT2=""
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; ntshow p1 "$NT_ORPH"; : > "$NT/alive.p1"; ntshow d1 "$NT_ORPH"; NTSAVED="$(ntsum)"
+try ntl; NT2="$(ntcase -):$(printf '%s\n' "$OUT" | grep -cxF 'Orca keeps these sessions of the saved team running without a tab: planner (p1), dev (d1); they were left as they are (end one with orca terminal close --terminal <handle>).' || true)"
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\nDEPLOYER=x1\n' $'PLANNER=pty1\nDEV=pty2\nDEPLOYER=pty3\n'; ntshow p1 "$NT_ORPH"; : > "$NT/alive.p1"; ntshow d1 "$NT_ORPH"; ntshow x1 "$NT_ALIVE"; : > "$NT/alive.x1"; NTSAVED="$(ntsum)"
+try ntl; NT2="$NT2|$(ntcase 'deployer (x1)'):$(printf '%s\n' "$OUT" | grep -c '^Orca keeps these sessions' || true)"
+check "C2 s1: a saved handle Orca flags orphaned with its agent (a detached session) and one without it (state 3) are named in the sessions line with their saved handle and left running while the old team moves aside; with a real tab beside them the refusal names only that tab, never the sessions" "$NT2" "0:0:1:4:0:changed:LOCAL_COORDINATOR PLANNER DEV DEPLOYER :1|1:1:0:0:0:same:PLANNER DEV DEPLOYER :0"
+# C3: the ptyId path counts a matched tab in states 0 (detached or not), 2 and 3, not a stale one, and names it with the matched handle;
+# C5: a matched tab whose state is unknown (4) stops the launch with today's error.
+NT3=""
+for V in stale alive orphan detached live; do
+  ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; printf '{"terminals":[{"handle":"rs-pl","ptyId":"pty1","title":"x"}]}\n' > "$NT/list.json"; NTSAVED="$(ntsum)"
+  case "$V" in
+    alive) ntshow rs-pl "$NT_ALIVE";;
+    orphan) ntshow rs-pl "$NT_ORPH";;
+    detached) ntshow rs-pl "$NT_ORPH"; : > "$NT/alive.rs-pl";;
+    live) ntshow rs-pl "$NT_ALIVE"; : > "$NT/alive.rs-pl";;
+  esac
+  try ntl
+  if [ "$V" = stale ]; then NT3="$NT3$(ntcase -)"; else NT3="$NT3$(ntcase 'planner (rs-pl)')"; fi
+  NT3="$NT3|"
+done
+ntreset; ntstate $'PLANNER=p1\nDEV=d1\n' $'PLANNER=pty1\nDEV=pty2\n'; printf '{"terminals":[{"handle":"rs-pl","ptyId":"pty1","title":"x"}]}\n' > "$NT/list.json"; ntshow rs-pl "$NT_RT"; NTSAVED="$(ntsum)"
+try ntl; NT3="$NT3$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: Orca is not ready (runtime_unavailable): cannot tell whether this worktree's team is still open. Nothing was changed. Run roles again once Orca is ready." || true):$(ntcnt create):$(ntcnt close):$([ "$(ntsum)" = "$NTSAVED" ] && echo same || echo changed)"
+check "C3+C5 s1: a terminal Orca restored with the role's saved ptyId counts in state 0, 0 detached, 2 and 3 and is listed with the matched handle, a stale one does not count, and state 4 stops the launch with today's error and nothing written" "$NT3" "0:0:1:4:0:changed:LOCAL_COORDINATOR PLANNER DEV DEPLOYER |1:1:0:0:0:same:PLANNER DEV |1:1:0:0:0:same:PLANNER DEV |1:1:0:0:0:same:PLANNER DEV |1:1:0:0:0:same:PLANNER DEV |1:1:0:0:same"
+# N1 + N9: --new-team with no tab open moves the saved team's files (byte for byte) to orca-roles.set-aside/<stamp>-<pid>/, keeps the
+# options, the mode and the other state, opens the team a first launch opens in the saved mode (pr-reviewer here), and a second run makes
+# a second folder without touching the first. N1 must not: any team file deleted, the overrides lost, a mode-switch close.
+ntreset
+ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\nDEV=d1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\nDEV=pty2\n'
+printf 'LOCAL_COORDINATOR=k0\nPLANNER=k1\nDEV=k2\n' > "$NTG/orca-roles.kicked"
+printf 'LOCAL_COORDINATOR=t1 p1\nPLANNER=t2 p2\n' > "$NTG/orca-roles.tabs"
+printf 'PLANNER=h1\n' > "$NTG/orca-roles.planner-handles"; printf 'programmer\n' > "$NTG/orca-roles.switch-from"
+printf '1\n' > "$NTG/orca-roles.front-reopen"; printf 'PLANNER=m1\n' > "$NTG/orca-roles.models"
+printf 'ses_x\n' > "$NTG/orca-roles-opencode-dev.session"
+printf '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}\n' > "$NTG/orca-roles.overrides.json"
+printf '{"role":"dev"}\n' > "$NTG/orca-roles.provenance.jsonl"; printf 'id:abc\n' > "$NTG/orca-roles.wtid"
+printf 'run:1\n' > "$NTG/orca-roles.coordinator"; printf 'h1\n' > "$NTG/orca-roles.handoff"
+mkdir -p "$NTG/orca-roles-hidden"; printf '%s\n' "$$" > "$NTG/orca-roles-hidden/dev"
+mkdir -p "$NT/pairtree"
+printf 'a b\n' > "$NTG/orca-roles.pairs"
+printf 'LOCAL_COORDINATOR=%s\nDEPLOYER=%s\nDEV=%s\n' "$NT/pairtree" "$NT/pairtree" "$NT/pairtree-gone" > "$NTG/orca-roles.trees"
+for F in env pty kicked tabs planner-handles switch-from front-reopen models trees; do cp "$NTG/orca-roles.$F" "$NT/save.$F"; done
+cp "$NTG/orca-roles-opencode-dev.session" "$NT/save.session"; cp "$NTG/orca-roles.overrides.json" "$NT/save.ovr"; cp "$NTG/orca-roles.pairs" "$NT/save.pairs"
+try ntl --new-team
+NTD="$(ntdir)"; N4A="$RC:$(printf '%s\n' "$OUT" | grep -cxF "The saved team's state was moved to ${NTD%/} (not deleted); a new team starts." || true):$(printf '%s\n' "$OUT" | grep -cxF 'Mode: pr-reviewer' || true):$(printf '%s\n' "$OUT" | grep -c '^Switching mode' || true):$(ntcnt create):$(ntcnt close):$(cut -d= -f1 "$NTG/orca-roles.env" | tr '\n' ' '):$(printf '%s' "${NTD%/}" | sed 's#.*/orca-roles.set-aside/##' | grep -cE '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' || true):$(grep -c "cd $NT/pairtree" "$NTL" || true):$(printf '%s\n' "$OUT" | grep -c '^The pair tree of' || true)"
+for F in env pty kicked tabs planner-handles switch-from front-reopen models trees; do N4A="$N4A:$([ -f "$NTD/orca-roles.$F" ] && cmp -s "$NTD/orca-roles.$F" "$NT/save.$F" && echo in || echo LOST)"; done
+N4A="$N4A:$([ -f "$NTD/orca-roles-opencode-dev.session" ] && cmp -s "$NTD/orca-roles-opencode-dev.session" "$NT/save.session" && echo in || echo LOST):$([ -f "$NTG/orca-roles.env" ] && echo state || echo gone):$(cmp -s "$NTG/orca-roles.overrides.json" "$NT/save.ovr" && echo same || echo CHANGED):$([ -f "$NTG/orca-roles.provenance.jsonl" ] && [ -f "$NTG/orca-roles.wtid" ] && [ -f "$NTG/orca-roles.coordinator" ] && [ -f "$NTG/orca-roles.handoff" ] && cmp -s "$NTG/orca-roles.pairs" "$NT/save.pairs" && [ ! -e "$NTG/orca-roles.trees" ] && [ -d "$NTG/orca-roles-hidden" ] && echo kept || echo LOST)"
+printf '{"ok":false,"error":{"code":"terminal_handle_stale"}}\n' > "$NT/show.h-Lcoord"; : > "$NTL"
+try ntl --new-team
+N4B="$RC:$(printf '%s\n' "$OUT" | grep -c "^The saved team's state was moved to " || true):$( { ls -d "$NTG"/orca-roles.set-aside/*/ 2>/dev/null || true; } | wc -l | tr -d ' '):$(cmp -s "$NTD/orca-roles.env" "$NT/save.env" && echo same || echo CHANGED):$(ntcnt create)"
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'; : > "$NTG/orca-roles.set-aside"
+try ntl --new-team
+N4C="$RC:$(printf '%s\n' "$OUT" | grep -cE '^ERROR: could not move the saved team.s state to .*/orca-roles\.set-aside/[0-9]{8}T[0-9]{6}Z-[0-9]+: .*/orca-roles\.set-aside/' || true):$([ -f "$NTG/orca-roles.env" ] && echo kept || echo gone):$(ntcnt create)"
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'
+printf '{"only":[],"enable":[],"disable":[],"set":[],"mode":"pr-reviewer"}\n' > "$NTG/orca-roles.overrides.json"
+printf 'LOCAL_COORDINATOR=%s\n' "$NT/pairtree-gone" > "$NTG/orca-roles.trees"; cp "$NTG/orca-roles.trees" "$NT/save.trees4"
+try ntl --new-team
+N4D="$RC:$(printf '%s\n' "$OUT" | grep -c '^The pair tree of' || true):$(ntcnt create):$(grep -c "cd $NT/pairtree-gone" "$NTL" || true):$([ -f "$(ntdir)orca-roles.trees" ] && cmp -s "$(ntdir)orca-roles.trees" "$NT/save.trees4" && echo in || echo LOST):$([ -f "$NTG/orca-roles.trees" ] && echo kept || echo gone)"
+check "N1+N9 s2: --new-team with no tab open moves the saved team's state byte for byte to orca-roles.set-aside/<UTC stamp>-<pid>/ (the env, pty, kicked, tabs, planner-handles, switch-from, front-reopen, models, trees and opencode session files), so no role of the new team is created in an old pair tree (no cd into the recorded folders) and a recorded folder that is gone prints no 'pair tree ... no longer exists' line, keeps the overrides, the mode-pending/config/provenance/work binding/handoff/hidden and pair-tree registry files, opens only the saved mode's front role with no mode-switch close, and a second --new-team makes a second folder leaving the first as it was, and a set-aside folder that cannot be created stops it with its literal, deleting and opening nothing" "$N4A|$N4B|$N4C|$N4D" "0:1:1:0:1:0:LOCAL_COORDINATOR :1:0:0:in:in:in:in:in:in:in:in:in:in:state:same:kept|0:1:2:same:1|1:1:kept:0|0:0:1:0:in:gone"
+# N1 (finding B2): a saved instance and a role that was opened earlier with open first-use are not part of the first launch --new-team opens,
+# and the saved configuration keeps no instanceOf entry.
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\nDEV_2=d2\nTESTER=t1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\nDEV_2=pty2\nTESTER=pty4\n'
+try ntl --new-team
+check "N1 s2: --new-team drops the saved instance and the first-use role that were opened earlier: only the roles a first launch opens are created (no DEV_2, no TESTER) and the saved configuration has no instanceOf entry, while the old state with them is in the set-aside folder" "$RC:$(ntcnt create):$(cut -d= -f1 "$NTG/orca-roles.env" | tr '\n' ' '):$(jq '[.roles | to_entries[] | select(.value.instanceOf != null)] | length' "$NTG/orca-roles.config.json" 2>/dev/null || echo X):$( { cat "$(ntdir)orca-roles.env" 2>/dev/null || true; } | tr '\n' ' ')" "0:3:LOCAL_COORDINATOR PLANNER DEPLOYER :0:LOCAL_COORDINATOR=l0 PLANNER=p1 DEV_2=d2 TESTER=t1 "
+# N2: a counted tab refuses --new-team with its literal, nothing moved, opened or closed; a stale, a detached and a state-3 saved handle
+# are not named.
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\nDEV=d1\nDEPLOYER=x1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\nDEV=pty2\nDEPLOYER=ptyx\n'
+ntshow l0 "$NT_ORPH"; : > "$NT/alive.l0"; ntshow p1 "$NT_ALIVE"; ntshow d1 "$NT_ORPH"
+printf '{"terminals":[{"handle":"rs-x","ptyId":"ptyx","title":"x"}]}\n' > "$NT/list.json"; ntshow rs-x "$NT_ORPH"; : > "$NT/alive.rs-x"
+NTSAVED="$(ntsum)"; try ntl --new-team
+S3S1="ERROR: this worktree's team was opened by an earlier version of the kit and these of its tabs are open: <tabs>. Close them and run roles again, or run roles --new-team to set the saved team aside and start a new one."
+S3N2="ERROR: --new-team: these tabs of this worktree's saved team are open: <tabs>. Close them and run roles --new-team again (or add --confirm-no-tabs if they are not this team's tabs). Nothing was changed."
+check "N2 s2 + S3 docs: --new-team with tabs of the saved team open (a saved handle in state 2 and a restored tab by its ptyId) is refused with its literal naming exactly those tabs, moves nothing, opens and closes nothing, and does not name a stale, a detached or a state-3 saved handle; README and the team skill quote the s1 and s2 literals and keep no old 'close its tabs' error" "$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: --new-team: these tabs of this worktree's saved team are open: planner (p1), deployer (rs-x). Close them and run roles --new-team again (or add --confirm-no-tabs if they are not this team's tabs). Nothing was changed." || true):$(ntcnt 'create|close'):$([ "$(ntsum)" = "$NTSAVED" ] && echo same || echo changed):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none):$(grep -cF "$S3S1" "$ROOT/README.md" || true):$(grep -cF "$S3S1" "$ROOT/plugin/skills/team/SKILL.md" || true):$(grep -cF "$S3N2" "$ROOT/README.md" || true):$(grep -cF "$S3N2" "$ROOT/plugin/skills/team/SKILL.md" || true):$(grep -cF 'close its tabs and run roles again' "$ROOT/README.md" "$ROOT/plugin/skills/team/SKILL.md" | awk -F: '{s += $2} END {print s+0}' || true)" "1:1:0:same:none:1:1:1:1:0"
+# N3: --new-team cannot tell -> its literal, nothing moved (a failed terminal list, and a role whose state is 4).
+NT7=""
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'; : > "$NT/listfail"; NTSAVED="$(ntsum)"
+try ntl --new-team; NT7="$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: --new-team: cannot tell whether this worktree's saved team still has open tabs ('orca terminal list' failed). Run it again once Orca is ready, or add --confirm-no-tabs if you closed them. Nothing was changed." || true):$([ "$(ntsum)" = "$NTSAVED" ] && echo same || echo changed):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none)"
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'; ntshow p1 "$NT_RT"; NTSAVED="$(ntsum)"
+try ntl --new-team; NT7="$NT7|$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: --new-team: cannot tell whether this worktree's saved team still has open tabs (Orca is not ready (runtime_unavailable)). Run it again once Orca is ready, or add --confirm-no-tabs if you closed them. Nothing was changed." || true):$([ "$(ntsum)" = "$NTSAVED" ] && echo same || echo changed):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none)"
+check "N3 s2: --new-team refuses with its cannot-tell literal when Orca's terminal list fails and when a role's state is 4 (Orca is not ready (<code>)), and moves nothing" "$NT7" "1:1:same:none|1:1:same:none"
+# N4: --confirm-no-tabs skips the check: it warns about a counted tab, moves the state and opens the team; with a failed list it warns
+# about nothing and moves the state all the same.
+NT8=""
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'; ntshow p1 "$NT_ALIVE"
+try ntl --new-team --confirm-no-tabs
+NT8="$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Warning: --confirm-no-tabs: these tabs of the saved team were found and are left running: planner (p1).' || true):$(printf '%s\n' "$OUT" | grep -c '^ERROR: --new-team' || true):$([ -f "$(ntdir)orca-roles.env" ] && echo moved || echo none):$(ntcnt create)"
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'; : > "$NT/listfail"
+try ntl --new-team --confirm-no-tabs
+NT8="$NT8|$RC:$(printf '%s\n' "$OUT" | grep -c '^Warning: --confirm-no-tabs' || true):$(printf '%s\n' "$OUT" | grep -c '^ERROR: --new-team' || true):$([ -f "$(ntdir)orca-roles.env" ] && echo moved || echo none):$(ntcnt create)"
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'; ntshow p1 "$NT_ORPH"; : > "$NT/alive.p1"
+try ntl --new-team
+NT8="$NT8|$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Orca keeps these sessions of the saved team running without a tab: planner (p1); they were left as they are (end one with orca terminal close --terminal <handle>).' || true):$([ -f "$(ntdir)orca-roles.env" ] && echo moved || echo none):$(ntcnt create)"
+check "N4 s2: --new-team --confirm-no-tabs with a tab open warns naming it, moves the state and opens the team (no refusal); with a failed terminal list it warns about nothing and moves the state (no refusal); and --new-team names a session of the saved team that Orca keeps without a tab and leaves it running" "$NT8" "0:1:0:moved:3|0:0:0:moved:3|0:1:moved:3"
+# N5: --new-team takes no other option; --confirm-no-tabs needs it; the worktree argument is allowed and a refused run changes nothing.
+# N10: --help prints the whole usage comment, new options and last line included.
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\n' $'LOCAL_COORDINATOR=pty0\n'
+printf '{"only":[],"enable":[],"disable":[],"set":[],"mode":"programmer"}\n' > "$NTG/orca-roles.overrides.json"; cp "$NTG/orca-roles.overrides.json" "$NT/save.n5"
+NT9=""
+for A in '--mode quick|--mode quick' '--reopen|--reopen' '--reset|--reset' '--open dev|--open' '--add dev|--add' '--tree /tmp/pairtree|--tree' '--status|--status'; do
+  O="${A#*|}"; A="${A%|*}"
+  try ntl --new-team $A
+  NT9="$NT9$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: --new-team takes no other option (got: $O). Nothing was changed." || true):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none):$(ntcnt 'create|close'):$(cmp -s "$NTG/orca-roles.overrides.json" "$NT/save.n5" && echo same || echo CHANGED)|"
+done
+try ntl --confirm-no-tabs; NT9="$NT9$RC:$(printf '%s\n' "$OUT" | grep -cxF 'ERROR: --confirm-no-tabs goes with --new-team. Nothing was changed.' || true):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none)|"
+try ntl --new-team id:WT
+NT9="$NT9$RC:$(printf '%s\n' "$OUT" | grep -c "^The saved team's state was moved to " || true):$(grep -c '^terminal create --worktree id:WT' "$NTL" || true):$(cmp -s "$NTG/orca-roles.overrides.json" "$NT/save.n5" && echo same || echo CHANGED)"
+try ntl --help
+NT10="$RC:$(printf '%s\n' "$OUT" | grep -c '^#   --new-team ' || true):$(printf '%s\n' "$OUT" | grep -c '^#   --confirm-no-tabs ' || true):$(printf '%s\n' "$OUT" | tail -1 | grep -cxF '# ("Orca is not ready"), it stops before closing or opening anything.' || true):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
+check "N5 s2: --new-team refuses --mode, --reopen, --reset, --open, --add, --tree and --status, and --confirm-no-tabs alone, with their literals, changes nothing (no move, no create or close, the overrides kept) and accepts id:<worktree>; N10: --help prints the whole usage comment, both new option lines and its last line, and nothing after it" "$NT9|$NT10" "1:1:none:0:same|1:1:none:0:same|1:1:none:0:same|1:1:none:0:same|1:1:none:0:same|1:1:none:0:same|1:1:none:0:same|1:1:none|0:1:3:same|0:1:1:1:26"
+# N6: no saved team -> its literal and a normal first launch. N7: a live kickoff of a previous launch refuses, nothing moved.
+NT10S=""
+ntreset; try ntl --new-team
+NT10S="$RC:$(printf '%s\n' "$OUT" | grep -cxF 'No saved team in this worktree: nothing to set aside; the team starts.' || true):$(ntcnt create):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none)"
+ntreset; ntstate $'LOCAL_COORDINATOR=l0\nPLANNER=p1\n' $'LOCAL_COORDINATOR=pty0\nPLANNER=pty1\n'
+sleep 30 & KP="$!"; mkdir -p "$NTG/orca-roles.kickoff.d"; printf 'dev\n' > "$NTG/orca-roles.kickoff.d/$KP"
+NTSAVED="$(ntsum)"; try ntl --new-team
+kill "$KP" 2>/dev/null; wait "$KP" 2>/dev/null || true
+NT10S="$NT10S|$RC:$(printf '%s\n' "$OUT" | grep -cxF "ERROR: the previous launch's kickoff is still running (pid $KP): try again in a moment. Nothing was changed." || true):$([ -d "$NTG/orca-roles.set-aside" ] && echo moved || echo none):$([ "$(ntsum)" = "$NTSAVED" ] && echo same || echo changed)"
+check "N6+N7 s2: --new-team with no saved team prints its literal and opens a normal first launch (nothing set aside); with a live kickoff of a previous launch it refuses with today's literal, moving nothing" "$NT10S" "0:1:3:none|1:1:none:same"
+cp "$NT/cfg.orig" "$KIT/config.json"
 }
 sec_launch_mode() {
 akkickgone() { ! pgrep -f "$TMP/home/.orca-roles/bin/kickoff.sh" >/dev/null; }
@@ -7050,7 +7235,7 @@ wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd t
 OTH=other wl; GRP="$(grep -c 'bin/launch.sh' "$TMP/grp.log" || true)"; rm -f "$TMP/wbin/git"
 [ "$GRP" -le 2 ] && echo "ok   wake: launch.sh itself starts at most 2 git rev-parse ($GRP)" || { echo "FAIL wake: launch.sh started $GRP git rev-parse (max 2)"; FAIL=1; }
 # an old-layout team (PLANNER= and no LOCAL_COORDINATOR=) asleep in the pending-choice state: every saved tab is woken, so the old-layout refusal sees them and the state is kept
-WOLE='ERROR: this worktree'"'"'s team was opened by an earlier version of the kit: close its tabs and run roles again'
+WOLE='ERROR: this worktree'"'"'s team was opened by an earlier version of the kit and these of its tabs are open: planner (rs-pl), dev (rs-dev). Close them and run roles again, or run roles --new-team to set the saved team aside and start a new one.'
 wst $'PLANNER=old-pl\nDEV=old-dev\n' $'PLANNER=wt@@p1\nDEV=wt@@p2\n' "$WPTP"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2; echo pending > "$WG/orca-roles.mode-pending"; B="$(wsum)"
 OTH=other wl --reopen
 check "wake: an old-layout team asleep while a mode choice is pending has all its tabs woken, is refused with the old-layout error and keeps its state, with nothing opened or closed" "$RC:$(wev):$(wn "$WOLE"):$([ "$(wsum)" = "$B" ] && echo same || echo CHANGED)" "1:W:tab-pl W:tab-dev switch:other :1:same"
