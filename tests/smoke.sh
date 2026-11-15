@@ -578,6 +578,19 @@ r23 "$R23PASS" '**Review focus.** List up to 5 kinds of input or situation that 
 r23 "$R23PASS" '**Lines that decide nothing.** Read each step'"'"'s text in the plan, and each spec before you send it, looking for text that leaves the decision to Dev: "TBD", "handle edge cases", "appropriate validation", "as needed", "or similar", "if necessary", "etc.". Replace each one with the decision; if you cannot take it, resolve it with the Researcher or the user (`needs:`) before returning the plan or the spec.' '^18\. \*\*Lines that decide nothing\.\*\*'
 r23 "$R23PASS" '**Project rules.**' '^15\. '
 [ "$(grep -oE '^[0-9]+\. ' <<<"$R23PASS" | tr -d '. ' | tr '\n' ' ')" = "$(seq 1 "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" | tr '\n' ' ')" ] && [ "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" -ge 18 ] || { echo "FAIL rules R23: the passes are not numbered 1 to N in order with N at least 18"; FAIL=1; }
+check "rules R23: the plan review method keeps its 19 passes" "$(grep -cE '^[0-9]+\. ' <<<"$R23PASS")" "19"
+# R29 the spec's format: P10 (no code blocks or file:line references outside the acceptance section, the spec lint before ending, the P10 exception in the Limits), the exact acceptance heading and the runner declaration, and the local coordinator linting each Dev spec before dispatching it
+PRB="$ROOT/prompts/programmer/local-coordinator-rounds.md"
+rule R29 "$PP" 'A spec decides what to build and its criteria, not how line by line: no code blocks and no `file:line` references outside its `## Acceptance command` section' '^- \*\*P10\.\*\*'
+rule R29 "$PP" 'a literal the contract needs in that form ends its line with `<!-- spec-lint: literal -->`' '^- \*\*P10\.\*\*'
+rule R29 "$PP" 'Before ending any task in which you wrote or changed a spec, run `~/.orca-roles/bin/oracle.sh --lint <spec file>` from the worktree on it and fix what it reports.' '^- \*\*P10\.\*\*'
+check "rules R29: P10 no longer says a spec carries no code" "$(grep -cF 'A spec carries no code;' "$PP" || true)" "0"
+rule R29 "$PP" 'point to files and sections instead of pasting them' '^- \*\*Specs and briefs are written in English'
+check "rules R29: the Specs and briefs bullet no longer points to files and lines" "$(grep -cF 'point to files and lines' "$PP" || true)" "0"
+rule R29 "$PP" 'The acceptance command section'"'"'s heading is exactly `## Acceptance command`; when a batch edits a file that its acceptance command runs (for example `tests/smoke.sh` for `bash tests/smoke.sh oracle`), that section also has a line `Runner files edited: <path>[, <path>...]` naming each such file, repo-relative, so that the oracle accepts their changes and still flags any other runner file.'
+rule R29 "$PP" 'you never run tests, builds or linters (only the spec lint of P10): the workers do.'
+rule R29 "$PRB" 'Before creating each Dev task on a `spec-<batch>.md` (and before hashing the spec when the oracle is on), run `~/.orca-roles/bin/oracle.sh --lint <spec path>` from the worktree: exit 0, create and dispatch the task; exit 1, do not: send the Planner a `replan` task with the spec path and the lint'"'"'s output (a light change), lint the spec it returns, and if it fails again tell the user and wait; exit 2, tell the user in one line and do not dispatch; exit 3 (no python3 >= 3.8), tell the user in one line and dispatch without the lint.' '^- Before creating each Dev task'
+check "rules R29: the lint bullet comes right after the Dev's task bullet in Paths, not content" "$(awk '/^## Paths, not content$/{s=1;next} /^## /{s=0} s' "$PRB" | grep -A1 '^- Dev'"'"'s task:' | tail -n 1 | grep -cF 'Before creating each Dev task')" "1"
 # R24 programmer rulings: the Ledger bullet ends with the Ruling rule; the Set audit bullet shows "Rulings I made" right after the below-medium sentence, before the full run and the commit list
 LP="$ROOT/prompts/programmer/local-coordinator.md"
 R24P2="$(awk '/^## Phase 2: flow of each step/{s=1;next} /^## /{s=0} s' "$LP")"
@@ -914,6 +927,29 @@ rule E6 "$AD/local-coordinator-team.md" 'also when the startup message lists the
 rule E6 "$AD/local-coordinator-team.md" 'The Dev fix and Tester rounds of one Review round count as one batch'
 rule E6 "$PD/planner.md" 'write one brief per question, each its own `needs: research:` item'
 rule E6 "$PD/planner.md" 'Name only batches that come earlier in plan order.'
+# batch1 (a3): the Planner's texts and the coordinator's lint gate, verbatim from the spec
+B1R="$TMP/b1rules"; rm -rf "$B1R"; mkdir -p "$B1R"
+cat > "$B1R/p10" <<'B1EOF'
+- **P10.** A spec decides what to build and its criteria, not how line by line: no code blocks and no `file:line` references outside its `## Acceptance command` section (name files, functions and sections instead; a literal the contract needs in that form ends its line with `<!-- spec-lint: literal -->`). Before ending any task in which you wrote or changed a spec, run `~/.orca-roles/bin/oracle.sh --lint <spec file>` from the worktree on it and fix what it reports. When a step's contract rests on how existing code or a library behaves at an edge, you return `needs: research` to verify it before the spec is final.
+B1EOF
+cat > "$B1R/gate" <<'B1EOF'
+- Before creating each Dev task on a `spec-<batch>.md` (and before hashing the spec when the oracle is on), run `~/.orca-roles/bin/oracle.sh --lint <spec path>` from the worktree: exit 0, create and dispatch the task; exit 1, do not: send the Planner a `replan` task with the spec path and the lint's output (a light change), lint the spec it returns, and if it fails again tell the user and wait; exit 2, tell the user in one line and do not dispatch; exit 3 (no python3 >= 3.8), tell the user in one line and dispatch without the lint.
+B1EOF
+cat > "$B1R/specs" <<'B1EOF'
+A spec is a contract: no code blocks and no line-level edits. The acceptance command section's heading is exactly `## Acceptance command`; when a batch edits a file that its acceptance command runs (for example `tests/smoke.sh` for `bash tests/smoke.sh oracle`), that section also has a line `Runner files edited: <path>[, <path>...]` naming each such file, repo-relative, so that the oracle accepts their changes and still flags any other runner file.
+B1EOF
+B1PL="$ROOT/prompts/programmer/planner.md"; B1CR="$ROOT/prompts/programmer/local-coordinator-rounds.md"
+B1A=0; grep -qFxF -- "$(cat "$B1R/p10")" "$B1PL" && B1A=1
+B1B=0; grep -qF -- "$(cat "$B1R/specs")" "$B1PL" && B1B=1
+B1C=0; B1S2="$(grep -F -- '- **Specs and briefs are written in English and stay compact.**' "$B1PL" || true)"
+case "$B1S2" in *'point to files and sections instead of pasting them'*) case "$B1S2" in *'point to files and lines'*) ;; *) B1C=1;; esac;; esac
+B1D=0; grep -qF -- 'and you never run tests, builds or linters (only the spec lint of P10): the workers do.' "$B1PL" && B1D=1
+B1E=0; grep -qF -- 'A spec carries no code;' "$B1PL" || B1E=1
+B1G=0; B1GN="$(grep -nF -- "$(cat "$B1R/gate")" "$B1CR" | cut -d: -f1 || true)"; B1DN="$(grep -nF -- "- Dev's task:" "$B1CR" | cut -d: -f1 || true)"
+[ -n "$B1GN" ] && [ -n "$B1DN" ] && [ "$B1GN" = "$((B1DN + 1))" ] && B1G=1
+B1T=0; B1SN="$(grep -n '^## ' "$B1CR" | awk -F: -v g="${B1GN:-0}" '$1 < g { s = $1 } END { print s }' || true)"
+[ -n "$B1SN" ] && sed -n "${B1SN}p" "$B1CR" | grep -qF -- '## Paths, not content' && B1T=1
+check "rules: batch1's P10 bullet and the Specs sentence are verbatim, the Specs and briefs bullet points to files and sections, the Limits clause names the spec lint, the old 'A spec carries no code;' is gone and the lint gate follows \"Dev's task:\" inside \"Paths, not content\"" "$B1A$B1B$B1C$B1D$B1E$B1G$B1T" "1111111"
 blk_end "rules: the safety and permission rules are in the prompts"
 }
 
@@ -1430,6 +1466,109 @@ $ make lint
   check "oracle: an empty block next to an inline span -> no commands (the block is the source)" "$(cmdsof '```
 ```
 `pytest tests/a.py`')" ""
+  # the commands and `Runner files edited:` come only from the section headed exactly ## Acceptance command (plain, backticks, ./, two per line, two lines, new, through a package script; and what still counts as a cheat)
+  fndd() { jq -r '.integrity | [(.findings | map(.kind + ":" + (.script // .file // "")) | join(",")), (.runner_config_changed | join(",")), ((.runner_files_declared // []) | join(",")), (.cheat | tostring)] | join("|")' <<<"$OUT"; }
+  specf() { local f; f="$(mktemp "$OR/specs/spec.XXXXXX")"; printf '%s' "$1" > "$f"; printf '%s' "$f"; }
+  P="$(oracle_repo decl)"; mkdir -p "$P/ci"; printf 'exit 0\n' > "$P/ci/a.sh"; printf 'exit 0\n' > "$P/ci/b.sh"; B="$(oc_base "$P" ci)"
+  printf 'exit 0 # edited\n' > "$P/ci/a.sh"
+  DC=""
+  for d in 'Runner files edited: ci/a.sh' 'Runner files edited: `ci/a.sh`' 'Runner files edited: ./ci/a.sh'; do
+    oracle_run "$P" dcl "$(specf "$(printf '## Acceptance command\n```\nbash ci/a.sh\n```\n%s\n' "$d")")" --dry-run --base "$B"
+    DC="$DC$(fndd);"
+  done
+  check "oracle: a changed runner file the acceptance section declares (plain, backticks, ./) is not a cheat: it is in runner_files_declared and runner_config_changed, with no finding" "$DC" "|ci/a.sh|ci/a.sh|false;|ci/a.sh|ci/a.sh|false;|ci/a.sh|ci/a.sh|false;"
+  printf 'exit 0 # edited\n' > "$P/ci/b.sh"
+  oracle_run "$P" dcl2 "$(oracle_spec '```
+bash ci/a.sh && bash ci/b.sh
+```
+Runner files edited: ci/a.sh, ci/b.sh')" --dry-run --base "$B"
+  DC2="$(fndd)"
+  oracle_run "$P" dcl3 "$(oracle_spec '```
+bash ci/a.sh && bash ci/b.sh
+```
+Runner files edited: ci/a.sh
+Runner files edited: ci/b.sh')" --dry-run --base "$B"
+  check "oracle: two declared runner files change, on one line and on two lines -> no cheat, both declared and listed" "$DC2|$(fndd)" "|ci/a.sh,ci/b.sh|ci/a.sh,ci/b.sh|false||ci/a.sh,ci/b.sh|ci/a.sh,ci/b.sh|false"
+  PN="$(oracle_repo declnew)"; BN="$(oc_base "$PN" none)"; mkdir -p "$PN/ci"; printf 'exit 0\n' > "$PN/ci/check.sh"
+  oracle_run "$PN" dcln "$(oracle_spec '```
+bash ci/check.sh
+```
+Runner files edited: ci/check.sh')" --dry-run --base "$BN"
+  check "oracle: a declared runner file that is new and untracked is not a cheat" "$(fndd)" "|ci/check.sh|ci/check.sh|false"
+  PL="$(oracle_repo decllint)"; printf '{"scripts":{"lint":"bash lint.sh"}}\n' > "$PL/package.json"; printf 'exit 0\n' > "$PL/lint.sh"; BL="$(oc_base "$PL" pkg)"
+  printf 'exit 0 # edited\n' > "$PL/lint.sh"
+  oracle_run "$PL" dcll "$(oracle_spec '`npm run lint`
+Runner files edited: lint.sh')" --dry-run --base "$BL"
+  check "oracle: a declared lint.sh run through npm run lint is not a cheat" "$(fndd)" "|lint.sh|lint.sh|false"
+  NC=""
+  PNC="$(oracle_repo declno)"; mkdir -p "$PNC/ci"; printf 'exit 0\n' > "$PNC/ci/a.sh"; BNC="$(oc_base "$PNC" ci)"
+  printf 'exit 0 # edited\n' > "$PNC/ci/a.sh"
+  for s in "$(printf '## Target\nx\n## Change\ny\n## Constraints\nRunner files edited: ci/a.sh\n## Ownership\nsrc/**\n## Acceptance command\n`bash ci/a.sh`\n')" \
+           "$(printf '## Acceptance command\n```\nbash ci/a.sh\n```\n```\nRunner files edited: ci/a.sh\n```\n')" \
+           "$(printf '## Acceptance command\n```\nbash ci/a.sh\n```\nrunner files edited: ci/a.sh\n')" \
+           "$(printf '## Acceptance command\n```\nbash ci/a.sh\n```\nRunner files edited: ci/a, ci/a.sh.bak\n')"; do
+    oracle_run "$PNC" dcn "$(specf "$s")" --dry-run --base "$BNC"
+    NC="$NC$(fndd);"
+  done
+  check "oracle: a declaration outside the section, inside a fence, in another case or of a path that only shares a prefix does not exempt the changed runner file" "$NC" "runner_file_changed:ci/a.sh|||true;runner_file_changed:ci/a.sh|||true;runner_file_changed:ci/a.sh|||true;runner_file_changed:ci/a.sh|||true;"
+  # C2: an undeclared changed runner file is still a finding, also when the command cannot be tokenised; a declared one never exempts a skip
+  P="$(oracle_repo und)"; mkdir -p "$P/ci"; printf 'exit 0\n' > "$P/ci/a.sh"; printf 'exit 0\n' > "$P/ci/b.sh"; B="$(oc_base "$P" ci)"
+  printf 'exit 0 # edited\n' > "$P/ci/a.sh"; printf 'exit 0 # edited\n' > "$P/ci/b.sh"
+  oracle_run "$P" u1 "$(oracle_spec '```
+bash ci/a.sh && bash ci/b.sh
+```
+Runner files edited: ci/a.sh')" --dry-run --base "$B"
+  UN1="$(fndd):$(st .cheat)"
+  UQ="$(printf '%s' '## Target
+x
+## Change
+y
+## Constraints
+z
+## Ownership
+s
+## Acceptance command
+```
+bash '"'"'ci/a.sh
+```
+Runner files edited: ci/a.sh
+')"
+  oracle_run "$P" u2 "$(specf "$UQ")" --dry-run --base "$B"
+  check "oracle: C2 with ci/a.sh declared, the undeclared changed and run ci/b.sh stays runner_file_changed (also with a command that cannot be tokenised), and ci/a.sh is declared" "$UN1|$(fndd):$(st .cheat)" "runner_file_changed:ci/b.sh|ci/a.sh|ci/a.sh|true:true|runner_file_changed:ci/b.sh|ci/a.sh|ci/a.sh|true:true"
+  PS="$(oracle_repo declskip)"; mkdir -p "$PS/ci"; printf 'exit 0\n' > "$PS/ci/a.sh"; BS="$(oc_base "$PS" ci)"
+  printf 'exit 0 # edited\n' > "$PS/ci/a.sh"; printf '\n@%s.mark.%s\ndef test_y():\n    assert False\n' pytest skip >> "$PS/tests/test_b.py"
+  oracle_run "$PS" dclsk "$(oracle_spec '```
+bash ci/a.sh
+```
+Runner files edited: ci/a.sh')" --dry-run --base "$BS"
+  check "oracle: a declared runner file plus an added pytest.mark.skip is still a cheat" "$(fndd):$(st .cheat)" "skip_or_xfail_added:tests/test_b.py|ci/a.sh|ci/a.sh|true:true"
+  # C3: only the section headed exactly ## Acceptance command feeds the commands
+  spc() { local p2 s2 d2; d2="$(mktemp -d "$OR/spc.XXXXXX")"; p2="$(oracle_repo "$(basename "$d2")")"; s2="$(specf "$1")"; oracle_run "$p2" "$(basename "$p2")" "$s2" --dry-run; printf '%s:%s:%s' "$RC" "$(st .status)" "$(jq -r '[.commands[].cmd] | join(" ; ")' <<<"$OUT")"; }
+  HC="$(spc '### Acceptance criteria
+- `bash nope.sh`
+## Acceptance command
+`bash test.sh`')"
+  HC="$HC|$(spc "$(printf '## Acceptance command   \n`bash test.sh`\n')")"
+  HC="$HC|$(spc '## Acceptance command
+`bash test.sh`
+text
+## Acceptance command
+`bash nope.sh`')"
+  check "oracle: C3 the commands come from a section headed exactly ## Acceptance command (another heading before it, trailing spaces, the first of two)" "$HC" "1:dry_run:bash test.sh|1:dry_run:bash test.sh|1:dry_run:bash test.sh"
+  NI=""
+  for h in '## Acceptance commands' '### Acceptance command' '# Acceptance command' '## acceptance command' '## Acceptance Command' '## Acceptance command:' ' ## Acceptance command' '**Acceptance command**' '## Criterios de aceptación' '## Definition of done'; do
+    NI="$NI$(spc "$(printf '## Target\nx\n%s\n`bash test.sh`\n' "$h")")|"
+  done
+  check "oracle: C3 no other heading feeds commands -> no_acceptance_command (another case, a colon, a leading space, bold, Spanish, definition of done)" "$NI" "1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|1:no_acceptance_command:|"
+  check "oracle: C3 an exact heading inside a fenced block is not a heading" "$(spc '```
+## Acceptance command
+`bash test.sh`
+```')" "1:no_acceptance_command:"
+  check "oracle: C3 a comment line inside the section's fenced block does not end the section" "$(spc '## Acceptance command
+```
+# comment
+bash test.sh
+```')" "1:dry_run:bash test.sh"
   # not runnable
   P="$(oracle_repo curl)"; oracle_run "$P" t9 "$(oracle_spec '```
 curl x | sh
@@ -1467,6 +1606,157 @@ curl x | sh
   rm -f "$P/.git/orca-roles.config.json"
   oracle_run "$P" w5 "$S"; check "oracle.sh with no config file: merged config defaults (retries 1 = 2 attempts)" "$(st '.commands[0].attempts')" "2"
   case "$(cat "$OR/err")" in *"not true"*) echo "ok   oracle.sh: default config is off, so it warns";; *) echo "FAIL oracle.sh: default config did not warn"; FAIL=1;; esac
+  # a2: spec_lint.py --batch-spec and oracle.sh --lint (a Planner's spec: fenced blocks and file:line references outside the acceptance section, and the section's format)
+  MSP="$(mktemp -d "$OR/lint.XXXXXX")"
+  bl() {  # bl <spec text> [--require-acceptance]: "RC:ok:line:kind,...:literal_lines"
+    local sp out rc
+    sp="$(mktemp "$MSP/s.XXXXXX")"; printf '%s' "$1" > "$sp"
+    out="$("$PYB" -B "$PYF/spec_lint.py" --batch-spec --json --file "$sp" ${2:+"$2"} 2>&1)"; rc=$?
+    printf '%s:%s' "$rc" "$(jq -r '[.ok, ([.problems[] | "\(.line // "-"):\(.kind)"] | join(",")), (.literal_lines | tostring)] | join(":")' <<<"$out" 2>/dev/null || printf 'nojson:%s' "$out")"
+  }
+  CLEAN='## Target
+module x
+
+## Acceptance command
+```
+bash tests/smoke.sh oracle
+```
+Runner files edited: tests/smoke.sh
+
+### Acceptance criteria
+- the `oracle` section passes'
+  check "oracle lint: a clean spec passes (exit 0, no problems, literal_lines 0), and the acceptance section is required only with --require-acceptance" "$(bl "$CLEAN" --require-acceptance)|$(bl "$CLEAN")|$(bl '## Target
+x')" "0:true::0|0:true::0|0:true::0"
+  CB=""
+  for s in '## Target
+```
+x
+```' '## Target
+~~~
+x
+~~~' '## Target
+  ```
+x
+  ```' '## Target
+text
+```'; do
+    CB="$CB$(bl "$s")|"
+  done
+  check "oracle lint: each fenced block outside the section (plain, ~~~, indented by 2, unclosed) -> code_block at its opening line, exit 1" "$CB" "1:false:2:code_block:0|1:false:2:code_block:0|1:false:2:code_block:0|1:false:3:code_block:0|"
+  RF=""
+  for r in 'bin/lib.sh:1196' 'planner.md:30' 'verify_task.py:237-306' 'tests/smoke.sh:1486:5' '(see allow.py:12)' '`allow.py:12`' 'README.md#L770' './x.sh:3'; do
+    RF="$RF$(bl "## Target
+see $r")|"
+  done
+  check "oracle lint: each file:line reference outside the section (plain, in backticks, a range, a second colon, ./) -> line_ref, exit 1" "$RF" "1:false:2:line_ref:0|1:false:2:line_ref:0|1:false:2:line_ref:0|1:false:2:line_ref:0|1:false:2:line_ref:0|1:false:2:line_ref:0|1:false:2:line_ref:0|1:false:2:line_ref:0|"
+  NF=""
+  for r in 'spec-sha256: <hex>' '18:41' 'http://localhost:8080/x' 'https://example.com:443/a' 'pytest tests/test_x.py::test_a' 'ratio 1.5:1' 'v1.3.0:' 'config.json: 5 keys' 'acceptance_section(spec)' 'section `oracle`'; do
+    NF="$NF$(bl "## Target
+$r")|"
+  done
+  check "oracle lint: no line_ref for a sha line, a time, a URL (also with a port), a pytest node id, a ratio, a version, a config key count, a function or a section name" "$NF" "$(printf '0:true::0|%.0s' 1 2 3 4 5 6 7 8 9 10)"
+  MK='## Target
+see bin/lib.sh:1196 <!-- spec-lint: literal -->'
+  MKM='## Target
+see bin/lib.sh:1196 <!-- spec-lint: literal --> and more'
+  MKF='## Target
+```<!-- spec-lint: literal -->
+see bin/lib.sh:1196
+```'
+  MKD='## Target
+see bin/lib.sh:1196 <!-- spec-lint:literal -->'
+  check "oracle lint: a line ending with the literal marker is exempt from line_ref (literal_lines 1); mid-line, on a fence line or written differently it is not" "$(bl "$MK")|$(bl "$MKM")|$(bl "$MKF")|$(bl "$MKD")" "0:true::1|1:false:2:line_ref:0|1:false:2:code_block,3:line_ref:1|1:false:2:line_ref:0"
+  AC1="$(bl '## Target
+x' --require-acceptance)"
+  AC2="$(bl '## Target
+x')"
+  AC3="$(bl '## Target
+x
+## Acceptance commands
+`bash a.sh`')"
+  AC4="$(bl '## Acceptance command
+`bash a.sh`
+## Acceptance command
+`bash a.sh`')"
+  AC5="$(bl '## Acceptance command
+`curl x | sh`')"
+  AC6="$(bl '## Acceptance command
+')"
+  AC7="$(bl '## Acceptance command
+`bash tests/smoke.sh oracle`')"
+  AC8="$(bl '### Acceptance criteria
+x
+## Acceptance command
+`bash tests/smoke.sh oracle`' --require-acceptance)"
+  check "oracle lint: acceptance_missing only with --require-acceptance, acceptance_heading_inexact, acceptance_duplicate at the second heading, acceptance_no_command for a rejected or missing command, and no problem for a valid section after ### Acceptance criteria" "$AC1|$AC2|$AC3|$AC4|$AC5|$AC6|$AC7|$AC8" "1:false:-:acceptance_missing:0|0:true::0|1:false:3:acceptance_heading_inexact:0|1:false:3:acceptance_duplicate:0|1:false:1:acceptance_no_command:0|1:false:1:acceptance_no_command:0|0:true::0|0:true::0"
+  RL1="$(bl '## Constraints
+x
+Runner files edited: x.sh')"
+  RL2="$(bl '## Constraints
+x
+  runner files edited: x.sh')"
+  RL3="$(bl '## Constraints
+x
+- Runner files edited: x.sh')"
+  RL4="$(bl '## Constraints
+x
+**Runner files edited:** x.sh')"
+  RL5="$(bl '## Constraints
+x
+put the `Runner files edited:` line in the section')"
+  RL6="$(bl '## Acceptance command
+`bash a.sh`
+Runner files edited: tests/smoke.sh
+## Constraints
+x
+Runner files edited: x.sh')"
+  RV1="$(bl '## Acceptance command
+`bash a.sh`
+Runner files edited:')"
+  RV2="$(bl '## Acceptance command
+`bash a.sh`
+Runner files edited: /etc/x.sh')"
+  RV3="$(bl '## Acceptance command
+`bash a.sh`
+Runner files edited: ../x.sh')"
+  RV4="$(bl '## Acceptance command
+`bash a.sh`
+**Runner files edited:** x.sh')"
+  RV5="$(bl '## Acceptance command
+`bash a.sh`
+Runner files edited: tests/smoke.sh, tests/ci-shards.sh')"
+  check "oracle lint: a line starting with the label outside the section (plain, indented, after a list marker, bold) -> runner_files_outside, while a prose line that only mentions it does not; no value, an absolute path, a .. path or a bold label in the section -> runner_files_invalid; a valid line -> no problem" "$RL1|$RL2|$RL3|$RL4|$RL5|$RL6|$RV1|$RV2|$RV3|$RV4|$RV5" "1:false:3:runner_files_outside:0|1:false:3:runner_files_outside:0|1:false:3:runner_files_outside:0|1:false:3:runner_files_outside:0|0:true::0|1:false:6:runner_files_outside:0|1:false:3:runner_files_invalid:0|1:false:3:runner_files_invalid:0|1:false:3:runner_files_invalid:0|1:false:3:runner_files_invalid:0|0:true::0"
+  # oracle.sh --lint: usage and exit codes, the config's enabled, and that it runs nothing
+  LCP="$(oracle_repo lintcli)"; LHOME="$OR/lhome"; mkdir -p "$LHOME"
+  printf 'touch "%s/ran"\n' "$OR" > "$LCP/test.sh"
+  printf '## Target\nx\n\n## Acceptance command\n```\nbash test.sh\n```\nRunner files edited: test.sh\n' > "$LCP/clean.md"
+  printf '## Target\nx\nbin/lib.sh:1196\n' > "$LCP/bad.md"; printf '## Target\nx\n' > "$LCP/nosec.md"
+  lcmd() { local p="$1"; shift; try bash -c 'cd "$1" || exit 2; unset ORCA_ROLES_CONFIG; LERR="$4"; KIT="$2" HOME="$3" exec "$2/bin/oracle.sh" "${@:5}" 2>"$LERR"' x "$p" "$KIT" "$LHOME" "$OR/lerr" "$@"; }
+  printf '{"settings":{"oracle":{"enabled":true}}}' > "$LCP/.git/orca-roles.config.json"
+  rm -f "$OR/ran"
+  lcmd "$LCP" --lint "$LCP/clean.md"; L0="$RC:$(jq -r .ok <<<"$OUT")"
+  lcmd "$LCP" --lint "$LCP/bad.md"; L1="$RC:$(jq -r '[.problems[].kind] | join(",")' <<<"$OUT")"
+  lcmd "$LCP" --lint "$LCP/nosec.md"; L2="$RC:$(jq -r '[.problems[].kind] | join(",")' <<<"$OUT")"
+  printf '{"settings":{"oracle":{"enabled":false}}}' > "$LCP/.git/orca-roles.config.json"
+  lcmd "$LCP" --lint "$LCP/nosec.md"; L3="$RC:$(jq -r '[.problems[].kind] | join(",")' <<<"$OUT")"
+  check "oracle.sh --lint: exit 0 and the lint JSON; exit 1 with the problems; the acceptance section required only with settings.oracle.enabled; the spec's acceptance command never runs" "$L0|$L1|$L2|$L3:$([ -e "$OR/ran" ] && echo ran || echo none)" "0:true|1:acceptance_missing,line_ref|1:acceptance_missing|0::none"
+  check "oracle.sh --lint writes no verify.json under the default output folder" "$(find "$LHOME/.cache/orca-roles/oracle" -name verify.json 2>/dev/null | wc -l | tr -d ' ')" "0"
+  LU=""
+  lcmd "$LCP" --lint; LU="$LU$RC:$(cat "$OR/lerr")|"
+  lcmd "$LCP" --lint "$LCP/nope.md"; LU="$LU$RC:$(cat "$OR/lerr")|"
+  lcmd "$LCP" --lint "$LCP/clean.md" --task x; LU="$LU$RC:$(cat "$OR/lerr")|"
+  lcmd "$LCP" --task x --lint "$LCP/clean.md"; LU="$LU$RC:$(cat "$OR/lerr")|"
+  lcmd "$LCP" --lint "$LCP/clean.md" --dry-run; LU="$LU$RC:$(cat "$OR/lerr")|"
+  lcmd "$LCP" --lint --base HEAD; LU="$LU$RC:$(cat "$OR/lerr")|"
+  lcmd "$LCP" --lint "$LCP/clean.md" --no-wait; LU="$LU$RC:$(cat "$OR/lerr")|"
+  check "oracle.sh --lint: exit 2 for a missing value, a missing file, and each other option (in either order), with the message" "$LU" "2:oracle.sh: --lint needs a value|2:oracle.sh: spec file not found: $LCP/nope.md|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|"
+  lcmd "$LCP" -h
+  check "oracle.sh -h prints the whole header, now with the --lint usage line" "$RC:$(grep -c -- '--lint <spec file>' <<<"$OUT"):$(grep -c -- 'Exit: verify_task.py' <<<"$OUT")" "0:1:1"
+  try bash -c 'cd "$1" && ORCA_ROLES_PYTHON=no-such-python-xyz KIT="$2" HOME="$3" "$2/bin/oracle.sh" --lint "$4" 2>"$5"' x "$LCP" "$KIT" "$LHOME" "$LCP/clean.md" "$OR/lerr"
+  check "oracle.sh --lint without python3 >= 3.8: exit 3 with the same message" "$RC:$(grep -c 'needs python3 >= 3.8' "$OR/lerr")" "3:1"
+  mkdir -p "$OR/notgit"; cp "$LCP/clean.md" "$OR/notgit/spec.md"
+  lcmd "$OR/notgit" --lint "$OR/notgit/spec.md"
+  check "oracle.sh --lint outside a git repository: exit 2 with the existing message" "$RC:$(cat "$OR/lerr")" "2:oracle.sh: run it from the worktree (this is not a git repository)"
   export ORCA_ROLES_CONFIG="$OCFG"
 fi
 unset ORCA_ROLES_CONFIG
@@ -1584,6 +1874,490 @@ PYE
 OC="$(cd "$TMP" && python3 -B "$TMP/ocases.py" "$ROOT/bin/oracle" 2>&1 | tail -5 | tr '\n' '|')"
 check "oracle integrity: install commands follow the lifecycle hooks (npm ci/it/i, pnpm install, yarn, CI=1 npm ci: a new postinstall is a cheat); a changed runner .sh tied to a script or an acceptance command is a cheat however it is run (bash with options, env prefixes, ./x.sh, sh -c, npx cross-env, after a pipe, sudo -E, a quoted name with spaces; an unbalanced quote counts every changed .sh); a test file turned into a symlink or a new symlink under tests/ is a cheat; a test config hidden by .git/info/exclude, the global excludes file, an untracked tests/.gitignore or a .gitignore changed since the base is a cheat; ignored files that were ignored before (node_modules, dist, .venv, a venv's own .gitignore), sh -c 'echo hi', a plain source change and a non-ASCII test path are not; an install command inside a reached package script (npm ci && jest) follows the hooks; options before the subcommand or script name (npm --silent ci, npm run --silent test) are skipped; echo npm ci is not followed" "$OC" "52/52|"
 PATH="${PATH#"$OR/nobin:"}"   # the orca of this section goes out of the PATH
+# batch1 (a1, a2): contract checks written from the spec, not from the section's checks above
+B1="$TMP/b1"; rm -rf "$B1"; mkdir -p "$B1"
+PYB1="${ORCA_ROLES_PYTHON:-python3}"
+if command -v "$PYB1" >/dev/null 2>&1 && "$PYB1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+  cat > "$B1/api.py" <<'B1PY'
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from spec_lint import acceptance_section, lint
+from verify_task import acceptance_commands
+
+bad = []
+
+
+def eq(name, got, want):
+    if got != want:
+        bad.append('%s=%r(want %r)' % (name, got, want))
+
+
+def as_(spec):
+    return acceptance_section(spec)
+
+
+# a1 item 2: the exact heading
+r = as_('## Acceptance command\n```\nbash test.sh\n```\n')
+eq('exact.count', r['count'], 1)
+eq('exact.line', r['line'], 1)
+eq('exact.body', 'bash test.sh' in (r['body'] or ''), True)
+eq('exact.inexact', r['inexact'], [])
+eq('exact.runner', r['runner_files'], [])
+
+r = as_('## Acceptance command \t\nbash test.sh\n')
+eq('trailing.count', (r['count'], r['line']), (1, 1))
+eq('trailing.body', 'bash test.sh' in (r['body'] or ''), True)
+
+# a1 item 3: body to end of file when no following heading
+r = as_('## Acceptance command\nbash test.sh\n')
+eq('tail.body', 'bash test.sh' in (r['body'] or ''), True)
+
+# a1 items 2 and 4: near misses never become the heading
+for name, spec in [
+    ('lead-space', ' ## Acceptance command\nbash test.sh\n'),
+    ('h3', '### Acceptance command\nbash test.sh\n'),
+    ('h1', '# Acceptance command\nbash test.sh\n'),
+    ('plural', '## Acceptance commands\nbash test.sh\n'),
+    ('lower', '## acceptance command\nbash test.sh\n'),
+    ('caps', '## Acceptance Command\nbash test.sh\n'),
+    ('colon', '## Acceptance command:\nbash test.sh\n'),
+    ('bold', '**Acceptance command**\nbash test.sh\n'),
+    ('bold-colon', '**Acceptance command:**\nbash test.sh\n'),
+]:
+    r = as_(spec)
+    eq(name + '.count', (r['count'], r['line'], r['body']), (0, None, None))
+    eq(name + '.inexact', r['inexact'], [1])
+
+# a1 item 1: fenced lines are never headings nor near misses
+for name, spec in [
+    ('fence-backtick', '```\n## Acceptance command\nbash test.sh\n```\n'),
+    ('fence-tilde', '~~~\n## Acceptance command\n~~~\n## Other\n'),
+    ('fence-indent', '   ```\n## Acceptance command\n   ```\n'),
+]:
+    r = as_(spec)
+    eq(name + '.count', (r['count'], r['line'], r['body']), (0, None, None))
+    eq(name + '.inexact', r['inexact'], [])
+
+# a1 item 3: a fence's '#' comment and a bold-only line do not end the section
+r = as_('## Acceptance command\n```\n# comment\nbash test.sh\n```\n**Note**\nmore\n### Next\nhidden\n')
+b = r['body'] or ''
+eq('body.keeps', ('# comment' in b, 'bash test.sh' in b, '**Note**' in b, 'more' in b), (True, True, True, True))
+eq('body.ends', 'hidden' in b, False)
+
+# a1 item 4: lines without 'acceptance command' are not near misses
+r = as_('### Acceptance criteria\n## Criterios de aceptación\n## Definition of done\n## Other\n')
+eq('inexact.empty', r['inexact'], [])
+
+# a1 item 5: runner declaration family
+for name, body, want in [
+    ('plain', 'Runner files edited: ci/check.sh, tests/smoke.sh\n', ['ci/check.sh', 'tests/smoke.sh']),
+    ('backticks', 'Runner files edited: `ci/check.sh`\n', ['ci/check.sh']),
+    ('dot-slash', 'Runner files edited: ./ci/check.sh\n', ['ci/check.sh']),
+    ('two-lines', 'Runner files edited: ci/check.sh\nRunner files edited: `./ci/check.sh`, tests/smoke.sh\n',
+     ['ci/check.sh', 'tests/smoke.sh']),
+    ('indented', '  Runner files edited: x.sh\n', ['x.sh']),
+    ('empty-items', 'Runner files edited: , x.sh ,\n', ['x.sh']),
+    ('prefix-kept', 'Runner files edited: ci/check\n', ['ci/check']),
+    ('no-files', 'Runner files edited:\n', []),
+]:
+    r = as_('## Acceptance command\nbash test.sh\n' + body)
+    eq('runner.' + name, r['runner_files'], want)
+
+for name, spec in [
+    ('outside', '## Constraints\nRunner files edited: x.sh\n\n## Acceptance command\nbash test.sh\n'),
+    ('after-body', '## Acceptance command\nbash test.sh\n## Constraints\nRunner files edited: x.sh\n'),
+    ('fenced', '## Acceptance command\n```\nRunner files edited: x.sh\n```\n'),
+    ('lowercase', '## Acceptance command\nbash test.sh\nrunner files edited: x.sh\n'),
+    ('mid-line', '## Acceptance command\nbash test.sh\nsee Runner files edited: x.sh\n'),
+]:
+    eq('runner.not.' + name, as_(spec)['runner_files'], [])
+
+# a1 item 6: commands only from the first exact section
+eq('cmds.h3-before', acceptance_commands('### Acceptance criteria\ncriteria\n## Acceptance command\n```\nbash test.sh\n```\n'),
+   ['bash test.sh'])
+eq('cmds.trailing', acceptance_commands('## Acceptance command \t\n```\nbash test.sh\n```\n'), ['bash test.sh'])
+eq('cmds.two-headings', acceptance_commands(
+    '## Acceptance command\n```\nbash one.sh\n```\n## Acceptance command\n```\nbash two.sh\n```\n'), ['bash one.sh'])
+eq('cmds.fence-comment', acceptance_commands('## Acceptance command\n```\n# comment\nbash x.sh\n```\n### Next\n'),
+   ['bash x.sh'])
+eq('cmds.empty-section', acceptance_commands('## Acceptance command\nnothing here\n'), [])
+for name, spec in [
+    ('plural', '## Acceptance commands\n```\nbash x.sh\n```\n'),
+    ('h3', '### Acceptance command\n```\nbash x.sh\n```\n'),
+    ('h1', '# Acceptance command\n```\nbash x.sh\n```\n'),
+    ('lower', '## acceptance command\n```\nbash x.sh\n```\n'),
+    ('caps', '## Acceptance Command\n```\nbash x.sh\n```\n'),
+    ('colon', '## Acceptance command:\n```\nbash x.sh\n```\n'),
+    ('lead-space', ' ## Acceptance command\n```\nbash x.sh\n```\n'),
+    ('bold', '**Acceptance command**\n```\nbash x.sh\n```\n'),
+    ('spanish', '## Criterios de aceptación\n```\nbash x.sh\n```\n'),
+    ('done', '## Definition of done\n```\nbash x.sh\n```\n'),
+    ('fenced', '```\n## Acceptance command\nbash x.sh\n```\n'),
+]:
+    eq('cmds.none.' + name, acceptance_commands(spec), None)
+
+# a1 item 9: lint() takes Observable acceptance only from the exact heading
+full = '## Target\nx\n## Change\ny\n## Constraints\nz\n## Ownership\nw\n## Acceptance command\n```\nbash test.sh\n```\n'
+r = lint(full)
+eq('lint.keys', sorted(r), ['acceptance_commands', 'missing', 'ok', 'problems', 'rejected_commands'])
+eq('lint.ok', (r['ok'], r['missing'], r['acceptance_commands'], r['rejected_commands']), (True, [], 1, 0))
+for name, head in [
+    ('h3-criteria', '### Acceptance criteria'),
+    ('bold', '**Acceptance command:**'),
+    ('lower', '## acceptance command'),
+    ('spanish', '## Criterios de aceptación'),
+    ('done', '## Definition of done'),
+]:
+    r = lint('## Target\nx\n## Change\ny\n## Constraints\nz\n## Ownership\nw\n' + head + '\n```\nbash test.sh\n```\n')
+    eq('lint.none.' + name, (r['ok'], 'Observable acceptance' in r['missing'],
+                            'missing Observable acceptance' in r['problems'], r['acceptance_commands']),
+       (False, True, True, 0))
+r = lint('# Goal\ng\n# Do\nd\n# Restricciones\nr\n# Files you own\no\n## Acceptance command\n```\nbash x.sh\n```\n')
+eq('lint.synonyms', (r['ok'], r['missing']), (True, []))
+
+if bad:
+    print('FAIL %d bad: %s' % (len(bad), ' | '.join(bad)))
+else:
+    print('ok')
+
+B1PY
+  cat > "$B1/integrity.py" <<'B1PY'
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+sys.dont_write_bytecode = True
+BIN = sys.argv[1]          # bin/oracle of the tree under test
+sys.path.insert(0, BIN)
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+os.environ['HOME'] = tempfile.mkdtemp(prefix='b1home-')
+os.environ.pop('XDG_CONFIG_HOME', None)
+import verify_task as V  # noqa: E402
+
+bad = []
+
+
+def eq(name, got, want):
+    if got != want:
+        bad.append('%s=%r(want %r)' % (name, got, want))
+
+
+def sh(wt, *a):
+    return subprocess.run(a, cwd=wt, check=True, capture_output=True, text=True)
+
+
+def w(wt, rel, text='x\n'):
+    p = os.path.join(wt, rel)
+    os.makedirs(os.path.dirname(p) or wt, exist_ok=True)
+    open(p, 'w').write(text)
+
+
+def mk(files, after=None):
+    wt = tempfile.mkdtemp(prefix='b1-')
+    sh(wt, 'git', 'init', '-q')
+    sh(wt, 'git', 'config', 'user.email', 'a@b')
+    sh(wt, 'git', 'config', 'user.name', 'n')
+    for k, v in files.items():
+        w(wt, k, v)
+    sh(wt, 'git', 'add', '-A')
+    sh(wt, 'git', 'commit', '-qm', 'base')
+    base = sh(wt, 'git', 'rev-parse', 'HEAD').stdout.strip()
+    if after:
+        after(wt)
+    return wt, base
+
+
+def integ(wt, base, cmds, declared):
+    r = V.integrity(wt, base, list(cmds), list(declared))
+    findings = sorted((f['kind'], f.get('file') or f.get('script')) for f in r['findings'])
+    return (r['cheat'], findings, r.get('runner_files_declared', 'MISSING'),
+            r.get('runner_config_changed'))
+
+
+def edit(rel, text):
+    return lambda wt: w(wt, rel, text)
+
+
+gf = []
+
+
+def g(name, wt, base, cmds, declared, want):
+    try:
+        got = integ(wt, base, cmds, declared)
+    except Exception as e:
+        got = 'EXC:%s:%s' % (type(e).__name__, e)
+    eq(name, got, want)
+    shutil.rmtree(wt, ignore_errors=True)
+    gf.append(name)
+
+
+# C1: a declared runner file is accepted, listed and kept in runner_config_changed
+wt, base = mk({'ci/check.sh': 'a\n'}, edit('ci/check.sh', 'b\n'))
+g('declared-changed', wt, base, ['bash ci/check.sh'], ['ci/check.sh'],
+  (False, [], ['ci/check.sh'], ['ci/check.sh']))
+
+wt, base = mk({'a.py': '1\n'}, lambda d: w(d, 'ci/check.sh', 'exit 0\n'))
+g('declared-untracked', wt, base, ['bash ci/check.sh'], ['ci/check.sh'],
+  (False, [], ['ci/check.sh'], ['ci/check.sh']))
+
+wt, base = mk({'ci/a.sh': 'a\n', 'ci/b.sh': 'b\n'}, lambda d: (w(d, 'ci/a.sh', 'a2\n'), w(d, 'ci/b.sh', 'b2\n')))
+g('declared-two-sorted', wt, base, ['bash ci/b.sh && bash ci/a.sh'], ['ci/b.sh', 'ci/a.sh'],
+  (False, [], ['ci/a.sh', 'ci/b.sh'], ['ci/a.sh', 'ci/b.sh']))
+
+wt, base = mk({'package.json': '{"scripts":{"lint":"bash lint.sh"}}\n', 'lint.sh': 'a\n'}, edit('lint.sh', 'b\n'))
+g('declared-npm-run-lint', wt, base, ['npm run lint'], ['lint.sh'],
+  (False, [], ['lint.sh'], ['lint.sh']))
+
+# C2: undeclared files, prefix-only declarations, skips and untokenizable commands
+wt, base = mk({'ci/a.sh': 'a\n', 'ci/b.sh': 'b\n'}, lambda d: (w(d, 'ci/a.sh', 'a2\n'), w(d, 'ci/b.sh', 'b2\n')))
+g('undeclared-kept', wt, base, ['bash ci/a.sh && bash ci/b.sh'], ['ci/a.sh'],
+  (True, [('runner_file_changed', 'ci/b.sh')], ['ci/a.sh'], ['ci/a.sh']))
+
+wt, base = mk({'ci/check.sh': 'a\n'}, edit('ci/check.sh', 'b\n'))
+g('prefix-short', wt, base, ['bash ci/check.sh'], ['ci/check'],
+  (True, [('runner_file_changed', 'ci/check.sh')], [], []))
+
+wt, base = mk({'ci/check.sh': 'a\n'}, edit('ci/check.sh', 'b\n'))
+g('prefix-bak', wt, base, ['bash ci/check.sh'], ['ci/check.sh.bak'],
+  (True, [('runner_file_changed', 'ci/check.sh')], [], []))
+
+wt, base = mk({'ci/a.sh': 'a\n', 'ci/b.sh': 'b\n'}, lambda d: (w(d, 'ci/a.sh', 'a2\n'), w(d, 'ci/b.sh', 'b2\n')))
+g('untokenizable', wt, base, ["bash 'ci/a.sh"], ['ci/a.sh'],
+  (True, [('runner_file_changed', 'ci/b.sh')], ['ci/a.sh'], ['ci/a.sh']))
+
+wt, base = mk({'test.sh': 'a\n', 'tests/test_b.py': 'def test_x():\n    assert 1\n'},
+              lambda d: (w(d, 'test.sh', 'b\n'),
+                         open(os.path.join(d, 'tests/test_b.py'), 'a').write(
+                             '\n' + '@' + 'pytest' + '.mark.' + 'skip' + '\ndef test_y():\n    assert 0\n')))
+g('declared-plus-skip', wt, base, ['bash test.sh'], ['test.sh'],
+  (True, [('skip_or_xfail_added', 'tests/test_b.py')], ['test.sh'], ['test.sh']))
+
+wt, base = mk({'ci/check.sh': 'a\n'})
+g('declared-unchanged', wt, base, ['bash ci/check.sh'], ['ci/check.sh'],
+  (False, [], [], []))
+
+wt, base = mk({'ci/check.sh': 'a\n', 'other.sh': 'a\n'}, edit('other.sh', 'b\n'))
+g('declared-not-run', wt, base, ['bash ci/check.sh'], ['ci/check.sh'],
+  (False, [], [], ['other.sh']))
+
+
+def run_main(wt, base, spec):
+    out = tempfile.mkdtemp(prefix='b1out-')
+    p = subprocess.run([sys.executable, '-B', os.path.join(BIN, 'verify_task.py'), '--worktree', wt,
+                        '--spec-file', spec, '--base', base, '--no-wait', '--dry-run'],
+                       capture_output=True, text=True, env=dict(os.environ, ORCA_ROLES_ORACLE_OUT=out))
+    try:
+        j = json.loads(p.stdout)
+    except Exception:
+        j = {}
+    shutil.rmtree(out, ignore_errors=True)
+    return p.returncode, j.get('cheat'), (j.get('integrity') or {}).get('runner_files_declared'), \
+        sorted((f['kind'], f.get('file') or f.get('script')) for f in (j.get('integrity') or {}).get('findings', []))
+
+
+spec_dir = tempfile.mkdtemp(prefix='b1spec-')
+inside = os.path.join(spec_dir, 'inside.md')
+outside = os.path.join(spec_dir, 'outside.md')
+open(inside, 'w').write('## Acceptance command\n```\nbash ci/check.sh\n```\nRunner files edited: ci/check.sh\n')
+open(outside, 'w').write('## Constraints\nRunner files edited: ci/check.sh\n\n## Acceptance command\n```\nbash ci/check.sh\n```\n')
+for name, spec, want in [
+    ('main.declared-inside', inside, (1, False, ['ci/check.sh'], [])),
+    ('main.declared-outside', outside, (1, True, [], [('runner_file_changed', 'ci/check.sh')])),
+]:
+    wt, base = mk({'ci/check.sh': 'a\n'}, edit('ci/check.sh', 'b\n'))
+    eq(name, run_main(wt, base, spec), want)
+    shutil.rmtree(wt, ignore_errors=True)
+shutil.rmtree(spec_dir, ignore_errors=True)
+
+if bad:
+    print('FAIL %d/%d bad: %s' % (len(bad), len(gf), ' | '.join(bad)))
+else:
+    print('ok %d' % len(gf))
+
+B1PY
+  cat > "$B1/batch.py" <<'B1PY'
+import json
+import os
+import subprocess
+import sys
+sys.dont_write_bytecode = True
+BIN = sys.argv[1]       # bin/oracle
+PY = sys.executable
+bad = []
+
+
+def run(text, require=False, flags=()):
+    a = [PY, '-B', os.path.join(BIN, 'spec_lint.py'), '--batch-spec'] + \
+        (['--require-acceptance'] if require else []) + list(flags)
+    p = subprocess.run(a, input=text, capture_output=True, text=True)
+    try:
+        j = json.loads(p.stdout)
+    except Exception:
+        return p.returncode, 'NOJSON:%s' % p.stdout[:80], None, None
+    return p.returncode, j.get('ok'), [(x.get('kind'), x.get('line')) for x in j.get('problems', [])], \
+        j.get('literal_lines', 'MISSING')
+
+
+def eq(name, got, want):
+    if got != want:
+        bad.append('%s=%r(want %r)' % (name, got, want))
+
+
+REF = '\n'.join(['bin/lib.sh:1196', 'planner.md:30', 'verify_task.py:237-306', 'tests/smoke.sh:1486:5',
+                 '(see allow.py:12)', 'the same `bin/lib.sh:1196` inside backticks', 'README.md#L770', './x.sh:3']) + '\n'
+NOTREF = '\n'.join(['spec-sha256: abcdef', '18:41', 'http://localhost:8080/x', 'https://example.com:443/a',
+                    'pytest tests/test_x.py::test_a', 'ratio 1.5:1', 'v1.3.0:', 'config.json: 5 keys',
+                    'acceptance_section(spec) and section `oracle`']) + '\n'
+OUTSIDE = '## Constraints\nRunner files edited: x.sh\n  runner files edited: x.sh\n' \
+          '- Runner files edited: x.sh\n**Runner files edited:** x.sh\n'
+INVALID = '## Acceptance command\n```\nbash x.sh\n```\nRunner files edited:\nRunner files edited: /etc/x.sh\n' \
+          'Runner files edited: ../x.sh\n**Runner files edited:** x.sh\n'
+CLEAN = '''# Spec clean
+
+## Target
+A behavior.
+
+## Change
+Prose naming `acceptance_section` and `batch_lint`.
+
+## Constraints
+No files are edited; see `bin/oracle/spec_lint.py` without a line number.
+- A quoted text: `Runner files edited:` appears in a quote.
+
+### Acceptance criteria
+- The lint sees headings.
+
+## Acceptance command
+```
+bash tests/smoke.sh oracle
+```
+Runner files edited: tests/smoke.sh
+'''
+
+for name, text, require, want in [
+    ('fence-backtick', 'x\n```\ncode\n```\n', False, (1, False, [('code_block', 2)], 0)),
+    ('fence-tilde', '~~~\nx\n~~~\n', False, (1, False, [('code_block', 1)], 0)),
+    ('fence-indent', '  ```\ncode\n  ```\n', False, (1, False, [('code_block', 1)], 0)),
+    ('fence-unclosed', '```\nx\n', False, (1, False, [('code_block', 1)], 0)),
+    ('fence-in-section', '## Acceptance command\n```\nbash tests/smoke.sh oracle\n```\n', False,
+     (0, True, [], 0)),
+    ('refs', REF, False, (1, False, [('line_ref', n) for n in range(1, 9)], 0)),
+    ('not-refs', NOTREF, False, (0, True, [], 0)),
+    ('ref-in-fence', '```\nbin/lib.sh:1\n```\n', False,
+     (1, False, [('code_block', 1), ('line_ref', 2)], 0)),
+    ('literal', 'see bin/lib.sh:1196 <!-- spec-lint: literal -->\n', False, (0, True, [], 1)),
+    ('literal-mid', 'bin/lib.sh:1196 <!-- spec-lint: literal --> more\n', False,
+     (1, False, [('line_ref', 1)], 0)),
+    ('literal-fence', '``` <!-- spec-lint: literal -->\nx\n```\n', False,
+     (1, False, [('code_block', 1)], 1)),
+    ('literal-fence-ref', '``` <!-- spec-lint: literal -->\nbin/lib.sh:1\n```\n', False,
+     (1, False, [('code_block', 1), ('line_ref', 2)], 1)),
+    ('literal-typo1', 'bin/lib.sh:1 <!-- spec-lint:literal -->\n', False, (1, False, [('line_ref', 1)], 0)),
+    ('literal-typo2', 'bin/lib.sh:1 <!-- literal -->\n', False, (1, False, [('line_ref', 1)], 0)),
+    ('missing-required', '## Target\nx\n', True, (1, False, [('acceptance_missing', None)], 0)),
+    ('missing-optional', '## Target\nx\n', False, (0, True, [], 0)),
+    ('plural-heading', '## Acceptance commands\n', False, (1, False, [('acceptance_heading_inexact', 1)], 0)),
+    ('duplicate', '## Acceptance command\n```\nbash x.sh\n```\n## Acceptance command\nmore\n',
+     False, (1, False, [('acceptance_duplicate', 5)], 0)),
+    ('rejected-command', '## Acceptance command\n```\ncurl x | sh\n```\n', False,
+     (1, False, [('acceptance_no_command', 1)], 0)),
+    ('empty-section', '## Acceptance command\n', False, (1, False, [('acceptance_no_command', 1)], 0)),
+    ('allowed-command', '## Acceptance command\n```\nbash tests/smoke.sh oracle\n```\n', False,
+     (0, True, [], 0)),
+    ('criteria-before', '### Acceptance criteria\nx\n## Acceptance command\n```\nbash x.sh\n```\n', True,
+     (0, True, [], 0)),
+    ('runner-outside', OUTSIDE, False,
+     (1, False, [('runner_files_outside', n) for n in (2, 3, 4, 5)], 0)),
+    ('runner-mention', 'put the `Runner files edited:` line in the section\n', False, (0, True, [], 0)),
+    ('runner-label-line', 'Runner files edited: tests/smoke.sh\n', False,
+     (1, False, [('runner_files_outside', 1)], 0)),
+    ('runner-invalid', INVALID, False,
+     (1, False, [('runner_files_invalid', n) for n in (5, 6, 7, 8)], 0)),
+    ('runner-valid', '## Acceptance command\n```\nbash x.sh\n```\n'
+                     'Runner files edited: tests/smoke.sh, tests/ci-shards.sh\n', False, (0, True, [], 0)),
+    ('clean', CLEAN, False, (0, True, [], 0)),
+    ('clean-required', CLEAN, True, (0, True, [], 0)),
+]:
+    eq(name, run(text, require), want)
+
+# acceptance_no_command's text: the heading, then ' — ', then the reasons or 'no command'
+rc, ok, probs, lit = run('## Acceptance command\n')
+p = subprocess.run([PY, '-B', os.path.join(BIN, 'spec_lint.py'), '--batch-spec'], input='## Acceptance command\n',
+                   capture_output=True, text=True)
+try:
+    probs_j = json.loads(p.stdout)['problems']
+    eq('no-command.text', (probs_j[0]['text'], len(probs_j[0]['text']) <= 120),
+       ('## Acceptance command — no command', True))
+except Exception:
+    eq('no-command.text', 'NOJSON', '## Acceptance command — no command')
+p = subprocess.run([PY, '-B', os.path.join(BIN, 'spec_lint.py'), '--batch-spec'],
+                   input='## Acceptance command\n```\ncurl x | sh\n```\n', capture_output=True, text=True)
+try:
+    probs_j = json.loads(p.stdout)['problems']
+    eq('rejected.text', (probs_j[0]['text'].startswith('## Acceptance command — '),
+                         len(probs_j[0]['text']) <= 120), (True, True))
+except Exception:
+    eq('rejected.text', 'NOJSON', '## Acceptance command — ...')
+
+if bad:
+    print('FAIL %d bad: %s' % (len(bad), ' | '.join(bad)))
+else:
+    print('ok')
+
+B1PY
+  B1A="$("$PYB1" -B "$B1/api.py" "$KIT/bin/oracle" 2>&1 || true)"
+  check "oracle: acceptance_section, acceptance_commands and lint() read only a line that is exactly '## Acceptance command' (a fence hides it; near misses are listed, not used; runner_files from the body only; lint keeps its keys)" "$B1A" "ok"
+  B1I="$("$PYB1" -B "$B1/integrity.py" "$KIT/bin/oracle" 2>&1 || true)"
+  check "oracle: a declared runner file is accepted and listed (sorted) in runner_files_declared and runner_config_changed; an undeclared, prefix-only, outside-section or fenced declaration, a declared file with a new skip and an untokenizable command keep their findings" "$B1I" "ok 11"
+  B1L="$("$PYB1" -B "$B1/batch.py" "$KIT/bin/oracle" 2>&1 || true)"
+  check "oracle: spec_lint --batch-spec reports code_block, line_ref (with the literal marker and the URL rule), acceptance_missing/duplicate/heading_inexact/no_command and the runner_files families, in line order with its exit code" "$B1L" "ok"
+  OL="$TMP/b1ol"; rm -rf "$OL"; mkdir -p "$OL/out" "$OL/git"
+  printf '## Acceptance command\n```\nbash test.sh\n```\nRunner files edited: test.sh\n' > "$OL/clean.md"
+  printf '## Target\nx\n' > "$OL/bad.md"
+  printf '## Acceptance commands\n' > "$OL/inexact.md"
+  printf '## Acceptance command\n```\nbash marker.sh\n```\n' > "$OL/runs.md"
+  printf '{"settings":{"oracle":{"enabled":true}}}\n' > "$OL/on.json"
+  printf '{"settings":{"oracle":{"enabled":false}}}\n' > "$OL/off.json"
+  mkdir -p "$OL/repo"; git -C "$OL/repo" init -q; git -C "$OL/repo" config user.email t@t; git -C "$OL/repo" config user.name t
+  printf 'exit 0\n' > "$OL/repo/test.sh"; printf 'touch %s/ran\n' "$OL" > "$OL/repo/marker.sh"
+  git -C "$OL/repo" add -A; git -C "$OL/repo" commit -q -m base
+  b1lint() {  # <args of oracle.sh>: stdout in OUT, exit in RC, stderr in $OL/err
+    try bash -c 'cd "$1" && KIT="$2" HOME="$3" ORCA_ROLES_ORACLE_OUT="$4" exec "$2/bin/oracle.sh" "${@:6}" 2>"$5"' z \
+      "$OL/repo" "$KIT" "$TMP/home" "$OL/out" "$OL/err" "$@"
+  }
+  b1err() { grep -qF -- "$1" "$OL/err" && printf msg || true; }
+  b1warn() { grep -qF -- 'not true' "$OL/err" && printf warned || true; }
+  B1O=""; B1SEP=""
+  export ORCA_ROLES_CONFIG="$OL/on.json"
+  b1lint --lint "$OL/clean.md"; B1O="$B1O$B1SEP$RC:$(jq -r .ok <<<"$OUT" 2>/dev/null):$(b1warn)"
+  B1SEP="|"; b1lint --lint "$OL/bad.md"; B1O="$B1O$B1SEP$RC:$(jq -r '.problems[0].kind' <<<"$OUT" 2>/dev/null)"
+  export ORCA_ROLES_CONFIG="$OL/off.json"
+  b1lint --lint "$OL/bad.md"; B1O="$B1O$B1SEP$RC:$(jq -r .ok <<<"$OUT" 2>/dev/null)"
+  b1lint --lint "$OL/inexact.md"; B1O="$B1O$B1SEP$RC:$(jq -r '.problems[0].kind' <<<"$OUT" 2>/dev/null)"
+  b1lint --lint "$OL/nope.md"; B1O="$B1O$B1SEP$RC:$(b1err "oracle.sh: spec file not found: $OL/nope.md")"
+  b1lint --lint; B1O="$B1O$B1SEP$RC:$(b1err 'oracle.sh: --lint needs a value')"
+  for b1a in "--task t1" "--spec-file $OL/clean.md" "--base HEAD" "--dry-run" "--no-wait"; do
+    b1lint --lint "$OL/clean.md" $b1a; B1O="$B1O$B1SEP$RC:$(b1err 'oracle.sh: --lint takes only a spec file')"
+    b1lint $b1a --lint "$OL/clean.md"; B1O="$B1O$B1SEP$RC:$(b1err 'oracle.sh: --lint takes only a spec file')"
+  done
+  ORCA_ROLES_PYTHON=no-such-python-xyz; export ORCA_ROLES_PYTHON
+  b1lint --lint "$OL/clean.md"; B1O="$B1O$B1SEP$RC:$(b1err 'needs python3 >= 3.8')"
+  unset ORCA_ROLES_PYTHON
+  export ORCA_ROLES_CONFIG="$OL/on.json"
+  b1lint --lint "$OL/runs.md"; B1O="$B1O$B1SEP$RC:$(ls -A "$OL/out" | wc -l | tr -d ' '):$([ -e "$OL/ran" ] && printf ran || printf norun)"
+  try bash -c 'cd "$1" && KIT="$2" HOME="$3" "$2/bin/oracle.sh" --lint "$5" 2>"$4"' z "$OL/git" "$KIT" "$TMP/home" "$OL/err" "$OL/clean.md"
+  B1O="$B1O$B1SEP$RC:$(b1err 'run it from the worktree (this is not a git repository)')"
+  B1LAST="$(awk 'NR > 1 { if (/^#/) { n = NR } else { exit } } END { print n }' "$KIT/bin/oracle.sh")"
+  try bash -c 'cd "$1" && KIT="$2" HOME="$3" "$2/bin/oracle.sh" -h 2>"$4"' z "$OL/repo" "$KIT" "$TMP/home" "$OL/err"
+  B1O="$B1O$B1SEP$RC:$([ "$OUT" = "$(sed -n "2,${B1LAST}p" "$KIT/bin/oracle.sh")" ] && printf same || printf diff):$(grep -c -- --lint <<<"$OUT" || true)"
+  unset ORCA_ROLES_CONFIG
+  check "oracle.sh --lint: exit 0/1 with enabled/disabled, 2 for a missing value, a missing file and each conflicting option in either order, 3 without python; the existing not-a-repository exit; no note when disabled; it writes nothing, runs no command and its -h prints the whole new header" "$B1O" "0:true:|1:acceptance_missing|0:true|1:acceptance_heading_inexact|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|2:msg|3:msg|0:0:norun|2:msg|0:same:1"
+else
+  echo "ok   oracle: batch1 contract checks skipped (no python3 >= 3.8)"
+fi
 }
 
 sec_loop() {
