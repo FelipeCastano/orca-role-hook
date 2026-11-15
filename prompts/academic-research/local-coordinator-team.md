@@ -7,6 +7,7 @@ Before a role's first task (for one opened per task, before each of its tasks; f
 ## Closing a role
 - **Per task.** After the `worker_done` of a role opened per task, once no question or follow-up of that task is pending, close it with `~/.orca-roles/bin/close-role.sh <id>` without asking, unless the user asked to keep it open.
 - **Per batch.** In this mode a batch is the code work of one experiment: from Dev's first task on it to the Tester's ACCEPTED of its code. A role opened per batch keeps its tab through that work. When it ends, close each role opened per batch that worked in it with `~/.orca-roles/bin/close-role.sh <id>` without asking, unless the user asked to keep it open; such a role is closed, not cleaned, at that point. The Dev fix and Tester rounds of one Review round count as one batch, which closes at the Tester's ACCEPTED of those fixes.
+- **Stage close.** After each stage's commit and `~/.orca-roles/bin/checkpoint.sh --clear-all`, run `~/.orca-roles/bin/team-status.sh --run <run_id> --after-commits`; for each tab it marks `closable`, check that it is not waiting for another role's answer to go on (a Dev waiting for the Tester); if it waits for nothing, close it with `~/.orca-roles/bin/set-close.sh --run <run_id> <id> [...]` without asking. Use `set-close.sh` only at a stage close, after its commit; before it, close a tab with `close-role.sh` as the bullets above say.
 - Run `~/.orca-roles/bin/canary.sh --run <run_id>` before each close, as "Report marker" says.
 
 ## Instances

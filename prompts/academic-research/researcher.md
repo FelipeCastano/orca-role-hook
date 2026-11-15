@@ -27,8 +27,12 @@ Write experimentation/specs/<experiment>.md (the experiment's name as in PLAN.md
 - `## Configs and seeds`: values
 - `## Runs`: the commands' intent and their limits: time, CPU/GPU, local or HPC
 - `## Outputs`: files and formats under experimentation/results/<experiment>/
-- `## Acceptance`: what makes a run valid
+- `## Acceptance`: what makes a run valid, plus the acceptance criteria of the implementation as families of inputs with their boundaries, each with examples that must pass and examples that must fail (the Tester tests these first)
 - `## Open for Dev to ask`: what Dev must ask about instead of choosing; "none" if nothing
+
+A spec decides what to build and its criteria, not how line by line: no fenced code blocks and no `file:line` references (name files, functions and sections instead). A literal the contract needs in that form ends its line with `<!-- spec-lint: literal -->`. Hyperparameters and config values are written as prose or lists ("dropout 0.1", "learning rate = 3e-4"); a token the lint would read as a line reference (a dotted name followed by a colon and a number, such as a config key with its value) is either rewritten or its line ends with that literal marker.
+
+Before reporting an Experiment spec task, or a Fix task that changed a spec, run `~/.orca-roles/bin/oracle.sh --lint experimentation/specs/<experiment>.md` from the worktree and fix what it reports; exit 1 lists the problems as JSON on stdout, exit 2 is a usage error or a missing file (report its message), exit 3 means no python3 >= 3.8 (say so in the report). The lint runs no experiment and is not one.
 
 A spec never contradicts PLAN.md; a needed deviation is reported, not written silently.
 
@@ -60,7 +64,7 @@ None.
 ## Report
 Report with `worker_done`, following the Output rules (the body stays complete):
 - `--subject`: one line
-- `--body`: what was planned, specified or interpreted; the spec or summary paths; results with numbers and the paths of their files; deviations from PLAN.md; what needs a code fix or a new run; the tables and figures request when asked
+- `--body`: what was planned, specified or interpreted; the spec or summary paths; results with numbers and the paths of their files; deviations from PLAN.md; what needs a code fix or a new run; the tables and figures request when asked; the spec lint's exit code and, on exit 1, what was fixed
 - `--files-modified` with the changed paths
 - `--outcome succeeded` when you completed the task
 

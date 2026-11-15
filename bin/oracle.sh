@@ -3,7 +3,7 @@
 # tests were not cheated (deleted, skipped, weakened) against the base. The Planner runs it after a Dev worker_done.
 # Usage (from the worktree):  oracle.sh --task <id> [--spec-file <file>] [--base <ref>] [--dry-run] [--no-wait]
 #                             oracle.sh --lint <spec file>   lint a Planner's spec file instead: no code blocks or file:line
-#                             references outside its `## Acceptance command` section (required only with settings.oracle.enabled);
+#                             references outside its `## Acceptance command` section (required only with settings.oracle.enabled in programmer mode);
 #                             exits 0, 1, 2 or 3, writes nothing and runs no command of the spec.
 # With both --task and --spec-file the file's sha256 is compared with the `spec-sha256: <hex>` line of the task's spec (spec_check in the result;
 # a mismatch is status spec_tampered and nothing runs).
@@ -50,9 +50,12 @@ GITDIR="$(git rev-parse --git-dir)"; GITDIR="$(cd "$GITDIR" && pwd)"
 CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 if [ ! -f "$CFG" ]; then CFG="$(mktemp)"; trap 'rm -f "$CFG"' EXIT; merged_config . > "$CFG" 2>/dev/null || echo '{}' > "$CFG"; fi
 if [ "$LINTMODE" = 1 ]; then
-  # the batch-spec lint: the JSON on stdout and its exit code; acceptance required only when the oracle is enabled
+  # the batch-spec lint: the JSON on stdout and its exit code; acceptance required only when the oracle is enabled in programmer mode
   LARGS=(--batch-spec --file "$LINT")
-  [ "$(jq -r '(.settings.oracle? | objects | .enabled?) == true' "$CFG" 2>/dev/null)" = true ] && LARGS+=(--require-acceptance)
+  if [ "$(jq -r '(.settings.oracle? | objects | .enabled?) == true' "$CFG" 2>/dev/null)" = true ]; then
+    LMODE="$(mode_of --saved "$CFG" 2>/dev/null)" || LMODE=programmer   # an invalid mode behaves as programmer
+    [ "$LMODE" = programmer ] && LARGS+=(--require-acceptance)
+  fi
   PYTHONDONTWRITEBYTECODE=1 "$PY" "$KIT/bin/oracle/spec_lint.py" "${LARGS[@]}"
   exit $?
 fi
