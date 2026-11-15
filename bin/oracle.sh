@@ -2,6 +2,9 @@
 # Optional executable oracle for Dev's work: runs the task spec's acceptance command (allowlisted) in this worktree and checks that the
 # tests were not cheated (deleted, skipped, weakened) against the base. The Planner runs it after a Dev worker_done.
 # Usage (from the worktree):  oracle.sh --task <id> [--spec-file <file>] [--base <ref>] [--dry-run] [--no-wait]
+#                             oracle.sh --lint <spec file>   lint a Planner's spec file instead: no code blocks or file:line
+#                             references outside its `## Acceptance command` section (required only with settings.oracle.enabled);
+#                             exits 0, 1, 2 or 3, writes nothing and runs no command of the spec.
 # With both --task and --spec-file the file's sha256 is compared with the `spec-sha256: <hex>` line of the task's spec (spec_check in the result;
 # a mismatch is status spec_tampered and nothing runs).
 # Reads settings.oracle {enabled, maxLoad, waitMax, timeout, retries} from the worktree's configuration. It runs even when
@@ -16,24 +19,43 @@ if ! command -v "$PY" >/dev/null 2>&1 || ! "$PY" -c 'import sys; sys.exit(0 if s
   exit 3
 fi
 
-TASK=""; SPEC=""; BASE=""; EXTRA=()
+TASK=""; SPEC=""; BASE=""; EXTRA=(); LINT=""; LINTMODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --task) [ $# -ge 2 ] || { echo "oracle.sh: --task needs a value" >&2; exit 2; }; TASK="$2"; shift 2;;
     --spec-file) [ $# -ge 2 ] || { echo "oracle.sh: --spec-file needs a value" >&2; exit 2; }; SPEC="$2"; shift 2;;
     --base) [ $# -ge 2 ] || { echo "oracle.sh: --base needs a value" >&2; exit 2; }; BASE="$2"; shift 2;;
+    --lint)
+      LINTMODE=1; shift
+      [ $# -ge 1 ] || { echo "oracle.sh: --lint needs a value" >&2; exit 2; }
+      case "$1" in --task|--spec-file|--base|--dry-run|--no-wait|--lint) echo "oracle.sh: --lint takes only a spec file" >&2; exit 2;; esac
+      LINT="$1"; shift;;
     --dry-run|--no-wait) EXTRA+=("$1"); shift;;
-    -h|--help) sed -n 2,11p "$0"; exit 0;;
+    -h|--help) awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "$0"; exit 0;;
     *) echo "oracle.sh: unknown option: $1" >&2; exit 2;;
   esac
 done
-[ -n "$TASK" ] || { echo "oracle.sh: --task <id> is required" >&2; exit 2; }
-[ -z "$SPEC" ] || [ -f "$SPEC" ] || { echo "oracle.sh: spec file not found: $SPEC" >&2; exit 2; }
+if [ "$LINTMODE" = 1 ]; then
+  if [ -n "$TASK" ] || [ -n "$SPEC" ] || [ -n "$BASE" ] || [ "${#EXTRA[@]}" -gt 0 ]; then
+    echo "oracle.sh: --lint takes only a spec file" >&2; exit 2
+  fi
+  [ -f "$LINT" ] || { echo "oracle.sh: spec file not found: $LINT" >&2; exit 2; }
+else
+  [ -n "$TASK" ] || { echo "oracle.sh: --task <id> is required" >&2; exit 2; }
+  [ -z "$SPEC" ] || [ -f "$SPEC" ] || { echo "oracle.sh: spec file not found: $SPEC" >&2; exit 2; }
+fi
 
 WT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "oracle.sh: run it from the worktree (this is not a git repository)" >&2; exit 2; }
 GITDIR="$(git rev-parse --git-dir)"; GITDIR="$(cd "$GITDIR" && pwd)"
 CFG="${ORCA_ROLES_CONFIG:-$GITDIR/orca-roles.config.json}"
 if [ ! -f "$CFG" ]; then CFG="$(mktemp)"; trap 'rm -f "$CFG"' EXIT; merged_config . > "$CFG" 2>/dev/null || echo '{}' > "$CFG"; fi
+if [ "$LINTMODE" = 1 ]; then
+  # the batch-spec lint: the JSON on stdout and its exit code; acceptance required only when the oracle is enabled
+  LARGS=(--batch-spec --file "$LINT")
+  [ "$(jq -r '(.settings.oracle? | objects | .enabled?) == true' "$CFG" 2>/dev/null)" = true ] && LARGS+=(--require-acceptance)
+  PYTHONDONTWRITEBYTECODE=1 "$PY" "$KIT/bin/oracle/spec_lint.py" "${LARGS[@]}"
+  exit $?
+fi
 
 ocfg() {  # <key> <default> → the value of settings.oracle.<key>, or the default
   jq -r --arg k "$1" --arg d "$2" '(.settings.oracle? | objects | .[$k]?) // $d | tostring' "$CFG" 2>/dev/null || printf '%s' "$2"

@@ -21,7 +21,7 @@ import tempfile
 import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from allow import command_lines, check_command, split_and  # noqa: E402
-from spec_lint import sections, FIELDS, load_task_spec  # noqa: E402
+from spec_lint import acceptance_section, load_task_spec  # noqa: E402
 
 TEST_PATH = re.compile(r'(^|/)(tests?|__tests__|spec|e2e)/|(\.|_)(test|spec)\.[a-z]+$|(^|/)test_[^/]+\.py$', re.I)
 SKIP = re.compile(r'@pytest\.mark\.(?:skip|xfail)|pytest\.(?:skip|xfail)\(|\b(?:it|test|describe)\.(?:skip|todo)\(|\b(?:xit|xdescribe|xtest)\(|t\.Skip\(|#\[ignore\]|\.only\(', re.I)
@@ -375,8 +375,9 @@ def hidden_test_config(wt, base, env):
     return findings
 
 
-def integrity(wt, base, cmds=None):
-    """Compares the whole worktree (commits, uncommitted and untracked files, not ignored) with the base, through a temporary index."""
+def integrity(wt, base, cmds=None, declared=()):
+    """Compares the whole worktree (commits, uncommitted and untracked files, not ignored) with the base, through a temporary index.
+    declared: the runner files the spec's acceptance section declares; their runner_file_changed findings are not a cheat."""
     if not base:
         return dict(checked=False, reason='no base ref', cheat=False, findings=[])
     if git(wt, 'rev-parse', '--verify', '-q', base + '^{commit}').returncode != 0:
@@ -386,12 +387,12 @@ def integrity(wt, base, cmds=None):
         env = dict(os.environ, GIT_INDEX_FILE=os.path.join(d, 'index'))
         if git_env(wt, env, 'read-tree', 'HEAD').returncode != 0 or git_env(wt, env, 'add', '-A').returncode != 0:
             return dict(checked=False, reason='temporary index failed', cheat=False, findings=[])
-        return integrity_diff(wt, base, cmds, env)
+        return integrity_diff(wt, base, cmds, env, declared)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def integrity_diff(wt, base, cmds, env):
+def integrity_diff(wt, base, cmds, env, declared=()):
     ns = git_env(wt, env, 'diff', '--cached', '--name-status', '-z', '--no-renames', base)  # base -> worktree
     findings = []
     deleted = []
@@ -437,16 +438,22 @@ def integrity_diff(wt, base, cmds, env):
     if removed > 20 and removed > 2 * max(added, 1):
         findings.append(dict(kind='tests_weakened', detail='%d test lines removed against %d added' % (removed, added)))
     runner = runner_findings(wt, base, cmds, changed) if cmds else []
+    declared_set = {os.path.normpath(p) for p in declared}
+    runner_files_declared = sorted(f['file'] for f in runner
+                                   if f['kind'] == 'runner_file_changed' and f['file'] in declared_set)
+    runner = [f for f in runner
+              if not (f['kind'] == 'runner_file_changed' and f['file'] in declared_set)]
     findings += runner
     findings += hidden_test_config(wt, base, env)
     reported_files = {f['file'] for f in runner if f['kind'] == 'runner_file_changed'}
     script_hit = any(f['kind'] == 'runner_script_changed' for f in runner)
-    config = sorted(p for p, st in changed.items()
-                    if is_config_file(p) and p not in reported_files and not (script_hit and p == 'package.json'))[:20]
+    config = sorted(set(p for p, st in changed.items()
+                        if is_config_file(p) and p not in reported_files and not (script_hit and p == 'package.json')) | set(runner_files_declared))[:20]
     return dict(checked=True, base=base[:10], tests_deleted=len(deleted),
                 tests_deleted_with_subject=sum(1 for p in deleted if subject_also_deleted(all_deleted, p)),
                 tests_modified=len(modified), lines_added=added, lines_removed=removed,
-                skips_added=added_skip, runner_config_changed=config, cheat=bool(findings), findings=findings[:10])
+                skips_added=added_skip, runner_config_changed=config, runner_files_declared=runner_files_declared,
+                cheat=bool(findings), findings=findings[:10])
 
 
 def wait_for_load(max_wait, max_load_ratio):
@@ -461,11 +468,10 @@ def wait_for_load(max_wait, max_load_ratio):
 
 
 def acceptance_commands(spec):
-    rx = FIELDS['Observable acceptance']
-    for name, body in sections(spec):
-        if re.search(r'\b(?:%s)\b' % rx, name):
-            return command_lines(body)
-    return None
+    acc = acceptance_section(spec)
+    if not acc['count']:
+        return None
+    return command_lines(acc['body'] or '')
 
 
 ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
@@ -622,6 +628,7 @@ def main(argv):
     else:
         sys.exit('verify_task.py: --spec-file or --task is required')
     task = a.task or os.path.basename(a.spec_file)
+    acc = acceptance_section(spec)
     cmds = acceptance_commands(spec)
     res = dict(task=task, worktree=os.path.basename(wt), pass_=False, cheat=False, status=None, commands=[], integrity=None)
     if a.spec_file and a.task:
@@ -664,7 +671,7 @@ def main(argv):
             else:
                 res['status'] = 'env_not_runnable' if any(c['exit'] == 127 for c in res['commands']) else 'fail'
             res['flaky_isolated'] = sum(c['flaky_isolated_files'] for c in res['commands'])
-    res['integrity'] = integrity(wt, pick_base(wt, a.base), cmds)
+    res['integrity'] = integrity(wt, pick_base(wt, a.base), cmds, acc['runner_files'])
     res['cheat'] = bool(res['integrity'].get('cheat'))
     ncpu = os.cpu_count() or 1
     load = os.getloadavg()[0]
