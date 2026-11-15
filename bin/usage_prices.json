@@ -196,5 +196,19 @@
    "cacheRead": 0.25,
    "webSearch": 0.01
   }
+ },
+ "unpricedAliases": {
+  "litellmi/aitire/coder": {
+   "model": "unknown",
+   "checked": "2026-11-14"
+  },
+  "litellmi/aitire/deepseek": {
+   "model": "unknown",
+   "checked": "2026-11-14"
+  },
+  "litellmi/aitire/chat-fast": {
+   "model": "unknown",
+   "checked": "2026-11-14"
+  }
  }
 }

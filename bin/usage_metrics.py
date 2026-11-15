@@ -26,13 +26,17 @@ one JSON line per kit session that changed in that pass, with all its cumulative
   costPriced         the tokens priced with bin/usage_prices.json (models without a price count 0 and are listed in unpriced)
   costState          totalCostUSD of the last cost-state line, null if none
   costByType, cacheSavings   summed over the models (cacheSavings: the cache tokens priced as uncached input, minus what they cost)
-  tools              {tool name: {calls, errors, seconds}}   (seconds: tool_use to tool_result)
-  turns, userMessages, compactions, maxContext, apiErrors, modelChanges
-  lines              {added, removed, source}   source "cost-state" or "edits" (counted from Edit/Write/MultiEdit)
+  tools              {tool name: {calls, errors, seconds}}   (seconds: tool_use to tool_result; an OpenCode row adds outputBytes)
+  turns, userMessages, compactions, maxContext, maxContextAdvisor, apiErrors, modelChanges
+                     (maxContext: the largest input + cache read + cache write a main-model request sent, from usage.iterations when the line has them;
+                     maxContextAdvisor: the largest sum of the advisor's own requests, 0 when the line has none)
+  lines              {added, removed, source}   source "cost-state" or "edits" (counted from Edit/Write/MultiEdit, or from the OpenCode edit/write parts)
   workerDone         [{verdict, seconds}]   one per worker_done send; verdict ACCEPTED/REJECTED from --subject, then a literal --body, else "";
                      seconds from the last dispatch preamble naming the task ("Your task ID is: <id>") to the send (null if none, or if an earlier send already used it)
   commits            {count, insertions, deletions}   Bash `git commit` calls that succeeded
   unpriced           models with no price
+  commands           {type: {calls, errors, outputBytes}}   OpenCode rows only (empty without a shell part): type is the basename
+                     of the first word of the command that is not cd/pushd/export/set/source/. ("unparsed" or "unknown" when it cannot be read)
 
 Live push (after the store, in the same pass): OTLP/HTTP JSON (application/json) to settings.metrics.otlpEndpoint, one ResourceMetrics per session,
 cumulative monotonic Sums (Gauges where noted), startTime = the session's first line, time = now. Only sessions with new transcript lines since their
@@ -45,7 +49,12 @@ service.version, session.id, task, orca_roles.role, orca_roles.agent (opencode s
 os_type, os_version, terminal_type, copied once a day from the newest claude_code_* series of prometheusUrl /api/v1/series; omitted when unavailable);
 never job/instance/project. An OpenCode resource carries service.version=opencode and orca_roles.agent=opencode, so every series of it is marked
 service_version="opencode" and orca_roles_agent="opencode"; Claude resources keep today's attributes and have no orca_roles.agent. Its cost is
-OpenCode's own estimate per model, its cost by type is one "unsplit" point per model and it has no cache savings series. The role pushed is the session
+OpenCode's own estimate per model, its cost by type is one "unsplit" point per model and it has no cache savings series. An OpenCode row carries the
+same workerDone, lines, commits and compactions as a Claude one (its completed shell parts whose exit is 0 give the commits; its completed edit and write
+parts give the lines; a completed compaction row adds one) and adds tools.*.outputBytes and commands, which stay in the store. OpenCode reads its tokens
+from the provider's answer: through the litellmi provider (LiteLLM chat-completions) cache writes are not reported (OpenCode reads
+prompt_tokens_details.cache_write_tokens or cache_created_input_tokens, which LiteLLM does not send), so cacheCreation 0 there means not reported, not
+that nothing was written; its output excludes reasoning, which is in thinking (billed output = output + thinking). The role pushed is the session
 id's role without one trailing -<digits> (dev-2 -> dev; the store keeps dev-2). Before a session's first push its old series (session_id) are read from
 Prometheus and continued: value = old last + (transcript cumulative now - transcript cumulative at the anchor, the last point where the transcript equals
 the old value exactly, else at the old last sample time), with the old series' labels; old counters that reset -> the session is not pushed (logged once);
@@ -69,6 +78,8 @@ Instrument -> Prometheus name (collector: resource_to_telemetry_conversion, unit
   orca_roles.commit.lines                 orca_roles_commit_lines_total{type=insertions|deletions}
   orca_roles.kit.events                   orca_roles_kit_events_total{event=launch|reopened|detached-kept|relaunch,role,task,project}
   orca_roles.dispatch.outcomes            orca_roles_dispatch_outcomes_total{outcome=dispatch|started|enter-resent|not-started|no-check,role,task,project}
+An OpenCode session's tool series carry the Claude name of the tool (shell and bash -> Bash, read -> Read, edit -> Edit, write -> Write, grep -> Grep,
+glob -> Glob; every other name unchanged, and one point per name and instrument); its store rows keep the raw name.
 The last two come from $KIT/metrics/events.jsonl, not from a session: counts per (task, project, event, role), task/project from worktrees.jsonl by the
 event's worktree path ('' if unmapped), pushed under one resource (service.name=claude-code, no session.id) only when a count changed.
 
@@ -101,6 +112,8 @@ GLOBAL_TASKS = {"coordinator": "global-coordinator", "auditor": "global-auditor"
 VERDICT_RE = re.compile(r"\b(ACCEPTED|REJECTED)\b")
 INS_RE = re.compile(r"(\d+) insertions?\(\+\)")
 DEL_RE = re.compile(r"(\d+) deletions?\(-\)")
+OC_TOOL_LABELS = {"shell": "Bash", "bash": "Bash", "read": "Read", "edit": "Edit", "write": "Write", "grep": "Grep", "glob": "Glob"}
+OC_SKIP_WORDS = ("cd", "pushd", "export", "set", "source", ".")
 TS_RE = re.compile(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d+))?")
 
 
@@ -217,9 +230,9 @@ def cost_of(model, u):
 def new_session(sid):
     return {
         "sid": sid, "kit": None, "cwd": "", "role": "", "prompts": 0, "first": "", "last": "", "version": "", "effort": "medium",
-        "models": {}, "tools": {}, "turns": 0, "userMessages": 0, "compactions": 0, "maxContext": 0, "apiErrors": 0, "modelChanges": 0,
-        "lastModel": "", "locEdits": [0, 0], "cs": None, "workerDone": [], "commits": [0, 0, 0], "taskPrompts": {}, "pending": {},
-        "special": {}, "recent": [], "unpriced": [],
+        "models": {}, "tools": {}, "turns": 0, "userMessages": 0, "compactions": 0, "maxContext": 0, "maxContextAdvisor": 0, "apiErrors": 0,
+        "modelChanges": 0, "lastModel": "", "locEdits": [0, 0], "cs": None, "workerDone": [], "commits": [0, 0, 0], "taskPrompts": {}, "pending": {},
+        "special": {}, "recent": [], "unpriced": [], "commands": {},
     }
 
 
@@ -280,6 +293,52 @@ def command_words(toks):
     while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
         i += 1
     return toks[i:]
+
+
+def command_type(cmd):
+    """-> the kind of an OpenCode shell command: the basename of the first simple command's word that is not cd/pushd/export/set/source/. (the first
+    one when all of them are), "unparsed" when simple_commands cannot tokenise it, "unknown" when there is no command."""
+    if not isinstance(cmd, str) or not cmd.strip():
+        return "unknown"
+    cs = simple_commands(cmd)
+    if cs is None:
+        return "unparsed"
+    first = ""
+    for c in cs:
+        w = command_words(c)
+        if not w:
+            continue
+        if not first:
+            first = w[0]
+        if w[0] not in OC_SKIP_WORDS:
+            return os.path.basename(w[0]) or "unknown"
+    return os.path.basename(first) if first else "unknown"
+
+
+def part_bytes(state):
+    """-> the UTF-8 byte size of an OpenCode tool part's output: its text content items plus its error message."""
+    n = 0
+    c = state.get("content")
+    for it in c if isinstance(c, list) else []:
+        if isinstance(it, dict) and it.get("type") == "text" and isinstance(it.get("text"), str):
+            n += len(it["text"].encode("utf-8"))
+    err = state.get("error")
+    if isinstance(err, dict):
+        if isinstance(err.get("message"), str):
+            n += len(err["message"].encode("utf-8"))
+    elif isinstance(err, str):
+        n += len(err.encode("utf-8"))
+    return n
+
+
+def token_sum(e):
+    """-> input + cache read + cache write of one usage.iterations entry (a missing or non-numeric field counts 0)."""
+    n = 0
+    for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+        v = e.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            n += v
+    return n
 
 
 def is_orca_send(w):
@@ -416,7 +475,15 @@ def feed(S, o, is_sub, mapped_cwd):
                 r["thinking"] += (det.get("thinking_tokens") or 0) if isinstance(det, dict) else 0
                 r["turns"] += 1
                 S["turns"] += 1
-                S["maxContext"] = max(S["maxContext"], inp + cr + cw)
+                it = u.get("iterations")
+                if isinstance(it, list):
+                    adv = [token_sum(e) for e in it if isinstance(e, dict) and e.get("type") == "advisor_message"]
+                    if adv:   # the advisor's own request is a separate maximum: it never raises maxContext
+                        S["maxContextAdvisor"] = max(S.get("maxContextAdvisor", 0), max(adv))
+                    main = [token_sum(e) for e in it if isinstance(e, dict) and e.get("type") != "advisor_message"]
+                    S["maxContext"] = max(S["maxContext"], max(main) if main else inp + cr + cw)
+                else:
+                    S["maxContext"] = max(S["maxContext"], inp + cr + cw)
                 c = cost_of(model, u)
                 if c is None:
                     if model not in S["unpriced"]:
@@ -531,16 +598,26 @@ def snapshot(S, ts, task, project):
         lines = {"added": cs[1], "removed": cs[2], "source": "cost-state"}
     else:
         lines = {"added": S["locEdits"][0], "removed": S["locEdits"][1], "source": "edits"}
-    return {
+    oc = S.get("ocCost") is not None
+    tools = {}
+    for n, v in S["tools"].items():
+        trow = {"calls": v.get("calls", 0), "errors": v.get("errors", 0), "seconds": round(v.get("seconds", 0.0), 3)}
+        if oc:
+            trow["outputBytes"] = v.get("bytes", 0)
+        tools[n] = trow
+    row = {
         "ts": ts, "session_id": S["sid"], "task": task, "project": project, "orca_roles_role": S["role"], "effort": S["effort"],
         "query_source": "main", "service_version": S["version"], "first": S["first"], "last": S["last"], "models": models, "tokens": tokens,
         "cost": r6(max(priced, cstate or 0.0)), "costPriced": r6(priced), "costState": cstate,
         "costByType": {k: r6(v) for k, v in cbt.items()}, "cacheSavings": r6(saved),
-        "tools": {n: {"calls": v["calls"], "errors": v["errors"], "seconds": round(v["seconds"], 3)} for n, v in S["tools"].items()},
-        "turns": S["turns"], "userMessages": S["userMessages"], "compactions": S["compactions"], "maxContext": S["maxContext"],
+        "tools": tools, "turns": S["turns"], "userMessages": S["userMessages"], "compactions": S["compactions"], "maxContext": S["maxContext"],
+        "maxContextAdvisor": S.get("maxContextAdvisor", 0),
         "apiErrors": S["apiErrors"], "modelChanges": S["modelChanges"], "lines": lines, "workerDone": S["workerDone"],
         "commits": {"count": S["commits"][0], "insertions": S["commits"][1], "deletions": S["commits"][2]}, "unpriced": S["unpriced"],
     }
+    if oc:
+        row["commands"] = {k: {"calls": v.get("calls", 0), "errors": v.get("errors", 0), "outputBytes": v.get("bytes", 0)} for k, v in S.get("commands", {}).items()}
+    return row
 
 
 # ---------------------------------------------------------------- the pass
@@ -850,6 +927,10 @@ def opencode_sessions(state, deadline):
                             for tid in PREAMBLE_TASK_RE.findall(d["text"]):
                                 if tid in S["taskPrompts"] or len(S["taskPrompts"]) < 300:
                                     S["taskPrompts"][tid] = created / 1000.0 if isinstance(created, (int, float)) else None
+                    if mtype == "compaction":
+                        if d.get("status") == "completed":
+                            S["compactions"] += 1
+                        continue
                     if mtype != "assistant":
                         continue
                     tk = d.get("tokens")
@@ -881,21 +962,50 @@ def opencode_sessions(state, deadline):
                         if not isinstance(b, dict) or b.get("type") != "tool":
                             continue
                         tool = b.get("name") if isinstance(b.get("name"), str) else "unknown"
-                        tl = S["tools"].setdefault(tool, {"calls": 0, "errors": 0, "seconds": 0.0})
+                        tl = S["tools"].setdefault(tool, {"calls": 0, "errors": 0, "seconds": 0.0, "bytes": 0})
                         tl["calls"] += 1
                         st = b.get("state") if isinstance(b.get("state"), dict) else {}
-                        if st.get("status") == "error":
+                        failed = st.get("status") == "error"
+                        if failed:
                             tl["errors"] += 1
+                        n = part_bytes(st)
+                        tl["bytes"] = tl.get("bytes", 0) + n
                         tm = b.get("time") if isinstance(b.get("time"), dict) else {}
                         ran, done = tm.get("ran"), tm.get("completed")
                         if isinstance(ran, (int, float)) and isinstance(done, (int, float)) and done >= ran:
                             tl["seconds"] += (done - ran) / 1000.0
-                        if tool == "bash" and isinstance(st.get("input"), dict) and isinstance(st["input"].get("command"), str):
-                            wd = worker_done_of(st["input"]["command"])
+                        inp = st.get("input") if isinstance(st.get("input"), dict) else {}
+                        cmd = inp.get("command") if tool in ("shell", "bash") else None
+                        if tool in ("shell", "bash"):
+                            ct = command_type(cmd)
+                            if ct not in S["commands"] and sum(1 for k in S["commands"] if k != "other") >= 50:
+                                ct = "other"   # a type beyond the 50 goes to "other", which does not count toward the 50
+                            cr = S["commands"].setdefault(ct, {"calls": 0, "errors": 0, "bytes": 0})
+                            cr["calls"] += 1
+                            cr["bytes"] += n
+                            if failed:
+                                cr["errors"] += 1
+                        if isinstance(cmd, str):
+                            wd = worker_done_of(cmd)
                             if wd is not None:
                                 t0 = S["taskPrompts"].pop(wd[1], None)
                                 t1 = created / 1000.0 if isinstance(created, (int, float)) else None
                                 S["workerDone"].append({"verdict": wd[0], "seconds": round(t1 - t0) if t0 is not None and t1 is not None else None})
+                            elif git_commit_in(cmd) and st.get("status") == "completed":
+                                md = st.get("metadata") if isinstance(st.get("metadata"), dict) else {}
+                                ex = md.get("exit")
+                                if isinstance(ex, int) and not isinstance(ex, bool) and ex == 0:
+                                    txt = text_of(st.get("content"))
+                                    a, d2 = INS_RE.search(txt), DEL_RE.search(txt)
+                                    S["commits"][0] += 1
+                                    S["commits"][1] += int(a.group(1)) if a else 0
+                                    S["commits"][2] += int(d2.group(1)) if d2 else 0
+                        if st.get("status") == "completed":
+                            if tool == "edit":
+                                S["locEdits"][0] += count_lines(inp.get("newString"))
+                                S["locEdits"][1] += count_lines(inp.get("oldString"))
+                            elif tool == "write":
+                                S["locEdits"][0] += count_lines(inp.get("content"))
                 if cost_seen:
                     S["cs"] = [cost, None, None]
                 S["ocCost"] = oc_cost
@@ -1226,7 +1336,14 @@ def session_points(S, P):
         add_pt("orca_roles.thinking", "tokens", "sum", {"model": model}, r["thinking"])
     base = "%s||" % CLAUDE_SERIES[2]
     add_pt("claude_code.session.count", "", "sum", {"start_type": (P["lab"].get(base) or {}).get("start_type", "fresh")}, 1, base)
-    for tool, v in S["tools"].items():
+    tools = S["tools"]
+    if oc is not None:   # an OpenCode session's tool series carry the Claude name: one point per label and instrument
+        tools = {}
+        for tool, v in S["tools"].items():
+            m = tools.setdefault(OC_TOOL_LABELS.get(tool, tool), {"calls": 0, "errors": 0, "seconds": 0.0})
+            for k in ("calls", "errors", "seconds"):
+                m[k] += v.get(k, 0)
+    for tool, v in tools.items():
         add_pt("orca_roles.tool.calls", "", "sum", {"tool": tool}, v["calls"])
         add_pt("orca_roles.tool.duration", "s", "sum", {"tool": tool}, v["seconds"])
         add_pt("orca_roles.tool.errors", "", "sum", {"tool": tool}, v["errors"])
