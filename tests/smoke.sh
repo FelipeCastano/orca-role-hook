@@ -460,7 +460,21 @@ rule R10 "$ROOT/prompts/coordinator.md" "The one terminal you create yourself is
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
 rule R10 "$PD/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
 rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: after it, and after a later Planner report that comes before the set'"'"'s commits, run `on-done.sh` without `--role planner`; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead with that `compact-role.sh` command. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead with that `compact-role.sh` command.' '^\*\*Compact the Planner only when its context is large'
-rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'in the foreground with a Bash timeout of 600000 ms, and wait for it to finish (about 40 s): the Planner'"'"'s cache is still warm then (for a Planner that does not run on claude, the same command cleans it instead). Never dispatch to the Planner while it runs; never compact it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead.' '^\*\*Compact the Planner right after each report'
+rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
+rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'The one exception is a `close` report: after it, and after a later Planner report that comes before the stage'"'"'s commit, run `on-done.sh` without `--role planner`; once the stage'"'"'s commit is made, run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before that commit, compact the Planner right before that task instead with that `compact-role.sh` command. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead with that `compact-role.sh` command.' '^\*\*Compact the Planner only when its context is large'
+# spec-batch3 c1-c5: academic's Planner is compacted when large and cleaned after each stage's commit, and the new stubs, the stage close and the README section are in place
+ACO3="$ROOT/prompts/academic-research/local-coordinator.md"; ACQ3="$ROOT/prompts/academic-research/local-coordinator-requests.md"; ACR3="$ROOT/prompts/academic-research/local-coordinator-rounds.md"; ACT3="$ROOT/prompts/academic-research/local-coordinator-team.md"
+check "rules c1: the academic compaction paragraph appears once and the file keeps no right-after wording ('Compact the Planner right after', '(about 40 s)', 'compacted right after')" "$(grep -c -F -e '**Compact the Planner only when its context is large.**' "$ACO3"):$(grep -c -F -e 'Compact the Planner right after' -e '(about 40 s)' -e 'compacted right after' "$ACO3" || true)" "1:0"
+check "rules c1: the academic Limits bullet on cleaning exempts the Planner's compaction and its cleaning once a stage's commit is made, so the compaction paragraph's cleaning needs no question" "$(grep -c -F -e 'The Planner'"'"'s compaction (`~/.orca-roles/bin/compact-role.sh planner`) and its cleaning once a stage'"'"'s commit is made (`~/.orca-roles/bin/clean.sh planner`) need no confirmation either (see "The Planner").' "$ACO3")" "1"
+check "rules c1: academic planner.md says its context may be compacted or cleaned between tasks, and local-coordinator.md says the Planner is compacted only when its context is large and cleaned after each stage's commit" "$(grep -c -F 'Your context may be compacted or cleaned between tasks' "$ROOT/prompts/academic-research/planner.md"):$(grep -c -F 'its context is compacted only when it is large' "$ACO3"):$(grep -c -F 'compacted when its context is large and cleaned after each stage'"'"'s commit' "$ACO3")" "1:1:1"
+check "rules c2: the requests stub starts with its title, holds both sections, and local-coordinator.md names it in backticks once, in The Planner" "$(head -1 "$ACQ3"):$(grep -c '^## Latest base$' "$ACQ3"):$(grep -c '^## Scope changes during a plan task$' "$ACQ3"):$(awk '/^## The Planner$/{s=1;next} /^## /{s=0} s' "$ACO3" | grep -c '`local-coordinator-requests.md`'):$(grep -c '`local-coordinator-requests.md`' "$ACO3")" "# Local coordinator: new requests and scope changes:1:1:1:1"
+for frag in 'sync-base.sh` once from the worktree, never while a code task is in flight' 'checkpoint.sh --list' '`git status --porcelain` prints nothing' 'merge commit on the user'"'"'s yes' 'git merge --abort' 'worker-abandon' 'interrupt-role.sh planner' 'Only when it says the Planner stopped' 'compact-role.sh planner --instructions "<what to keep of the draft>"' 'clean.sh planner' 'inbox.sh --run <run_id>' 'or the user tells you to go on'; do grep -qF -- "$frag" "$ACQ3" || { echo "FAIL rules c2: academic local-coordinator-requests.md lost '$frag'"; FAIL=1; }; done
+check "rules c3: the rounds stub starts with its title and holds its five sections; local-coordinator.md names it in stage 4 and stage 5" "$(head -1 "$ACR3"):$(for s in Ids 'Paths, not content' 'The routine handoff' Fixes 'Briefed rounds'; do grep -c "^## $s\$" "$ACR3"; done | tr '\n' ' '):$(awk '/^4\. \*\*Experiments\.\*\*/{print} /^5\. \*\*Review\.\*\*/{print}' "$ACO3" | grep -c '`local-coordinator-rounds.md`')" "# Local coordinator: rounds:1 1 1 1 1 :2"
+for frag in 'one more than the highest `exp` id already in the ledger' 'recorded in the ledger as' 'read the ledger, not PLAN.md, to find an experiment'"'"'s id' '`review<k>`' 'handoff.sh exp<n>' 'checkpoint.sh <id> <n>' 'oracle.sh --lint <spec path>' 'exit 0, dispatch' 'exit 1, do not' 'exit 2, tell the user in one line and do not dispatch' 'exit 3, tell the user in one line and dispatch without the lint' 'Dev runs none' 'Base ref (for the base check): <ref>' 'never tells the Tester what to test, mutate or look at'; do grep -qF -- "$frag" "$ACR3" || { echo "FAIL rules c3: academic local-coordinator-rounds.md lost '$frag'"; FAIL=1; }; done
+check "rules c3: the Tests where the change is bullet names no tests for Dev, and the report-file sentence appears once, in the Report marker bullet" "$(grep -c -F 'Briefs to Dev and the Tester name the tests the change touches' "$ACO3" || true):$(grep -c -F 'A worker'"'"'s full report is in the file its `--report-path` names (the body is only a summary): read that file before you act on the report.' "$ACO3"):$(grep '^- \*\*Report marker\.\*\*' "$ACO3" | grep -c -F 'A worker'"'"'s full report is in the file its `--report-path` names')" "0:1:1"
+check "rules c4: Stage close names --after-commits and set-close.sh --run <run_id>, the Commits section names checkpoint.sh --clear-all and Stage close, and the team file keeps its per-batch closing sentence" "$(grep -c '^- \*\*Stage close\.\*\*' "$ACT3"):$(grep '^- \*\*Stage close\.\*\*' "$ACT3" | grep -c -F -e 'team-status.sh --run <run_id> --after-commits' -e 'set-close.sh --run <run_id> <id> [...]' -e 'Use `set-close.sh` only at a stage close'):$(awk '/^## Commits$/{s=1;next} /^## /{s=0} s' "$ACO3" | grep -c -F -e 'checkpoint.sh --clear-all' -e 'as "Stage close" in `local-coordinator-team.md` says'):$(grep -c -F 'such a role is closed, not cleaned, at' "$ACT3")" "1:1:1:1"
+ARSEC3="$(awk '/^#### academic-research mode$/{f=1;next} /^#### /{f=0} f' "$ROOT/README.md")"
+for frag in 'reports/<task_id>.md' 'Dev runs no tests' 'test-run.sh' 'tree-guard.sh' 'crosscheck.sh tree' 'crosscheck.sh run' 'runs the full suite once per experiment stage' 'pass/fail examples' 'oracle.sh --lint' 'only above 200,000 tokens' 'cleaned after each stage' 'sync-base.sh' 'interrupt-role.sh' 'handoff.sh' 'checkpoint.sh' 'set-close.sh'; do [ "$(grep -c -F -- "$frag" <<<"$ARSEC3")" = 1 ] || { echo "FAIL rules c5: README '#### academic-research mode' must name '$frag' once"; FAIL=1; }; done
 rule R10 "$ROOT/bin/dispatch.sh" 'POLLS="${ORCA_ROLES_DISPATCH_POLLS:-15}"'
 rule R10 "$PD/local-coordinator.md" 'The exemption covers only prompt, README and skill text' '\*\*Wording-only fixes need no Tester round'
 rule R10 "$PD/tester.md" 'A missing one is a finding that makes the verdict REJECTED' '^9\. \*\*Check the steps against the spec'
@@ -485,6 +499,39 @@ rule R11 "$PD/tester.md" 'outside the worktree' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'report the base check as not run for that reason' '^7\. \*\*Base check'
 rule R11 "$PD/tester.md" 'Fails on the base before its body runs' '^   - \*\*Fails on the base before'
 rule R11 "$PD/tester.md" 'it does not count' '^   - \*\*Fails on the base before'
+# R11/R21/R29 academic-research parity: Dev runs no tests, the Tester goes through test-run.sh, guards the worktree and proves the new tests on the batch's base with tree and run (never basecheck), and the Researcher's spec keeps P10's shape and is linted
+rule R21 "$ROOT/prompts/academic-research/dev.md" 'Run the linter and the type check on the files you changed'
+rule R21 "$ROOT/prompts/academic-research/dev.md" 'The experiment runs the spec asks for stay yours, under "### Running"'
+check "rules R21: academic-research/dev.md no longer asks Dev to run a test" "$(grep -c -e 'run the existing tests related to your change' -e 'Leave the code running its own tests' "$ROOT/prompts/academic-research/dev.md" || true)" "0"
+rule R11 "$ROOT/prompts/academic-research/tester.md" '**Contract first.**' '^3\. '
+rule R11 "$ROOT/prompts/academic-research/tester.md" 'then the spec in experimentation/specs/'
+check "rules R11: academic-research/tester.md no longer reads Dev's changes with the spec first" "$(grep -c 'and Dev'"'"'s changes' "$ROOT/prompts/academic-research/tester.md" || true)" "0"
+# shellcheck disable=SC2088  # literal pattern: the tilde must not expand
+rule R11 "$ROOT/prompts/academic-research/tester.md" '~/.orca-roles/bin/test-run.sh --role tester --'
+# shellcheck disable=SC2088  # literal pattern: the tilde must not expand
+rule R11 "$ROOT/prompts/academic-research/tester.md" '~/.orca-roles/bin/tree-guard.sh snapshot <scratchDir>/tree-guard.snap'
+# shellcheck disable=SC2088  # literal pattern: the tilde must not expand
+rule R11 "$ROOT/prompts/academic-research/tester.md" '~/.orca-roles/bin/tree-guard.sh compare <scratchDir>/tree-guard.snap --allow'
+rule R11 "$ROOT/prompts/academic-research/tester.md" '`changed`, `head` or `leftover` line is restored or said at once in your report'
+# shellcheck disable=SC2088  # literal pattern: the tilde must not expand
+rule R11 "$ROOT/prompts/academic-research/tester.md" '~/.orca-roles/bin/crosscheck.sh tree <scratchDir>/base --ref <base ref> --overlay'
+# shellcheck disable=SC2088  # literal pattern: the tilde must not expand
+rule R11 "$ROOT/prompts/academic-research/tester.md" '~/.orca-roles/bin/crosscheck.sh run <scratchDir>/base --label base-check --timeout'
+rule R11 "$ROOT/prompts/academic-research/tester.md" 'report it as "not shown by the base check"'
+check "rules R11: academic-research/tester.md never names crosscheck.sh basecheck or the git status check" "$(grep -c -e 'crosscheck.sh basecheck' -e 'git status --porcelain' "$ROOT/prompts/academic-research/tester.md" || true)" "0"
+rule R11 "$ROOT/prompts/academic-research/tester.md" '`pytest experimentation/tests`'
+rule R11 "$ROOT/prompts/academic-research/tester.md" 'refreshed first with the same `rsync -a --delete --exclude .git ./ <scratchDir>/copy/` (run-script tests run only there)'
+rule R11 "$ROOT/prompts/academic-research/tester.md" 'the tree-guard compare summary line and any `changed` or `head` line'
+check "rules R11: academic-research/tester.md lists baseCheck in its parameters" "$(grep -c '`baseCheck`: true' "$ROOT/prompts/academic-research/tester.md" || true)" "1"
+rule R29 "$ROOT/prompts/academic-research/researcher.md" 'plus the acceptance criteria of the implementation as families of inputs with their boundaries'
+rule R29 "$ROOT/prompts/academic-research/researcher.md" 'no fenced code blocks and no `file:line` references'
+rule R29 "$ROOT/prompts/academic-research/researcher.md" '<!-- spec-lint: literal -->'
+# shellcheck disable=SC2088  # literal pattern: the tilde must not expand
+rule R29 "$ROOT/prompts/academic-research/researcher.md" '~/.orca-roles/bin/oracle.sh --lint experimentation/specs/<experiment>.md'
+rule R29 "$ROOT/prompts/academic-research/researcher.md" 'exit 2 is a usage error or a missing file'
+rule R29 "$ROOT/prompts/academic-research/researcher.md" 'exit 3 means no python3 >= 3.8'
+rule R29 "$ROOT/prompts/academic-research/researcher.md" 'The lint runs no experiment and is not one.'
+rule R29 "$ROOT/prompts/academic-research/researcher.md" "the spec lint's exit code and, on exit 1, what was fixed"
 rule R11 "$PD/cross-dev.md" 'fails on the base only at import or collection' '^5\. Check that your tests fail'
 check "rules R11: tester.md no longer counts a missing name as testing the change" "$(grep -c 'does not exist yet counts' "$PD/tester.md" || true)" "0"
 rule R11 "$PD/tester.md" 'each test set in its own copy outside the worktree' '^8\. \*\*Cross-check matrix'
@@ -541,7 +588,7 @@ for m in programmer pr-reviewer academic-research quick; do
     rule R21 "$ROOT/prompts/$m/code-reviewer.md" 'If every failure is **unrelated** (proven red on the base), the verdict is `VERDICT: ACCEPTED` and the failures are listed under "Full suite" as pre-existing, with the base run that proves it; they are not findings. Any **flaky**, **related** or **unproven** failure makes it `VERDICT: REJECTED`' '^16\. \*\*Full suite, last'
   }
   [ "$m" != academic-research ] || {
-    rule R21 "$ROOT/prompts/$m/dev.md" 'never the full suite unless the brief asks'
+    rule R21 "$ROOT/prompts/$m/dev.md" 'Run no tests and no test suite: every test run is the Tester'"'"'s'
     rule R21 "$PL" '**Tests where the change is.**'
   }
   [ "$m" != pr-reviewer ] || rule R21 "$PL" '**Tests where the finding is.**'
@@ -894,10 +941,10 @@ for m in programmer pr-reviewer academic-research quick; do
   [ "$(grep -c '^## Written reports$' "$ROOT/prompts/$m/local-coordinator.md")" = 1 ] || { echo "FAIL rules W: $m/local-coordinator.md must hold one Written reports section"; FAIL=1; }
   [ "$m" != programmer ] || rule W3 "$ROOT/prompts/programmer/planner.md" 'the outline (rule 3) goes back to the local coordinator as `needs: user` before you write the report'
 done
-# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 73432, academic-research 53706, pr-reviewer 37723, quick 44343 bytes)
+# Every local-coordinator-*.md a stub names exists beside it and starts with its title; each local-coordinator.md stays within the cap of the finished set (programmer 73432, academic-research 55166, pr-reviewer 37723, quick 44343 bytes)
 LCB=""
 for m in programmer academic-research pr-reviewer quick; do
-  case "$m" in programmer) lcap=73432;; academic-research) lcap=53706;; quick) lcap=44343;; *) lcap=37723;; esac
+  case "$m" in programmer) lcap=73432;; academic-research) lcap=55166;; quick) lcap=44343;; *) lcap=37723;; esac
   lcn="$(grep -o '`local-coordinator-[a-z0-9-]*\.md`' "$ROOT/prompts/$m/local-coordinator.md" | tr -d '`' | sort -u)"; lcb=0
   [ -n "$lcn" ] || lcb=1
   for lf in $lcn; do head -1 "$ROOT/prompts/$m/$lf" 2>/dev/null | grep -q '^# Local coordinator: ' || lcb=1; done
@@ -915,10 +962,22 @@ Q6C=""; for f in local-coordinator-hidden local-coordinator-kit local-coordinato
 Q6C="$Q6C$(q6 researcher.md '4. If you need the API running, ask the local coordinator with `ask`: the Deployer is the one who starts it.' '4. If you need the API running, ask the local coordinator with `ask`.')"
 Q6C="$Q6C$(q6 local-coordinator-resume.md 'A worker (the Planner included) with a task in flight' 'A worker with a task in flight' ' The Deployer must start the application again if the E2E test was in progress: the earlier processes died with the restart.' '')"
 Q6C="$Q6C$(q6 dev.md '2. If it is a fix, resolve each finding from the Code-Reviewer, the Tester or the E2E-Tester included in the spec, one by one.' '2. If it is a fix, resolve each finding from the Tester included in the spec, one by one.')"
-Q6C="$Q6C$(q6 tester.md '5. If it is a fix requested by the Code-Reviewer, resolve each finding assigned to you.' '5. If it is a fix, resolve each finding assigned to you.' 'Never the full suite, not even when a brief asks for it: the Code-Reviewer runs it, once per set, as the last step of its review.' 'Never the full suite, not even when a brief asks for it: in this mode CI runs it on the pull request.' 'The Code-Reviewer no longer reviews each step, so your review is the step'"'"'s only one before the step closes; the set audit comes later.' 'Your review is the only one: quick mode has no Code-Reviewer and no set audit.' 'The copies of the base check and of the cross-check are not listed either. The local coordinator passes them to the Code-Reviewer so that it does not run them again;' 'The copies of the base check and of the cross-check are not listed either;' 'ask the local coordinator before you start mutating (the Deployer, who edits no code, starts and stops them as part of your task).' 'ask the local coordinator before you start mutating.')"
+Q6C="$Q6C$(q6 tester.md '5. If it is a fix requested by the Code-Reviewer, resolve each finding assigned to you.' '5. If it is a fix, resolve each finding assigned to you.' 'Never the full suite, not even when a brief asks for it: the Code-Reviewer runs it, once per set, as the last step of its review.' 'Never the full suite, not even when a brief asks for it: in this mode CI runs it on the pull request.' 'The Code-Reviewer no longer reviews each step, so your review is the step'"'"'s only one before the step closes; the set audit comes later.' 'Your review is the only one: quick mode has no Code-Reviewer and no set audit.' 'The copies of the base check and of the cross-check are not listed either. The local coordinator passes them to the Code-Reviewer so that it does not run them again;' 'The copies of the base check and of the cross-check are not listed either;' 'ask the local coordinator before you start mutating (the Deployer, who edits no code, starts and stops them as part of your task).' 'ask the local coordinator before you start mutating.' $'\n**Integration runs.** A brief that starts with `Integration run` gives a checkpoint ref and a list of commands that were green in other trees. Run each command once, as written, through `~/.orca-roles/bin/test-run.sh --role tester -- <command>`, in your worktree; write no test, mutate nothing, skip the base check and the cross-check. Report each command with its counts as a green run on that ref, or red with its failing tests: `VERDICT: ACCEPTED` when all are green, `VERDICT: REJECTED` otherwise.\n' '')"
 UCQ="$(awk 'NR > 1 { print prev } { prev = $0 }' "$ROOT/prompts/programmer/local-coordinator-under-coordinator.md"; tail -1 "$ROOT/prompts/quick/local-coordinator-under-coordinator.md")"
 [ "$UCQ" = "$(cat "$ROOT/prompts/quick/local-coordinator-under-coordinator.md")" ] && Q6C="${Q6C}same" || Q6C="${Q6C}DIFF"
 check "rules: quick's hidden, kit, recovery, reports, common-workers and reports files equal programmer's byte for byte; its researcher, resume, dev, tester and under-coordinator prompts equal programmer's with only the named lines changed" "$Q6C" "same same same same same same same same same same same same"
+# spec-batch4 d1-d4: quick writes one linted spec per batch, gives its rounds as local-coordinator-rounds.md says, hands off with handoff.sh, keeps one ledger per set, drops the unreachable Integration-runs paragraph from its tester and says so in the README
+B4P="$ROOT/prompts/quick/local-coordinator.md"; B4R="$ROOT/prompts/quick/local-coordinator-rounds.md"
+B4I3="$(grep '^3\. \*\*Plan\.\*\*' "$B4P" || true)"
+check "rules d1: quick's Plan item writes one spec per batch, the per-step spec name is gone from quick's prompts, and the item forbids code blocks and file:line references and names the literal marker" "$(printf '%s' "$B4I3" | grep -c -F -- 'spec-<batch>.md'):$(grep -rF 'spec-<step>.md' "$ROOT/prompts/quick" | wc -l | tr -d ' '):$(printf '%s' "$B4I3" | grep -c -F -- 'no code blocks and no `file:line` references'):$(printf '%s' "$B4I3" | grep -c -F -- '<!-- spec-lint: literal -->')" "1:0:1:1"
+check "rules d2: quick's rounds stub starts with its title and holds its five sections" "$(head -1 "$B4R"):$(grep -c -E '^## (Paths, not content|The routine handoff|Fixes|The set.s ledger|Briefed rounds)$' "$B4R")" "# Local coordinator: rounds:5"
+for frag in 'handoff.sh <batch> --to <tester handle> --run <run_id> --spec <spec path> --report <Dev'"'"'s report path>' 'oracle.sh --lint <spec path>' 'exit 0, create and dispatch the task' 'exit 1, do not' 'exit 2, tell the user in one line and do not dispatch' 'exit 3 (no python3 >= 3.8), tell the user in one line and dispatch without the lint' '`ledger.md` in your scratchDir' '`conventions.md` in your scratchDir' 'Tester round <k>: <verdict>; report <path>; checkpoint <ref>' 'never tells the Tester what to test, mutate or look at'; do grep -qF -- "$frag" "$B4R" || { echo "FAIL rules d2: quick local-coordinator-rounds.md lost '$frag'"; FAIL=1; }; done
+check "rules d2: the rounds stub names no Planner, replan, decide, Code-Reviewer or oracle hashing, quick's Phase 2 names it in backticks, and quick's prompts hold no per-batch ledger name" "$(grep -c -i -E 'planner|replan|decide|code-reviewer|hashing|spec-sha256' "$B4R" || true):$(awk '/^## Phase 2/{s=1;next} /^## /{s=0} s' "$B4P" | grep -c '`local-coordinator-rounds.md`' | awk '{print ($1 > 0)}'):$(grep -rF 'ledger-<batch>.md' "$ROOT/prompts/quick" | wc -l | tr -d ' ')" "0:1:0"
+check "rules d2: quick's Phase 2 no longer holds the inline two-part Tester brief and When you start re-reads conventions.md instead of the ledger" "$(grep -c -F 'create the Tester'"'"'s task with a brief of two parts' "$B4P" || true):$(grep -c -F '*The task*: every step'"'"'s text from the plan' "$B4P" || true):$(grep -c -F 're-read `conventions.md` and only the convention files changed since' "$B4P"):$(grep -c -F 're-read the ledger section' "$B4P" || true)" "0:0:1:0"
+check "rules d2: quick's \"One step at a time\" bullet and its \"Wording-only fixes\" sub-bullet are byte-identical to the base" "$(grep -c -F -x -- '- **One step at a time.** Only one code task is in flight at any moment: the current batch'"'"'s Dev or Tester task. While it is in flight, dispatch no other task to any worker in that worktree (a Researcher task waits until the code task reports), because the Tester mutates the tree in place. Never start the next batch'"'"'s Dev task while the current batch is open, that is, before its ACCEPTED and its closing checkpoint.' "$B4P"):$(grep -c -F -x -- '   - **Wording-only fixes need no Tester round.** The exemption covers only prompt, README and skill text: any code, SQL or executable runbook or command document goes through the Tester. When a fix changes only the wording of prompts, README or skill text and no pinned rule, check it yourself with the project'"'"'s rules checks (in this kit, `tests/smoke.sh rules prompts`) and close the round; anything that touches code, tests or a pinned rule goes through the Tester as usual. A project without such quick checks has none: the fix goes to the Tester.' "$B4P")" "1:1"
+check "rules d3: quick's tester no longer carries the Integration-runs paragraph and programmer's still does" "$(grep -c 'Integration run' "$ROOT/prompts/quick/tester.md" || true):$(grep -c 'Integration run' "$ROOT/prompts/programmer/tester.md" || true)" "0:1"
+B4SEC="$(awk '/^#### quick mode$/{f=1;next} /^#### /{f=0} f' "$ROOT/README.md")"
+for frag in 'one contract spec per batch' 'oracle.sh --lint' 'handoff.sh' 'one ledger per set' 'no pair trees, no integration runs'; do [ "$(grep -c -F -- "$frag" <<<"$B4SEC")" = 1 ] || { echo "FAIL rules d4: README '#### quick mode' must name '$frag' once"; FAIL=1; }; done
 for m in programmer quick academic-research; do rule E6 "$ROOT/prompts/$m/local-coordinator.md" 'before such a role'"'"'s first task, and before closing one, read `local-coordinator-team.md` in the same folder as this file and follow it'; done
 for m in programmer academic-research; do rule E6 "$ROOT/prompts/$m/local-coordinator-team.md" 'such a role is closed, not cleaned, at'; done
 rule E6 "$PD/local-coordinator-team.md" 'none needs another'"'"'s answer, each names its own output files, and none measures time, load, memory or capacity'
@@ -1760,12 +1819,60 @@ Runner files edited: tests/smoke.sh, tests/ci-shards.sh')"
   lcmd "$LCP" --lint "$LCP/clean.md" --no-wait; LU="$LU$RC:$(cat "$OR/lerr")|"
   check "oracle.sh --lint: exit 2 for a missing value, a missing file, and each other option (in either order), with the message" "$LU" "2:oracle.sh: --lint needs a value|2:oracle.sh: spec file not found: $LCP/nope.md|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|2:oracle.sh: --lint takes only a spec file|"
   lcmd "$LCP" -h
-  check "oracle.sh -h prints the whole header, now with the --lint usage line" "$RC:$(grep -c -- '--lint <spec file>' <<<"$OUT"):$(grep -c -- 'Exit: verify_task.py' <<<"$OUT")" "0:1:1"
+  check "oracle.sh -h prints the whole header, now with the --lint usage line and the acceptance section required in programmer mode only" "$RC:$(grep -c -- '--lint <spec file>' <<<"$OUT"):$(grep -c -- 'Exit: verify_task.py' <<<"$OUT"):$(grep -c -- 'section (required only with settings.oracle.enabled in programmer mode)' <<<"$OUT")" "0:1:1:1"
   try bash -c 'cd "$1" && ORCA_ROLES_PYTHON=no-such-python-xyz KIT="$2" HOME="$3" "$2/bin/oracle.sh" --lint "$4" 2>"$5"' x "$LCP" "$KIT" "$LHOME" "$LCP/clean.md" "$OR/lerr"
   check "oracle.sh --lint without python3 >= 3.8: exit 3 with the same message" "$RC:$(grep -c 'needs python3 >= 3.8' "$OR/lerr")" "3:1"
   mkdir -p "$OR/notgit"; cp "$LCP/clean.md" "$OR/notgit/spec.md"
   lcmd "$OR/notgit" --lint "$OR/notgit/spec.md"
   check "oracle.sh --lint outside a git repository: exit 2 with the existing message" "$RC:$(cat "$OR/lerr")" "2:oracle.sh: run it from the worktree (this is not a git repository)"
+  # the acceptance section is required only with settings.oracle.enabled in programmer mode; the other problems stay in every mode
+  lcfg() {  # lcfg <enabled: true|false|none> <mode: none|programmer|quick|academic-research|pr-reviewer|academic-writer|bogus|number|empty>
+    local j='{"settings":{}}' m="$2"
+    [ "$1" = none ] || j="$(jq -c --argjson e "$1" '.settings.oracle = {enabled: $e}' <<<"$j")"
+    case "$m" in
+      none) ;;
+      bogus|empty) j="$(jq -c --arg m "$([ "$m" = empty ] && printf '' || printf '%s' "$m")" '.settings.mode = $m' <<<"$j")";;
+      number) j="$(jq -c '.settings.mode = 123' <<<"$j")";;
+      *) j="$(jq -c --arg m "$m" '.settings.mode = $m' <<<"$j")";;
+    esac
+    printf '%s' "$j" > "$LCP/.git/orca-roles.config.json"
+  }
+  lk() {  # lk <spec file>: "RC:kinds:bytes on stderr"
+    lcmd "$LCP" --lint "$1"
+    printf '%s:%s:%s' "$RC" "$(jq -r '[.problems[].kind] | join(",")' <<<"$OUT" 2>/dev/null)" "$(wc -c < "$OR/lerr" | tr -d ' ')"
+  }
+  LP=""
+  for m in programmer none; do lcfg true "$m"; LP="$LP$(lk "$LCP/nosec.md")|"; done
+  check "oracle.sh --lint: no acceptance section with the oracle enabled, mode programmer or unset -> exit 1 acceptance_missing" "$LP" "1:acceptance_missing:0|1:acceptance_missing:0|"
+  LR=""
+  for m in quick academic-research pr-reviewer academic-writer; do lcfg true "$m"; LR="$LR$(lk "$LCP/nosec.md")|"; done
+  check "oracle.sh --lint: the same spec with the oracle enabled in quick, academic-research, pr-reviewer or academic-writer -> exit 0, no problem, no stderr" "$LR" "0::0|0::0|0::0|0::0|"
+  LI=""
+  for m in bogus number empty; do lcfg true "$m"; LI="$LI$(lk "$LCP/nosec.md")|"; done
+  check "oracle.sh --lint: an invalid settings.mode (unknown name, a number, empty) with the oracle enabled -> exit 1 acceptance_missing, nothing on stderr" "$LI" "1:acceptance_missing:0|1:acceptance_missing:0|1:acceptance_missing:0|"
+  LO=""
+  for m in programmer quick academic-research; do lcfg false "$m"; LO="$LO$(lk "$LCP/nosec.md")|"; done
+  for m in programmer pr-reviewer; do lcfg none "$m"; LO="$LO$(lk "$LCP/nosec.md")|"; done
+  printf '{}' > "$LCP/.git/orca-roles.config.json"; LO="$LO$(lk "$LCP/nosec.md")|"
+  check "oracle.sh --lint: no acceptance section with the oracle disabled in any mode, absent, or a config with no settings -> exit 0" "$LO" "0::0|0::0|0::0|0::0|0::0|0::0|"
+  printf '## Target\nx\n```\nnot a command\n```\n## Acceptance command\n`bash test.sh`\n' > "$LCP/fenced.md"
+  printf '## Target\nx\n## Acceptance command\n`bash test.sh`\nRunner files edited: /etc/x.sh\n' > "$LCP/rf.md"
+  LN=""
+  for m in quick academic-research academic-writer programmer; do lcfg true "$m"; LN="$LN$(lk "$LCP/fenced.md")|"; done
+  lcfg true quick; LN="$LN$(lk "$LCP/bad.md")|$(lk "$LCP/rf.md")"
+  check "oracle.sh --lint: a fenced block outside the section in quick, academic-research, academic-writer and programmer -> code_block, a file:line in quick -> line_ref, a bad Runner files line in quick -> runner_files_invalid" "$LN" "1:code_block:0|1:code_block:0|1:code_block:0|1:code_block:0|1:line_ref:0|1:runner_files_invalid:0"
+  printf '## Target\nx\n## Acceptance command\n`curl x | sh`\n' > "$LCP/nocmd.md"
+  LC=""
+  for m in academic-research programmer quick academic-writer; do lcfg true "$m"; LC="$LC$(lk "$LCP/nocmd.md")|"; done
+  check "oracle.sh --lint: an acceptance section with no allowed command is still reported in academic-research, programmer, quick and academic-writer -> acceptance_no_command" "$LC" "1:acceptance_no_command:0|1:acceptance_no_command:0|1:acceptance_no_command:0|1:acceptance_no_command:0|"
+  printf '## Target\nx\n## Acceptance command\n```\nbash test.sh\n```\nRunner files edited: test.sh\n' > "$LCP/ok.md"
+  lcfg true quick; check "oracle.sh --lint: a valid acceptance section in quick -> exit 0" "$(lk "$LCP/ok.md")" "0::0"
+  if command -v shellcheck >/dev/null 2>&1; then
+    try shellcheck -S warning "$KIT/bin/oracle.sh"
+    check "shellcheck at the CI threshold reports nothing on bin/oracle.sh" "$RC:$OUT" "0:"
+  else
+    echo "ok   shellcheck on bin/oracle.sh: skipped (shellcheck not installed)"
+  fi
   export ORCA_ROLES_CONFIG="$OCFG"
 fi
 unset ORCA_ROLES_CONFIG
