@@ -458,9 +458,9 @@ rule R10 "$PD/planner.md" '**Nothing leaves the worktree.** No `git push`, no co
 rule R10 "$ROOT/prompts/coordinator.md" 'Start it only when the user asks for an audit, never on your own or on a schedule'
 rule R10 "$ROOT/prompts/coordinator.md" "The one terminal you create yourself is the Auditor's tab"
 rule R10 "$PD/local-coordinator.md" 'Never let the Planner wait' '^Never let the Planner wait'
-rule R10 "$PD/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
+rule R10 "$PD/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
 rule R10 "$PD/local-coordinator.md" 'The one exception is a `close` report: after it, and after a later Planner report that comes before the set'"'"'s commits, run `on-done.sh` without `--role planner`; once the set'"'"'s commits are made (and again after the commit of a fix made after them), run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before those commits, compact the Planner right before that task instead with that `compact-role.sh` command. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead with that `compact-role.sh` command.' '^\*\*Compact the Planner only when its context is large'
-rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
+rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when' '^\*\*Compact the Planner only when its context is large'
 rule R10 "$ROOT/prompts/academic-research/local-coordinator.md" 'The one exception is a `close` report: after it, and after a later Planner report that comes before the stage'"'"'s commit, run `on-done.sh` without `--role planner`; once the stage'"'"'s commit is made, run `~/.orca-roles/bin/clean.sh planner`, without asking the user; if a Planner task comes before that commit, compact the Planner right before that task instead with that `compact-role.sh` command. Never dispatch to the Planner while either command runs; never compact or clean it twice between two tasks, and never with a Planner task in flight. If the command fails, tell the user its message in one line and compact the Planner right before its next task instead with that `compact-role.sh` command.' '^\*\*Compact the Planner only when its context is large'
 # spec-batch3 c1-c5: academic's Planner is compacted when large and cleaned after each stage's commit, and the new stubs, the stage close and the README section are in place
 ACO3="$ROOT/prompts/academic-research/local-coordinator.md"; ACQ3="$ROOT/prompts/academic-research/local-coordinator-requests.md"; ACR3="$ROOT/prompts/academic-research/local-coordinator-rounds.md"; ACT3="$ROOT/prompts/academic-research/local-coordinator-team.md"
@@ -532,6 +532,13 @@ rule R29 "$ROOT/prompts/academic-research/researcher.md" 'exit 2 is a usage erro
 rule R29 "$ROOT/prompts/academic-research/researcher.md" 'exit 3 means no python3 >= 3.8'
 rule R29 "$ROOT/prompts/academic-research/researcher.md" 'The lint runs no experiment and is not one.'
 rule R29 "$ROOT/prompts/academic-research/researcher.md" "the spec lint's exit code and, on exit 1, what was fixed"
+# R30 merge order: a committed team reports `Ready to merge:` and keeps its base; only the next pull request to merge updates from it
+rule R30 "$ROOT/prompts/coordinator.md" 'the next pull request to merge is the first ready'
+rule R30 "$ROOT/prompts/coordinator.md" 'never tell every team to merge the base after a sibling pull request merges'
+for m in programmer academic-research quick; do
+  rule R30 "$ROOT/prompts/$m/local-coordinator-under-coordinator.md" 'start your `worker_done` with `Ready to merge:`'
+  rule R30 "$ROOT/prompts/$m/local-coordinator-under-coordinator.md" 'Merge only when the coordinator'"'"'s task says your pull request is the next to merge'
+done
 rule R11 "$PD/cross-dev.md" 'fails on the base only at import or collection' '^5\. Check that your tests fail'
 check "rules R11: tester.md no longer counts a missing name as testing the change" "$(grep -c 'does not exist yet counts' "$PD/tester.md" || true)" "0"
 rule R11 "$PD/tester.md" 'each test set in its own copy outside the worktree' '^8\. \*\*Cross-check matrix'
@@ -7665,6 +7672,9 @@ cat > "$OC/bin/opencode" <<'EOS'
 #!/bin/bash
 case "$1" in
   --version) echo "opencode 9.9.9"; exit 0;;
+  --help) d="$(dirname "$0")"; n=$(cat "$d/help.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$d/help.n"   # the kit's --prompt probe, counted
+    [ -f "$d/help.fail" ] && exit 1
+    [ -f "$d/help.no" ] || echo "  --prompt string  the first message of the session"; exit 0;;
   models) echo "$* DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}" >> "$(dirname "$0")/models.log"; echo "p/m"; echo "p/other"; exit 0;;
   run) echo "run $*" >> "${OC_DELLOG:-/dev/null}"   # models.sh --check's request: ok, or a failure, a reply without ok, a hang
     case "${OC_RUNMODE:-}" in fail) echo "Error: forbidden (403)" >&2; exit 1;; noword) echo "I cannot help"; exit 0;; hang) exec sleep 30;; esac
@@ -7677,7 +7687,7 @@ case "$1 $2" in   # OpenCode sessions: list prints the JSON in $OC_LIST; delete 
     case "${OC_DELMODE:-}" in fail) exit 3;; hang) echo $$ > "$OC_DELLOG.pid"; exec sleep 30;; esac
     exit 0;;
 esac
-{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; echo "OPENCODE_CONFIG=${OPENCODE_CONFIG-}"; echo "DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}"; } > "$OC_OUT"
+{ for a in "$@"; do printf '%s\n' "$a"; done; echo "PWD=$PWD"; echo "OPENCODE_CONFIG=${OPENCODE_CONFIG-}"; echo "DPC=${OPENCODE_DISABLE_PROJECT_CONFIG-unset}"; echo "ADU=${OPENCODE_DISABLE_AUTOUPDATE-unset}"; } > "$OC_OUT"
 EOS
 chmod +x "$OC/bin/opencode"
 git -C "$OC/real/wt" init -q; OCW="$OC/link/wt"; OCWP="$(cd "$OC/real/wt" && pwd -P)"; KITP="$(cd "$KIT" && pwd -P)"
@@ -7698,20 +7708,62 @@ echo "orca $*" >> "${OC_DELLOG:-/dev/null}"
 exit 0
 EOS
 chmod +x "$OC/bin/orca"
-ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_KILLLOG="${OCKILL:-}" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
+ocrun() { (cd "$OCW" && HOME="$TMP/home" PATH="${OCBIN:+$OCBIN:}$OC/bin:$PATH" OC_OUT="$OC/out" OC_LIST="$OC/list.json" OC_KILLLOG="${OCKILL:-}" OC_DELLOG="${OCLOG:-$OC/del.log}" OC_DELMODE="${OCDELMODE:-}" ORCA_ROLES_OC_DELETE_TIMEOUT="${OCTO:-}" ORCA_ROLES_STATE="${OCSTATE:-}" ORCA_ROLES_CONFIG="${OCCFG:-$OC/cfg.json}" "$TMP/home/.orca-roles/bin/$1" "${@:2}" 2>&1); }
 ocf() { printf '%s/.git/orca-roles-opencode-%s.json' "${2:-$OC/real/wt}" "$1"; }   # a role's configuration file (physical git dir)
 ocperms() { jq -r --arg r "$1" '.agents["orca-" + $r].permissions[] | tojson' "$(ocf "$1")"; }   # the permission items, one compact JSON per line
 FILE="$(ocf dev)"
 export OPENCODE_CONFIG="$OC/inherited.json"; try ocrun agent.sh dev; unset OPENCODE_CONFIG
 check "opencode: agent.sh starts the stub (exit 0); an inherited OPENCODE_CONFIG gets one warning naming it" "$RC:$(grep -cxF -- "agent.sh: dev (opencode): OPENCODE_CONFIG ($OC/inherited.json) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." <<<"$OUT")" "0:1"
-check "opencode: argv is --standalone + extraArgs + --session <own id> (no mini, --agent or --model); PWD and OPENCODE_CONFIG are physical paths" "$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out")" "--standalone
---x
-y z
---session
-ses_orca_dev_N
-PWD=$OCWP
-OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json
-DPC=unset"
+# AC1/AC2: with a tab handle and a stub whose --help lists --prompt, the first message is the last argument, one --prompt=<message> byte-identical
+# to worker_msg (--resume: worker_back_msg), and the marker says which tab and start it was
+OCMK="$OC/real/wt/.git/orca-roles-opencode-dev.started"
+rm -f "$OC/out"; ORCA_TERMINAL_HANDLE=term_x ocrun agent.sh dev >/dev/null
+AC1="$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out" | awk '/^--prompt=/{print "--prompt=<worker_msg>"; next} {print}' | tr '\n' ' ')"
+AC1MK="$(tr '\n' '/' < "$OCMK" 2>/dev/null || true)"
+AC1T="$(awk '/^--prompt=/{sub(/^--prompt=/, ""); print; f=1; next} END{if (!f) print "MISSING"}' "$OC/out")"
+AC1T="$([ "$AC1T" = "$(cd "$OCW" && KIT="$TMP/home/.orca-roles" worker_msg "$OC/cfg.json" dev)" ] && echo sametext || echo othertext)"
+ACTUI="$([ "$(oc_tui_args "$(sed -n '1,/^PWD=/p' "$OC/out" | sed '$d' | tr '\n' ' ')"; echo $?)" = 0 ] && echo 0 || echo 1)"
+rm -f "$OC/out"; ORCA_TERMINAL_HANDLE=term_x ocrun agent.sh dev --resume ses_back_1 >/dev/null
+AC2="$(awk '/^--prompt=/{sub(/^--prompt=/, ""); print; f=1; next} END{if (!f) print "MISSING"}' "$OC/out")"
+AC2="$([ "$AC2" = "$(cd "$OCW" && KIT="$TMP/home/.orca-roles" worker_back_msg "$OC/cfg.json" dev term_x)" ] && echo sametext || echo othertext)"
+AC2MK="$(tr '\n' '/' < "$OCMK" 2>/dev/null || true)"
+check "opencode: argv is --standalone + extraArgs + --session <own id> (no mini, --agent or --model); PWD and OPENCODE_CONFIG are physical paths; in a tab with a handle the first message is one last --prompt= argument, byte-identical to worker_msg (--resume: worker_back_msg), which oc_tui_args accepts, and the marker names that handle and new/back" "$AC1|$AC1T|$AC1MK|$ACTUI|$AC2|$AC2MK" "--standalone --x y z --session ses_orca_dev_N --prompt=<worker_msg> PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset ADU=1 |sametext|term_x/new/|0|sametext|term_x/back/"
+# AC3: the typed fallback. No kit-added --prompt= and no marker (a stale one removed) with no tab handle, --prompt in extraArgs (either form) or a
+# session flag there, for the front role, for a message with " --service " and for a stub whose --help has no --prompt line or fails. The probe is
+# cached per binary path and mtime: none on a hit, one again after a touch. The cases that fall back before the probe keep it from running at all.
+occ_stale() { printf 'stale\nnew\n' > "$OC/real/wt/.git/orca-roles-opencode-$1.started"; }
+occ() {  # occ <config> <handle ("" for none)> [role]: run agent.sh once; "<lines starting with --prompt=>:<marker, or none>"
+  local cfg="$1" h="$2" r="${3:-dev}" sf; sf="$OC/real/wt/.git/orca-roles-opencode-$r.started"; rm -f "$OC/out"
+  ORCA_TERMINAL_HANDLE="$h" OCCFG="$cfg" ocrun agent.sh "$r" >/dev/null 2>&1
+  printf '%s:%s' "$(grep -c '^--prompt=' "$OC/out" || true)" "$([ -e "$sf" ] && tr '\n' '/' < "$sf" || echo none)"
+}
+FB1=""; rm -f "$OC/bin/help.n"   # the counter starts here: H0 counts the fallback cases below, not AC1's probe
+for ef in '["--prompt", "x"]' '["--prompt=x"]' '["--continue"]'; do
+  jq --argjson a "$ef" '.roles.dev.extraArgs = $a' "$OC/cfg.json" > "$OC/cfg-fb.json"
+  rm -f "$KIT/tmp/opencode-prompt-flag"; occ_stale dev; FB1="$FB1 $(occ "$OC/cfg-fb.json" term_x)"
+done
+jq '.roles["local-coordinator"] = {"title": "Local coordinator", "agent": "opencode"}' "$OC/cfg.json" > "$OC/cfg-front.json"
+rm -f "$KIT/tmp/opencode-prompt-flag"; occ_stale local-coordinator; FB2="$(occ "$OC/cfg-front.json" term_x local-coordinator)"
+mkdir -p "$OC/real/wt/.git/orca-roles.notes"; printf 'Please run --service x now\n' > "$OC/real/wt/.git/orca-roles.notes/dev.md"
+rm -f "$KIT/tmp/opencode-prompt-flag"; occ_stale dev; FB3="$(occ "$OC/cfg.json" term_x)"; rm -f "$OC/real/wt/.git/orca-roles.notes/dev.md"
+rm -f "$KIT/tmp/opencode-prompt-flag"; occ_stale dev; FB4="$(occ "$OC/cfg.json" "")"
+H0="$(cat "$OC/bin/help.n" 2>/dev/null || echo 0)"   # none of the cases above may probe --help
+: > "$OC/bin/help.no"; rm -f "$OC/bin/help.n" "$KIT/tmp/opencode-prompt-flag"
+occ_stale dev; FB5="$(occ "$OC/cfg.json" term_x)"; rm -f "$OC/bin/help.no"
+occ "$OC/cfg.json" term_x >/dev/null; C1="$(cat "$OC/bin/help.n" 2>/dev/null || echo 0)"
+occ "$OC/cfg.json" term_x >/dev/null; C2="$(cat "$OC/bin/help.n" 2>/dev/null || echo 0)"
+touch -t 202001010000 "$OC/bin/opencode"
+occ "$OC/cfg.json" term_x >/dev/null; C3="$(cat "$OC/bin/help.n" 2>/dev/null || echo 0)"
+C4="$([ "$(awk -F'\t' 'NR == 1 {print $1}' "$KIT/tmp/opencode-prompt-flag" 2>/dev/null || true)" = "$(cd "$OC/bin" && pwd -P)/opencode" ] && echo path || echo other):$(awk -F'\t' '{print NF":"$3}' "$KIT/tmp/opencode-prompt-flag" 2>/dev/null || true)"
+# a second stub at another path with the same mtime: the cache must not answer for it (path, not mtime alone), so its --help runs and, having no
+# --prompt line, gets no --prompt= and no marker
+mkdir -p "$OC/bin2"; cp "$OC/bin/opencode" "$OC/bin2/opencode"; chmod +x "$OC/bin2/opencode"; : > "$OC/bin2/help.no"; rm -f "$OC/bin2/help.n"
+touch -r "$OC/bin/opencode" "$OC/bin2/opencode"
+occ_stale dev; C5="$(OCBIN="$OC/bin2" occ "$OC/cfg.json" term_x):$(cat "$OC/bin2/help.n" 2>/dev/null || echo 0)"; rm -rf "$OC/bin2"
+# a --help that fails: no --prompt= and no marker, and the probe is not cached as a yes
+: > "$OC/bin/help.fail"; rm -f "$OC/bin/help.n" "$KIT/tmp/opencode-prompt-flag"
+occ_stale dev; FB6="$(occ "$OC/cfg.json" term_x):$(cat "$OC/bin/help.n" 2>/dev/null || echo 0)"; rm -f "$OC/bin/help.fail"
+check "opencode fallback: no kit-added --prompt= and no marker (a stale one removed) with no tab handle, --prompt (either form) or a session flag in extraArgs, for the front role, for a message with ' --service ' and with a stub whose --help has no --prompt line or fails; the earlier cases probe no --help and the help cases probe once, the probe is cached per binary path and mtime (none on a hit, one again after a touch), the cache line naming the stub's physical path and yes, and a second stub with the same mtime at another path is probed afresh" "${FB1# } $FB2|$FB3|$FB4|$FB5|$H0|$C1:$C2:$C3|$C4|$C5|$FB6" "0:none 1:none 0:none 0:none|0:none|0:none|0:none|0|1:1:2|path:3:yes|0:none:1|0:none:1"
 check "opencode: a role with no model starts --standalone --session" "$(ocrun agent.sh tester >/dev/null; sed -n 1,2p "$OC/out" | tr '\n' ' ')" "--standalone --session "
 jq '.settings.trust = "never"' "$OC/cfg.json" > "$OC/cfg-never.json"; jq '.settings.trust = "bogus"' "$OC/cfg.json" > "$OC/cfg-bogus.json"; jq '.settings.trust = "worktree"' "$OC/cfg.json" > "$OC/cfg-wt.json"
 oc_flags() { OCCFG="$1" ocrun agent.sh dev >/dev/null; echo "$(grep -cx -e '--standalone' "$OC/out") $(grep '^DPC=' "$OC/out")"; }
@@ -7738,7 +7790,14 @@ EXPECT_FM="{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"allow\"}
 {\"action\":\"edit\",\"resource\":\"$KITP/trusted.list\",\"effect\":\"deny\"}
 {\"action\":\"edit\",\"resource\":\"$KITP/.manifest\",\"effect\":\"deny\"}
 {\"action\":\"edit\",\"resource\":\"$KITP/.installed\",\"effect\":\"deny\"}
-{\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}"
+{\"action\":\"edit\",\"resource\":\"$KITP/VERSION\",\"effect\":\"deny\"}
+{\"action\":\"read\",\"resource\":\".env\",\"effect\":\"deny\"}
+{\"action\":\"read\",\"resource\":\"*/.env\",\"effect\":\"deny\"}
+{\"action\":\"read\",\"resource\":\".env.*\",\"effect\":\"deny\"}
+{\"action\":\"read\",\"resource\":\"*/.env.*\",\"effect\":\"deny\"}
+{\"action\":\"read\",\"resource\":\"*.env.example\",\"effect\":\"allow\"}
+{\"action\":\"read\",\"resource\":\"*.env.sample\",\"effect\":\"allow\"}
+{\"action\":\"read\",\"resource\":\"*.env.template\",\"effect\":\"allow\"}"
 check "opencode: the agent is exactly the expected JSON without system (allow first, the role's valid items, then the kit's denies last)" "$(jq -c '.agents["orca-dev"] | del(.system)' "$FILE")" "$(jq -nc --argjson p "$(printf '%s\n' "$EXPECT_FM" | jq -sc .)" '{description: "orca-roles Dev role", mode: "primary", model: "p/m", steps: 5, permissions: $p}')"
 check "opencode: the kit's deny on its prompts comes after a role item that allows them (the last matching rule wins)" "$([ "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"deny\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" -gt "$(printf '%s\n' "$FM" | grep -nF "\"effect\":\"allow\"" | grep -F "$KITP/prompts/**" | cut -d: -f1)" ] && echo after)" "after"
 check "opencode: the edit denies of the agent file are the paths of kit_deny_rules, in the same order" "$(printf '%s\n' "$FM" | grep -F '"action":"edit"' | grep -F '"effect":"deny"' | jq -r '.resource' | sed "s|^$KITP/||")" "$(KIT="$KITP" kit_deny_rules | sed "s|^Edit(//${KITP#/}/||; s|)\$||")"
@@ -7748,8 +7807,21 @@ jq '.roles["code-reviewer"] = {"title": "Code-Reviewer", "agent": "opencode", "o
 check "opencode: the code-reviewer's subagent deny comes after a role item that allows subagents (the last matching rule wins)" "$(ocperms code-reviewer | grep -nF '"action":"subagent"' | sed 's/^\([0-9]*\):.*"effect":"\([a-z]*\)".*/\1 \2/' | tr '\n' ' ' | awk '{ print ($2 == "allow" && $4 == "deny" && $3 > $1) ? "after" : "wrong" }')" "after"
 RV=""; for r in plan-reviewer verifier; do jq --arg r "$r" --arg p "$KITP/prompts/pr-reviewer/verifier.md" '.roles[$r] = {"title": $r, "agent": "opencode"} + (if $r == "verifier" then {prompt: $p} else {} end)' "$OC/cfg.json" > "$OC/cfg-rv.json"; OCCFG="$OC/cfg-rv.json" try ocrun opencode-prepare.sh "$r"; RV="$RV$(ocperms "$r" | grep -c '"action":"subagent","resource":"\*","effect":"deny"' || true)"; done
 check "opencode: the plan-reviewer's and the verifier's configuration carry the subagent deny" "$RV" "11"
+# the seven .env read items close every role's list: after the allow-all, the role's own item and the kit's other denies, in every mode
+OENV='[{"action":"read","resource":".env","effect":"deny"},{"action":"read","resource":"*/.env","effect":"deny"},{"action":"read","resource":".env.*","effect":"deny"},{"action":"read","resource":"*/.env.*","effect":"deny"},{"action":"read","resource":"*.env.example","effect":"allow"},{"action":"read","resource":"*.env.sample","effect":"allow"},{"action":"read","resource":"*.env.template","effect":"allow"}]'
+OEM=""
+OEXP="$(printf '%s\n' "$OENV" | jq -c '.[]')"
+for om in programmer academic-research pr-reviewer quick; do
+  or=dev; [ "$om" = pr-reviewer ] && or=verifier
+  jq --arg m "$om" --arg r "$or" '.settings.mode = $m | .roles[$r] = ((.roles[$r] // {}) + {"agent": "opencode", "opencode": {"permissions": [{"action": "read", "resource": "*", "effect": "deny"}]}})' "$OC/cfg.json" > "$OC/cfg-env-mode.json"
+  OCCFG="$OC/cfg-env-mode.json" try ocrun opencode-prepare.sh "$or"; OCCFG=""
+  OP="$(ocperms "$or")"
+  OEM="$OEM$RC:$([ "$(printf '%s\n' "$OP" | tail -7)" = "$OEXP" ] && echo last || echo misplaced):$(printf '%s\n' "$OP" | sed -n 2p):$(printf '%s\n' "$OP" | grep -c '"action":"read"' || true):$(printf '%s\n' "$OP" | grep -c '"effect":"ask"' || true)|"
+done
+ocrun opencode-prepare.sh dev >/dev/null   # back to the section's configuration for the checks below
+check "opencode: in each mode (programmer, academic-research, pr-reviewer, quick) a role whose own list denies every read keeps that item second and ends with the seven .env items, deny .env, */.env, .env.* and */.env.* then allow *.env.example, *.env.sample and *.env.template, no ask" "$OEM" "0:last:{\"action\":\"read\",\"resource\":\"*\",\"effect\":\"deny\"}:8:0|0:last:{\"action\":\"read\",\"resource\":\"*\",\"effect\":\"deny\"}:8:0|0:last:{\"action\":\"read\",\"resource\":\"*\",\"effect\":\"deny\"}:8:0|0:last:{\"action\":\"read\",\"resource\":\"*\",\"effect\":\"deny\"}:8:0|"
 check "opencode: a dev role's permissions have no subagent item" "$(ocperms dev | grep -c '"action":"subagent"' || true)" "0"
-check "opencode: the file's top-level keys are agents and default_agent (orca-dev), its agent keys are in order, 21 permissions" "$(jq -c '[keys, .default_agent, (.agents | keys), (.agents["orca-dev"] | keys_unsorted), (.agents["orca-dev"].permissions | length), (.agents["orca-dev"].steps | type)]' "$FILE")" '[["agents","default_agent"],"orca-dev",["orca-dev"],["description","mode","model","steps","system","permissions"],21,"number"]'
+check "opencode: the file's top-level keys are agents and default_agent (orca-dev), its agent keys are in order, 28 permissions" "$(jq -c '[keys, .default_agent, (.agents | keys), (.agents["orca-dev"] | keys_unsorted), (.agents["orca-dev"].permissions | length), (.agents["orca-dev"].steps | type)]' "$FILE")" '[["agents","default_agent"],"orca-dev",["orca-dev"],["description","mode","model","steps","system","permissions"],28,"number"]'
 check "opencode: the invalid permission items were reported and skipped" "$(ocrun agent.sh dev | grep -c 'skipping an invalid item')" "2"
 BODY="$(jq -r '.agents["orca-dev"].system' "$FILE")"
 ANC="$(cd "$OCW" && HOME="$TMP/home" KIT="$TMP/home/.orca-roles" role_anchor "$OC/cfg.json" dev)"
@@ -7813,7 +7885,7 @@ SV=""; for sv in '["--server", "http://127.0.0.1:1"]|--server' '["--server=http:
   OCCFG="$OC/cfg-sv.json" try ocrun agent.sh dev
   SV="$SV $RC:$(grep -cxF -- "$svm" <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
 done
-check "opencode: extraArgs --standalone is passed once at its position; --server (both forms), --agent and --model=… exit 1 with their message, nothing started, no JSON, no session" "$SA1$SV" "0:--x --standalone y z --session ses_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset  1:1:1: 1:1:1: 1:1:1: 1:1:1: 1:1:1:"
+check "opencode: extraArgs --standalone is passed once at its position; --server (both forms), --agent and --model=… exit 1 with their message, nothing started, no JSON, no session" "$SA1$SV" "0:--x --standalone y z --session ses_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset ADU=1  1:1:1: 1:1:1: 1:1:1: 1:1:1: 1:1:1:"
 printf '{"default_agent": "build"}\n' > "$OCW/opencode.json"; rm -f "$OC/out" "$OCG0/orca-roles-opencode-dev.json"; try ocrun agent.sh dev
 DA1="$RC:$(grep -cxF "agent.sh: dev (opencode): opencode.json sets default_agent, which would replace the role's agent orca-dev. Remove it, or set settings.trust to \"never\" to ignore the project's OpenCode configuration." <<<"$OUT"):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)"
 rm -f "$OC/out"; OCCFG="$OC/cfg-never.json" try ocrun agent.sh dev; DA2="$RC:$([ -e "$OC/out" ] && echo started || true)"; rm -f "$OCW/opencode.json"
@@ -7841,7 +7913,7 @@ SV2=""; for sv2 in '["--agent=orca-x"]|--agent' '["--model", "p/q"]|--model' '["
   SV2="$SV2 $RC:$(grep -cxF "agent.sh: dev (opencode): $sv2f in extraArgs is not supported: the kit sets the role's agent and model in its OpenCode configuration (roles.dev.model). Remove it from roles.dev.extraArgs." <<<"$OUT"):$(wc -l <<<"$OUT" | tr -d ' '):$([ -e "$OC/out" ] && echo started || true)$([ -e "$OCG0/orca-roles-opencode-dev.json" ] && echo json || true)$([ -e "$OCG0/orca-roles-opencode-dev.session" ] && echo session || true)"
 done
 jq '.roles.dev.extraArgs = ["--log-level=info", "--prompt", "x"]' "$OC/cfg.json" > "$OC/cfg-ok.json"; rm -f "$OC/out"; OCCFG="$OC/cfg-ok.json" try ocrun agent.sh dev
-check "opencode: extraArgs --agent=…, --model … and --agent after another flag exit 1 with the flag alone, nothing started, written or saved; --log-level=info and --prompt x still start" "$SV2|$RC:$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out" | tr '\n' ' ')" " 1:1:1: 1:1:1: 1:1:1:|0:--standalone --log-level=info --prompt x --session ses_orca_dev_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset "
+check "opencode: extraArgs --agent=…, --model … and --agent after another flag exit 1 with the flag alone, nothing started, written or saved; --log-level=info and --prompt x still start" "$SV2|$RC:$(sed 's/^ses_orca_dev_[0-9]*$/ses_orca_dev_N/' "$OC/out" | tr '\n' ' ')" " 1:1:1: 1:1:1: 1:1:1:|0:--standalone --log-level=info --prompt x --session ses_orca_dev_N PWD=$OCWP OPENCODE_CONFIG=$OCWP/.git/orca-roles-opencode-dev.json DPC=unset ADU=1 "
 # failures: outside a repo, and agent.sh stops when the preparation fails
 mkdir -p "$OC/norepo"; OCW="$OC/norepo"; try ocrun opencode-prepare.sh dev; check "opencode: outside a git repo prepare exits 1 with a message" "$RC:$(grep -c 'not inside a git repository' <<<"$OUT")" "1:1"
 rm -f "$OC/out"; try ocrun agent.sh dev; check "opencode: agent.sh exits 1 and never starts opencode when prepare fails" "$RC:$([ -e "$OC/out" ] && echo started):$(grep -c 'could not prepare' <<<"$OUT")" "1::1"
@@ -8640,7 +8712,7 @@ check "coordinator prompt: marks the worktree before creating it, checks the loc
 check "coordinator prompt: the task is created before the worktree, the marker before orca worktree create" "$(awk '/task-create --spec/ && !t{t=NR} /> "\$d\/<name>"/{m=NR} /^   Then `orca worktree create/{c=NR} END{print (t && m && c && t < m && m < c) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "ordered"
 check "coordinator prompt: the worktree name is restricted, its basename is checked after creation, the marker goes once the role is sent" "$(grep -c '\^\[a-z0-9\]\[a-z0-9-\]{0,39}\$' "$ROOT/prompts/coordinator.md") $(grep -c 'basename of that path equals `<name>`; if not, tell the user.*do not rename anything' "$ROOT/prompts/coordinator.md") $(grep -c 'removes the marker once it has sent the local coordinator its role message' "$ROOT/prompts/coordinator.md")" "1 1 1"
 check "coordinator prompt: dispatches to the local coordinator's existing tab (handle from LOCAL_COORDINATOR=, PLANNER= never read, no dispatch to a Planner), never a second agent, and never talks to workers" "$(grep -c 'worker-start --task <task_id> --terminal <local coordinator handle> --worktree id:<worktree id>' "$ROOT/prompts/coordinator.md") $(grep -c 'Do not use `worker-start --worktree new-\*`' "$ROOT/prompts/coordinator.md") $(grep -c 'never talk to the workers below a local coordinator' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'with the `LOCAL_COORDINATOR=<handle>` line (never read `PLANNER=`)' "$ROOT/prompts/coordinator.md") $(grep -c 'PLANNER=' "$ROOT/prompts/coordinator.md") $(grep -c -E '(--terminal|--to) <planner' "$ROOT/prompts/coordinator.md" || true)" "1 1 1 1 1 0"
-check "coordinator prompt: never blocks on check --wait (Orca's notice, ack until 0, waiter_exists), answers sends with answer.sh, never reads tabs for questions, checks again after asking the user, forgets a released worktree, asks with context first" "$(grep -c 'Never block waiting for the local coordinators.*only for the Runs bound to this tab.*An unacknowledged batch stops further notices.*never read its tab to find a question.*Do not use .check --wait., a background wait or sleep loops, even if the orchestration guide suggests them: Orca allows one wait per Run (a second fails with .waiter_exists.)' "$ROOT/prompts/coordinator.md") $(grep -c 'writes to your Run with `send`: a `question` is handled like an `ask`, and a `status` that closes its task like a `worker_done`. Answer either with `~/.orca-roles/bin/answer.sh --id <msg_id>' "$ROOT/prompts/coordinator.md") $(grep -c 'As soon as the user answers, `check` again before anything else' "$ROOT/prompts/coordinator.md") $(grep -c 'Otherwise `worker-release`.*remove `orca-roles.coordinator` from the worktree.s git dir' "$ROOT/prompts/coordinator.md") $(awk '/^- \*\*Context before a question\.\*\*/{c=NR} /^- \*\*Questions from a local coordinator\.\*\*/{q=NR} END{print (c && q && c < q) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 1 1 ordered"
+check "coordinator prompt: never blocks on check --wait (Orca's notice, ack until 0, waiter_exists), answers sends with answer.sh, never reads tabs for questions, checks again after asking the user, forgets a settled worktree's coordinator marker without naming worker-release, keeps it for a Ready to merge worktree until its pull request is merged, asks with context first" "$(grep -c 'Never block waiting for the local coordinators.*only for the Runs bound to this tab.*An unacknowledged batch stops further notices.*never read its tab to find a question.*Do not use .check --wait., a background wait or sleep loops, even if the orchestration guide suggests them: Orca allows one wait per Run (a second fails with .waiter_exists.)' "$ROOT/prompts/coordinator.md") $(grep -c 'writes to your Run with `send`: a `question` is handled like an `ask`, and a `status` that closes its task like a `worker_done`. Answer either with `~/.orca-roles/bin/answer.sh --id <msg_id>' "$ROOT/prompts/coordinator.md") $(grep -c 'As soon as the user answers, `check` again before anything else' "$ROOT/prompts/coordinator.md") $(grep -c 'Otherwise remove `orca-roles.coordinator` from the worktree.s git dir' "$ROOT/prompts/coordinator.md") $(grep -c 'worker-release' "$ROOT/prompts/coordinator.md" || true) $(grep -c 'a worktree that reported .Ready to merge:. keeps it until its pull request is merged' "$ROOT/prompts/coordinator.md" || true) $(awk '/^- \*\*Context before a question\.\*\*/{c=NR} /^- \*\*Questions from a local coordinator\.\*\*/{q=NR} END{print (c && q && c < q) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 1 1 0 1 ordered"
 check "coordinator prompt: after the worker-start delivery to the local coordinator it runs dispatch.sh --check-only with --run (one Enter if the brief stayed unsent, else a 'Dispatch not started' status to the coordinator; the Run's mail watcher), before the local coordinator's wait" "$(grep -c '^5\. Dispatch it to the local coordinator: .*worker-start --task <task_id> --terminal <local coordinator handle> --worktree id:<worktree id> --json.\. Right after, run .~/.orca-roles/bin/dispatch.sh --check-only --task <task_id> --to <local coordinator handle> --run <run_id>.: it works in the background, sends one Enter if the brief stayed unsent in the local coordinator.s composer and, if the local coordinator still does not start, sends you one .status. "Dispatch not started"' "$ROOT/prompts/coordinator.md")" "1"
 check "coordinator prompt: status comes from team-status per worktree (no message, tick or question to a local coordinator when it answers), a stopped worktree is told to the user with feature, worktree, since when and the Planner's last message, a waiting Planner at once, and a 'Dispatch not started' status is looked at with team-status" "$(grep -c -F -e '- **Status comes from `team-status`.** When you report to the user, or the user asks how a feature is going, run `~/.orca-roles/bin/team-status.sh <worktree folder>` for each worktree you manage and answer from it: send no message, tick or question to a local coordinator when it already answers; ask the local coordinator only for a detail only it knows.' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'all `done`, `failed` or `interrupted` while its dispatch has no `worker_done` has stopped: tell the user which feature and worktree, since when and the local coordinator'"'"'s last message' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'A local coordinator `waiting` (a dialog in its tab needs the user): tell the user at once.' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'A `status` "Dispatch not started": look at that worktree with `team-status` and tell the user.' "$ROOT/prompts/coordinator.md")" "1 1 1 1"
 check "coordinator prompt: questions on the project's rules go to the user, never settled by the coordinator" "$(grep -c -F -e '- Project rules: a question about the project'"'"'s own rules or conventions' "$ROOT/prompts/coordinator.md") $(grep -c -F -e 'Never settle it yourself, even when the code or the other features suggest an answer.' "$ROOT/prompts/coordinator.md") $(awk '/^  - Doubts:/{d=NR} /^  - Project rules:/{p=NR} /^  - Anything that leaves the worktree/{l=NR} END{print (d && p && l && d < p && p < l) ? "ordered" : "no"}' "$ROOT/prompts/coordinator.md")" "1 1 ordered"
@@ -10178,6 +10250,44 @@ G4="$(grep -c '^Dev: its OpenCode screen showed no prompt after 30 s; sending it
 OCSCREEN='' mf "$(mfc "$DEVOK")" clean "dev"
 G5="$(grep -c 'showed no prompt' "$MF/out.log" || true):$(grep -c '^SEND ' "$MF/orca.log" || true)"
 check "opencode start-up: the cap is min(kickoffTimeoutSeconds, 30): a kickoffTimeoutSeconds of 3600 gives one line after 30 s (not 3600) and the role is still sent at once past it; a Claude role is never gated" "$G4|$G5" "1:1:quick|0:1"
+# AC4: kickoff honours the marker agent.sh leaves for a --prompt= start (nothing typed, whatever its screen check said, the line names the tab on a
+# timeout) and types as today for a marker naming another handle or kind, no marker, and a reused tab; the marker is deleted as soon as it is read.
+OCMK4="$MF/wt/.git/orca-roles-opencode-dev.started"
+mkov() { mf "$OC4CFG" clean "dev"; }
+mk4() { printf '%s:%s:%s' "$(grep -c '^SEND ' "$MF/orca.log" || true)" "$(tr '\n' ' ' < "$MF/gd/orca-roles.kicked" 2>/dev/null)" "$([ -e "$OCMK4" ] && echo marker || echo gone)"; }
+OC4CFG="$(mfc '"title": "Dev", "agent": "opencode"')"
+printf 'hd\nnew\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands' mkov
+A41="$(mk4):$(grep -c '^Prompt passed at start to hd$' "$MF/out.log" || true)"
+printf 'hd\nnew\n' > "$OCMK4"; OCSCREEN='' ORCA_ROLES_SCREEN_POLL=0 mkov
+A42="$(mk4):$(grep -c '^Dev: prompt passed at start to hd, but its OpenCode screen showed no prompt after 1 s; check that tab\.$' "$MF/out.log" || true):$(grep -c 'sending its role anyway' "$MF/out.log" || true)"
+printf 'other\nnew\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands' mkov
+A43="$(mk4):$(grep -c '^Dev: its start marker names another handle (other): typing its role\.$' "$MF/out.log" || true)"
+printf 'other\nnew\n' > "$OCMK4"; OCSCREEN='' ORCA_ROLES_SCREEN_POLL=0 mkov
+A43B="$(mk4):$(grep -cxF -- 'Dev: its OpenCode screen showed no prompt after 1 s; sending its role anyway.' "$MF/out.log" || true):$(grep -cxF -- 'Dev: its start marker names another handle (other): typing its role.' "$MF/out.log" || true)"
+printf 'hd\nback\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands' mkov
+A44="$(mk4):$(grep -c '^Dev: its start marker is another kind (back, not new): typing its role\.$' "$MF/out.log" || true)"
+rm -f "$OCMK4"; OCSCREEN='  ctrl+p commands' mkov
+A45="$(mk4):$(grep -c '^Dev: its start left no prompt marker: typing its role\.$' "$MF/out.log" || true)"
+printf 'hd\nnew\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands' REUSED=dev mkov
+A46="$(grep -c '^SEND ' "$MF/orca.log" || true):$(tr '\n' ' ' < "$MF/gd/orca-roles.kicked" 2>/dev/null)"
+printf 'hd\nback\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands' REM=dev mkov
+A47="$(mk4):$(grep -c '^Prompt passed at start to hd$' "$MF/out.log" || true)"
+: > "$OCMK4"; OCSCREEN='  ctrl+p commands' mkov
+A48="$(mk4):$(grep -c '^Dev: its start left no prompt marker: typing its role\.$' "$MF/out.log" || true)"
+rm -f "$OCMK4"
+# a matching marker never skips the model checks: opaque models still record (`DEV=p/m`), and a modelError already on the screen counts from the
+# baseline 0 (the role was never sent the message); the front role has no marker branch at all and keeps typing, with today's timeout line and
+# no "prompt passed at start" line
+printf 'p/m\n' > "$MF/oc.models"; rm -f "$MF/oc.mode"
+printf 'hd\nnew\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands' mf "$(mfc '"title": "Dev", "agent": "opencode", "model": "p/m"')" clean "dev"
+A49="$(models)"
+printf 'hd\nnew\n' > "$OCMK4"; OCSCREEN='  ctrl+p commands bad p/m' mf "$(mfc '"title": "Dev", "agent": "opencode", "model": "p/m", "modelError": "bad {model}"')" clean "dev"
+A50="$(mk4):$(models):$(nmnote)"
+OCFC="$(mfc '"title": "Dev", "agent": "opencode"' | jq -c '.roles["local-coordinator"].agent = "opencode"')"
+printf 'hp\nnew\n' > "$MF/wt/.git/orca-roles-opencode-local-coordinator.started"; OCSCREEN='' mf "$OCFC" clean "local-coordinator"
+A51="$(grep -c '^SEND' "$MF/orca.log" || true):$(grep -cxF -- 'Local coordinator: its OpenCode screen showed no prompt after 1 s; sending its role anyway.' "$MF/out.log" || true):$(grep -c 'prompt passed at start' "$MF/out.log" || true)"
+rm -f "$OCMK4" "$MF/wt/.git/orca-roles-opencode-local-coordinator.started"
+check "opencode start: a marker matching the tab and the kind (new, or back for a remembered role) means the message is already in argv: nothing typed, the role recorded as kicked, one line saying it was passed (a timed-out screen check says to check that tab); another handle, another kind, no marker or an empty one types it as today with one line naming why (the timeout line first when the screen timed out) and the marker is gone; a reused tab is typed as today; a matching marker still lets the model checks run, a model error already on the screen counts, and the front role keeps today's behaviour (typed, no 'prompt passed at start' line)" "$A41|$A42|$A43|$A43B|$A44|$A45|$A46|$A47|$A48|$A49|$A50|$A51" "0:DEV=hd :gone:1|0:DEV=hd :gone:1:0|1:DEV=hd :gone:1|1:DEV=hd :gone:1:1|1:DEV=hd :gone:1|1:DEV=hd :gone:1|1:DEV=hd |0:DEV=hd :gone:1|1:DEV=hd :gone:1|DEV=p/m |0:DEV=hd :gone:DEV=FAILED:p/m :1|1:1:0"
 rm -f "$MF/oc.mode" "$MF/oc.models" "$MF/oc.log"
 # defaults.modelError inherited and overridden, old and new Bedrock-style errors counted apart
 CUD='"title": "Dev", "agent": "custom", "command": "x", "model": "my-model"'
@@ -13211,10 +13321,13 @@ note line
 W
 printf '%s\n' "$OUT" | sed -n '2,$p' > "$TMP/msg/got"
 check "on-done: exit 0, the report line and its needs/Decisions blocks only" "$RC:$(printf '%s\n' "$OUT" | sed -n 1p | sed "s|$ODR|PATH|"):$(diff -q "$TMP/msg/want" "$TMP/msg/got" >/dev/null 2>&1 && echo same || echo differs)" "0:report: PATH:same"
-check "on-done: release then canary, no compaction without --role" "$(grep -c '^orchestration worker-release --dispatch ctx_abc --json$' "$MB/log"):$(grep -c '^canary --run run_x$' "$MB/canary.log"):$([ -e "$MB/compact.log" ] && echo compacted || echo none)" "1:1:none"
+check "on-done: no release, then canary, no compaction without --role" "$(grep -c 'orchestration worker-release' "$MB/log" || true):$(grep -c '^canary --run run_x$' "$MB/canary.log"):$([ -e "$MB/compact.log" ] && echo compacted || echo none)" "0:1:none"
 try od_run --dispatch ctx_abc --run run_x --role planner --no-release
 CHECKINSTR='Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest.'
-check "on-done: --role planner passes the literal instructions; a no-op line is hidden" "$RC:$(grep -c "^compact planner --if-above 200000 --instructions $CHECKINSTR$" "$MB/compact.log"):$(printf '%s\n' "$OUT" | grep -c 'not compacted'):$(grep -c 'worker-release' "$MB/log")" "0:1:0:1"
+PL1="$RC:$(grep -c "^compact planner --if-above 200000 --instructions $CHECKINSTR$" "$MB/compact.log" || true):$(printf '%s\n' "$OUT" | grep -c 'not compacted' || true)"
+: > "$MB/compact.log"
+try od_run --dispatch ctx_abc --run run_x --role planner
+check "on-done: --role planner passes the literal instructions with and without --no-release, a no-op line is hidden, and neither run releases" "$PL1:$RC:$(grep -c "^compact planner --if-above 200000 --instructions $CHECKINSTR$" "$MB/compact.log" || true):$(printf '%s\n' "$OUT" | grep -c 'not compacted' || true):$(grep -c 'worker-release' "$MB/log" || true)" "0:1:0:0:1:0:0"
 echo 'compact-role: planner context 100 tokens, at most 200000: not compacted' > "$MB/compact.out"
 try od_run --dispatch ctx_abc --run run_x --role planner --no-release
 check "on-done: a one-line ': not compacted' from compact-role prints nothing" "$(printf '%s\n' "$OUT" | grep -c 'not compacted')" "0"
@@ -13224,7 +13337,7 @@ check "on-done: a failing compaction adds its line and exits 1" "$RC:$(printf '%
 rm -f "$MB/compact.out" "$MB/compact.rc"
 echo 'release: no such dispatch' > "$MB/release.out"; echo 4 > "$MB/release.rc"; : > "$MB/canary.log"
 try od_run --dispatch ctx_abc --run run_x
-check "on-done: a failed release is one line, the rest still runs, exit 1" "$RC:$(printf '%s\n' "$OUT" | grep -c '^on-done: worker-release failed (exit 4): release: no such dispatch$'):$(grep -c '^canary --run run_x$' "$MB/canary.log"):$(printf '%s\n' "$OUT" | grep -c '^report: ')" "1:1:1:1"
+check "on-done: no release call even when the stub would fail it, the canary still runs, exit 0" "$RC:$(grep -c 'worker-release' "$MB/log" || true):$(grep -c '^canary --run run_x$' "$MB/canary.log"):$(printf '%s\n' "$OUT" | grep -c '^report: ')" "0:0:1:1"
 rm -f "$MB/release.out" "$MB/release.rc"
 echo 9 > "$MB/canary.rc"
 try od_run --dispatch ctx_abc --run run_x --no-release
@@ -13250,14 +13363,16 @@ try od_run --dispatch ctx_abc 2>/dev/null; check "on-done: missing --run is a us
 try od_run --dispatch ctx_abc --run run_x --role tester 2>/dev/null; check "on-done: --role takes only planner" "$RC:$(wc -l < "$MB/log" | tr -d ' ')" "2:0"
 try od_run --dispatch ctx_abc --run run_x --bogus 2>/dev/null; check "on-done: an unknown option exits 2, nothing run" "$RC:$(wc -l < "$MB/log" | tr -d ' ')" "2:0"
 # spec-batch3 p1: the prompts run on-done.sh after each worker_done
-OD5='- After each `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id>` with the dispatch id `inbox.sh` printed for it, in the foreground with a Bash timeout of 600000 ms: it releases the dispatch, runs `canary.sh` (see "Report marker") and prints the report path with its `needs:` and Decisions lines (for a report sent without a file, its body); open the report for anything else. If the role has immediate work, add `--no-release` and reuse its tab. It exits 1 when a step failed or the canary found something: its lines say which.'
+OD5='- After each `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id>` with the dispatch id `inbox.sh` printed for it, in the foreground with a Bash timeout of 600000 ms: it runs `canary.sh` (see "Report marker") and prints the report path with its `needs:` and Decisions lines (for a report sent without a file, its body); open the report for anything else. It exits 1 when a step failed or the canary found something: its lines say which.'
 OD6='`on-done.sh` runs `~/.orca-roles/bin/canary.sh --run <run_id>` after each `worker_done` and prints its lines only when it finds something:'
-OD9A='When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the release and the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when'
+OD9A='When you read a Planner `worker_done`, run `~/.orca-roles/bin/on-done.sh --dispatch <dispatch_id> --run <run_id> --role planner` in place of the plain `on-done.sh` call, before anything else that involves the Planner, in the foreground with a Bash timeout of 600000 ms, and wait for it to finish: after the canary it runs `~/.orca-roles/bin/compact-role.sh planner --if-above 200000 --instructions "Keep verbatim the current plan (its file paths and steps), the open findings, every Ruling (Planner): line and every answer of the user; summarize the rest."`, which compacts only when'
 OD9B='The one exception is a `close` report: after it, and after a later Planner report that comes before the set'"'"'s commits, run `on-done.sh` without `--role planner`;'
 OD9C=' with that `compact-role.sh` command'
-OP=""; for m in programmer quick academic-research pr-reviewer; do OP="$OP$(grep -c -F -e "$OD5" "$ROOT/prompts/$m/local-coordinator.md" || true):$(grep -c -F -e "$OD6" "$ROOT/prompts/$m/local-coordinator.md" || true):"; done
-check "on-done: the four local coordinator prompts run on-done.sh with the dispatch id inbox.sh printed (--no-release for immediate work, exit 1) and their Report marker says on-done.sh runs canary.sh and prints its lines only when it finds something" "$OP" "1:1:1:1:1:1:1:1:"
+OP=""; for m in programmer quick academic-research pr-reviewer; do OP="$OP$(grep -c -F -e "$OD5" "$ROOT/prompts/$m/local-coordinator.md" || true):$(grep -c -F -e "$OD6" "$ROOT/prompts/$m/local-coordinator.md" || true):$(grep -c -e 'releases the dispatch' -e '--no-release' "$ROOT/prompts/$m/local-coordinator.md" || true):"; done
+check "on-done: the four local coordinator prompts run on-done.sh with the dispatch id inbox.sh printed (canary, exit 1), their Report marker says on-done.sh runs canary.sh and prints its lines only when it finds something, and no release or --no-release is left in them" "$OP" "1:1:0:1:1:0:1:1:0:1:1:0:"
 check "on-done: programmer's compaction runs on-done.sh --role planner, the close-report exception uses on-done.sh without --role then, and both deferred paths name the compact-role.sh command" "$(grep -c -F -e "$OD9A" "$ROOT/prompts/programmer/local-coordinator.md" || true):$(grep -c -F -e "$OD9B" "$ROOT/prompts/programmer/local-coordinator.md" || true):$(grep -o -F -e "$OD9C" "$ROOT/prompts/programmer/local-coordinator.md" | wc -l | tr -d ' ')" "1:1:2"
+# spec-batch2 s-release AC1: no prompt, skill or script tells the coordinator to release a dispatch; only loop.py's would_do names the command
+check "on-done: no prompt, skill or script calls worker-release (only loop.py's would_do names it)" "$(grep -rn 'worker-release' "$ROOT/prompts" "$ROOT/plugin" "$ROOT/bin" | grep -vc 'oracle/loop\.py:' || true)" "0"
 }
 
 sec_answer() {

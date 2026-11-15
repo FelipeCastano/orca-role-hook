@@ -262,6 +262,40 @@ oc_session_file() {
   gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
   printf '%s/orca-roles-opencode-%s.session' "$gd" "$1"
 }
+# File with a role's OpenCode launch marker: agent.sh writes it when the role's first message goes on its OpenCode command line
+# (--prompt=<message>), so kickoff does not type it. Line 1 the tab's handle, line 2 new (a new conversation) or back (a resumed
+# one).  oc_started_file <role> [<git dir>]  (default: the git dir of the current directory)
+oc_started_file() {
+  local gd="${2:-}"
+  [ -n "$gd" ] || gd="$(team_git_dir)" || return 1
+  gd="$(cd "$gd" 2>/dev/null && pwd)" || return 1
+  printf '%s/orca-roles-opencode-%s.started' "$gd" "$1"
+}
+# Whether the opencode agent.sh would run lists --prompt in its --help output: 0 yes, 1 no (not found, --help failed, no such
+# line). A check costs an OpenCode start (~3 s), so the answer is cached per binary, by physical path and mtime, in
+# $KIT/tmp/opencode-prompt-flag; a cache that cannot be written does not change the answer.  oc_prompt_flag
+oc_prompt_flag() {
+  local p mt cache lp lm ans out tmp
+  p="$(command -v opencode 2>/dev/null)" || return 1
+  [ -n "$p" ] || return 1
+  p="$(resolve_target "$p")" || return 1
+  mt="$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null)" || mt=""
+  cache="$KIT/tmp/opencode-prompt-flag"
+  if [ -n "$mt" ] && [ -f "$cache" ]; then
+    IFS=$'\t' read -r lp lm ans _ < "$cache" 2>/dev/null || true
+    if [ "$lp" = "$p" ] && [ "$lm" = "$mt" ]; then [ "$ans" = yes ]; return; fi
+  fi
+  ans=no
+  if out="$(OPENCODE_DISABLE_AUTOUPDATE=1 opencode --help 2>/dev/null < /dev/null)"; then
+    case "$out" in *--prompt*) ans=yes;; esac
+  fi
+  if [ -n "$mt" ] && mkdir -p "$KIT/tmp" 2>/dev/null; then
+    tmp="$cache.tmp.$$"
+    if ( printf '%s\t%s\t%s\n' "$p" "$mt" "$ans" > "$tmp" ) 2>/dev/null; then mv "$tmp" "$cache" 2>/dev/null || rm -f "$tmp"
+    else rm -f "$tmp" 2>/dev/null || true; fi
+  fi
+  [ "$ans" = yes ]
+}
 # File with a role's OpenCode configuration (opencode-prepare.sh writes it, agent.sh passes it as OPENCODE_CONFIG).  oc_config_file <role> [<git dir>]
 oc_config_file() {
   local gd="${2:-}"

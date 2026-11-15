@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# After one worker_done: releases its dispatch, runs the canary, compacts the Planner when asked, and prints the report path with the lines the
-# coordinator has to read (needs: blocks and Decisions sections) instead of the whole report.
+# After one worker_done: runs the canary, compacts the Planner when asked, and prints the report path with the lines the coordinator has to
+# read (needs: blocks and Decisions sections) instead of the whole report.
 # Usage (from the worktree):  on-done.sh --dispatch <dispatch_id> --run <run_id> [--role planner] [--no-release]
-#   --no-release: keeps the worker's tab (the caller reuses it); by default the dispatch is released.
+#   --no-release: accepted for older prompts; does nothing (on Orca 1.4.259 a release of a kit tab's dispatch was reported to answer retained/external_terminal and do nothing).
 #   --role planner: also runs compact-role.sh planner --if-above 200000 with the instructions the local coordinator prompt names.
 #   Text: nothing when every step succeeds; otherwise the failing step's own output and one line naming it. Then "report: <path>" and, for a
 #   readable report, its needs: blocks and its Decisions sections in file order; "report: none in <message id>; its body follows:" plus the
@@ -13,13 +13,13 @@
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 USAGE="Usage: on-done.sh --dispatch <dispatch_id> --run <run_id> [--role planner] [--no-release]"
-DISPATCH=""; RUN=""; ROLE=""; NORELEASE=0; dis_set=0; run_set=0
+DISPATCH=""; RUN=""; ROLE=""; dis_set=0; run_set=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dispatch) [ $# -ge 2 ] || { echo "$USAGE" >&2; exit 2; }; DISPATCH="$2"; dis_set=1; shift;;
     --run) [ $# -ge 2 ] || { echo "$USAGE" >&2; exit 2; }; RUN="$2"; run_set=1; shift;;
     --role) [ $# -ge 2 ] || { echo "$USAGE" >&2; exit 2; }; ROLE="$2"; shift;;
-    --no-release) NORELEASE=1;;
+    --no-release) :;;
     *) echo "$USAGE" >&2; exit 2;;
   esac
   shift
@@ -31,14 +31,6 @@ case "$ROLE" in ''|planner) ;; *) echo "$USAGE" >&2; exit 2;; esac
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/orca-roles-on-done.XXXXXX")" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 FAIL=0
-
-if [ "$NORELEASE" = 0 ]; then
-  ROUT="$(orca orchestration worker-release --dispatch "$DISPATCH" --json 2>&1)"; RRC=$?
-  if [ "$RRC" != 0 ]; then
-    FAIL=1
-    echo "on-done: worker-release failed (exit $RRC): $(printf '%s' "$ROUT" | tr '\t\n' '  ')"
-  fi
-fi
 
 CANARY="${ORCA_ROLES_CANARY:-$KIT/bin/canary.sh}"
 "$CANARY" --run "$RUN" > "$TMPD/canary.out" 2> "$TMPD/canary.err"; CRC=$?
