@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assigns a task to a worker's tab and, in the background, checks that the worker started it.
-# Usage:  dispatch.sh --task <task_id> --to <handle> [--run <run_id>]
+# Usage:  dispatch.sh (--task <task_id> | --spec-file <file>) (--to <handle> | --role <id> [--open]) [--run <run_id>]
 #         dispatch.sh --check-only --task <task_id> --to <handle>
 # The first form runs `orca orchestration dispatch --task <t> --to <h> [--run <id>] --inject --json`, prints Orca's JSON unchanged and exits
 # with its status at once: 3 when Orca exited 0 but its output holds no created dispatch (after the same JSON and one line on stderr); when it
@@ -12,6 +12,15 @@
 # result cannot tell whether the turn began (the brief may stay typed but unsent in the composer), so it polls `orca worktree ps` for
 # a row of the worker's pane whose prompt names the task (none for a role whose agent is neither claude nor codex): every 3 s for 45 s. If it has not started it sends Enter once, only when the
 # preview of the tab shows "[Pasted text", and polls 45 s more. Still not started: one "Dispatch not started" status to the dispatcher.
+#         --role <id> / --spec-file <file> / --open
+# --role takes the role's handle from the team state (ORCA_ROLES_STATE, else <git dir>/orca-roles.env: the first line <VAR>=<handle>, <id> upper-cased with
+# every - turned into _) instead of --to. --spec-file creates the task first with `orca orchestration task-create --spec-file <file> --task-title
+# "<id or handle>: <basename>" --run <run_id> --json` and prints "dispatch.sh: task <task_id> created from <file> for <id> (<handle>)"; --open runs
+# `${ORCA_ROLES_LAUNCH:-$KIT/bin/launch.sh} --open <id>` first and waits until the state holds the role's handle H and <git dir>/orca-roles.kicked the line
+# <VAR>=H (every ORCA_ROLES_OPEN_TICK s, default 2, at most ORCA_ROLES_OPEN_WAIT s, default 240; it stops at once when no kickoff runs and the line is
+# missing), so a refused or an unreached role leaves no task. In these forms a non-zero exit of `orca orchestration dispatch` is exit 1 (Orca's output
+# printed), never Orca's own status. Exit codes: 0 dispatched, 2 usage, 3 no dispatch created by Orca, 4 no handle for the role in the state, 5
+# task-create failed, 6 launch failed or the role was not reached in time.
 #         dispatch.sh --mail --run <run_id>
 # With --run (all three forms) a detached mail watcher of that Run also runs, one per Run (notes in orca-roles-mail.log next to the dispatch
 # log): Orca sometimes never types its "You have N orchestration message" notice. Every 15 s it reads the Run's mailbox; a message that is
@@ -41,6 +50,39 @@ role_of_handle() {  # role_of_handle <handle>: the role id that owns it in the t
   [ -n "$state" ] && [ -f "$state" ] || return 0
   var="$(grep -m1 "=$1\$" "$state" 2>/dev/null | cut -d= -f1)"; [ -n "$var" ] || return 0
   printf '%s' "$var" | tr 'A-Z_' 'a-z-'
+}
+role_var() {  # role_var <id>: the team state's variable for that role id (var_of's inverse)
+  printf '%s' "$1" | tr '-' '_' | tr '[:lower:]' '[:upper:]'
+}
+state_value() {  # state_value <file> <VAR>: the value of the first <VAR>=<line> line of that file, or nothing
+  [ -n "$1" ] && [ -f "$1" ] || return 0
+  awk -v v="$2" 'index($0, v "=") == 1 { sub(/^[^=]*=/, ""); print; exit }' "$1" 2>/dev/null
+}
+handle_of_var() { local st; st="${ORCA_ROLES_STATE:-${GITDIR:+$GITDIR/orca-roles.env}}"; state_value "$st" "$1"; }   # handle_of_var <VAR>: the role's handle in the team state
+kicked_of_var() { [ -n "$GITDIR" ] || return 0; state_value "$GITDIR/orca-roles.kicked" "$1"; }   # kicked_of_var <VAR>: its handle in orca-roles.kicked, written with its role message (kickoff.sh:7)
+role_ready() { local h; h="$(handle_of_var "$1")"; [ -n "$h" ] && [ "$(kicked_of_var "$1")" = "$h" ]; }   # role_ready <VAR>: the state has its handle and the kicked line holds the same one
+kickoff_live() {  # a kickoff is running: a file in <git dir>/orca-roles.kickoff.d named by a live pid
+  local f
+  [ -n "$GITDIR" ] && [ -d "$GITDIR/orca-roles.kickoff.d" ] || return 1
+  for f in "$GITDIR/orca-roles.kickoff.d"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in ''|*[!0-9]*) continue;; esac
+    kill -0 "${f##*/}" 2>/dev/null && return 0
+  done
+  return 1
+}
+open_wait() {  # open_wait <id> <VAR>: waits for the role message of a role just opened to be sent
+  local tick wait n i=0
+  role_ready "$2" && return 0
+  tick="$(awk -v t="${ORCA_ROLES_OPEN_TICK:-2}" 'BEGIN { if (t + 0 <= 0) t = 2; print t }')"
+  wait="${ORCA_ROLES_OPEN_WAIT:-240}"; case "$wait" in ''|*[!0-9.]*) wait=240;; esac
+  n="$(awk -v w="$wait" -v t="$tick" 'BEGIN { k = int(w / t); if (k < 0) k = 0; print k }')"
+  while :; do
+    kickoff_live || { echo "dispatch.sh: $1 was not reached (no role message sent); nothing created or dispatched." >&2; exit 6; }
+    [ "$i" -lt "$n" ] || { echo "dispatch.sh: $1 is not ready after $wait s; nothing created or dispatched. Dispatch once \"Roles reopened\" names it." >&2; exit 6; }
+    sleep "$tick"; i=$((i + 1))
+    role_ready "$2" && return 0
+  done
 }
 
 # Same detachment as launch.sh's detached_start: Orca kills the process group of a tab when it closes it.
@@ -146,7 +188,7 @@ if [ "${1:-}" = --mail-watch ]; then   # hidden: the detached mail watcher  --ma
       if [ -n "$DUE" ]; then
         N="$(printf '%s\n' "$DUE" | wc -l | tr -d ' ')"; IDS="$(printf '%s' "$DUE" | tr '\n' ' ')"
         if coord_ready; then
-          if orca terminal send --terminal "$CH" --text "You have $N unread orchestration message(s) that Orca did not announce. Run \`orca orchestration check --run $MRUN\`." --enter --json >/dev/null 2>&1; then
+          if orca terminal send --terminal "$CH" --text "You have $N unread orchestration message(s) that Orca did not announce. Run \`~/.orca-roles/bin/inbox.sh --run $MRUN\`." --enter --json >/dev/null 2>&1; then
             printf '%s\n' "$DUE" >> "$SEEN"; tail -n 200 "$SEEN" > "$SEEN.tmp" && mv "$SEEN.tmp" "$SEEN"
             mlog "noticed $N ($IDS) to $CH"; SENDFAILS=0; LAST=""
           else
@@ -188,32 +230,72 @@ if [ "${1:-}" = --watch ]; then   # hidden: the detached checker  --watch <task>
   exit 0
 fi
 
-TASK=""; TO=""; RUN=""; ONLY=0
+TASK=""; TO=""; RUN=""; ROLE=""; SPEC=""; ONLY=0; OPEN=0
+USAGE="Usage: dispatch.sh (--task <task_id> | --spec-file <file>) (--to <handle> | --role <id> [--open]) [--run <run_id>] | --check-only --task <task_id> --to <handle> [--run <run_id>] | --mail --run <run_id>"
+usage() { echo "$USAGE" >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) TASK="${2:-}"; shift;;
-    --to) TO="${2:-}"; shift;;
+    --task) [ -n "${2:-}" ] || usage; TASK="$2"; shift;;
+    --to) [ -n "${2:-}" ] || usage; TO="$2"; shift;;
     --run) RUN="${2:-}"; shift;;
+    --role) [ -n "${2:-}" ] || usage; ROLE="$2"; shift;;
+    --spec-file) [ -n "${2:-}" ] || usage; SPEC="$2"; shift;;
+    --open) OPEN=1;;
     --check-only) ONLY=1;;
     --mail) ONLY=2;;
     *) echo "dispatch.sh: unknown option $1" >&2; exit 2;;
   esac
   shift
 done
-USAGE="Usage: dispatch.sh --task <task_id> --to <handle> [--run <run_id>] | --check-only --task <task_id> --to <handle> [--run <run_id>] | --mail --run <run_id>"
 if [ "$ONLY" = 2 ]; then
-  valid_run "$RUN" || { echo "$USAGE" >&2; exit 2; }
+  [ -z "$ROLE$SPEC" ] && [ "$OPEN" = 0 ] || usage
+  valid_run "$RUN" || usage
   start_mail "$RUN"
   exit 0
 fi
-[ -n "$TASK" ] && [ -n "$TO" ] || { echo "$USAGE" >&2; exit 2; }
-
 if [ "$ONLY" = 1 ]; then
+  [ -z "$ROLE$SPEC" ] && [ "$OPEN" = 0 ] || usage
+  [ -n "$TASK" ] && [ -n "$TO" ] || usage
   pane="$(orca terminal show --terminal "$TO" --json 2>/dev/null | jq -r '.result.terminal | select(.tabId != null and .leafId != null) | "\(.tabId):\(.leafId)"' 2>/dev/null)"
   creator="${ORCA_TERMINAL_HANDLE:-}"
   start_checker "$TASK" "$TO" "$pane" "$creator"
   [ -z "$RUN" ] || start_mail "$RUN"
   exit 0
+fi
+# exactly one target (--to or --role) and one task (--task or --spec-file); --spec-file needs its Run and --open a role
+{ [ -n "$TO" ] && [ -n "$ROLE" ]; } && usage
+[ -n "$TO" ] || [ -n "$ROLE" ] || usage
+{ [ -n "$TASK" ] && [ -n "$SPEC" ]; } && usage
+[ -n "$TASK" ] || [ -n "$SPEC" ] || usage
+[ -z "$SPEC" ] || [ -n "$RUN" ] || usage
+[ "$OPEN" = 0 ] || [ -n "$ROLE" ] || usage
+[ -z "$SPEC" ] || { [ -f "$SPEC" ] && [ -r "$SPEC" ]; } || usage
+NEW=0
+if [ -n "$ROLE" ] || [ -n "$SPEC" ]; then NEW=1; fi
+# --open opens the role before the handle is read and before any task is created: a refused or unreached role leaves no task behind
+if [ "$OPEN" = 1 ]; then
+  "${ORCA_ROLES_LAUNCH:-$KIT/bin/launch.sh}" --open "$ROLE"
+  LRC=$?
+  [ "$LRC" = 0 ] || { echo "dispatch.sh: launch.sh --open $ROLE failed (exit $LRC); nothing created or dispatched." >&2; exit 6; }
+  open_wait "$ROLE" "$(role_var "$ROLE")"
+fi
+if [ -n "$ROLE" ]; then
+  TO="$(handle_of_var "$(role_var "$ROLE")")"
+  [ -n "$TO" ] || { echo "dispatch.sh: no handle for role $ROLE in the team state; open it with --open." >&2; exit 4; }
+fi
+if [ -n "$SPEC" ]; then
+  SBASE="$(basename "$SPEC")"
+  if [ -n "$ROLE" ]; then STITLE="$ROLE: $SBASE"; else STITLE="$TO: $SBASE"; fi
+  TC_OUT="$(orca orchestration task-create --spec-file "$SPEC" --task-title "$STITLE" --run "$RUN" --json)"
+  TC_RC=$?
+  TASK="$(printf '%s' "$TC_OUT" | jq -r 'select(.ok == true and .result.status == "ready") | (.result.taskId // "") | select(type == "string" and length > 0)' 2>/dev/null)"
+  if [ "$TC_RC" != 0 ] || [ -z "$TASK" ]; then
+    [ -z "$TC_OUT" ] || printf '%s\n' "$TC_OUT" >&2
+    echo "dispatch.sh: task-create failed for $SPEC; nothing dispatched." >&2
+    exit 5
+  fi
+  if [ -n "$ROLE" ]; then printf 'dispatch.sh: task %s created from %s for %s (%s)\n' "$TASK" "$SPEC" "$ROLE" "$TO"
+  else printf 'dispatch.sh: task %s created from %s for %s\n' "$TASK" "$SPEC" "$TO"; fi
 fi
 
 # A brief typed while the worker is still answering (its role message, just resent by clean.sh or launch.sh) arrives in that turn; Orca reads the turn's end as the worker stopping without reporting
@@ -244,4 +326,5 @@ if [ "$rc" = 0 ]; then
   start_checker "$TASK" "$TO" "$pane" "${creator:-${ORCA_TERMINAL_HANDLE:-}}"
   [ -z "$RUN" ] || start_mail "$RUN"
 fi
+if [ "$rc" != 0 ] && [ "$NEW" = 1 ]; then exit 1; fi
 exit "$rc"
