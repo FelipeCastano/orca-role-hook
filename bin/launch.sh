@@ -350,6 +350,56 @@ session_of_handle() {
   done
   return 0
 }
+# The last interactive Claude session the kit's records hold for a tab: nothing when no record can be trusted, since resuming a probe or a fresh session is worse than starting one.
+session_of_record() {  # <handle> <folder>
+  local h="${1:-}" folder="${2:-}" dir hits nl n id cands pd sdir tf wf ep line key seen e1 e2
+  [ -n "$h" ] && [ -n "$folder" ] || return 0
+  dir="$KIT/state/session-handles"
+  [ -d "$dir" ] || return 0
+  hits="$(grep -lxsF -d skip -e "$h" -- "$dir"/* 2>/dev/null)"   # one search for every record
+  [ -n "$hits" ] || return 0
+  nl=$'\n'"$hits"$'\n'; cands=""
+  while IFS= read -r n; do   # the records that matched, newest first, skipping names that are not a session id
+    [ -n "$n" ] || continue
+    [[ "$n" =~ ^[0-9a-f-]{36}$ ]] || continue
+    case "$nl" in *$'\n'"$dir/$n"$'\n'*) cands="$cands$n"$'\n';; esac
+  done < <(ls -t "$dir" 2>/dev/null)
+  [ -n "$cands" ] || return 0
+  wf="$(cd "$folder" 2>/dev/null && pwd -P)"; [ -n "$wf" ] || wf="$folder"
+  local -a pds=() dirs=()
+  if [ -n "${ORCA_ROLES_CLAUDE_PROJECTS:-}" ]; then pds=("$ORCA_ROLES_CLAUDE_PROJECTS")
+  else
+    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || pds=("$CLAUDE_CONFIG_DIR/projects")
+    pds+=("${HOME:-/nonexistent}/.claude/projects")
+  fi
+  seen=" "
+  for pd in "${pds[@]}"; do   # duplicates skipped, the same folder reached twice
+    [ -n "$pd" ] || continue
+    key="$(cd "$pd" 2>/dev/null && pwd -P)"; [ -n "$key" ] || key="${pd%/}"
+    case "$seen" in *" $key "*) continue;; esac
+    seen="$seen$key "; dirs+=("$pd")
+  done
+  e1="$(printf '%s' "$wf" | tr '/.' '--')"; e2="$(printf '%s' "$wf" | tr -c 'A-Za-z0-9\n' '-')"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    tf=""
+    for pd in "${dirs[@]}"; do   # the first projects folder that has this transcript decides
+      sdir="$pd/$e1"; [ -d "$sdir" ] || { sdir="$pd/$e2"; [ -d "$sdir" ] || continue; }
+      [ -f "$sdir/$id.jsonl" ] && { tf="$sdir/$id.jsonl"; break; }
+    done
+    [ -n "$tf" ] || continue
+    ep=""
+    while IFS= read -r line; do   # the first object of the transcript that carries an entrypoint
+      case "$line" in *'"entrypoint"'*) ;; *) continue;; esac
+      ep="$(printf '%s\n' "$line" | jq -r '[.. | objects | select(has("entrypoint")) | .entrypoint] | first // empty' 2>/dev/null)"
+      [ -z "$ep" ] || break
+    done < "$tf"
+    [ "$ep" = cli ] || continue
+    jq -Rne 'first(inputs | fromjson? | select(.type? == "user"))' "$tf" >/dev/null 2>&1 || continue   # a session with no message of its own is empty; a cut-off line does not hide the others
+    printf '%s' "$id"; return 0
+  done <<< "$cands"
+  return 0
+}
 WAIT="$(setting "$NEWCFG" launchWaitSeconds 15)"
 LIST=""; LISTOK=0
 for i in $(seq 1 "$WAIT"); do
@@ -497,7 +547,7 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
     reason="$(wake_tab "${WT#id:}" "$wtab" "$wleaf")"; wrc=$?
     case "$wrc" in
       0) W_ROLE[$W_N]="$wid"; W_PTY[$W_N]="$wp"; W_TITLE[$W_N]="$wtitle"; W_HANDLE[$W_N]=""; W_OLD[$W_N]="$wold"; W_VAR[$W_N]="$wv"; W_READY[$W_N]=0; W_N=$((W_N + 1));;
-      2) echo "$WAKE_MSG"; W_STOP=1;;
+      2) if [ -n "$reason" ]; then echo "Cannot wake tabs Orca kept asleep on this system ($reason); their roles are treated as closed."; else echo "$WAKE_MSG"; fi; W_STOP=1;;
       *) echo "Could not wake the tab of $wtitle ($reason); it is treated as closed.";;
     esac
   done
@@ -848,8 +898,13 @@ for id in $ROLES; do
     fi
     continue
   fi
+  rf=""   # the folder the role ran in (its pair tree, else the worktree's root): the kit's records are filed under it
+  if [ -n "$TREE_SLOT" ] && [ "$id" = "$TREE_SLOT" ]; then rf="$TREE_PATH"
+  else rf="$(grep "^$v=" "$GITDIR/orca-roles.trees" 2>/dev/null | head -1 | cut -d= -f2-)"; fi
+  [ -n "$rf" ] || rf="$(cd "$(git_here toplevel)" 2>/dev/null && pwd -P)"
   if [ "$st" = 3 ]; then
     sid="$(oc_saved_id "$id")"
+    if [ -z "$sid" ]; then case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_record "${!v}" "$rf")";; esac; fi
     if [ -n "$sid" ]; then
       REMEMBERED="$REMEMBERED $id"; echo "The tab of $t (${!v}) was closed but Orca kept its session running; ending it and opening a new one with its conversation ($sid)."
     else
@@ -861,6 +916,7 @@ for id in $ROLES; do
     oc_reap_role "$CFG" "$id" "$t" "${!v}"
   elif [ "$st" = 2 ]; then
     sid="$(oc_saved_id "$id")"
+    if [ -z "$sid" ]; then case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_record "${!v}" "$rf")";; esac; fi
     if [ -n "$sid" ]; then
       REMEMBERED="$REMEMBERED $id"; echo "The agent in the tab of $t (${!v}) is gone; closing that tab and opening a new one with its conversation ($sid)."
     else
@@ -884,8 +940,13 @@ for id in $ROLES; do
         fi
         continue
       fi
+      srec=0
       case "$(rstr "$CFG" "$id" agent)" in
-        claude|"") sid="$(session_of_handle "$rh")";;
+        claude|"") sid="$(session_of_handle "$rh")"
+                   if [ -z "$sid" ]; then   # nothing live to read: the kit's records, first for the restored tab, then for the saved one
+                     sid="$(session_of_record "$rh" "$rf")"; [ -z "$sid" ] || srec=1
+                     if [ -z "$sid" ]; then sid="$(session_of_record "${!v}" "$rf")"; [ -z "$sid" ] || srec=1; fi
+                   fi;;
         opencode) sid="$(oc_saved_id "$id")";;   # the id agent.sh saved: --session continues it
       esac
       if [ "$id" = "$FRONT" ] && [ "${ORCA_ROLES_RELAUNCH:-}" = 1 ] && [ -z "$sid" ]; then
@@ -893,7 +954,8 @@ for id in $ROLES; do
         echo "$FLC's conversation could not be read from its restored tab ($rh): not reopened, to keep it."
         continue
       fi
-      if [ "$id" = "$FRONT" ] && [ -n "$sid" ] && ! orca terminal wait --terminal "$rh" --for tui-idle --timeout-ms 2000 --json >/dev/null 2>&1; then
+      if [ "$id" = "$FRONT" ] && [ -n "$sid" ] && { [ "$srec" = 0 ] || [ -n "$(agent_pid_of_handle "$rh")" ] || [ -n "$(agent_in "$rh")" ]; } \
+         && ! orca terminal wait --terminal "$rh" --for tui-idle --timeout-ms 2000 --json >/dev/null 2>&1; then
         PLANNER_KEEP_PTY="$p"; PLANNER_BUSY=1
         echo "$FLC's restored tab ($rh) is busy: not reopened now; run roles again when it is idle."
         continue
@@ -908,6 +970,7 @@ for id in $ROLES; do
       fi
     else
       sid="$(oc_saved_id "$id")"
+      if [ -z "$sid" ]; then case "$(rstr "$CFG" "$id" agent)" in claude|"") sid="$(session_of_record "${!v}" "$rf")";; esac; fi
       if [ -n "$sid" ]; then
         REMEMBERED="$REMEMBERED $id"; echo "The previous tab of $t (${!v}) no longer exists; opening a new one with its conversation ($sid)."
       else
