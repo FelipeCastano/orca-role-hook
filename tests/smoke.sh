@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags memory-dir restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -153,7 +153,7 @@ if [ "$SMK_TOP" = 1 ] && [ -n "$SMK_TLOG" ]; then
 fi
 export SMOKE_TIMING_LOG=off   # a smoke.sh started by a check logs nothing
 if [ "$JOBS" -gt 1 ] && [ ${#ARGS[@]} -gt 1 ]; then smoke_parallel; fi
-unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET SMOKE_MAX_LOAD SMOKE_LOAD_FILE SMOKE_NCPU SMOKE_SLOW_CHECK   # the suite gives the same result from any terminal; a test that needs one sets it itself
+unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR ORCA_ROOT_PATH ORCA_WORKTREE_PATH ORCA_ROLES_STATE ORCA_ROLES_WAKE ORCA_ROLES_WAKE_BUDGET SMOKE_MAX_LOAD SMOKE_LOAD_FILE SMOKE_NCPU SMOKE_SLOW_CHECK CLAUDE_CONFIG_DIR   # the suite gives the same result from any terminal; a test that needs one sets it itself
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
 export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
 export ORCA_ROLES_PACE=0.05   # the kit's fixed retry and poll waits, shortened; a check that needs the real value sets it itself
@@ -5884,6 +5884,131 @@ S1="$(date +%s)"; ADV_VER=HANG advrun "$AV/n.json" dev; S2="$(date +%s)"
 avm "$(avcount --advisor):$([ $((S2 - S1)) -lt 20 ] && echo fast || echo slow):$(tail -1 "$AVJ/.git/orca-roles.provenance.jsonl" | jq -r .cliVersion)" 1:fast:null hang
 check "agent.sh: codex, opencode and custom roles ignore the key (no flag, variable, warning or --version call, also for an invalid value); the guard warns and drops the flag below 2.1.322, keeps it at the floor and for an unknown line, takes one --version per launch (provenance included), runs for no auto/off value and cuts a hanging one off (C6, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 16))"
 rm -f "$TMP/fakebin/claude" "$TMP/fakebin/codex" "$TMP/fakebin/nice"
+}
+
+sec_memory_dir() {
+# claude_memory_dir / claude_memory_settings (bin/lib.sh) and the --settings agent.sh, coordinator.sh and auditor.sh give Claude Code, on
+# the layouts an Orca profile and a repository can have. Own HOME, CLAUDE_CONFIG_DIR and stub agents: never the caller's environment and
+# never the real ~/.claude.
+MD="$TMP/mem"; rm -rf "$MD"; mkdir -p "$MD/home" "$MD/nofolder" "$MD/cfg/projects" "$MD/prof" "$MD/noproj" "$MD/plain" "$MD/long" "$MD/naïve" "$MD/naive" "$MD/filecfg" "$MD/stub"
+MD="$(cd "$MD" && pwd -P)"
+mslug() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9' '-'; }
+PM="$MD/cfg/projects"; EF="$PM/$(mslug "$MD/my.repo")/memory"
+ln -sfn "$MD/cfg" "$MD/home/.claude"; ln -sfn "$KIT" "$MD/home/.orca-roles"; ln -sfn "$KIT" "$MD/nofolder/.orca-roles"
+ln -sfn "$PM" "$MD/prof/projects"; ln -sfn "$MD/my.repo" "$MD/link"
+git init -q -b main "$MD/my.repo"; git -C "$MD/my.repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+git -C "$MD/my.repo" worktree add -q -b wt "$MD/wt"; mkdir -p "$MD/my.repo/src/deep" "$MD/wt/deep"; : > "$MD/filecfg/projects"
+git init -q "$MD/submod"; git -C "$MD/submod" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+(cd "$MD/my.repo" && git -c protocol.file.allow=always submodule add -q ../submod sub)
+git init -q --bare "$MD/bare.git"; git init -q --separate-git-dir="$MD/sep.git" "$MD/sepwt"
+LB="$(mslug "$MD/long")"; LN=$((200 - ${#LB} - 1))
+D200="$MD/long/$(printf 'a%.0s' $(seq 1 "$LN"))"; D201="$MD/long/$(printf 'b%.0s' $(seq 1 $((LN + 1))))"; mkdir -p "$D200" "$D201"
+MBAD=0
+mdir() {  # mdir <cwd> [VAR=value...]: claude_memory_dir there; MD_OUT, MD_RC and stderr in $MD/err, every error or message counted in MBAD
+  local d="$1"; shift
+  MD_RC=0; MD_OUT="$(cd "$d" && env -i HOME="$MD/home" PATH="$PATH" KIT="$KIT" "$@" bash -c '. "$KIT/bin/lib.sh"; claude_memory_dir' 2>"$MD/err")" || MD_RC=$?
+  [ "$MD_RC" = 0 ] && [ ! -s "$MD/err" ] || MBAD=$((MBAD + 1))
+}
+mdset() {  # mdset <cwd> <json object> [VAR=value...]: claude_memory_settings there; MD_OUT, MD_RC and stderr as mdir
+  local d="$1" j="$2"; shift 2
+  MD_RC=0; MD_OUT="$(cd "$d" && env -i HOME="$MD/home" PATH="$PATH" KIT="$KIT" "$@" bash -c '. "$KIT/bin/lib.sh"; claude_memory_settings "$1"' _ "$j" 2>"$MD/err")" || MD_RC=$?
+  [ "$MD_RC" = 0 ] && [ ! -s "$MD/err" ] || MBAD=$((MBAD + 1))
+}
+mdv() { local d="$1"; shift; mdir "$d" "$@"; [ -n "$MD_OUT" ] && printf '%s' "$MD_OUT" || printf -- '-'; }
+
+# the folder: the physical projects folder (through CLAUDE_CONFIG_DIR, an empty CLAUDE_CONFIG_DIR or ~/.claude, its projects entry a real
+# folder or a symlink) and the physical root (a checkout, a linked worktree and its subfolder, a subfolder, a folder reached through a
+# symlink, the cwd outside a repository), the slug
+V1="$(mdv "$MD/my.repo"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/prof"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR=):$(mdv "$MD/wt"):$(mdv "$MD/wt/deep"):$(mdv "$MD/my.repo/src/deep"):$(mdv "$MD/plain"):$(mdv "$MD/link")"
+SUF="$(printf '%s' "$EF" | grep -c 'my-repo/memory$')"
+check "memory-dir folder: the physical projects folder and the physical root for a main checkout, a CLAUDE_CONFIG_DIR whose projects entry is a symlink, an empty CLAUDE_CONFIG_DIR falling back to \$HOME/.claude, a linked worktree and that worktree's subfolder, a subfolder, a non-git cwd and a folder reached through a symlink; a '.' and '/' in my.repo become '-' in the slug; the folder is not created; no message, exit 0" "$V1|$SUF|$([ -e "$EF" ] && echo made || echo none)|$MBAD" "$EF:$EF:$EF:$EF:$EF:$EF:$PM/$(mslug "$MD/plain")/memory:$EF|1|none|0"
+
+# the skip cases: nothing, no message, exit 0
+V2="$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/noproj"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/none"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/filecfg"):$(mdv "$D200"):$(mdv "$D201"):$(mdv "$MD/bare.git"):$(mdv "$MD/sepwt"):$(mdv "$MD/my.repo/sub"):$(mdv "$MD/naïve"):$(mdv "$MD/naive")"
+
+# the user's own settings file: a folder it sets there wins over the kit's --settings, so the kit leaves the folder unset, and so does a file
+# that cannot be read as a JSON object; an absent file, an object without that key and a null value change nothing; the file is only read
+mkdir -p "$MD"/set/{notes,empty,model,nullval,none,bad,list,both}/projects
+printf '%s' '{"autoMemoryDirectory":"~/my-notes"}' > "$MD/set/notes/settings.json"
+printf '%s' '{"autoMemoryDirectory":""}' > "$MD/set/empty/settings.json"
+printf '%s' '{"autoMemoryDirectory":"x","model":"opus"}' > "$MD/set/both/settings.json"
+printf '%s' '{"model":"opus"}' > "$MD/set/model/settings.json"
+printf '%s' '{"autoMemoryDirectory":null}' > "$MD/set/nullval/settings.json"
+printf '%s' 'not json' > "$MD/set/bad/settings.json"
+printf '%s' '[]' > "$MD/set/list/settings.json"
+S0="$(cat "$MD/set"/*/settings.json 2>/dev/null | shasum | awk '{print $1}')"
+SV="$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/notes"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/empty"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/both"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/model"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/nullval"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/none"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/bad"):$(mdv "$MD/my.repo" CLAUDE_CONFIG_DIR="$MD/set/list")"
+USIN='{"language":"english"}'
+mdset "$MD/my.repo" "$USIN" CLAUDE_CONFIG_DIR="$MD/set/notes"
+SV="$SV:$MD_OUT:$MD_RC"
+S1="$(cat "$MD/set"/*/settings.json 2>/dev/null | shasum | awk '{print $1}')"
+V2="$V2|$SV:$([ "$S0" = "$S1" ] && echo same || echo differ)"
+check "memory-dir skips: no folder and no message for a missing projects entry, a missing config dir, a projects entry that is a regular file, a slug over 200 characters, a bare repository, a --separate-git-dir checkout, a submodule and a root with a non-ASCII byte, and the same for a user settings file that sets autoMemoryDirectory (also empty, and beside another key) or does not parse as a JSON object (also an array), whose settings object then carries no memory key; a slug of exactly 200 characters, an ASCII sibling and a settings file that is absent, has no such key or has it null still give a folder, and no settings file changes; exit 0 everywhere" "$V2|$MBAD" "-:-:-:$PM/$(mslug "$D200")/memory:-:-:-:-:-:$PM/$(mslug "$MD/naive")/memory|-:-:-:$MD/set/model/projects/$(mslug "$MD/my.repo")/memory:$MD/set/nullval/projects/$(mslug "$MD/my.repo")/memory:$MD/set/none/projects/$(mslug "$MD/my.repo")/memory:-:-:$USIN:0:same|0"
+
+# the --settings JSON: every input key kept, only autoMemoryDirectory added, the input unchanged without a folder
+LJ='{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}'
+EJ="{\"language\":\"english\",\"enabledPlugins\":{\"superpowers@superpowers-marketplace\":false,\"superpowers@claude-plugins-official\":false},\"autoMemoryDirectory\":\"$EF\"}"
+mdset "$MD/my.repo" "$LJ"; J1="$MD_OUT"
+mdset "$MD/my.repo" '{}'; J2="$MD_OUT"
+mdset "$MD/my.repo" "$LJ" HOME="$MD/nofolder"; J3="$MD_OUT"
+mdset "$MD/my.repo" '{}' HOME="$MD/nofolder"; J4="$MD_OUT"
+check "memory-dir settings: the kit object keeps its keys and gains only autoMemoryDirectory (the new key last, the folder as one JSON string, no trailing slash, no permissions key); {} becomes only the folder; with no folder the input comes back unchanged" "$J1|$J2|$J3|$J4|$(printf '%s' "$J1" | jq -c 'del(.autoMemoryDirectory)'):$(printf '%s' "$J1" | jq -c 'has("permissions")'):$([ "${EF%/}" = "$EF" ] && echo noslash || echo slash)|$MBAD" "$EJ|{\"autoMemoryDirectory\":\"$EF\"}|$LJ|{}|$LJ:false:noslash|0"
+
+# the launchers: exactly one kit --settings with the folder (and, for a worker, the language), placed before --add-dir (and extraArgs), and
+# the same argv as without a folder once it is taken out; the front role keeps its language; codex and custom get nothing
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/argv"\n' "$MD" > "$MD/stub/claude"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/cxargv"\n' "$MD" > "$MD/stub/codex"
+chmod +x "$MD/stub/claude" "$MD/stub/codex"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "sessionHook": false }, "defaults": { "mcp": [], "agent": "claude" }, "mcpServers": {},
+  "roles": { "local-coordinator": {}, "planner": { "permissionMode": "acceptEdits" }, "dev": {},
+             "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] },
+             "cx": { "agent": "codex" }, "cu": { "agent": "custom", "command": "echo CUSTOM" } } }
+J
+lgo() { local d="$1" h="$2"; shift 2; rm -f "$MD/argv" "$MD/cxargv"; LOUT="$(cd "$d" && env -i HOME="$h" PATH="$MD/stub:$PATH" KIT="$KIT" "$@" 2>&1)" || true; }
+lset() { awk 'p {print; exit} $0 == "--settings" {p=1}' "$MD/argv"; }
+lnset() { grep -cx -- '--settings' "$MD/argv" || true; }
+lnoset() { awk 'p {p=0; next} $0 == "--settings" {p=1; next} {print}' "$1"; }
+lsame() { cmp -s "$1" "$2" && echo same || echo differs; }
+lplace() {  # lplace <--flag>: the single --settings and its value sit immediately before the first --add-dir and after that option
+  local sid aid oid
+  sid="$(grep -n '^--settings$' "$MD/argv" | cut -d: -f1 || true)"
+  aid="$(grep -n '^--add-dir$' "$MD/argv" | head -1 | cut -d: -f1 || true)"
+  oid="$(grep -n -- "^$1\$" "$MD/argv" | head -1 | cut -d: -f1 || true)"
+  if [ -n "$sid" ] && [ -n "$aid" ] && [ -n "$oid" ] && [ "$sid" -gt "$oid" ] && [ "$sid" = "$((aid - 2))" ] && [ "$(sed -n "$((aid - 1))p" "$MD/argv" | jq -r '.autoMemoryDirectory // "-"' 2>/dev/null)" = "$EF" ]; then echo ordered; else echo "misplaced:$sid:$aid:$oid"; fi
+}
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" dev; W1="$(lnset):$(lset)"; cp "$MD/argv" "$MD/dev.all"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/agent.sh" dev; lnoset "$MD/dev.all" > "$MD/dev.one"; lnoset "$MD/argv" > "$MD/dev.none"; W1="$W1|$(lnset):$(lset):$(printf '%s' "$(lset)" | grep -c autoMemoryDirectory || true):$(lsame "$MD/dev.one" "$MD/dev.none")"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" local-coordinator; F1="$(lnset):$(lset)"; cp "$MD/argv" "$MD/lc.all"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/agent.sh" local-coordinator; lnoset "$MD/lc.all" > "$MD/lc.one"; F1="$F1:$(lnset):$(lsame "$MD/lc.one" "$MD/argv")"
+jq '.settings.superpowers = false' "$KIT/config.json" > "$MD/sp-off.json"
+lgo "$MD/my.repo" "$MD/home" ORCA_ROLES_CONFIG="$MD/sp-off.json" "$KIT/bin/agent.sh" local-coordinator; F2="$(lnset):$(lset):$(printf '%s' "$LOUT" | grep -c '"language"' || true)"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" tx; T1="$(lnset):$(lset):$(tail -1 "$MD/argv"):$(awk '$0 == "--settings" { if (!a) a = NR; else b = NR } END { print (a && b && a < b) ? "ordered" : "no" }' "$MD/argv")"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/coordinator.sh"; C1="$(lnset):$(lset):$(lplace --permission-mode):$(sed -n 1p "$MD/argv" | grep -c '^Read ')"; cp "$MD/argv" "$MD/co.all"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/coordinator.sh"; lnoset "$MD/co.all" > "$MD/co.one"; C1="$C1:$(lnset):$(lsame "$MD/co.one" "$MD/argv")"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/auditor.sh"; A1="$(lnset):$(lset):$(lplace --disallowedTools)"; cp "$MD/argv" "$MD/au.all"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/auditor.sh"; lnoset "$MD/au.all" > "$MD/au.one"; A1="$A1:$(lnset):$(lsame "$MD/au.one" "$MD/argv")"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" cx; X1="$(grep -c autoMemoryDirectory "$MD/cxargv" || true)"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" cu; X2="$(printf '%s' "$LOUT" | grep -c autoMemoryDirectory || true)"
+check "memory-dir launchers: agent.sh gives a worker and the front role one --settings with the folder (the worker keeps the English language, the front role gets no language), the front role with settings.superpowers=false gets it with the superpowers-off object, a role's own extraArgs --settings still comes after the kit's, coordinator.sh and auditor.sh put it after their options and exactly before --add-dir with the role message first; without a folder each argv is today's (the same lines once the settings pair is taken out, and the worker's object without the new key); codex and custom get nothing" "$W1|$F1|$F2|$T1|$C1|$A1|$X1:$X2" "1:$EJ|1:$LJ:0:same|1:{\"autoMemoryDirectory\":\"$EF\"}:0:same|1:{\"enabledPlugins\":{\"superpowers@superpowers-marketplace\":false,\"superpowers@claude-plugins-official\":false},\"autoMemoryDirectory\":\"$EF\"}:0|2:$EJ:{\"language\":\"spanish\"}:ordered|1:{\"autoMemoryDirectory\":\"$EF\"}:ordered:1:0:same|1:{\"autoMemoryDirectory\":\"$EF\"}:ordered:0:same|0:0"
+
+# no settings file is written: the kit's folder travels in --settings only
+printf '{"theme":"dark"}\n' > "$MD/cfg/settings.json"; printf '{"theme":"light"}\n' > "$MD/prof/settings.json"; printf '{"projects":{}}\n' > "$MD/home/.claude.json"
+N0="$(shasum "$MD/cfg/settings.json" "$MD/prof/settings.json" | awk '{print $1}' | tr '\n' ' ')"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" dev
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/coordinator.sh"
+lgo "$MD/my.repo" "$MD/home" "$KIT/bin/auditor.sh"
+N1="$(shasum "$MD/cfg/settings.json" "$MD/prof/settings.json" | awk '{print $1}' | tr '\n' ' ')"
+check "memory-dir no file written: after agent.sh, coordinator.sh and auditor.sh launches ~/.claude/settings.json and the profile's settings.json are byte-identical, and .claude.json differs only by the existing trust entry of the launch folder" "$([ "$N0" = "$N1" ] && echo same):$(jq -c --arg d "$MD/my.repo" 'del(.projects[$d])' "$MD/home/.claude.json" 2>/dev/null):$(jq -r --arg d "$MD/my.repo" '.projects[$d].hasTrustDialogAccepted' "$MD/home/.claude.json" 2>/dev/null)" "same:{\"projects\":{}}:true"
+
+# portability: spaces and a quote in HOME, spaces in CLAUDE_CONFIG_DIR and the repository path stay one JSON string
+HS="$MD/home sp\"ace"; MS="$MD/prof space"; MR="$MD/r space/my.repo"
+mkdir -p "$HS" "$MS/projects"; ln -sfn "$KIT" "$HS/.orca-roles"; ln -sfn "$MS" "$HS/.claude"; git init -q "$MR"
+FE="$MS/projects/$(mslug "$MR")/memory"
+mdir "$MR" HOME="$HS"; P1="$MD_OUT"
+mdset "$MR" '{}' HOME="$HS"; P2="$MD_OUT"
+lgo "$MR" "$HS" "$KIT/bin/agent.sh" dev; P3="$(lnset):$(lset | jq -r .autoMemoryDirectory 2>/dev/null || echo broken)"
+check "memory-dir portability: a HOME with a space and a quote, a CLAUDE_CONFIG_DIR with a space and a repository path with a space give the same folder, and the settings JSON keeps it as one string in one argv element" "$P1|$P2|$P3|$MBAD" "$FE|{\"autoMemoryDirectory\":\"$FE\"}|1:$FE|0"
 }
 
 sec_restart() {

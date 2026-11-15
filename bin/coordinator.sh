@@ -45,4 +45,5 @@ elif [ "$ADVISOR" != auto ]; then
 fi
 # The message goes first: --add-dir takes several values and would swallow it as one more folder.
 if [ -n "$DEPTH" ]; then DEPTH_MSG=" Orca's nested worker depth is $DEPTH."; else DEPTH_MSG=" Orca's nested worker depth could not be read."; fi
-exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\".$DEPTH_MSG" ${ARGS[@]+"${ARGS[@]}"} --add-dir "$KIT/prompts" "${ADV_ARGS[@]+"${ADV_ARGS[@]}"}"
+MEM="$(claude_memory_settings '{}')"; MEM_ARGS=(); [ "$MEM" = '{}' ] || MEM_ARGS=(--settings "$MEM")
+exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\".$DEPTH_MSG" ${ARGS[@]+"${ARGS[@]}"} "${MEM_ARGS[@]+"${MEM_ARGS[@]}"}" --add-dir "$KIT/prompts" "${ADV_ARGS[@]+"${ADV_ARGS[@]}"}"
