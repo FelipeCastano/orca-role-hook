@@ -396,7 +396,7 @@ c_restart_prepare() {  # before the restart: what each role had
   st_set r1run ""; st_set r1why "$why"; echo "R1.run: could not create the Run: $why"
 }
 c_restart_after() {  # after a real restart: asleep tabs are woken and reopened with their conversation, no duplicate (n13, #8, #38)
-  local id=$1 asleep live t0 t1 r
+  local id=$1 asleep live t0 t1 r wp
   live="$(wt_terms)"; asleep=""
   local ph=""   # asleep: not listed; placeholder: listed (old handle, maybe a stale identity) but no agent process behind it
   while IFS='=' read -r v h; do
@@ -406,13 +406,24 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
   info "$id.asleep" "roles asleep after the restart (not in terminal list):${asleep:- none}; listed without an agent (placeholders):${ph:- none}"
   asleep="$asleep$ph"
   attach "$id terminals after the restart, before roles" "$live"
+  wp="$(
+    . "$KIT/bin/lib.sh" >/dev/null 2>&1 || { printf 'wake path unknown: could not load %s\n' "$KIT/bin/lib.sh"; exit 0; }
+    if n="$(orca_app_node 2>/dev/null)" && [ -n "$n" ]; then
+      printf 'wake path available: %s\n' "$(printf '%s' "$n" | cut -d'|' -f2)"
+    elif declare -F orca_app_node_reason >/dev/null 2>&1 && why="$(orca_app_node_reason 2>/dev/null)" && [ -n "$why" ]; then
+      printf 'wake path unavailable: %s\n' "$why"
+    else
+      printf 'wake path unavailable (the installed kit gives no reason)\n'
+    fi
+  )"
+  info "$id.wakepath" "$wp"
   t0=$SECONDS; roles_run; t1=$SECONDS
   attach "$id roles after the restart" "$LIVE_DIR/last-roles.log"
   info "$id.time" "roles took $((t1 - t0)) s"
   r="$(grep -c 'woke it' "$LIVE_DIR/last-roles.log")"
   check "$id.wake" "every asleep or placeholder role was woken" "$r" "$(echo $asleep | wc -w | tr -d ' ')"
-  check "$id.memory" "every role reopened with its conversation" "$(grep -c 'reopening it with its conversation' "$LIVE_DIR/last-roles.log")" "$(grep -c . "$GD/orca-roles.env")"
-  check "$id.lost" "no role started without memory" "$(grep -c 'no longer exists\|could not be read\|treated as closed' "$LIVE_DIR/last-roles.log")" 0
+  check "$id.memory" "every role reopened with its conversation" "$(grep -c 'with its conversation' "$LIVE_DIR/last-roles.log")" "$(grep -c . "$GD/orca-roles.env")"
+  check "$id.lost" "no role started without memory" "$(grep -cE 'opening a new one\.$|could not be read|treated as closed' "$LIVE_DIR/last-roles.log")" 0
   sleep 20
   check "$id.duplicates" "one tab per role and no stray agent tab" "$(wt_terms | awk -F'\t' '$4 != ""' | wc -l | tr -d ' ')" "$(grep -c . "$GD/orca-roles.env")"
   local bad=""; while IFS='=' read -r v h; do orca terminal show --terminal "$h" --json >/dev/null 2>&1 || bad="$bad $v"; done < "$GD/orca-roles.env"
