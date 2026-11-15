@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer capacity capacity-contract"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -929,6 +929,17 @@ rule E6 "$PD/local-coordinator-parallel.md" 'never runs while a pair tree has a 
 rule E6 "$PD/local-coordinator-parallel.md" 'shows no tree `open` or `integrated`'
 rule E6 "$PD/tester.md" 'write no test, mutate nothing, skip the base check and the cross-check'
 rule E6 "$PD/local-coordinator-team.md" 'Do not retry at once; give the task to the first tab of that role that reports'
+# batch3 (a5): the capacity measure before opening pair trees and instances, its "at most" rule, and the progress guarantee
+rule E6 "$PD/local-coordinator-parallel.md" 'run `~/.orca-roles/bin/capacity.sh` in the worktree and look at the ready batches that have not started. Open at most its "more fit here" number of new pair trees, in plan order'
+rule E6 "$PD/local-coordinator-parallel.md" 'when "more fit here" is 0, or the capacity is unknown (`Capacity: unknown`, or capacity.sh exits non-zero), and no batch is open in the worktree, run the first ready batch in the worktree on its own Dev and Tester'
+rule E6 "$PD/local-coordinator-team.md" 'Before opening two or more instances at once (a group of parallel Researchers, or pair trees where the mode has them), run `~/.orca-roles/bin/capacity.sh` and open at most twice its `Capacity:` number of single instances (one pair is two tabs)'
+# fix1 (F5): the local coordinator acts on the coordinator's capacity-free message, and a still-0 result sends nothing
+rule E6 "$PD/local-coordinator-under-coordinator.md" 'When the coordinator says capacity is free, run `~/.orca-roles/bin/capacity.sh` at once and open what it allows for the waiting work, by the same rules as at a close (pair trees per `local-coordinator-parallel.md` where the mode has it; instances per "Instances" in `local-coordinator-team.md`); if it still says 0, send no new status (the number did not change).'
+rule E6 "$PD/local-coordinator-parallel.md" 'or for the coordinator'"'"'s message that capacity is free (see `local-coordinator-under-coordinator.md`)'
+# fix1 (F6): the role's own tab runs even when Capacity is 0
+rule E6 "$PD/local-coordinator-team.md" 'and at least one, the role'"'"'s own tab, even when `Capacity:` is 0'
+rule R10 "$ROOT/prompts/coordinator.md" 'run `~/.orca-roles/bin/capacity.sh <every worktree folder you coordinate>`'
+rule R10 "$ROOT/prompts/coordinator.md" 'never more than one such message per waiting status'
 for frag in 'close it with `~/.orca-roles/bin/set-close.sh --run <run_id> <id> [...]` without asking' 'The Plan-Reviewer and the Code-Reviewer, where your team has them, are closed this way with the set, after its commits' 'check that it is not waiting for another role'"'"'s answer to go on' 'Use `set-close.sh` only at the set close, after its commits'; do rule E6 "$PD/local-coordinator-team.md" "$frag" '\*\*Set close\.\*\*'; done
 for f in "$PD/local-coordinator-parallel.md" "$PD/local-coordinator.md" "$ROOT/prompts/quick/local-coordinator.md"; do rule E6 "$f" 'close the set'"'"'s tabs as "Set close" in'; done
 rule E6 "$AD/local-coordinator-team.md" 'Do not use `~/.orca-roles/bin/launch.sh --add` in this mode'
@@ -4158,6 +4169,10 @@ akreset() { akdrain; rm -rf "$AKG"/orca-roles.* "$AK"/sent.* "$AK/wt.json" "$AK/
 LA="$TMP/la"; mkdir -p "$LA/bin" "$LA/proj"; git -C "$LA/proj" init -q; LAG="$LA/proj/.git"
 printf '#!/bin/sh\necho "$*" >> "%s/kick.log"\n' "$LA" > "$LA/bin/kickoff"; printf '#!/bin/sh\necho 4242\n' > "$LA/bin/agentpid"
 printf '#!/bin/sh\necho x >> "%s/hook.calls"\ncat "%s/cap"\n' "$LA" "$LA" > "$LA/bin/cap"; chmod +x "$LA/bin/kickoff" "$LA/bin/agentpid" "$LA/bin/cap"
+printf '#!/bin/sh\nprintf "1\\t0\\t100\\t/sbin/launchd\\t/sbin/launchd\\n"\n' > "$LA/bin/table"
+printf '#!/bin/sh\nprintf "100\\t1\\t400\\t/usr/local/bin/claude\\tclaude\\n101\\t1\\t500\\t/usr/local/bin/claude\\tclaude\\n"\n' > "$LA/bin/tab2"
+printf '#!/bin/sh\nprintf "200\\t1\\t600\\t/usr/local/bin/claude\\tclaude\\n"\n' > "$LA/bin/tab1"
+printf '#!/bin/sh\nprintf "300\\t1\\t300\\t/usr/local/bin/claude\\tclaude\\n301\\t1\\t900\\t/usr/local/bin/opencode\\topencode\\n"\n' > "$LA/bin/tabmix"; chmod +x "$LA/bin/table" "$LA/bin/tab1" "$LA/bin/tab2" "$LA/bin/tabmix"
 cat > "$LA/bin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$LA/orca.log"
@@ -4170,7 +4185,7 @@ esac
 exit 0
 EOS
 chmod +x "$LA/bin/orca"; printf '# Scout\n' > "$LA/scout.md"
-lal() { (cd "$LA/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LA/bin:$PATH" ORCA_ROLES_KICKOFF="$LA/bin/kickoff" ORCA_ROLES_AGENT_PID="$LA/bin/agentpid" ORCA_ROLES_HOST_CAPACITY="$LA/bin/cap" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+lal() { (cd "$LA/proj" && env -u ORCA_ROLES_CONFIG -u ORCA_ROLES_STATE -u ORCA_WORKTREE_ID HOME="$TMP/home" PATH="$LA/bin:$PATH" ORCA_ROLES_KICKOFF="$LA/bin/kickoff" ORCA_ROLES_AGENT_PID="$LA/bin/agentpid" ORCA_ROLES_HOST_CAPACITY="$LA/bin/cap" ORCA_ROLES_PROC_TABLE="${LATAB:-$LA/bin/table}" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_CLI_TIMEOUT=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 lacfg() { write_launch_config; jq --arg s "$LA/scout.md" '.roles.researcher = {"title":"Researcher","open":"per-task","maxInstances":3} | .roles.scout = {"title":"Scout","open":"start","maxInstances":3,"prompt":$s} | .roles.hid = {"title":"Hid","open":"hidden","prompt":$s} | .settings.scaling = {"maxExtraInstances":4,"maxLoad":0.8,"minFreeMemoryMB":2048}' "$KIT/config.json" > "$LA/cfg.json" && cp "$LA/cfg.json" "$KIT/config.json"; }
 lareset() { rm -rf "$LAG"/orca-roles.* "$LA"/stale-*; : > "$LA/orca.log"; : > "$LA/kick.log"; : > "$LA/hook.calls"; echo "1.00 8 9000" > "$LA/cap"; }
 lasum() { cat "$LAG/orca-roles.env" "$LAG/orca-roles.pty" "$LAG/orca-roles.tabs" "$LAG/orca-roles.overrides.json" "$LAG/orca-roles.config.json" 2>/dev/null | cksum || true; }
@@ -4201,17 +4216,21 @@ lacap() { lareset; try lal; try lal --add researcher; echo "$1" > "$LA/cap"; HS=
 hw() { lacap "$1"; HWR="$(printf '%s:%s:%s' "$RC" "$(printf '%s\n' "$OUT" | grep -c '^Instance: researcher-2 ' || true)" "$([ "$(lasum)" = "$HS" ] && [ "$(lacre)" = "$HN" ] && echo same || echo changed)")"; }
 LDR='REFUSED: Researcher: the 1-minute load is %s on 8 cores, at or over settings.scaling.maxLoad 0.8 per core; no instance was opened.'
 hw '6.39 8 9000'; W1="$HWR"; hw '6.40 8 9000'; W2="$HWR"; W2L="$(printf '%s\n' "$OUT" | grep -cxF "$(printf "$LDR" 6.40)" || true)"; hw '7.20 8 9000'; W3="$HWR"; W3L="$(printf '%s\n' "$OUT" | grep -cxF "$(printf "$LDR" 7.20)" || true)"
-hw '1.00 8 2048'; W4="$HWR"; hw '1.00 8 2047'; W5="$HWR"; W5L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2047 MB of memory available, under settings.scaling.minFreeMemoryMB 2048; no instance was opened.' || true)"
+hw '1.00 8 2598'; W4="$HWR"; hw '1.00 8 2597'; W5="$HWR"; W5L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2597 MB of memory available; one more claude tab takes 550 MB (default estimate) and settings.scaling.minFreeMemoryMB keeps 2048 MB free; no instance was opened.' || true)"
+LATAB="$LA/bin/tab2"; hw '1.00 8 2498'; W4B="$HWR"; hw '1.00 8 2497'; W5B="$HWR"; W5BL="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2497 MB of memory available; one more claude tab takes 450 MB (the average of 2 live tab(s)) and settings.scaling.minFreeMemoryMB keeps 2048 MB free; no instance was opened.' || true)"; LATAB=""
+LATAB="$LA/bin/tab1"; hw '1.00 8 2648'; W4C="$HWR"; hw '1.00 8 2647'; W5C="$HWR"; W5CL="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2647 MB of memory available; one more claude tab takes 600 MB (the average of 1 live tab(s)) and settings.scaling.minFreeMemoryMB keeps 2048 MB free; no instance was opened.' || true)"; LATAB=""
+LATAB="$LA/bin/tabmix"; hw '1.00 8 2348'; W4D="$HWR"; hw '1.00 8 2347'; W5D="$HWR"; W5DL="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2347 MB of memory available; one more claude tab takes 300 MB (the average of 1 live tab(s)) and settings.scaling.minFreeMemoryMB keeps 2048 MB free; no instance was opened.' || true)"; LATAB=""
 hw '7.20 8 100'; W6="$HWR"; W6L="$(printf '%s\n' "$OUT" | grep -c 'MB of memory' || true)"
 jq '.settings.scaling.minFreeMemoryMB = 0' "$KIT/config.json" > "$LA/cfg.x"; cp "$KIT/config.json" "$LA/cfg.keep2"; cp "$LA/cfg.x" "$KIT/config.json"; hw '1.00 8 10'; W7="$HWR"; W7N="$(printf '%s\n' "$OUT" | grep -c '^Note:' || true)"; cp "$LA/cfg.keep2" "$KIT/config.json"
 hw '- - -'; W8="$HWR"; W8N="$(printf '%s\n' "$OUT" | grep -cxF -e 'Note: the load check was skipped: the load or the number of cores could not be read on this system.' -e 'Note: the memory check was skipped: the available memory could not be read on this system.' || true)"
 hw '- 8 9000'; W9="$HWR"; W9N="$(printf '%s\n' "$OUT" | grep -c '^Note: the load check was skipped' || true):$(printf '%s\n' "$OUT" | grep -c '^Note: the memory check' || true)"
 hw '1.00 8 -'; W10="$HWR"; W10N="$(printf '%s\n' "$OUT" | grep -c '^Note: the memory check was skipped' || true)"
-check "launch --add: the hardware check refuses at load >= maxLoad x cores (6.39 opens, 6.40 and 7.20 refuse) and under minFreeMemoryMB (2048 opens, 2047 refuses; 0 disables it), with the exact lines, nothing changed on a refusal, the load first; unreadable values print a Note and never refuse" "$W1|$W2:$W2L|$W3:$W3L|$W4|$W5:$W5L|$W6:$W6L|$W7:$W7N|$W8:$W8N|$W9:$W9N|$W10:$W10N" "0:1:changed|3:0:same:1|3:0:same:1|0:1:changed|3:0:same:1|3:0:same:0|0:1:changed:0|0:1:changed:2|0:1:changed:1:0|0:1:changed:1"
+check "launch --add: the hardware check refuses at load >= maxLoad x cores (6.39 opens, 6.40 and 7.20 refuse) and when the available memory minus one tab of the role's agent is under minFreeMemoryMB (no live claude tab: the 550 MB default estimate, 2598 opens and 2597 refuses; two live claude tabs averaging 450 MB: 2498 opens and 2497 refuses; one live claude tab of 600 MB: 2648 and 2647; a live claude tab of 300 MB beside a live opencode tab of 900 MB: 2348 and 2347, the opencode tab not counted; 0 disables it), with the exact lines, nothing changed on a refusal, the load first; unreadable values print a Note and never refuse" "$W1|$W2:$W2L|$W3:$W3L|$W4|$W5:$W5L|$W4B|$W5B:$W5BL|$W4C|$W5C:$W5CL|$W4D|$W5D:$W5DL|$W6:$W6L|$W7:$W7N|$W8:$W8N|$W9:$W9N|$W10:$W10N" "0:1:changed|3:0:same:1|3:0:same:1|0:1:changed|3:0:same:1|0:1:changed|3:0:same:1|0:1:changed|3:0:same:1|0:1:changed|3:0:same:1|3:0:same:0|0:1:changed:0|0:1:changed:2|0:1:changed:1:0|0:1:changed:1"
 cp "$KIT/config.json" "$LA/cfg.keep3"; jq '.roles.researcher.agent = "opencode"' "$LA/cfg.keep3" > "$KIT/config.json"
-hw '1.00 8 2548'; O1="$HWR"; hw '1.00 8 2547'; O2="$HWR"; O2L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2547 MB of memory available, under settings.scaling.minFreeMemoryMB 2048 plus 500 MB for its private OpenCode server; no instance was opened.' || true)"
+hw '1.00 8 2848'; O1="$HWR"; hw '1.00 8 2847'; O2="$HWR"; O2L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2847 MB of memory available; one more opencode tab takes 800 MB (default estimate) and settings.scaling.minFreeMemoryMB keeps 2048 MB free; no instance was opened.' || true)"; O2S="$(printf '%s\n' "$OUT" | grep -c 'private OpenCode server' || true)"
+LATAB="$LA/bin/tabmix"; hw '1.00 8 2948'; O3="$HWR"; hw '1.00 8 2947'; O4="$HWR"; O4L="$(printf '%s\n' "$OUT" | grep -cxF 'REFUSED: Researcher: 2947 MB of memory available; one more opencode tab takes 900 MB (the average of 1 live tab(s)) and settings.scaling.minFreeMemoryMB keeps 2048 MB free; no instance was opened.' || true)"; LATAB=""
 cp "$LA/cfg.keep3" "$KIT/config.json"
-check "launch --add: an OpenCode role needs minFreeMemoryMB plus 500 MB for its private server (2548 opens, 2547 refuses with the exact line); a Claude role still opens at 2048" "$O1|$O2:$O2L|$W4" "0:1:changed|3:0:same:1|0:1:changed"
+check "launch --add: an OpenCode role is measured like any other (with no live opencode tab, the 800 MB default estimate: 2848 opens, 2847 refuses with the exact line, no line mentions its private server; with a live claude tab of 300 MB beside a live opencode tab of 900 MB, its own: 2948 opens and 2947 refuses); a Claude role still opens at 2598" "$O1|$O2:$O2L:$O2S|$O3|$O4:$O4L|$W4" "0:1:changed|3:0:same:1:0|0:1:changed|3:0:same:1|0:1:changed"
 # instances survive later launches and --reopen
 lareset; try lal; try lal --add researcher; try lal --add researcher
 R0="$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true)"; try lal; R1="$RC:$(grep -c '^RESEARCHER_2=' "$LAG/orca-roles.env" || true):$(jq -r '.roles["researcher-2"].instanceOf // "none"' "$LAG/orca-roles.config.json")"
@@ -13959,6 +13978,453 @@ check "usage scheduler: what it schedules works as the scheduler runs it: the pl
 SF1="${ORCA_ROLES_SCHEDULER:-unset}:$(grep -c "^export ORCA_ROLES_SCHEDULER=fake " "$ROOT/tests/smoke.sh" || true):$([ -e "$SB/real.log" ] && cat "$SB/real.log" || echo none)"   # every install of this section ran with the recording launchctl/crontab first on PATH
 check "usage scheduler safety: the suite's prelude exports ORCA_ROLES_SCHEDULER=fake, this run has it, and no install of this section ever called the recording launchctl or crontab" "$SF1" "fake:1:none"
 }
+
+sec_capacity() {
+# capacity.sh: the pairs that fit (a faked host, process table and OS), the worktree rows, --json and the usage errors
+CAPD="$TMP/cap"; rm -rf "$CAPD"; mkdir -p "$CAPD/bin" "$CAPD/empty" "$CAPD/proc"
+CAPB="$CAPD/bin"
+printf '#!/bin/sh\n[ "$1" = -s ] || exit 0\ncat "%s/uname"\n' "$CAPD" > "$CAPB/uname"
+printf '#!/bin/sh\ncase "$2" in pid=,ppid=,rss=,comm=) cat "%s/ps1";; pid=,args=) cat "%s/ps2";; esac\n' "$CAPD" "$CAPD" > "$CAPB/ps"
+printf '#!/bin/sh\ncat "%s/top"\n' "$CAPD" > "$CAPB/top"
+printf '#!/bin/sh\ncat "%s/host"\n' "$CAPD" > "$CAPD/hostsh"
+printf '#!/bin/sh\ncat "%s/table"\n' "$CAPD" > "$CAPD/tablesh"
+chmod +x "$CAPB"/* "$CAPD/hostsh" "$CAPD/tablesh"
+CAPCWD="$CAPD/empty"
+capx() {  # capx <config file|-> [args]: capacity.sh with this section's faked host, process table and OS ('-' unsets ORCA_ROLES_CONFIG)
+  local cf="$1"; shift
+  if [ "$cf" = - ]; then
+    (cd "$CAPCWD" && unset ORCA_ROLES_CONFIG && KIT="$KIT" PATH="$CAPB:$PATH" HOME="$TMP/home" ORCA_ROLES_PROC="$CAPD/proc" ORCA_ROLES_HOST_CAPACITY="$CAPD/hostsh" ORCA_ROLES_PROC_TABLE="$CAPD/tablesh" "$ROOT/bin/capacity.sh" "$@" 2>"$CAPD/err")
+  else
+    (cd "$CAPCWD" && KIT="$KIT" PATH="$CAPB:$PATH" HOME="$TMP/home" ORCA_ROLES_PROC="$CAPD/proc" ORCA_ROLES_CONFIG="$cf" ORCA_ROLES_HOST_CAPACITY="$CAPD/hostsh" ORCA_ROLES_PROC_TABLE="$CAPD/tablesh" "$ROOT/bin/capacity.sh" "$@" 2>"$CAPD/err")
+  fi
+}
+captry() { if OUT="$(capx "$KIT/config.default.json" "$@")"; then RC=0; else RC=$?; fi; }
+# host_os and host_capacity's Linux branch, from a uname shim and an ORCA_ROLES_PROC folder
+printf 'Darwin\n' > "$CAPD/uname"; O1="$(PATH="$CAPB:$PATH"; host_os)"
+printf 'Linux\n' > "$CAPD/uname"
+printf 'Linux version 5.15.153.1-microsoft-standard-WSL2\n' > "$CAPD/proc/version"; O2="$(PATH="$CAPB:$PATH"; ORCA_ROLES_PROC="$CAPD/proc"; host_os)"
+printf 'Linux version 5.15.0-91-generic\n' > "$CAPD/proc/version"; O3="$(PATH="$CAPB:$PATH"; ORCA_ROLES_PROC="$CAPD/proc"; host_os)"
+printf 'Linux version 5.15.0 (Microsoft@Microsoft.com)\n' > "$CAPD/proc/version"; O4="$(PATH="$CAPB:$PATH"; ORCA_ROLES_PROC="$CAPD/proc"; host_os)"
+rm -f "$CAPD/proc/version"; O5="$(PATH="$CAPB:$PATH"; ORCA_ROLES_PROC="$CAPD/proc"; host_os)"
+printf 'FreeBSD\n' > "$CAPD/uname"; O6="$(PATH="$CAPB:$PATH"; host_os)"
+: > "$CAPD/uname"; O7="$(PATH="$CAPB:$PATH"; host_os)"
+printf 'Linux\n' > "$CAPD/uname"
+mkdir -p "$CAPD/proc805" "$CAPD/proc0"
+printf 'MemTotal: 16384 kB\nMemAvailable: 8388608 kB\n' > "$CAPD/proc805/meminfo"
+printf 'MemTotal: 16384 kB\n' > "$CAPD/proc0/meminfo"
+H1="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_HOST_CAPACITY; ORCA_ROLES_PROC="$CAPD/proc805"; host_capacity | cut -d' ' -f3)"
+H2="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_HOST_CAPACITY; ORCA_ROLES_PROC="$CAPD/proc0"; host_capacity | cut -d' ' -f3)"
+H3="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_HOST_CAPACITY; export ORCA_ROLES_PROC="$CAPD/noproc"; host_capacity | cut -d' ' -f3)"
+check "capacity: host_os names the system macos, linux, wsl (a Linux whose kernel says Microsoft in either case, and one without a version) or other (another kernel, an empty uname), and host_capacity reads MemAvailable under ORCA_ROLES_PROC (8192 MB for 8388608 kB, - without it)" "$O1 $O2 $O3 $O4 $O5 $O6 $O7|$H1 $H2 $H3" "macos wsl linux wsl linux other other|8192 - -"
+# proc_table on a faked macOS: top's MEM in every unit form, the two ps calls joined by pid, the paths with spaces whole
+printf 'Darwin\n' > "$CAPD/uname"
+CAPME="/Applications/Orca.app/Contents/Frameworks/Orca Helper (Renderer).app/Contents/MacOS/Orca Helper (Renderer)"
+printf '   10     1  100 /bin/a\n   11     1  100 /bin/b\n   12     1  100 /bin/c\n   13     1  100 /bin/d\n   14     1  100 /bin/e\n   15     1  100 /bin/f\n   16     1  100 /bin/g\n   17     1  100 /bin/h\n   18     1  100 /bin/i\n   20     1  100 /bin/k\n   21     1  200 %s\n' "$CAPME" > "$CAPD/ps1"
+printf '   10 a\n   11 b --x\n   12 c\n   13 d\n   14 e\n   15 f\n   16 g\n   17 h\n   19 q\n   21 Orca Helper (Renderer) --type=renderer --a "b c"\n' > "$CAPD/ps2"
+printf 'Processes: 30 total, 1 running\n2026/11/15 12:00:00\nLoad Avg: 1.00, 1.00, 1.00\nPID    MEM\n   10   4149M\n   11   914M+\n   12   1.5G\n   13   512K\n   14   2T\n   15   300M-\n   16   n/a\n   17   5B\n   19   123M\n   21   100M\n' > "$CAPD/top"
+P1="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_PROC_TABLE; proc_table | sort -n | tr '\t' '|')"
+K1="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_PROC_TABLE; proc_kind)"
+E1="$(printf '%s\n' '10|1|4149|/bin/a|a' '11|1|914|/bin/b|b --x' '12|1|1536|/bin/c|c' '13|1|0|/bin/d|d' '14|1|2097152|/bin/e|e' '15|1|300|/bin/f|f' '16|1|0|/bin/g|g' '17|1|0|/bin/h|h' "21|1|100|$CAPME|Orca Helper (Renderer) --type=renderer --a \"b c\"")"
+check "capacity: proc_table on macOS takes each MB from top's MEM (4149M, 914M+, 1.5G, 512K, 2T, 300M-; a value outside the family -> 0), leaves out a pid only one of the two ps calls has and one top does not list (18, 19, 20), and keeps a path with spaces and args with spaces whole in their own fields" "$P1|$K1" "$E1|footprint"
+# the same table on a faked Linux, and on macOS when top lists no process: RSS in KB / 1024, rounded down
+printf 'Linux\n' > "$CAPD/uname"
+printf '   10     1   512000 /bin/a\n   11     1     1023 /bin/b\n   12     1  5242880 /bin/c\n   13     1        0 /bin/d\n' > "$CAPD/ps1"
+printf '   10 a\n   11 b\n   12 c\n   13 d\n' > "$CAPD/ps2"
+: > "$CAPD/top"
+P2="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_PROC_TABLE; proc_table | sort -n | tr '\t' '|')"; K2="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_PROC_TABLE; proc_kind)"
+printf 'Darwin\n' > "$CAPD/uname"
+P3="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_PROC_TABLE; proc_table | sort -n | tr '\t' '|')"; K3="$(PATH="$CAPB:$PATH"; unset ORCA_ROLES_PROC_TABLE; proc_kind)"
+E2="$(printf '%s\n' '10|1|500|/bin/a|a' '11|1|0|/bin/b|b' '12|1|5120|/bin/c|c' '13|1|0|/bin/d|d')"
+check "capacity: proc_table on Linux takes the RSS from ps in MB rounded down (512000 KB -> 500, 1023 -> 0, 5242880 -> 5120, 0 -> 0) and the same way on macOS when top lists no process, with proc_kind rss in both" "$P2|$K2|$P3|$K3" "$E2|rss|$E2|rss"
+# agent_tab_mb: a tab is an agent process with no agent-process ancestor; its footprint is its own MB plus its descendants'
+printf '501\t1\t300\tclaude\tclaude\n502\t1\t200\tclaude\tclaude --continue\n503\t502\t300\thelper\thelper --run\n504\t1\t250\topencode\topencode --standalone\n505\t504\t500\topencode\topencode serve --stdio --port 0\n506\t1\t700\topencode\topencode serve --service\n507\t502\t100\tclaude\tclaude --nested\n' > "$CAPD/table"
+A1="$(export ORCA_ROLES_PROC_TABLE="$CAPD/tablesh"; { agent_tab_mb claude; agent_tab_mb opencode; agent_tab_mb codex; agent_tab_mb custom; } | tr '\n' '/')"
+printf '601\t1\t900\tnode\tnode /home/me/.npm-global/bin/claude\n602\t1\t800\tnode\tnode /usr/local/lib/node_modules/@openai/codex/bin/codex.js\n' > "$CAPD/table"
+A2="$(export ORCA_ROLES_PROC_TABLE="$CAPD/tablesh"; { agent_tab_mb claude; agent_tab_mb codex; } | tr '\n' '/')"
+check "capacity: agent_tab_mb averages the live tabs' footprints (two claude tabs of 300 and 200+300+100 -> 450 2, an opencode tab with its shared server 250+500 -> 750 1), leaves out the lone 'opencode serve --service' and the claude under another claude, and gives the fallback with 0 live tabs (codex 550, an unknown agent 550, opencode 800); node running an npm-installed CLI is detected by its second word (900 1, 800 1)" "$A1|$A2" "450 2/750 1/550 0/550 0/|900 1/800 1/"
+# the human lines of a faked macOS, a Linux and a WSL, at 2.00 load on 10 cores with 9000 MB available
+printf '2.00 10 9000\n' > "$CAPD/host"
+printf 'Darwin\n' > "$CAPD/uname"
+printf '101\t1\t300\tclaude\tclaude\n102\t1\t200\tclaude\tclaude --continue\n103\t102\t400\thelper\thelper --run\n900\t1\t4149\tcom.apple.Virtualization.VirtualMachine\tcom.apple.Virtualization.VirtualMachine\n901\t1\t1900\t/Applications/Orca.app/Contents/MacOS/Orca\t/Applications/Orca.app/Contents/MacOS/Orca\n902\t1\t1024\t/opt/exact\texact\n903\t1\t1023\t/opt/under\tunder\n' > "$CAPD/table"
+captry; C5="$RC:$OUT"
+C5E="$(printf '%s\n' "Capacity: 6 more Dev+Tester pair(s) fit now (limited by CPU)." "Memory: 9000 MB available, 2048 MB kept free (settings.scaling.minFreeMemoryMB), 900 MB per pair (Dev claude 450 MB, Tester claude 450 MB): 7 pair(s)." "CPU: load 2.00 on 10 cores, settings.scaling.maxLoad 0.8 per core, 1.0 per pair: 6 pair(s)." "Footprints: claude 450 MB (average of 2 live tab(s)); opencode 800 MB (default estimate, no live tab); codex 550 MB (default estimate, no live tab)." "Orca: 1900 MB." "Large consumers: com.apple.Virtualization.VirtualMachine (a virtual machine, such as Docker Desktop's) 4149 MB, exact 1024 MB.")"
+check "capacity: a faked macOS prints the Capacity, Memory (900 MB per pair, 7 pairs), CPU (6 pairs), Footprints, Orca and Large consumers (the virtual machine named, plus a process of exactly 1024 MB and not one of 1023 MB) lines in that order, with no Not measured line" "$C5" "0:$C5E"
+printf 'Linux\n' > "$CAPD/uname"; rm -f "$CAPD/proc/version"; captry; C6="$(printf '%s' "$OUT" | sed -n '4p'):$(printf '%s' "$OUT" | grep -c '^Not measured:' || true):$(printf '%s' "$OUT" | grep -c '^Orca: 1900 MB\.$' || true)"
+printf 'Linux version 5.15.153.1-microsoft-standard-WSL2\n' > "$CAPD/proc/version"
+printf '101\t1\t300\tclaude\tclaude\n102\t1\t200\tclaude\tclaude --continue\n103\t102\t400\thelper\thelper --run\n900\t1\t4149\tcom.apple.Virtualization.VirtualMachine\tcom.apple.Virtualization.VirtualMachine\n' > "$CAPD/table"
+captry; C7="$(printf '%s' "$OUT" | sed -n '4p'):$(printf '%s' "$OUT" | grep -c '^Orca:' || true):$(printf '%s' "$OUT" | sed -n '6p'):$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')"
+check "capacity: on a faked Linux the same numbers print with the Footprints line ending ' Measured as RSS.', no WSL line and the Orca line; on a faked WSL (a version with Microsoft) there is no Orca line, the Footprints line still ends ' Measured as RSS.' and the WSL 'Not measured' line comes right after the Large consumers one" "$C6|$C7" "Footprints: claude 450 MB (average of 2 live tab(s)); opencode 800 MB (default estimate, no live tab); codex 550 MB (default estimate, no live tab). Measured as RSS.:0:1|Footprints: claude 450 MB (average of 2 live tab(s)); opencode 800 MB (default estimate, no live tab); codex 550 MB (default estimate, no live tab). Measured as RSS.:0:Not measured: the Windows side (Orca, the Windows apps and the memory Windows keeps for itself); the numbers are the WSL VM's, within its .wslconfig memory limit.:6"
+# an unreadable host, and only the memory unreadable
+printf 'Darwin\n' > "$CAPD/uname"; rm -f "$CAPD/proc/version"; printf -- '- - -\n' > "$CAPD/host"; captry; U1="$RC:$(printf '%s' "$OUT" | sed -n '1,3p' | tr '\n' '/'):$(printf '%s' "$OUT" | grep -c '^Not measured:' || true)"
+printf -- '1.00 10 -\n' > "$CAPD/host"; captry; U2="$(printf '%s' "$OUT" | sed -n '1p;3p' | tr '\n' '/')"
+printf -- '- 10 9000\n' > "$CAPD/host"; captry; U3="$(printf '%s' "$OUT" | sed -n '1p' | grep -o 'limited by [a-z ]*)')"
+check "capacity: with nothing readable (exit 0) the Capacity line says unknown, Memory and CPU say not measured, the two Not measured lines follow and no pair is counted; with only the memory unreadable the fit comes from the CPU, with only the load unreadable from the memory" "$U1|$U2|$U3" "0:Capacity: unknown (neither the memory nor the load could be read)./Memory: not measured./CPU: not measured./:2|Capacity: 7 more Dev+Tester pair(s) fit now (limited by CPU)./CPU: load 1.00 on 10 cores, settings.scaling.maxLoad 0.8 per core, 1.0 per pair: 7 pair(s)./|limited by memory)"
+# --json: the keys and the same numbers as the lines
+printf '2.00 10 9000\n' > "$CAPD/host"
+printf '101\t1\t300\tclaude\tclaude\n102\t1\t200\tclaude\tclaude --continue\n103\t102\t400\thelper\thelper --run\n900\t1\t4149\tcom.apple.Virtualization.VirtualMachine\tcom.apple.Virtualization.VirtualMachine\n901\t1\t1900\t/Applications/Orca.app/Contents/MacOS/Orca\t/Applications/Orca.app/Contents/MacOS/Orca\n902\t1\t1024\t/opt/exact\texact\n903\t1\t1023\t/opt/under\tunder\n' > "$CAPD/table"
+captry --json; J1="$(printf '%s' "$OUT" | jq -e . >/dev/null 2>&1 && echo valid):$(printf '%s' "$OUT" | jq -r 'keys | join(",")' 2>/dev/null)"; V1="$(printf '%s' "$OUT" | jq -c '[.os, .load1, .cores, .maxLoad, .pairLoad, .availableMB, .minFreeMemoryMB, .pairMB, .footprints.claude, .footprints.opencode, .footprints.codex, .footprintKind, .pairs, .orcaMB, .consumers, .notMeasured, .worktrees]' 2>/dev/null)"
+printf -- '- - -\n' > "$CAPD/host"; captry --json; V2="$(printf '%s' "$OUT" | jq -c '[.load1, .cores, .availableMB, .pairs, .footprintKind, (.worktrees | length)]' 2>/dev/null)"
+check "capacity --json: one valid object with exactly os, load1, cores, maxLoad, pairLoad, availableMB, minFreeMemoryMB, pairMB, footprints, footprintKind, pairs, orcaMB, consumers, notMeasured and worktrees, the numbers of the lines and null where nothing could be read (consumers take a process of 1024 MB and not one of 1023 MB)" "$J1|$V1|$V2" 'valid:availableMB,consumers,cores,footprintKind,footprints,load1,maxLoad,minFreeMemoryMB,notMeasured,orcaMB,os,pairLoad,pairMB,pairs,worktrees|["macos",2.00,10,0.8,1.0,9000,2048,900,{"mb":450,"tabs":2,"source":"measured"},{"mb":800,"tabs":0,"source":"default"},{"mb":550,"tabs":0,"source":"default"},"footprint",{"byMemory":7,"byCpu":6,"fit":6,"limit":"CPU"},1900,[{"name":"com.apple.Virtualization.VirtualMachine","mb":4149},{"name":"exact","mb":1024}],[],[]]|[null,null,null,{"byMemory":null,"byCpu":null,"fit":null,"limit":"unknown"},"footprint",0]'
+# the worktree rows: what each runs and how many more fit there, from its own configuration
+mkrow() {  # mkrow <folder> <config json> <env text>
+  mkdir -p "$1"; git -C "$1" init -q
+  printf '%s' "$2" > "$1/.git/orca-roles.config.json"
+  printf '%s' "$3" > "$1/.git/orca-roles.env"
+}
+RC3='{"roles":{"dev":{"open":"per-task","maxInstances":3},"tester":{"open":"per-task","maxInstances":3},"dev-2":{"instanceOf":"dev","open":"per-task"},"tester-2":{"instanceOf":"tester","open":"per-task"}},"settings":{"scaling":{"maxExtraInstances":4,"maxLoad":0.8,"minFreeMemoryMB":2048}}}'
+RC2='{"roles":{"dev":{"open":"per-task","maxInstances":3},"tester":{"open":"per-task","maxInstances":3},"dev-2":{"instanceOf":"dev","open":"per-task"},"tester-2":{"instanceOf":"tester","open":"per-task"}},"settings":{"scaling":{"maxExtraInstances":2,"maxLoad":0.8,"minFreeMemoryMB":2048}}}'
+RC10='{"roles":{"dev":{"open":"per-task","maxInstances":10},"tester":{"open":"per-task","maxInstances":10}},"settings":{"scaling":{"maxExtraInstances":20,"maxLoad":0.8,"minFreeMemoryMB":2048}}}'
+RCO='{"roles":{"dev":{"agent":"opencode","open":"per-task","maxInstances":3},"tester":{"open":"per-task","maxInstances":3}},"settings":{"scaling":{"maxExtraInstances":4}}}'
+mkrow "$CAPD/wtA" "$RC3" 'DEV=h1
+DEV_2=h2
+TESTER=h3
+TESTER_2=h4
+'
+printf 'b1\t1\t/tmp/t1\t%s\t/tmp/t1/.git\topen\nb1i\t1\t/tmp/t1i\t%s\t/tmp/t1i/.git\tintegrated\nb2\t1\t/tmp/t2\t%s\t/tmp/t2/.git\tremoved\n' "$(git -C "$CAPD/wtA" rev-parse HEAD 2>/dev/null || printf 'none')" "$(git -C "$CAPD/wtA" rev-parse HEAD 2>/dev/null || printf 'none')" "$(git -C "$CAPD/wtA" rev-parse HEAD 2>/dev/null || printf 'none')" > "$CAPD/wtA/.git/orca-roles.pairs"
+mkdir -p "$CAPD/wtB"
+mkrow "$CAPD/wtC" "$RC2" 'DEV=h1
+DEV_2=h2
+TESTER=h3
+TESTER_2=h4
+'
+mkrow "$CAPD/wtD" "$RC10" 'DEV=h1
+TESTER=h2
+'
+mkrow "$CAPD/wtE" "$RC3" 'DEV=h1
+TESTER=h2
+'
+mkrow "$CAPD/wtF" "$RCO" 'DEV=h1
+TESTER=h2
+'
+printf '2.00 10 9000\n' > "$CAPD/host"; printf 'Darwin\n' > "$CAPD/uname"
+WA="$(cd "$CAPD/wtA" && pwd -P)"; WB="$(cd "$CAPD/wtB" && pwd -P)"; WC="$(cd "$CAPD/wtC" && pwd -P)"; WD="$(cd "$CAPD/wtD" && pwd -P)"; WE="$(cd "$CAPD/wtE" && pwd -P)"
+captry "$CAPD/wtA"; R1="$RC:$(printf '%s' "$OUT" | grep '^Worktree ' || true)"
+captry "$CAPD/wtA" "$CAPD/wtB"; R2="$(printf '%s' "$OUT" | grep '^Worktree ' | tr '\n' '/')"
+captry "$CAPD/wtC"; R3="$(printf '%s' "$OUT" | grep '^Worktree ' | sed 's/.*; //')"
+captry "$CAPD/wtD"; R4="$(printf '%s' "$OUT" | grep '^Worktree ' | sed 's/.*; //')"
+printf -- '- - -\n' > "$CAPD/host"; captry "$CAPD/wtE"; R5="$(printf '%s' "$OUT" | grep '^Worktree ' | sed "s#$WE#WE#")"
+captry --json "$CAPD/wtE"; R6="$(printf '%s' "$OUT" | jq -c '.worktrees[0] | [.devTabs, .testerTabs, .pairTrees, .running, .moreHere, .limit, .machineMeasured]' 2>/dev/null)"
+captry --json "$CAPD/wtA" "$CAPD/wtB"; R7="$(printf '%s' "$OUT" | jq -c '[.worktrees[] | [.path, .team, (.devTabs // "-"), (.pairTrees // "-")]]' 2>/dev/null | sed "s#$WA#WA#g; s#$WB#WB#g")"
+check "capacity: a worktree row counts the Dev and Tester tabs (with their instances) and the open or integrated pair trees, and names what limits 'more fit here': maxExtraInstances on a tie with maxInstances (1), maxExtraInstances alone (0), the machine when the caps leave more (6, CPU), maxExtraInstances with ' The machine was not measured.' when nothing could be read (2, JSON machineMeasured false); a folder without a team is a 'no team' row and two folders give two rows in order" "$R1|$R2|$R3|$R4|$R5|$R6|$R7" "0:Worktree $WA: 2 pair(s) running (2 Dev tab(s), 2 Tester tab(s), 2 pair tree(s)); 1 more fit here (limited by maxExtraInstances).|Worktree $WA: 2 pair(s) running (2 Dev tab(s), 2 Tester tab(s), 2 pair tree(s)); 1 more fit here (limited by maxExtraInstances)./Worktree $WB: no team./|0 more fit here (limited by maxExtraInstances).|6 more fit here (limited by CPU).|Worktree WE: 1 pair(s) running (1 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 2 more fit here (limited by maxExtraInstances). The machine was not measured.|[1,1,0,1,2,\"maxExtraInstances\",false]|[[\"WA\",true,2,2],[\"WB\",false,\"-\",\"-\"]]"
+# the machine part's configuration: ORCA_ROLES_CONFIG, else the first worktree's, else the kit's config.json
+printf '2.00 10 9000\n' > "$CAPD/host"
+printf '{"roles":{"dev":{"agent":"codex"},"tester":{"agent":"codex"}}}' > "$KIT/config.json"
+try capx -; F1="$(printf '%s' "$OUT" | sed -n '2p')"
+rm -f "$KIT/config.json"
+try capx - "$CAPD/wtF"; F2="$(printf '%s' "$OUT" | sed -n '2p')"
+check "capacity: the machine part takes its agents and settings.scaling from ORCA_ROLES_CONFIG, else the kit's config.json when there is no worktree, else the first worktree's own configuration (900 MB per pair with both on claude; 1100 MB with both on codex from the kit's config.json; 1250 MB with Dev on opencode from the first worktree's)" "$F1|$F2" "Memory: 9000 MB available, 2048 MB kept free (settings.scaling.minFreeMemoryMB), 1100 MB per pair (Dev codex 550 MB, Tester codex 550 MB): 6 pair(s).|Memory: 9000 MB available, 2048 MB kept free (settings.scaling.minFreeMemoryMB), 1250 MB per pair (Dev opencode 800 MB, Tester claude 450 MB): 5 pair(s)."
+# no folder argument: the current worktree, with ORCA_ROLES_STATE and ORCA_ROLES_CONFIG applying as in team-status.sh
+printf 'DEV=only\n' > "$CAPD/state.env"
+OUT="$(cd "$CAPD/wtA" && KIT="$KIT" PATH="$CAPB:$PATH" HOME="$TMP/home" ORCA_ROLES_PROC="$CAPD/proc" ORCA_ROLES_STATE="$CAPD/state.env" ORCA_ROLES_CONFIG="$CAPD/wtC/.git/orca-roles.config.json" ORCA_ROLES_HOST_CAPACITY="$CAPD/hostsh" ORCA_ROLES_PROC_TABLE="$CAPD/tablesh" "$ROOT/bin/capacity.sh" 2>"$CAPD/err")"; RC=$?
+D1="$RC:$(printf '%s' "$OUT" | grep '^Worktree ' | sed "s#$WA#WA#")"
+OUT="$(cd "$CAPD/empty" && KIT="$KIT" PATH="$CAPB:$PATH" HOME="$TMP/home" ORCA_ROLES_PROC="$CAPD/proc" ORCA_ROLES_HOST_CAPACITY="$CAPD/hostsh" ORCA_ROLES_PROC_TABLE="$CAPD/tablesh" "$ROOT/bin/capacity.sh" 2>"$CAPD/err")"; RC=$?
+D2="$RC:$(printf '%s' "$OUT" | grep -c '^Worktree ' || true)"
+check "capacity: without a folder argument the current worktree is the one row (ORCA_ROLES_STATE names the tabs it counts and ORCA_ROLES_CONFIG the configuration it uses) and a folder that is no git worktree gives no row" "$D1|$D2" "0:Worktree WA: 1 pair(s) running (1 Dev tab(s), 0 Tester tab(s), 2 pair tree(s)); 1 more fit here (limited by maxExtraInstances).|0:0"
+# usage errors, and never a call to Orca
+try capx "$KIT/config.default.json" --nope; X1="$RC:$(wc -l < "$CAPD/err" | tr -d ' ')"
+try capx "$KIT/config.default.json" "$CAPD/nosuch"; X2="$RC"
+try capx "$KIT/config.default.json" --help; X3="$RC:$(printf '%s' "$OUT" | grep -c '^# Usage:  capacity.sh' || true)"
+try capx "$KIT/config.default.json" -h; X4="$RC"
+: > "$NOORCA/calls.log"; captry; X5="$(wc -l < "$NOORCA/calls.log" | tr -d ' '):$RC"
+check "capacity: an unknown option and a folder argument that is not a folder exit 2 with a message on stderr, --help and -h print the usage and exit 0, and it never calls orca" "$X1|$X2|$X3|$X4|$X5" "2:1|2|0:1|0|0:0"
+}
+
+sec_capacity_contract() {
+# Contract of the capacity measure (lib.sh) and bin/capacity.sh: every criterion over its whole family and edges, all readings through the seams
+CC="$TMP/ccap"; CCB="$CC/bin"; CCPATH="$CCB:$PATH"; mkdir -p "$CCB" "$CC/proc" "$CC/empty"; : > "$CC/err"
+printf '#!/bin/sh\ncat "%s/uname" 2>/dev/null\n' "$CC" > "$CCB/uname"
+printf '#!/bin/sh\ncat "%s/table" 2>/dev/null\n' "$CC" > "$CCB/table"
+printf '#!/bin/sh\ncat "%s/host" 2>/dev/null\n' "$CC" > "$CCB/host"
+printf '#!/bin/sh\ncat "%s/top.out" 2>/dev/null\n' "$CC" > "$CCB/top"
+cat > "$CCB/ps" <<EOS
+#!/bin/sh
+prev=""; pid=""
+for a in "\$@"; do [ "\$prev" = "-p" ] && pid="\$a"; prev="\$a"; done
+case "\$*" in
+  *comm*) src="$CC/ps-comm";;
+  *args*) src="$CC/ps-args";;
+  *) exit 0;;
+esac
+[ -r "\$src" ] || exit 0
+if [ -n "\$pid" ]; then awk -v p="\$pid" '\$1 == p' "\$src"; else cat "\$src"; fi
+exit 0
+EOS
+chmod +x "$CCB"/uname "$CCB"/table "$CCB"/host "$CCB"/top "$CCB"/ps
+: > "$CC/uname"; : > "$CC/table"; : > "$CC/top.out"; : > "$CC/ps-comm"; : > "$CC/ps-args"; : > "$CC/proc/version"; printf '%s\n' '- - -' > "$CC/host"
+cc_os() { printf '%s\n' "$1" > "$CC/uname"; }
+cc_ver() { printf '%s\n' "$1" > "$CC/proc/version"; }
+cc_top_start() { cat > "$CC/top.out" <<'EOT'
+Processes: 30 total, 1 running, 29 sleeping, 200 threads
+2026/11/15 10:00:00
+Load Avg: 1.00, 1.00, 1.00
+PhysMem: 20G used (2907M wired, 5470M compressor), 3010M unused.
+
+PID    MEM
+EOT
+}
+cc_toprow() { printf '%s   %s\n' "$1" "$2" >> "$CC/top.out"; }
+cc_psrow() { printf '%6s %6s %8s %s\n' "$1" "$2" "$3" "$4" >> "$CC/ps-comm"; }
+cc_psargs() { printf '%6s %s\n' "$1" "$2" >> "$CC/ps-args"; }
+cc_row() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$CC/table"; }
+cc_lib() { ( PATH="$CCB:$PATH"; ORCA_ROLES_PROC="$CC/proc"; "$@" ) 2>"$CC/err" || true; }
+cc_agent() { ( PATH="$CCB:$PATH"; ORCA_ROLES_PROC="$CC/proc"; ORCA_ROLES_PROC_TABLE="$CCB/table"; agent_tab_mb "$@" ) 2>"$CC/err" || true; }
+cc_run() {  # cc_run <config> [args...]: bin/capacity.sh from a folder with no team, the seams from the fixture files; $CCOUT, $CCRC
+  local cfg="$1"; shift
+  CCOUT="$( cd "$CC/empty" && KIT="$KIT" HOME="$TMP/home" PATH="$CCPATH" ORCA_ROLES_PROC="$CC/proc" ORCA_ROLES_HOST_CAPACITY="$CCB/host" ORCA_ROLES_PROC_TABLE="$CCB/table" ORCA_ROLES_CONFIG="$cfg" "$ROOT/bin/capacity.sh" "$@" 2>"$CC/err" )" && CCRC=0 || CCRC=$?
+}
+cc_fix_macos() {  # C5's faked macOS: two claude tabs averaging 450 MB, Orca processes, a virtual machine and four other large consumers
+  cc_os Darwin; cc_ver ''; : > "$CC/table"
+  cc_row 10 1 300 /usr/local/bin/claude 'claude --resume abc'
+  cc_row 20 1 200 /usr/local/bin/claude 'claude'
+  cc_row 21 20 400 /usr/bin/python3 'python3 helper.py'
+  cc_row 22 20 0 /usr/local/bin/claude 'claude --version'
+  cc_row 60 1 1000 '/Applications/Orca.app/Contents/MacOS/Orca' '/Applications/Orca.app/Contents/MacOS/Orca --serve'
+  cc_row 61 1 200 '/Applications/Orca Agents.app/Contents/MacOS/Orca Agents' '/Applications/Orca Agents.app/Contents/MacOS/Orca Agents'
+  cc_row 62 1 5000 /opt/manyargs/app '/opt/manyargs/app /Applications/Orca.app/Contents/x'
+  cc_row 63 1 4500 /usr/local/bin/orca '/usr/local/bin/orca serve'
+  cc_row 70 1 4149 /usr/libexec/com.apple.Virtualization.VirtualMachine 'com.apple.Virtualization.VirtualMachine'
+  cc_row 71 1 2000 /opt/alpha 'alpha'
+  cc_row 72 1 1500 /opt/beta 'beta'
+  cc_row 73 1 1200 /opt/gamma 'gamma'
+  cc_row 74 1 1100 /opt/dog 'dog'
+  cc_row 75 1 500 /opt/small 'small'
+}
+CFG1="$CC/cfg-2048-08.json"; CFG2="$CC/cfg-0-08.json"; CFG3="$CC/cfg-2048-07.json"; CFG4="$CC/cfg-2048-10.json"
+printf '%s' '{"settings":{"scaling":{"minFreeMemoryMB":2048,"maxLoad":0.8}},"roles":{"dev":{"title":"Dev"},"tester":{"title":"Tester"}}}' > "$CFG1"
+printf '%s' '{"settings":{"scaling":{"minFreeMemoryMB":0,"maxLoad":0.8}},"roles":{"dev":{"title":"Dev"},"tester":{"title":"Tester"}}}' > "$CFG2"
+printf '%s' '{"settings":{"scaling":{"minFreeMemoryMB":2048,"maxLoad":0.7}},"roles":{"dev":{"title":"Dev"},"tester":{"title":"Tester"}}}' > "$CFG3"
+printf '%s' '{"settings":{"scaling":{"minFreeMemoryMB":2048,"maxLoad":1.0}},"roles":{"dev":{"title":"Dev"},"tester":{"title":"Tester"}}}' > "$CFG4"
+
+# C1, C2: the OS kind and the meminfo folder
+cc_os Darwin; cc_ver 'Linux version 6.6.0 (microsoft-standard-WSL2)'; H1="$(cc_lib host_os)"
+cc_os Linux; H2="$(cc_lib host_os)"
+cc_ver 'Linux version 5.15.0 (Microsoft Corporation)'; H3="$(cc_lib host_os)"
+cc_ver 'Linux 6.5.0-MICROSOFT'; H4="$(cc_lib host_os)"
+cc_ver 'Linux version 5.15.0-1051-azure'; H5="$(cc_lib host_os)"
+cc_ver ''; H6="$(cc_lib host_os)"
+cc_os FreeBSD; H7="$(cc_lib host_os)"
+cc_os ''; H8="$(cc_lib host_os)"
+cc_os Darwin; H9="$(cc_lib host_os)"
+cc_os Linux
+printf 'MemTotal: 16000000 kB\nMemAvailable: 8388608 kB\n' > "$CC/proc/meminfo"; M1="$(cc_lib host_capacity | awk '{print $3}')"
+rm -f "$CC/proc/meminfo"; M2="$(cc_lib host_capacity | awk '{print $3}')"
+printf 'MemTotal: 16000000 kB\n' > "$CC/proc/meminfo"; M3="$(cc_lib host_capacity | awk '{print $3}')"
+printf 'MemAvailable: 0 kB\n' > "$CC/proc/meminfo"; M4="$(cc_lib host_capacity | awk '{print $3}')"
+printf 'MemAvailable: 1023 kB\n' > "$CC/proc/meminfo"; M5="$(cc_lib host_capacity | awk '{print $3}')"
+printf 'MemAvailable: 1024 kB\n' > "$CC/proc/meminfo"; M6="$(cc_lib host_capacity | awk '{print $3}')"
+check "capacity-contract: host_os gives macos, wsl (a Linux version with Microsoft in any case), linux, other (FreeBSD and no uname output) from a uname shim, and host_capacity's Linux memory comes from <ORCA_ROLES_PROC>/meminfo (8388608 kB -> 8192, 1024 -> 1, 1023 -> 0, no meminfo or no MemAvailable -> -)" "$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9|$M1|$M2|$M3|$M4|$M5|$M6" "macos|wsl|wsl|wsl|linux|linux|other|other|macos|8192|-|-|0|0|1"
+
+# C3: the MEM unit family of a faked macOS top, and the two-ps join (a pid in only one of them is left out)
+cc_os Darwin; cc_ver ''
+cc_top_start
+cc_toprow 100 4149M; cc_toprow 101 914M+; cc_toprow 102 1.5G; cc_toprow 103 512K; cc_toprow 104 2T; cc_toprow 105 300M-
+cc_toprow 106 n/a; cc_toprow 107 ''; cc_toprow 108 1023K; cc_toprow 109 1024K; cc_toprow 110 1B; cc_toprow 111 1024B
+cc_toprow 112 1.9M; cc_toprow 113 2G; cc_toprow 114 0.5G; cc_toprow 115 1023M; cc_toprow 116 1T; cc_toprow 117 99M*
+cc_toprow 200 500M
+for p in 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 201; do
+  cc_psrow "$p" 1 999999 "/usr/bin/p$p"; cc_psargs "$p" "p$p"
+done
+T1="$(cc_lib proc_table | wc -l | tr -d ' ')"
+T2="$(cc_lib proc_table | awk -F'\t' '$1 ~ /^[0-9]+$/ {printf "%s=%s\n", $1, $3}' | sort -n | tr '\n' ' ' | sed 's/ $//')"
+check "capacity-contract: proc_table on a faked macOS (top and ps shims) gives the MEM column of top in MB (4149M, 914M+, 1.5G, 512K, 2T, 300M-, 1023K, 1024K, 1B, 1024B, 1.9M, 2G, 0.5G, 1023M, 1T, 99M*; n/a and an empty value give 0; the ps RSS is not used) and leaves out the pids only one of the two ps calls lists" "$T1|$T2" "18|100=4149 101=914 102=1536 103=0 104=2097152 105=300 106=0 107=0 108=0 109=1 110=0 111=0 112=1 113=2048 114=512 115=1023 116=1048576 117=99"
+
+# C3: the last two fields come out whole (spaces kept apart by the tabs), Linux and WSL take RSS/1024, other prints nothing
+cc_os Darwin
+cc_top_start; cc_toprow 300 4149M; cc_toprow 301 22M
+cc_psrow 300 1 45256 '/Applications/Orca.app/Contents/Frameworks/Orca Helper (Renderer).app/Contents/MacOS/Orca Helper (Renderer)'
+cc_psargs 300 '/Applications/Orca.app/Contents/Frameworks/Orca Helper (Renderer).app/Contents/MacOS/Orca Helper (Renderer) --type=renderer --lang=en-US --user-data-dir=/Users/x/Library/Application Support/Orca'
+cc_psrow 301 300 8192 /usr/bin/python3; cc_psargs 301 '/usr/bin/python3 -m http.server 8080'
+S1="$(cc_lib proc_table | awk -F'\t' '$1 == 300 { print ($3 == "4149" && $4 == "/Applications/Orca.app/Contents/Frameworks/Orca Helper (Renderer).app/Contents/MacOS/Orca Helper (Renderer)" && $5 == "/Applications/Orca.app/Contents/Frameworks/Orca Helper (Renderer).app/Contents/MacOS/Orca Helper (Renderer) --type=renderer --lang=en-US --user-data-dir=/Users/x/Library/Application Support/Orca") ? "ok" : "bad(" $3 "|" $4 "|" $5 ")" }')"
+: > "$CC/top.out"; : > "$CC/ps-comm"; : > "$CC/ps-args"; cc_toprow 400 999M
+cc_os Linux; cc_ver 'Linux version 6.6.0-generic'
+cc_psrow 400 1 1023 /usr/bin/a; cc_psargs 400 'a'
+cc_psrow 401 1 1024 /usr/bin/b; cc_psargs 401 'b'
+cc_psrow 402 1 4095 /usr/bin/c; cc_psargs 402 'c'
+cc_psrow 403 1 4096 /usr/bin/d; cc_psargs 403 'd'
+cc_psrow 404 1 0 /usr/bin/e; cc_psargs 404 'e'
+L1="$(cc_lib proc_table | awk -F'\t' '{printf "%s=%s ", $1, $3}' | sed 's/ $//')"
+cc_ver 'Linux version 5.15.153.1-microsoft-standard-WSL2'
+L2="$(cc_lib proc_table | awk -F'\t' '{printf "%s=%s ", $1, $3}' | sed 's/ $//')"
+cc_os FreeBSD; L3="$(cc_lib proc_table | wc -l | tr -d ' ')"
+check "capacity-contract: proc_table keeps an executable path with spaces and args with spaces whole in their own fields, takes RSS/1024 rounded down on Linux and WSL (1023 -> 0, 1024 -> 1, 4095 -> 3, 4096 -> 4, 0 -> 0; top is not read there) and prints no line on another system" "$S1|$L1|$L2|$L3" "ok|400=0 401=1 402=3 403=4 404=0|400=0 401=1 402=3 403=4 404=0|0"
+
+# C4: a tab is an agent process with no agent ancestor, its footprint its MB plus every descendant; opencode serve is no tab
+cc_os Darwin; : > "$CC/table"
+cc_row 10 1 300 /usr/local/bin/claude 'claude'
+cc_row 20 1 200 /usr/local/bin/claude 'claude'
+cc_row 21 20 400 /usr/bin/python3 'python3 helper.py'
+cc_row 22 20 0 /usr/local/bin/claude 'claude --version'
+cc_row 30 1 250 /usr/local/bin/opencode 'opencode'
+cc_row 31 30 500 /usr/local/bin/opencode 'opencode serve --stdio'
+cc_row 40 1 900 /usr/local/bin/opencode 'opencode serve --service'
+A1="$(cc_agent claude)|$(cc_agent opencode)|$(cc_agent codex)"
+: > "$CC/table"
+A2="$(cc_agent claude)|$(cc_agent opencode)|$(cc_agent codex)|$(cc_agent custom)"
+cc_row 50 1 100 /usr/local/bin/node 'node /usr/local/bin/claude-code'
+cc_row 51 1 201 /usr/local/bin/claude 'claude'
+cc_row 52 1 300 /usr/bin/node 'node /opt/codex/bin/codex'
+cc_row 53 1 700 /usr/bin/node 'node server.js'
+cc_row 54 1 50 /opt/tools/opencode '/opt/tools/opencode run batch'
+A3="$(cc_agent claude)|$(cc_agent opencode)|$(cc_agent codex)"
+check "capacity-contract: agent_tab_mb averages the footprint of the live tabs, rounded down: two claude tabs of 300 and 200+400 MB are 450 2, the claude under a claude counts in its parent's tab and not as a tab, an opencode tab of 250 with an 'opencode serve --stdio' child of 500 is 750 1, a lone 'opencode serve --service' is no tab, node plus a second word starting with claude or codex is an agent, the fallbacks are 550 0 / 800 0 / 550 0 (550 0 for any other agent), and 100 and 201 give 150" "$A1|$A2|$A3" "450 2|750 1|550 0|550 0|800 0|550 0|550 0|150 2|50 1|300 1"
+
+# a1's pair capacity, through the human lines: by memory max(0,(A-F)/P), by CPU max(0,(M*C-L)/Q with Q=1.0), fit the smaller, its resource the limit
+cc_pair() {  # cc_pair <config> <host>: "<byMemory> <byCPU> <fit> <limit>" from the Memory, CPU and Capacity lines
+  printf '%s\n' "$2" > "$CC/host"
+  cc_run "$1"
+  printf '%s\n' "$CCOUT" | awk '
+    /^Memory: not measured\.$/ { m = "unknown" }
+    /^Memory: / && !/not measured/ { l = $0; sub(/.*: /, "", l); sub(/ pair\(s\)\.$/, "", l); m = l }
+    /^CPU: not measured\.$/ { c = "unknown" }
+    /^CPU: / && !/not measured/ { l = $0; sub(/.*: /, "", l); sub(/ pair\(s\)\.$/, "", l); c = l }
+    /^Capacity: unknown/ { f = "unknown"; t = "unknown" }
+    /^Capacity: [0-9]/ { l = $0; sub(/^Capacity: /, "", l); f = l; sub(/ more .*/, "", f); t = l; sub(/.*\(limited by /, "", t); sub(/\)\.$/, "", t) }
+    END { printf "%s %s %s %s", m, c, f, t }'
+}
+: > "$CC/table"
+Q1="$(cc_pair "$CFG1" '2.00 10 9000')"
+Q2="$(cc_pair "$CFG1" '7.50 10 9000')"
+Q3="$(cc_pair "$CFG1" '0.00 10 2047')"
+Q4="$(cc_pair "$CFG1" '1.00 10 -')"
+Q5="$(cc_pair "$CFG1" '- - -')"
+Q6="$(cc_pair "$CFG1" '0.00 10 8648')"
+Q7="$(cc_pair "$CFG1" '0.00 10 8647')"
+Q8="$(cc_pair "$CFG1" '0.00 10 3148')"
+Q9="$(cc_pair "$CFG1" '0.00 10 3147')"
+Q10="$(cc_pair "$CFG1" '- 10 9000')"
+Q11="$(cc_pair "$CFG1" '2.00 - 9000')"
+Q12="$(cc_pair "$CFG1" '20.00 10 9000')"
+Q13="$(cc_pair "$CFG2" '0.00 10 1100')"
+Q14="$(cc_pair "$CFG2" '0.00 10 1099')"
+Q15="$(cc_pair "$CFG3" '0.00 10 9000')"
+Q16="$(cc_pair "$CFG3" '6.00 10 9000')"
+Q17="$(cc_pair "$CFG3" '6.10 10 9000')"
+Q18="$(cc_pair "$CFG4" '10.00 10 9000')"
+Q19="$(cc_pair "$CFG4" '9.00 10 9000')"
+check "capacity-contract: the pair capacity by memory is max(0,(A-F)/P) and by CPU max(0,(M*C-L)/1.0), the smaller one fits and names the limit (memory and CPU on a tie, unknown when neither is known, the known one when only it is): 9000/2048/1100/2.0/10/0.8 -> 6 6, 7.5 -> 6 0 CPU, 2047 -> 0 8 memory, A unknown -> 7 CPU, both unknown, 8648 -> 6 and 8647 -> 5, 3148 -> 1 and 3147 -> 0, F=0 -> 1100 is one pair, maxLoad 0.7 gives 7 by CPU and 6.10 gives 0, maxLoad 1.0 with load 10 gives 0 and 9 gives 1, an unreadable load or core count leaves memory" "$Q1|$Q2|$Q3|$Q4|$Q5|$Q6|$Q7|$Q8|$Q9|$Q10|$Q11|$Q12|$Q13|$Q14|$Q15|$Q16|$Q17|$Q18|$Q19" "6 6 6 memory and CPU|6 0 0 CPU|0 8 0 memory|unknown 7 7 CPU|unknown unknown unknown unknown|6 8 6 memory|5 8 5 memory|1 8 1 memory|0 8 0 memory|6 unknown 6 memory|6 unknown 6 memory|6 0 0 CPU|1 8 1 memory|0 8 0 memory|6 7 6 memory|6 1 1 CPU|6 0 0 CPU|6 0 0 CPU|6 1 1 CPU"
+
+# C5: the human lines of a faked macOS
+cc_fix_macos
+printf '2.00 10 9000\n' > "$CC/host"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out5"
+G1="$(grep -cxF 'Capacity: 6 more Dev+Tester pair(s) fit now (limited by CPU).' "$CC/out5" || true)"
+G2="$(grep -cxF 'Memory: 9000 MB available, 2048 MB kept free (settings.scaling.minFreeMemoryMB), 900 MB per pair (Dev claude 450 MB, Tester claude 450 MB): 7 pair(s).' "$CC/out5" || true)"
+G3="$(grep -cE '^CPU: load 2(\.0+)? on 10 cores, settings\.scaling\.maxLoad 0\.8 per core, 1\.0 per pair: 6 pair\(s\)\.$' "$CC/out5" || true)"
+G4="$(grep -cxF 'Footprints: claude 450 MB (average of 2 live tab(s)); opencode 800 MB (default estimate, no live tab); codex 550 MB (default estimate, no live tab).' "$CC/out5" || true)"
+G5="$(grep -cxF 'Orca: 1200 MB.' "$CC/out5" || true)"
+G6="$(grep -cxF "Large consumers: app 5000 MB, orca 4500 MB, com.apple.Virtualization.VirtualMachine (a virtual machine, such as Docker Desktop's) 4149 MB." "$CC/out5" || true)"
+G7="$(wc -l < "$CC/out5" | tr -d ' ')"
+G8="$(grep -c '^Not measured:' "$CC/out5" || true)"
+G9="$CCRC:$(wc -c < "$CC/err" | tr -d ' ')"
+check "capacity-contract: faked macOS with host '2.00 10 9000' prints the Capacity (6, limited by CPU), Memory (900 MB per pair, 7 pairs), CPU (6 pairs), Footprints (450 measured), Orca (the two Orca.app processes, not the args of another one or a bare orca on macOS), Large consumers (largest 3, the virtual machine note) and no Not measured line, nothing else and nothing on stderr" "$G1|$G2|$G3|$G4|$G5|$G6|$G7|$G8|$G9" "1|1|1|1|1|1|6|0|0:0"
+
+# C6: Linux says Measured as RSS and has no WSL line; WSL has the verbatim not-measured line and no Orca line; other measures no process
+cc_os Linux; cc_ver 'Linux version 6.6.0-generic'; : > "$CC/table"; : > "$CC/top.out"; : > "$CC/ps-comm"; : > "$CC/ps-args"
+cc_row 10 1 300 /usr/local/bin/claude 'claude'
+cc_row 20 1 600 /usr/local/bin/claude 'claude'
+cc_row 30 1 1200 /usr/local/bin/opencode 'opencode run'
+cc_row 64 1 1100 /usr/local/bin/orca 'orca serve'
+cc_row 71 1 2000 /opt/alpha 'alpha'
+cc_row 72 1 1500 /opt/beta 'beta'
+cc_row 74 1 1100 /opt/dog 'dog'
+: > "$CC/top.out"; : > "$CC/ps-comm"; : > "$CC/ps-args"
+printf '2.00 10 9000\n' > "$CC/host"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out6"
+K1="$(grep -cxF 'Footprints: claude 450 MB (average of 2 live tab(s)); opencode 1200 MB (average of 1 live tab(s)); codex 550 MB (default estimate, no live tab). Measured as RSS.' "$CC/out6" || true)"
+K2="$(grep -cxF 'Orca: 1100 MB.' "$CC/out6" || true)"
+K3="$(grep -cxF 'Large consumers: alpha 2000 MB, beta 1500 MB, dog 1100 MB.' "$CC/out6" || true)"
+K4="$(grep -cxF 'Capacity: 6 more Dev+Tester pair(s) fit now (limited by CPU).' "$CC/out6" || true)"
+K5="$(grep -c '^Not measured:' "$CC/out6" || true)"
+cc_ver 'Linux version 5.15.153.1-microsoft-standard-WSL2'
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out6w"
+W1="$(grep -cxF "Not measured: the Windows side (Orca, the Windows apps and the memory Windows keeps for itself); the numbers are the WSL VM's, within its .wslconfig memory limit." "$CC/out6w" || true)"
+W2="$(grep -c '^Orca:' "$CC/out6w" || true)"
+W3="$(grep -cE '^Footprints: .* Measured as RSS\.$' "$CC/out6w" || true)"
+W4="$CCRC"
+cc_os FreeBSD; cc_ver ''; : > "$CC/table"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out6o"
+O1="$(grep -cxF 'Not measured: process footprints on this system.' "$CC/out6o" || true)"
+O2="$(grep -cxF 'Footprints: claude 550 MB (default estimate, no live tab); opencode 800 MB (default estimate, no live tab); codex 550 MB (default estimate, no live tab).' "$CC/out6o" || true)"
+O3="$(grep -c '^Orca:' "$CC/out6o" || true):$(grep -c '^Large consumers:' "$CC/out6o" || true)"
+check "capacity-contract: faked Linux keeps the same numbers, appends ' Measured as RSS.' to Footprints, counts an orca basename and leaves the agent tabs out of Large consumers; faked WSL prints the verbatim Windows not-measured line and no Orca line; another system says its process footprints are not measured, with the default Footprints line and no Orca or Large consumers line" "$K1|$K2|$K3|$K4|$K5|$W1|$W2|$W3|$W4|$O1|$O2|$O3" "1|1|1|1|0|1|0|1|0|1|1|0:0"
+
+# C7: an unreadable host and each half of it
+cc_os Darwin; cc_ver ''; : > "$CC/table"; : > "$CC/top.out"; : > "$CC/ps-comm"; : > "$CC/ps-args"
+printf '%s\n' '- - -' > "$CC/host"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out7"
+U1="$(grep -cxF 'Capacity: unknown (neither the memory nor the load could be read).' "$CC/out7" || true)"
+U2="$(grep -cxF 'Memory: not measured.' "$CC/out7" || true)"
+U3="$(grep -cxF 'CPU: not measured.' "$CC/out7" || true)"
+U4="$(grep -cxF 'Not measured: the memory (the system gave no available memory).' "$CC/out7" || true)"
+U5="$(grep -cxF 'Not measured: the load (the system gave no load or no core count).' "$CC/out7" || true)"
+U6="$CCRC:$(grep -c '^Not measured:' "$CC/out7" || true)"
+printf '%s\n' '2.00 10 -' > "$CC/host"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out7m"
+V1="$(grep -cxF 'Capacity: 6 more Dev+Tester pair(s) fit now (limited by CPU).' "$CC/out7m" || true)"
+V2="$(grep -c '^CPU: load ' "$CC/out7m" || true):$(grep -cxF 'Memory: not measured.' "$CC/out7m" || true):$(grep -c '^Not measured:' "$CC/out7m" || true)"
+printf '%s\n' '- 10 9000' > "$CC/host"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out7l"
+V3="$(grep -cxF 'Capacity: 6 more Dev+Tester pair(s) fit now (limited by memory).' "$CC/out7l" || true)"
+V4="$(grep -cxF 'CPU: not measured.' "$CC/out7l" || true):$(grep -cxF 'Not measured: the load (the system gave no load or no core count).' "$CC/out7l" || true)"
+printf '%s\n' '2.00 - 9000' > "$CC/host"
+cc_run "$CFG1"; printf '%s\n' "$CCOUT" > "$CC/out7c"
+V5="$(grep -cxF 'Capacity: 6 more Dev+Tester pair(s) fit now (limited by memory).' "$CC/out7c" || true):$(grep -cxF 'CPU: not measured.' "$CC/out7c" || true)"
+check "capacity-contract: an unreadable host prints Capacity unknown, Memory: not measured., CPU: not measured., the two Not measured lines and exits 0; only the memory unreadable gives fit by CPU (6, CPU) with a measured CPU line, and only the load or the cores unreadable gives fit by memory (6, memory) with CPU: not measured." "$U1|$U2|$U3|$U4|$U5|$U6|$V1|$V2|$V3|$V4|$V5" "1|1|1|1|1|0:2|1|1:1:1|1|1:1|1:1"
+
+# C8: --json is one object with exactly the spec's keys and the same numbers, null where unknown
+cc_fix_macos
+printf '2.00 10 9000\n' > "$CC/host"
+cc_run "$CFG1" --json; printf '%s' "$CCOUT" > "$CC/j1"
+J1="$(jq -s -e 'length == 1 and (.[0] | type) == "object"' "$CC/j1" >/dev/null 2>&1 && echo one || echo bad)"
+J2="$(jq -r 'keys | join(",")' "$CC/j1" 2>/dev/null || true)"
+J3="$(jq -c '[.os, (.load1 * 1), .cores, (.maxLoad * 1), (.pairLoad * 1), .availableMB, .minFreeMemoryMB, .pairMB]' "$CC/j1" 2>/dev/null || true)"
+J4="$(jq -c '[.footprints.claude, .footprints.opencode, .footprints.codex, .footprintKind]' "$CC/j1" 2>/dev/null || true)"
+J5="$(jq -c '[.pairs.byMemory, .pairs.byCpu, .pairs.fit, .pairs.limit]' "$CC/j1" 2>/dev/null || true)"
+J6="$(jq -c '[.orcaMB, .consumers, .notMeasured, .worktrees]' "$CC/j1" 2>/dev/null || true)"
+printf '%s\n' '- - -' > "$CC/host"; : > "$CC/table"; : > "$CC/top.out"; : > "$CC/ps-comm"; : > "$CC/ps-args"
+cc_run "$CFG1" --json; printf '%s' "$CCOUT" > "$CC/j2"
+J7="$(jq -c '[.os, .load1, .cores, .availableMB, .pairMB, .footprintKind]' "$CC/j2" 2>/dev/null || true)"
+J8="$(jq -c '[.pairs.byMemory, .pairs.byCpu, .pairs.fit, .pairs.limit]' "$CC/j2" 2>/dev/null || true)"
+J9="$(jq -c '[.orcaMB, .consumers, .notMeasured]' "$CC/j2" 2>/dev/null || true)"
+# C10 part: the usage exits, --help, and a failing orca shim that must never be called
+cc_fix_macos; printf '2.00 10 9000\n' > "$CC/host"
+cc_run "$CFG1" --nope; X1="$CCRC:$(printf '%s' "$CCOUT" | wc -c | tr -d ' '):$(grep -c . "$CC/err" || true)"
+cc_run "$CFG1" "$CC/host"; X2="$CCRC"
+cc_run "$CFG1" --help; X3="$CCRC:$(printf '%s' "$CCOUT" | grep -c 'Usage:.*capacity\.sh' || true)"
+cc_run "$CFG1" -h; X4="$CCRC"
+rm -f "$CCB/orca"; cc_run "$CFG1"; BEFORE="$CCOUT"
+printf '#!/bin/sh\necho "$*" >> "%s/orca.log"\nexit 1\n' "$CC" > "$CCB/orca"; chmod +x "$CCB/orca"; : > "$CC/orca.log"
+cc_run "$CFG1"; X5="$CCRC:$([ "$CCOUT" = "$BEFORE" ] && echo same || echo changed):$(wc -l < "$CC/orca.log" | tr -d ' ')"
+rm -f "$CCB/orca"
+check "capacity-contract: --json prints one object and only that, with exactly the 15 keys and the same numbers as the human output (nulls when unknown, footprints default, machineMeasured false); an unknown option and a path that is not a folder exit 2 with a message on stderr and nothing on stdout, --help and -h print the usage and exit 0, and a failing orca first on the PATH changes nothing and is never called" "$J1|$J2|$J3|$J4|$J5|$J6|$J7|$J8|$J9|$X1|$X2|$X3|$X4|$X5" "one|availableMB,consumers,cores,footprintKind,footprints,load1,maxLoad,minFreeMemoryMB,notMeasured,orcaMB,os,pairLoad,pairMB,pairs,worktrees|[\"macos\",2,10,0.8,1,9000,2048,900]|[{\"mb\":450,\"tabs\":2,\"source\":\"measured\"},{\"mb\":800,\"tabs\":0,\"source\":\"default\"},{\"mb\":550,\"tabs\":0,\"source\":\"default\"},\"footprint\"]|[7,6,6,\"CPU\"]|[1200,[{\"name\":\"app\",\"mb\":5000},{\"name\":\"orca\",\"mb\":4500},{\"name\":\"com.apple.Virtualization.VirtualMachine\",\"mb\":4149}],[],[]]|[\"macos\",null,null,null,1100,\"footprint\"]|[null,null,null,\"unknown\"]|[null,[],[\"the memory (the system gave no available memory)\",\"the load (the system gave no load or no core count)\"]]|2:0:1|2|0:1|0|0:same:0"
+
+# C9: the per-worktree rows
+CWTA="$CC/wtA"; CWTB="$CC/wtB"; CWTC="$CC/wtC"; CWTD="$CC/wtD"; CWTE="$CC/wtE"
+rm -rf "$CWTA" "$CWTB" "$CWTC" "$CWTD" "$CWTE"
+for d in "$CWTA" "$CWTB" "$CWTC" "$CWTD" "$CWTE"; do mkdir -p "$d"; git -C "$d" init -q; done
+CWTA="$(cd "$CWTA" && pwd -P)"; CWTB="$(cd "$CWTB" && pwd -P)"; CWTC="$(cd "$CWTC" && pwd -P)"; CWTD="$(cd "$CWTD" && pwd -P)"; CWTE="$(cd "$CWTE" && pwd -P)"
+cc_wtcfg() { printf '{"roles":{"dev":{"title":"Dev","open":"per-task","maxInstances":%s},"tester":{"title":"Tester","open":"per-task","maxInstances":%s},"dev-2":{"title":"Dev 2","instanceOf":"dev"},"tester-2":{"title":"Tester 2","instanceOf":"tester"}},"settings":{"scaling":{"maxExtraInstances":%s,"maxLoad":0.8,"minFreeMemoryMB":2048}}}' "$3" "$3" "$2" > "$1/.git/orca-roles.config.json"; }
+cc_rowsof() { cc_run "$CFG1" "$@"; printf '%s\n' "$CCOUT" | grep '^Worktree ' | sed -e "s#$CWTA#A#g" -e "s#$CWTB#B#g" -e "s#$CWTC#C#g" -e "s#$CWTD#D#g" -e "s#$CWTE#E#g" || true; }
+printf 'DEV=h-dev\nDEV_2=h-dev2\nTESTER=h-tester\nTESTER_2=h-tester2\n' > "$CWTA/.git/orca-roles.env"
+printf 'b1\t1\t/x/pair-b1\tabc\t/x/gd\topen\nb0\t1\t/x/pair-b0\tdef\t/x/gd\tremoved\n' > "$CWTA/.git/orca-roles.pairs"
+printf 'DEV=h-dev\nDEV_2=h-dev2\nTESTER=h-tester\n' > "$CWTB/.git/orca-roles.env"
+printf 'DEV=h-dev\nTESTER=h-tester\n' > "$CWTD/.git/orca-roles.env"
+printf 'DEV=h-dev\nTESTER=h-tester\n' > "$CWTE/.git/orca-roles.env"
+printf '5.00 10 9000\n' > "$CC/host"
+cc_wtcfg "$CWTB" 4 3
+cc_wtcfg "$CWTA" 2 3; RW1="$(cc_rowsof "$CWTA")"
+cc_wtcfg "$CWTA" 20 10; RW2="$(cc_rowsof "$CWTA" "$CWTB")"; RW2="${RW2//$'\n'//}"
+RW3="$(cc_rowsof "$CWTB")"
+RW4="$(cc_rowsof "$CWTC")"
+cc_wtcfg "$CWTE" 4 3; printf '6.00 10 9000\n' > "$CC/host"; RW4B="$(cc_rowsof "$CWTE")"
+cc_wtcfg "$CWTD" 4 3
+printf '%s\n' '- - -' > "$CC/host"
+RW5="$(cc_rowsof "$CWTD")"
+cc_run "$CFG1" --json "$CWTD"
+RW6="$CCRC:$(printf '%s' "$CCOUT" | jq -c '[.worktrees[] | [.path, .team, .devTabs, .testerTabs, .pairTrees, .running, .moreHere, .limit, .machineMeasured]]' 2>/dev/null | sed -e "s#\"$CWTD\"#\"D\"#g" || true)"
+check "capacity-contract: a worktree row counts the saved Dev and Tester tabs (with their instances) and the open pair trees, says the larger of the two tab counts is running, and names what limits 'more fit here': maxExtraInstances (2 extras open and 2 allowed gives 0), the machine (3, CPU), maxExtraInstances on a tie with maxInstances (1) and on a tie with the machine's 2 (2); a folder without a team is 'no team'; two folders give two rows in argument order; with nothing readable it ends ' The machine was not measured.' (2, maxExtraInstances, machineMeasured false)" "$RW1|$RW2|$RW3|$RW4|$RW4B|$RW5|$RW6" "Worktree A: 2 pair(s) running (2 Dev tab(s), 2 Tester tab(s), 1 pair tree(s)); 0 more fit here (limited by maxExtraInstances).|Worktree A: 2 pair(s) running (2 Dev tab(s), 2 Tester tab(s), 1 pair tree(s)); 3 more fit here (limited by CPU)./Worktree B: 2 pair(s) running (2 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 1 more fit here (limited by maxExtraInstances).|Worktree B: 2 pair(s) running (2 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 1 more fit here (limited by maxExtraInstances).|Worktree C: no team.|Worktree E: 1 pair(s) running (1 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 2 more fit here (limited by maxExtraInstances).|Worktree D: 1 pair(s) running (1 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 2 more fit here (limited by maxExtraInstances). The machine was not measured.|0:[[\"D\",true,1,1,0,1,2,\"maxExtraInstances\",false]]"
+}
+
 
 [ $# -gt 0 ] || set -- $SECTIONS
 SMK_TMARK=$SECONDS
