@@ -12,7 +12,7 @@
 #   --status         shows the kit version, then the team (mode, each role's tab state and model) and exits; changes nothing in the worktree or Orca and opens nothing
 #   --reopen         reopens only the roles whose saved tab is lost (they have a saved handle that no longer works); roles with no saved handle (closed with close-role.sh, or never opened) and live roles are left as they are. Takes no other option.
 #   --open a,b       opens only those roles now (ids or titles), also when their "open" is "first-use", "per-task" or "per-batch" (not hidden roles: they have no tab); the other roles are left as they are. Not saved. Takes no other option; refused while the mode is not chosen or differs from the open team's.
-#   --add <role>     opens one more tab of that role (id or title) now: its own tab when it has none, else the instance <id>-<n> with the lowest free n; refused (exit 3, a line starting REFUSED:) over its maxInstances, settings.scaling or the machine's load or memory. Not saved. Takes no other option.
+#   --add <role>     opens one more tab of that role (id or title) now: its own tab when it has none, else the instance <id>-<n> with the lowest free n; refused (exit 3, a line starting REFUSED:) over its maxInstances, settings.scaling (maxExtraInstances, maxLoad, and minFreeMemoryMB against one tab of the role's agent) or the machine's load or memory. Not saved. Takes no other option.
 #   --tree <path>    with --add: the new tab's agent runs in that pair tree (pair-tree.sh create), not in the worktree; kept for every reopen of that tab
 # The exceptions go on the project's setup script line and are applied on top of config.json and .orca-roles.json.
 # They are saved per worktree, so 'roles' without options applies them again when resuming. Options of a later run are added to the
@@ -477,13 +477,14 @@ if [ -n "$ADD_REQ" ]; then
     else
       echo "Note: the load check was skipped: the load or the number of cores could not be read on this system."
     fi
-    need="$mm"; oc=""
-    if [ "$(rstr "$NEWCFG" "$r" agent)" = opencode ]; then need="$(awk -v m="$mm" 'BEGIN { print m + 500 }')"; oc=" plus 500 MB for its private OpenCode server"; fi
     if awk -v m="$mm" 'BEGIN { exit !(m > 0) }'; then
       case "${hmem:--}" in
         ''|*[!0-9]*) echo "Note: the memory check was skipped: the available memory could not be read on this system.";;
-        *) if awk -v a="$hmem" -v m="$need" 'BEGIN { exit !(a < m) }'; then
-             refuse "$AT: $hmem MB of memory available, under settings.scaling.minFreeMemoryMB $mm$oc; no instance was opened."
+        *) ag="$(rstr "$NEWCFG" "$r" agent)"; ag="${ag:-claude}"
+           read -r tmb tn <<< "$(agent_tab_mb "$ag")"
+           how="default estimate"; [ "$tn" = 0 ] || how="the average of $tn live tab(s)"
+           if awk -v a="$hmem" -v t="$tmb" -v m="$mm" 'BEGIN { exit !(a - t < m) }'; then
+             refuse "$AT: $hmem MB of memory available; one more $ag tab takes $tmb MB ($how) and settings.scaling.minFreeMemoryMB keeps $mm MB free; no instance was opened."
            fi;;
       esac
     fi
