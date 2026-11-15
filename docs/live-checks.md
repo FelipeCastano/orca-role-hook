@@ -57,6 +57,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 |---|---|---|
 | W0 | How the `orca` CLI is reached from WSL (`$ORCA_CLI_COMMAND`, the bridge) | #19 |
 | W1 | The Planner relauncher's hang: a process started in a tab and detached with `setsid` closes that same tab; does the close return? And closing another tab from this terminal. It measures Orca's behaviour and stays FAIL while Orca hangs; the kit no longer hangs on it because it limits closes to 15 s (`ORCA_ROLES_CLOSE_TIMEOUT`) | WSL bug report |
+| W2 | `capacity.sh --json` in the WSL VM: the OS kind and whether it is `wsl`, the available memory, the pairs it fits and what it says it does not measure | this PR |
 
 ### agents.sh
 

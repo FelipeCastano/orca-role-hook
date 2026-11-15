@@ -144,9 +144,14 @@ case "$AGENT" in
     # keeps the user's language. Placed before extraArgs: claude takes the last --settings whole (no merge), so a --settings in
     # extraArgs replaces this one and should carry its own "language". It also keeps superpowers out of the workers even when a project or the
     # user enables it (only those two plugin ids); a --settings in extraArgs replaces it whole.
-    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    # Both objects also carry autoMemoryDirectory (claude_memory_settings): Claude Code then names the role's memory folder and its .md writes need no dialog.
+    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings "$(claude_memory_settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')")
     # settings.superpowers = false: "off" also means off for a superpowers the user installed (the front role has no other kit --settings)
-    [ "$ROLE" = "$FRONT" ] && [ "$SP_OFF" = 1 ] && ARGS+=(--settings '{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')
+    if [ "$ROLE" = "$FRONT" ]; then
+      FSET='{}'; [ "$SP_OFF" = 1 ] && FSET='{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}'
+      FSET="$(claude_memory_settings "$FSET")"
+      [ "$FSET" = '{}' ] || ARGS+=(--settings "$FSET")
+    fi
     # The role's advisor: a model adds Claude Code's hidden --advisor, off disables the tool, auto adds nothing
     ADVISOR="$(advisor_of "$CFG" "$ROLE")" || ADVISOR=""
     if [ -z "$ADVISOR" ]; then
@@ -221,6 +226,8 @@ case "$AGENT" in
       echo "agent.sh: $ROLE (opencode): OPENCODE_CONFIG ($OPENCODE_CONFIG) is replaced by the kit's configuration for this role; put those settings in ~/.config/opencode/opencode.json." >&2
     fi
     export OPENCODE_CONFIG="$OCCFG"
+    # Update check off (measured with 2.2.5: the "update" key is read only from OpenCode's own config directory, not from OPENCODE_CONFIG)
+    export OPENCODE_DISABLE_AUTOUPDATE=1
     # settings.trust "never": the project's opencode.json, .opencode/ and AGENTS.md stay off (honoured by the private server, --standalone)
     if [ "$(trust_of "$CFG")" = never ]; then export OPENCODE_DISABLE_PROJECT_CONFIG=1; fi
     cd "$(pwd -P)"; PWD="$(pwd -P)"; export PWD
@@ -239,6 +246,34 @@ case "$AGENT" in
         printf '%s\n%s\n' "$OCID" "$(pwd -P)" > "$OCF.tmp.$$" && mv "$OCF.tmp.$$" "$OCF" || echo "agent.sh: could not save the OpenCode session id of $ROLE" >&2
       fi
       ARGS+=(--session "$OCID")
+    fi
+    # A worker's first message goes on the command line when the installed OpenCode lists --prompt (checked once per binary,
+    # lib.sh): OpenCode submits it by itself and kickoff does not type it. The marker tells kickoff which tab and start it was,
+    # and the message is the text kickoff would type for this role. Not the front role, not from a tab this script has no handle
+    # for, not with the sessions owned by the user (a session flag in extraArgs), never with --prompt in extraArgs, and not for a
+    # message oc_tui_args would refuse (" --service "): those keep today's typed path.
+    OC_START=""
+    if [ "$ROLE" != "$FRONT" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "$OWN_SESSION" = 0 ]; then
+      OC_HAS_PROMPT=0
+      while IFS= read -r o; do case "$o" in --prompt|--prompt=*) OC_HAS_PROMPT=1;; esac; done < <(rcfg "$CFG" "$ROLE" extraArgs | jq -r '.[]?' 2>/dev/null)
+      if [ "$OC_HAS_PROMPT" = 0 ]; then
+        if [ -n "$RESUME" ]; then OC_START=back; OC_MSG="$(worker_back_msg "$CFG" "$ROLE" "$ORCA_TERMINAL_HANDLE")"
+        else OC_START=new; OC_MSG="$(worker_msg "$CFG" "$ROLE")"; fi
+        case "$OC_MSG" in *" --service "*) OC_START="";; esac
+        if [ -n "$OC_START" ] && ! oc_prompt_flag; then OC_START=""; fi
+      fi
+    fi
+    if [ -z "$OC_START" ]; then
+      OCF="$(oc_started_file "$ROLE")" || OCF=""
+      [ -z "$OCF" ] || rm -f "$OCF"
+    else
+      OCF="$(oc_started_file "$ROLE")" || OCF=""
+      if [ -n "$OCF" ] && ( printf '%s\n%s\n' "$ORCA_TERMINAL_HANDLE" "$OC_START" > "$OCF.tmp.$$" ) 2>/dev/null && mv "$OCF.tmp.$$" "$OCF"; then
+        ARGS+=("--prompt=$OC_MSG")
+      else
+        [ -z "$OCF" ] || rm -f "$OCF" "$OCF.tmp.$$" 2>/dev/null || true
+        echo "agent.sh: could not record the OpenCode start of $ROLE; kickoff will type its message." >&2
+      fi
     fi
     record_provenance opencode || true
     exec "${RUN[@]+"${RUN[@]}"}" opencode ${ARGS[@]+"${ARGS[@]}"}

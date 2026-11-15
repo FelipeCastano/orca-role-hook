@@ -26,9 +26,15 @@ c_close_own_tab() {  # the relauncher's hang (WSL bug report): a process started
   sleep 3; timeout 60 orca terminal close --terminal "$b" --tab --json >/dev/null 2>&1; rc=$?
   check "$id.other" "closing another tab from this terminal returns" "$rc" 0
 }
+c_capacity() {  # the capacity measure in this WSL VM: the OS kind, the available memory, the pairs it fits, what it cannot measure
+  local id=$1 j
+  j="$(bash "$HOME/.orca-roles/bin/capacity.sh" --json 2>/dev/null)" || j=""
+  printf '%s' "$j" | jq -e . >/dev/null 2>&1 || j="{}"
+  info "$id" "os=$(printf '%s' "$j" | jq -r '.os // "none"'), availableMB=$(printf '%s' "$j" | jq -r '.availableMB // "null"'), pairs=$(printf '%s' "$j" | jq -c '.pairs' 2>/dev/null), notMeasured=$(printf '%s' "$j" | jq -c '.notMeasured' 2>/dev/null), os is wsl: $(printf '%s' "$j" | jq -r '.os == "wsl"' 2>/dev/null)"
+}
+c_cli_route_and_capacity() { run_check W0 c_cli_route; run_check W2 c_capacity; }
 # shellcheck disable=SC2034  # read by live_main in lib.sh
-EXTRA_BEFORE=c_cli_route_once
-c_cli_route_once() { run_check W0 c_cli_route; }
+EXTRA_BEFORE=c_cli_route_and_capacity
 # shellcheck disable=SC2034  # read by live_main in lib.sh
 EXTRA_TEAM=c_close_own_tab_once
 c_close_own_tab_once() { run_check W1 c_close_own_tab; }
