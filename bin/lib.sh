@@ -256,7 +256,7 @@ orca_version() {
     return 0
   fi
   case "$lim" in ''|*[!0-9]*|0) lim=5;; esac
-  raw="$(bounded_run --quiet "$lim" "orca --version" command orca --version 2>/dev/null)" || raw=""   # a non-zero exit or a timeout is an unknown version
+  raw="$(bounded_run --quiet "$lim" "orca --version" command orca --version 2>/dev/null < /dev/null)" || raw=""   # a non-zero exit or a timeout is an unknown version
   v="$(version_norm "$raw")"
   if [ "$nw" = 0 ]; then
     mkdir -p "$KIT/state" 2>/dev/null && { printf '%s' "$v" > "$f.tmp.$$" 2>/dev/null && mv "$f.tmp.$$" "$f" 2>/dev/null; } || rm -f "$f.tmp.$$" 2>/dev/null
@@ -270,19 +270,54 @@ orca_older_than() {
   have="$(orca_version)"
   [ -n "$have" ] && version_lt "$have" "${1:-}"
 }
+# The value of a --spec-file for Orca for Windows on WSL: the Windows path wslpath gives it (a relative value made absolute first), the
+# value itself when it is a Windows path already (two leading backslashes, or a drive letter and a slash) or wslpath cannot answer.  spec_win_path <value>
+spec_win_path() {
+  local p="$1" cmd out
+  case "$p" in
+    \\\\*|[A-Za-z]:\\*|[A-Za-z]:/*) printf '%s\n' "$p"; return 0;;
+  esac
+  case "$p" in /*) ;; *) p="$PWD/$p";; esac
+  cmd="$(wslpath_cmd)" || { printf '%s\n' "$1"; return 0; }
+  out="$("$cmd" -w "$p" 2>/dev/null)" && [ -n "$out" ] || { printf '%s\n' "$1"; return 0; }
+  printf '%s\n' "$out"
+}
 # The array ORCA_COMPAT_ARGS: its arguments with every --full removed when they start with 'orchestration' and Orca is older than 1.4.246
-# (that Orca prints the whole record by default); otherwise unchanged.
+# (that Orca prints the whole record by default), and on WSL with every --spec-file value given as the Windows path wslpath makes of it
+# (Orca for Windows resolves a Linux path on drive C); otherwise unchanged.
 orca_compat_args() {
-  local a
-  if [ "${1:-}" = orchestration ] && orca_older_than "$ORCA_MIN_VERSION"; then
+  local a v conv=0 drop=0
+  if [ "${1:-}" = orchestration ]; then
+    for a in "$@"; do case "$a" in --spec-file|--spec-file=*) conv=1; break;; esac; done
+    [ "$conv" = 0 ] || { is_wsl && orca_ide_path >/dev/null; } || conv=0
+    if orca_older_than "$ORCA_MIN_VERSION"; then drop=1; fi
+    if [ "$conv" = 0 ] && [ "$drop" = 0 ]; then ORCA_COMPAT_ARGS=("$@"); return 0; fi
     ORCA_COMPAT_ARGS=()
-    for a in "$@"; do [ "$a" = --full ] || ORCA_COMPAT_ARGS+=("$a"); done
+    while [ "$#" -gt 0 ]; do
+      a="$1"; shift
+      if [ "$drop" = 1 ] && [ "$a" = --full ]; then continue; fi
+      case "$a" in
+        --spec-file)
+          ORCA_COMPAT_ARGS+=("$a")
+          if [ "$#" -gt 0 ]; then
+            v="$1"; shift
+            if [ "$conv" = 1 ]; then v="$(spec_win_path "$v")"; fi
+            ORCA_COMPAT_ARGS+=("$v")
+          fi;;
+        --spec-file=*)
+          v="${a#--spec-file=}"
+          if [ "$conv" = 1 ]; then v="$(spec_win_path "$v")"; fi
+          ORCA_COMPAT_ARGS+=("--spec-file=$v");;
+        *) ORCA_COMPAT_ARGS+=("$a");;
+      esac
+    done
     return 0
   fi
   ORCA_COMPAT_ARGS=("$@")
 }
 # Every orca call of the kit's scripts has a time limit: $ORCA_ROLES_CLI_TIMEOUT s (60; 0 = none), or the call's --timeout-ms (rounded up to s) + 60.
 # `terminal close` has its own, $ORCA_ROLES_CLOSE_TIMEOUT s (15; 0 = none). A value that is not a whole number is ignored.
+# No kit call reads stdin, so it is closed: on WSL, orca.exe reads the caller's stdin and would eat a here-doc or a file read loop.
 orca() {
   local lim="${ORCA_ROLES_CLI_TIMEOUT:-}" a prev="" close="${ORCA_ROLES_CLOSE_TIMEOUT:-}"
   case "$lim" in ''|*[!0-9]*) lim=60;; esac
@@ -290,14 +325,14 @@ orca() {
   orca_compat_args "$@"
   if [ "$lim" = 0 ] || { [ "${1:-} ${2:-}" = "terminal close" ] && [ "$close" = 0 ]; }; then   # by path: bash 3.2 ends a background job with set -e at a failing "command orca" inside this function
     a="$(type -P orca)" || return 127
-    "$a" ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"}; return
+    "$a" ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"} < /dev/null; return
   fi
   [ "${1:-} ${2:-}" = "terminal close" ] && lim="$close"   # on WSL a tab closing itself never gets the answer
   for a in "$@"; do
     if [ "$prev" = --timeout-ms ]; then case "$a" in ''|*[!0-9]*) ;; *) lim=$(( (a + 999) / 1000 + 60 ));; esac; fi
     prev="$a"
   done
-  bounded_run "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"}
+  bounded_run "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"} < /dev/null
 }
 
 # After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale), else tells it was not confirmed and returns 1.
@@ -455,6 +490,21 @@ oc_tui_args() {
   case " $1 " in *" --standalone "*) ;; *) return 1;; esac
   case "$(printf '%s\n' "$1" | awk '{print $2}')" in mini|-*) return 0;; esac
   return 1
+}
+# The pid of the claude, codex or OpenCode TUI process (not its private 'opencode serve' child) whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
+agent_pid_of_handle() {
+  [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
+  local pid comm env
+  while read -r pid comm; do
+    case "$comm" in
+      opencode|*/opencode) oc_tui_args "$(ps -o args= -p "$pid" 2>/dev/null)" || continue;;
+    esac
+    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
+    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
+    echo "$pid"
+    return 0
+  done < <(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)(claude|codex|opencode)$/ {print $1, $2}')
+  return 0
 }
 # The pids of this user's OpenCode processes of a role's tab whose ORCA_TERMINAL_HANDLE is <handle>, one per line: its OpenCode TUI (oc_tui_args: the full TUI, or 'opencode mini' of an older kit's tab) and the private
 # 'opencode serve --stdio' child, never the shared 'opencode serve --service' nor any other subcommand. Test hook: ORCA_ROLES_OC_PIDS (a command called with the handle).  oc_pids_of_handle <handle>

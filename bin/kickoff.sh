@@ -11,12 +11,13 @@ KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
 # shellcheck source=/dev/null
 . "$STATE"
 FRONT="$(front_role "$(mode_of --saved "$CFG" 2>/dev/null || echo programmer)" "$(dirname "$STATE")")"   # the role that owns the Run and talks to the user
-FRONTV="$(var_of "$FRONT")"; FL="$(front_label "$FRONT")"; FLC="$(front_label "$FRONT" cap)"
+FRONTV="$(var_of "$FRONT")"; FRONT_TO="${!FRONTV:-}"; FL="$(front_label "$FRONT")"; FLC="$(front_label "$FRONT" cap)"
 ROLES="$(cut -d= -f1 "$STATE" | tr 'A-Z_' 'a-z-' | tr '\n' ' ')"
 TIMEOUT_MS=$(( $(setting "$CFG" kickoffTimeoutSeconds 180) * 1000 ))
 SETTLE="${ORCA_ROLES_KICK_SETTLE:-2}"
 CHECK_PIDS=""; FRONT_MAIL=0
-trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"' EXIT
+RESOLVED="$STATE"; RESOLVED_TMP=""   # the state file's lines with each role's live handle (see resolve_handles); the saved ones until it is written
+trap 'rm -f "$(dirname "$STATE")/orca-roles.kickoff.d/$$"; [ -z "$RESOLVED_TMP" ] || rm -f "$RESOLVED_TMP"' EXIT
 
 screen_of()   { orca terminal read --terminal "$1" --json 2>/dev/null | jq -r '.. | strings' 2>/dev/null; }
 # OpenCode: text typed before its TUI has painted goes to the tab's shell, and orca terminal send still reports it accepted. For a tab this
@@ -49,10 +50,10 @@ front_err_text() {  # $1 output of a failed orca call, $2 its error code: one li
 front_send() {
   local out code
   FRONT_ERR=""
-  out="$(orca orchestration send --to "${!FRONTV}" --type status --subject "$1" --body "$2" --json 2>&1)" && return 0
+  out="$(orca orchestration send --to "$FRONT_TO" --type status --subject "$1" --body "$2" --json 2>&1)" && return 0
   code="$(front_err_code "$out")"
   if [ "$code" = no_active_sender_terminal ]; then
-    out="$(orca orchestration send --from "${!FRONTV}" --to "${!FRONTV}" --type status --subject "$1" --body "$2" --json 2>&1)" && {
+    out="$(orca orchestration send --from "$FRONT_TO" --to "$FRONT_TO" --type status --subject "$1" --body "$2" --json 2>&1)" && {
       echo "No Orca terminal identity here ($code): sent as $FL's own tab."; return 0; }
     code="$(front_err_code "$out")"
   fi
@@ -72,7 +73,7 @@ role_status() {
   [ -z "$rest" ] || first="$first Still starting: $rest."
   body="$first
 Use these handles from now on:
-$(cat "$STATE")"
+$(cat "$RESOLVED")"
   if front_send "Roles reopened" "$body"; then echo "Told $FL the roles were reopened: $t."; front_mail
   else echo "Could not tell $FL the roles were reopened: $t ($FRONT_ERR)."; fi
 }
@@ -94,6 +95,44 @@ front_mail() {
   "$KIT/bin/dispatch.sh" --mail --run "$run" >/dev/null 2>&1 || true
   echo "Mail watcher started on Run $run for $FL."
 }
+# Orca can list the pre-restart handle of a tab next to its new one, and launch.sh writes the saved handle back for a role --open does not
+# name, so orca-roles.env can name handles no tab carries any more. A handle counts as live when a claude, codex or OpenCode TUI process
+# carries it as ORCA_TERMINAL_HANDLE (agent_pid_of_handle), the test launch.sh trusts for a tab that still works.
+saved_pty() { grep "^$1=" "$(dirname "$STATE")/orca-roles.pty" 2>/dev/null | head -1 | cut -d= -f2-; }
+# resolve_handles: one 'orca terminal list' for the whole kickoff, then <VAR>=<handle> for every state line, in its order: the saved handle
+# when Orca lists it, then the handles with the role's saved ptyId, in list order; the first of them with a live agent, else the first
+# (a custom agent, or a check that cannot see processes); the line is left out with no candidate. A failed list, or one with no handle,
+# leaves a byte-for-byte copy of the state file.
+resolve_handles() {
+  local list n line v h p c cands first rf
+  RESOLVED_TMP="$(mktemp "${TMPDIR:-/tmp}/orca-roles-handles.XXXXXX")" || { RESOLVED_TMP=""; return 0; }
+  RESOLVED="$RESOLVED_TMP"
+  list="$(orca terminal list --worktree "$WT" --json 2>/dev/null)" || list=""
+  n="$(printf '%s' "$list" | jq -r '[.. | objects | select(has("handle"))] | length' 2>/dev/null)"; n="${n:-0}"
+  case "$n" in ''|*[!0-9]*) n=0;; esac
+  if [ "$n" -eq 0 ]; then cp "$STATE" "$RESOLVED"; return 0; fi
+  while IFS= read -r line; do
+    v="${line%%=*}"; h="${line#*=}"; p="$(saved_pty "$v")"; cands=""
+    if printf '%s' "$list" | jq -e --arg h "$h" 'any(.. | objects | select(has("handle")); .handle == $h)' >/dev/null 2>&1; then cands="$h"; fi
+    if [ -n "$p" ]; then
+      while IFS= read -r c; do
+        [ -z "$c" ] || cands="${cands:+$cands
+}$c"
+      done < <(printf '%s' "$list" | jq -r --arg p "$p" --arg h "$h" '[.. | objects | select(has("handle") and .ptyId == $p and .handle != $h) | .handle] | .[]' 2>/dev/null)
+    fi
+    first=""
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      [ -n "$first" ] || first="$c"
+      if [ -n "$(agent_pid_of_handle "$c")" ]; then first="$c"; break; fi
+    done <<< "$cands"
+    [ -z "$first" ] || printf '%s=%s\n' "$v" "$first" >> "$RESOLVED"
+  done < "$STATE"
+  rf="$(grep "^$FRONTV=" "$RESOLVED" 2>/dev/null | head -1 | cut -d= -f2-)"
+  [ -z "$rf" ] || FRONT_TO="$rf"   # a line left out keeps the saved handle: the messages go where they went before
+  return 0
+}
+resolve_handles
 
 MODELS="$(dirname "$STATE")/orca-roles.models"; MODELS_D="$MODELS.d"
 # Model errors on the screen (wrapped lines joined, so one error counts once).  err_count <handle> <ERE>
@@ -322,10 +361,10 @@ if is_new "$FRONT"; then
         *) echo "$FLC has a new tab for this mode: nothing to clear.";;
       esac
     fi
-    if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ]; then PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
-    else PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"; fi
+    if [ -n "${ORCA_ROLES_SWITCH_FROM:-}" ]; then PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$RESOLVED" "$JIRA_KEY" "$JIRA_URL" 4 "$ORCA_ROLES_SWITCH_FROM")"
+    else PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$RESOLVED" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"; fi
   else
-    PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$STATE" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
+    PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$RESOLVED" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
   fi
   planner_history_add "$GITDIR" ""   # seeds the handle history from the previous kicked/env files before kicked_set overwrites them
   if STALE="$(stale_run "$GITDIR" "${!FRONTV}")"; then
@@ -379,7 +418,7 @@ if ! is_new "$FRONT" && [ -n "$OPENED_WORKERS" ] && [ -n "${!FRONTV:-}" ]; then
     echo "$FLC was told about each role as its kick ended."
   else
     HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
-$(cat "$STATE")"
+$(cat "$RESOLVED")"
     if front_send "Role handles changed" "$HANDLES_BODY"; then
       echo "Told $FL the new handles."
       front_mail

@@ -26,6 +26,19 @@ A check already done is not repeated when you run the script again. To start ove
 
 After the restart run `roles` in each of your own worktrees: the installed kit wakes their tabs too.
 
+### Running one check
+
+To run a single check without the whole script, from the checkout in bash, after `./install.sh` of that checkout, with Orca open: source `tests/live/lib.sh`, run `live_start <name>` and `live_preflight`, then `run_check <id> <function> [args]`. For example:
+
+```sh
+bash -c '. tests/live/lib.sh; live_start wsl; live_preflight; run_check X7 c_e2e'
+```
+
+- The function and the arguments of each id are on its `run_check` line in `live_main` (`tests/live/lib.sh`), or in `tests/live/wsl.sh` for W0-W2.
+- `live_start <name>` picks the report and the state files (`report-<name>.md`, `state-<name>`). With a script's own name (`mac`, `wsl`) the rows are added to that script's report, and a check already done there is skipped; to run it again, delete its `done.<id>=1` line from `~/orca-live-checks/state-<name>`, or use another name for a separate report and state.
+- What a check needs before it: X7 needs the throwaway project (`project_setup`, already there after a full run). T2-T11 need the worktree T1 created, loaded with `wt_load` from the same state file (`live_start` with the name of the run that ran T1). R1 and R2 need the restart phase and are not run alone.
+- `ORCA_LIVE_DIR` moves the folder (default `~/orca-live-checks`).
+
 ## What each script checks
 
 ### mac.sh and wsl.sh
@@ -38,7 +51,7 @@ After the restart run `roles` in each of your own worktrees: the installed kit w
 | X4 | `roles-yaml --all --dry-run` over the projects registered in your Orca; nothing is written; fails when every project was skipped | #32 |
 | X5 | A fresh install into a temporary HOME: the real superpowers fetch from GitHub, a Claude session that loads its skills, and `project-plugins.sh install` doing a real `claude plugin marketplace add` and `install` (in a temporary Claude config) | #39 |
 | X6 | The new-role wizard in that temporary kit: typed by you, or fed from a file when there is no terminal | #28 |
-| X7 | The pinned E2E stack: install, `browser-login.sh` saving a real session (a local page sets a cookie and localStorage), `e2e-browser.sh session`, and `e2e-run.sh` running a flow with that session against the page; it asks before opening the browser, and without a terminal the login, session and flow are skipped, so X7 is not marked done and a later run with a terminal asks for it again | #31 |
+| X7 | The pinned E2E stack: install, `browser-login.sh` saving a real session (a local page sets a cookie and localStorage), `e2e-browser.sh session`, and `e2e-run.sh` running a flow with that session against the page; it asks before opening the browser, and without a terminal the login, session and flow are skipped. An environment failure (the install, the local server, or the browser start) also leaves X7 not done, so a later run asks for it again | #31 |
 | T1 | A worktree created by Orca with an agent: the setup script runs the kit, only the local coordinator opens and asks the mode; the composer's extra session (its title is reported) is closed | #1, #45 |
 | T2 | Choosing the mode from a terminal of another worktree: the kit takes the folder's worktree and opens the programmer team | #45, this PR |
 | T3 | `orca-roles.pty` holds Orca's ptyId byte for byte (on WSL the ptyIds have backslashes) | this PR |
