@@ -332,7 +332,13 @@ c_e2e() {  # the pinned E2E stack: install, a real login (cookie + localStorage)
   fi
   mkdir -p "$app"
   printf '%s\n' '<!doctype html><title>live</title><h1>live-checks</h1><script>document.cookie="live=1; path=/; max-age=86400"; localStorage.setItem("live","1")</script>' > "$app/index.html"
-  (cd "$app" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) & srv=$!
+  # not `python3 -m http.server`: its HTTPServer looks up the host's name (socket.getfqdn) between bind and listen, and on
+  # GitHub's macOS runner that reverse lookup takes tens of seconds, so the port stayed closed past the wait below
+  (cd "$app" && exec python3 -c 'import sys, socketserver, http.server as h
+class S(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+S(("127.0.0.1", int(sys.argv[1])), h.SimpleHTTPRequestHandler).serve_forever()' "$port" >/dev/null 2>&1) & srv=$!
   # the server needs a moment to listen (a slow macOS CI runner is slower than one second): try the port every 0.2 s, for at most 10 s,
   # and stop at once when the server process has exited, since then nothing will ever answer
   port_up() { python3 -c 'import socket, sys
