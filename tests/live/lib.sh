@@ -316,8 +316,15 @@ c_new_role_wizard() {  # the new-role wizard (#28) in the temporary HOME of c_in
   rm -rf "$w"
 }
 c_e2e() {  # the pinned E2E stack: install, a real login (cookie + localStorage), a flow against a real local app (#31); asks before opening the browser, and skips what needs a person when there is no terminal
-  local id=$1 port=8765 app="$LIVE_DIR/app" out rc srv
-  "$KIT/bin/e2e-browser.sh" check >/dev/null 2>&1 || { out="$("$KIT/bin/e2e-browser.sh" install 2>&1)" || { fail "$id.install" "$(printf '%s' "$out" | tail -2)"; return; }; }
+  local id=$1 port=8765 app="$LIVE_DIR/app" out rc srv items why
+  if ! "$KIT/bin/e2e-browser.sh" check >/dev/null 2>&1; then
+    if ! out="$("$KIT/bin/e2e-browser.sh" install 2>&1)"; then
+      items="$(printf '%s\n' "$out" | awk '/^  - / { printf "%s%s", s, $0; s = "; " }')"
+      fail "$id.install" "${items:-$(printf '%s' "$out" | tail -2)}"
+      LIVE_NOT_DONE=1   # the environment, not the kit's check: a later run must try it again
+      return
+    fi
+  fi
   ok "$id.install" "the pinned Playwright stack is installed (e2e-browser.sh check)"
   if ! live_tty; then
     skip "$id.login" "needs a person to close the browser (no terminal)"
@@ -355,10 +362,16 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$port
     fail "$id.login" "the local server did not start on 127.0.0.1:$port (python3 -m http.server)"
     skip "$id.session" "the local server did not start"; skip "$id.flow" "the local server did not start"
     kill "$srv" 2>/dev/null
+    LIVE_NOT_DONE=1   # an environment failure: a later run must ask for it again
     return
   fi
   out="$(cd "$PROJ" && "$KIT/bin/browser-login.sh" "http://127.0.0.1:$port/" 2>&1)"; rc=$?
-  [ $rc = 0 ] && ok "$id.login" "browser-login.sh saved a session ($(printf '%s' "$out" | grep -o 'Session saved:.*'))" || fail "$id.login" "$(printf '%s' "$out" | tail -2)"
+  if [ $rc = 0 ]; then ok "$id.login" "browser-login.sh saved a session ($(printf '%s' "$out" | grep -o 'Session saved:.*'))"
+  else
+    why="$(printf '%s\n' "$out" | grep -m1 '^ERROR: ' || true)"
+    fail "$id.login" "${why:-$(printf '%s' "$out" | tail -2)}"
+  fi
+  [ $rc = 2 ] && LIVE_NOT_DONE=1   # not ready, no display or the browser did not start: the environment, not the login
   out="$(cd "$PROJ" && "$KIT/bin/e2e-browser.sh" session "http://127.0.0.1:$port/" 2>&1)"; rc=$?
   check "$id.session" "e2e-browser.sh session reads the saved session" "$rc" 0
   mkdir -p "$PROJ/qa-e2e/live"
@@ -398,7 +411,7 @@ c_choose_mode() {  # the mode chosen from another worktree's terminal: the kit t
 c_pty_file() {  # orca-roles.pty holds exactly the ptyId Orca reports for each role (WSL ptyIds have backslashes: n13 awk fix)
   local id=$1 bad="" v h p
   while IFS='=' read -r v h; do
-    p="$(orca terminal show --terminal "$h" --json 2>/dev/null | jfield result.terminal.ptyId)"
+    p="$(orca terminal show --terminal "$h" --json 2>/dev/null < /dev/null | jfield result.terminal.ptyId)"
     [ "$(grep "^$v=" "$GD/orca-roles.pty" | cut -d= -f2-)" = "$p" ] || bad="$bad $v"
   done < "$GD/orca-roles.env"
   check "$id" "orca-roles.pty matches Orca's ptyId byte for byte for every role" "${bad:-none}" none
@@ -531,7 +544,7 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
     END { if (!n) printf "none"; print "" }' "$LIVE_DIR/last-roles.log")" none
   sleep 20
   check "$id.duplicates" "one tab per role and no stray agent tab" "$(wt_terms | awk -F'\t' '$4 != ""' | wc -l | tr -d ' ')" "$(grep -c . "$GD/orca-roles.env")"
-  local bad=""; while IFS='=' read -r v h; do orca terminal show --terminal "$h" --json >/dev/null 2>&1 || bad="$bad $v"; done < "$GD/orca-roles.env"
+  local bad=""; while IFS='=' read -r v h; do orca terminal show --terminal "$h" --json >/dev/null 2>&1 < /dev/null || bad="$bad $v"; done < "$GD/orca-roles.env"
   check "$id.handles" "every handle in orca-roles.env is live (WSL stale handles, BACKLOG)" "${bad:-none}" none
   c_restart_run "$id"
 }
