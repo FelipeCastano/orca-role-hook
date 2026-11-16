@@ -217,7 +217,8 @@ def batch_lint(spec, require_acceptance=False):
 
 
 def _orca(*args):
-    r = subprocess.run(['orca', 'orchestration'] + list(args) + ['--json', '--full'], capture_output=True, text=True)
+    full = [] if os.environ.get('ORCA_ROLES_NO_FULL') == '1' else ['--full']   # Orca below 1.4.246 knows no --full and prints the whole record anyway
+    r = subprocess.run(['orca', 'orchestration'] + list(args) + ['--json'] + full, capture_output=True, text=True)
     try:
         d = json.loads(r.stdout)
     except Exception:

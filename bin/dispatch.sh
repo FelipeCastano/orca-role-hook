@@ -18,7 +18,9 @@
 # "<id or handle>: <basename>" --run <run_id> --json` and prints "dispatch.sh: task <task_id> created from <file> for <id> (<handle>)"; --open runs
 # `${ORCA_ROLES_LAUNCH:-$KIT/bin/launch.sh} --open <id>` first and waits until the state holds the role's handle H and <git dir>/orca-roles.kicked the line
 # <VAR>=H (every ORCA_ROLES_OPEN_TICK s, default 2, at most ORCA_ROLES_OPEN_WAIT s, default 240; it stops at once when no kickoff runs and the line is
-# missing), so a refused or an unreached role leaves no task. In these forms a non-zero exit of `orca orchestration dispatch` is exit 1 (Orca's output
+# missing), so a refused or an unreached role leaves no task. Below Orca 1.4.246, which has no --spec-file, the file's contents go as --spec, and one
+# counting over 24000 characters (its bytes plus its quotes and backslashes, which the Windows command line orca-ide uses on WSL has to hold escaped)
+# is refused with exit 2 and nothing created. In these forms a non-zero exit of `orca orchestration dispatch` is exit 1 (Orca's output
 # printed), never Orca's own status. Exit codes: 0 dispatched, 2 usage, 3 no dispatch created by Orca, 4 no handle for the role in the state, 5
 # task-create failed, 6 launch failed or the role was not reached in time.
 #         dispatch.sh --mail --run <run_id>
@@ -286,7 +288,22 @@ fi
 if [ -n "$SPEC" ]; then
   SBASE="$(basename "$SPEC")"
   if [ -n "$ROLE" ]; then STITLE="$ROLE: $SBASE"; else STITLE="$TO: $SBASE"; fi
-  TC_OUT="$(orca orchestration task-create --spec-file "$SPEC" --task-title "$STITLE" --run "$RUN" --json)"
+  if orca_older_than "$ORCA_MIN_VERSION"; then
+    # no --spec-file before 1.4.246: the contents go as --spec, whose length the Windows command line orca-ide uses on WSL caps at 32767
+    SPCN="$(( $(LC_ALL=C wc -c < "$SPEC") + $(LC_ALL=C tr -cd '"' < "$SPEC" | wc -c) + $(LC_ALL=C tr -cd '\\' < "$SPEC" | wc -c) ))"
+    if [ "$SPCN" -gt 24000 ]; then
+      echo "ERROR: Orca $(orca_version) has no --spec-file and this spec is too long for the command line ($SPCN counted as bytes plus quotes and backslashes; the limit is 24000, under the 32767-character Windows command line that orca-ide uses on WSL). Update Orca to 1.4.246 or later." >&2
+      exit 2
+    fi
+    STEXT="$(cat "$SPEC"; printf x)"; STEXT="${STEXT%x}"   # keeps the file's trailing newlines
+    if [ "${STEXT#-}" = "$STEXT" ]; then
+      TC_OUT="$(orca orchestration task-create --spec "$STEXT" --task-title "$STITLE" --run "$RUN" --json)"
+    else   # a text starting with "-" reads as a flag when it stands alone; --spec=<text> takes it
+      TC_OUT="$(orca orchestration task-create --spec="$STEXT" --task-title "$STITLE" --run "$RUN" --json)"
+    fi
+  else
+    TC_OUT="$(orca orchestration task-create --spec-file "$SPEC" --task-title "$STITLE" --run "$RUN" --json)"
+  fi
   TC_RC=$?
   TASK="$(printf '%s' "$TC_OUT" | jq -r 'select(.ok == true and .result.status == "ready") | (.result.taskId // "") | select(type == "string" and length > 0)' 2>/dev/null)"
   if [ "$TC_RC" != 0 ] || [ -z "$TASK" ]; then

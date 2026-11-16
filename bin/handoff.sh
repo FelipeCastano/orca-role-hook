@@ -8,11 +8,12 @@
 # previous round's checkpoint and keeps that base. Options come in any order, each with one value.
 # Writes: the brief at <local coordinator's scratch>/briefs/<batch>-r<k>.md, one line in that folder's ledger.md, and the round's line
 # <batch> <k> <ref> <base> in <git dir>/orca-roles.handoff.
-# Exit codes: 0 done; 1 usage or a bad argument, nothing done; 3 checkpoint failed; 4 task-create failed; 5 dispatch failed.
+# Exit codes: 0 done; 1 usage or a bad argument, also a spec too long for the command line below Orca 1.4.246 (nothing is dispatched); 3 checkpoint
+# failed; 4 task-create failed; 5 dispatch failed.
 # On 3, 4 and 5 nothing is dispatched and stderr says what was recorded. ORCA_ROLES_DISPATCH replaces dispatch.sh (the tests).
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
-case "${1:-}" in -h|--help) sed -n 2,12p "$0"; exit 0;; esac
+case "${1:-}" in -h|--help) sed -n 2,13p "$0"; exit 0;; esac
 usage() { sed -n 4,5p "$0" >&2; exit 1; }
 abspath() {  # abspath <path>: the path as given, with its folder resolved
   local d b
@@ -101,7 +102,18 @@ ledger() {  # ledger <end of the line>
   printf -- '- %s %s round %s: checkpoint %s; Dev report %s; brief %s; %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BATCH" "$K" "$REF" "$REPORT" "$BRIEF" "$1" >> "$LEDGER"
 }
 
-TC_OUT="$(orca orchestration task-create --spec-file "$BRIEF" --task-title "Tester $BATCH round $K" --run "$RUN" --json)"
+if orca_older_than "$ORCA_MIN_VERSION"; then
+  # no --spec-file before 1.4.246: the brief goes as --spec, whose length the Windows command line orca-ide uses on WSL caps at 32767
+  SPCN="$(( $(LC_ALL=C wc -c < "$BRIEF") + $(LC_ALL=C tr -cd '"' < "$BRIEF" | wc -c) + $(LC_ALL=C tr -cd '\\' < "$BRIEF" | wc -c) ))"
+  if [ "$SPCN" -gt 24000 ]; then
+    echo "ERROR: Orca $(orca_version) has no --spec-file and this spec is too long for the command line ($SPCN counted as bytes plus quotes and backslashes; the limit is 24000, under the 32767-character Windows command line that orca-ide uses on WSL). Update Orca to 1.4.246 or later." >&2
+    exit 1
+  fi
+  STEXT="$(cat "$BRIEF"; printf x)"; STEXT="${STEXT%x}"   # keeps the file's trailing newlines
+  TC_OUT="$(orca orchestration task-create --spec "$STEXT" --task-title "Tester $BATCH round $K" --run "$RUN" --json)"
+else
+  TC_OUT="$(orca orchestration task-create --spec-file "$BRIEF" --task-title "Tester $BATCH round $K" --run "$RUN" --json)"
+fi
 TC_RC=$?
 TASK_ID="$(printf '%s' "$TC_OUT" | jq -r 'select(.ok == true and .result.status == "ready") | .result.taskId' 2>/dev/null)"
 if [ "$TC_RC" != 0 ] || [ -z "$TASK_ID" ]; then

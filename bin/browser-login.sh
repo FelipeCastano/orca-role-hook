@@ -20,14 +20,31 @@ PW="$KIT/pw/node_modules/.bin/playwright"
 export KIT
 CHK="$("$KIT/bin/e2e-browser.sh" check 2>&1)" || { echo "$CHK" >&2; exit 2; }
 [ -x "$PW" ] || { echo "ERROR: $PW is missing. Fix: $KIT/bin/e2e-browser.sh install" >&2; exit 2; }
+# A Linux machine with no display starts Chromium nowhere: say so before it fails with an unrelated error.
+if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "ERROR: no display for the browser: DISPLAY and WAYLAND_DISPLAY are not set. On WSL, enable WSLg (wsl --update, then wsl --shutdown) or run browser-login.sh from a terminal that has a display." >&2
+  exit 2
+fi
 migrate_session "$PROJ"
 mkdir -p "$(dirname "$STATE")"
-TMP="$STATE.tmp.$$"; rm -f "$TMP"; trap 'rm -f "$TMP"' EXIT
+TMP="$STATE.tmp.$$"; rm -f "$TMP" "$TMP.err"; trap 'rm -f "$TMP" "$TMP.err"' EXIT
 echo "Project: $PROJ"
 echo "Identity: $IDENT"
 echo "A browser will open at $URL. Sign in (including MFA) and, once you see the application loaded, CLOSE the browser window."
 echo "The session will be saved in $STATE"
-PLAYWRIGHT_BROWSERS_PATH="$KIT/browsers" "$PW" open --save-storage="$TMP" "$URL" || true
+# A run that saves nothing within a few seconds is a browser that never started (no display, an immediate crash), not an unfinished login.
+MIN="${ORCA_ROLES_BROWSER_MIN_SECONDS-5}"; case "$MIN" in ''|*[!0-9]*) MIN=5;; esac
+T0=$SECONDS
+if PLAYWRIGHT_BROWSERS_PATH="$KIT/browsers" "$PW" open --save-storage="$TMP" "$URL" 2> "$TMP.err"; then PWC=0; else PWC=$?; fi
+TOOK=$((SECONDS - T0))
+[ ! -s "$TMP.err" ] || cat "$TMP.err" >&2
+if [ ! -f "$TMP" ] && { [ "$PWC" -ne 0 ] || [ "$TOOK" -lt "$MIN" ]; }; then
+  LAST="$(awk '{ sub(/\r$/, ""); if (NF) l = $0 } END { print l }' "$TMP.err")"
+  [ -n "$LAST" ] || LAST="no output"
+  echo "ERROR: the browser did not start or closed at once (playwright exited with $PWC after $TOOK s): $LAST. Nothing was saved." >&2
+  if [ -f "$STATE" ]; then echo "The previous session ($STATE) is unchanged." >&2; fi
+  exit 2
+fi
 if [ -f "$TMP" ] && session_matches "$TMP" "$URL"; then
   mv -f "$TMP" "$STATE"
   echo "Session saved: $(jq -r '"\((.cookies // []) | length) cookies, \((.origins // []) | length) origins"' "$STATE")."

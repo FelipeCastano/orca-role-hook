@@ -11,7 +11,7 @@
 #   --json     a JSON array of {role, title, handle, paneKey, state, since, sinceMs, task, tool, summary} instead of the lines
 #   --run <id> also looks for dispatches whose text was never submitted (one worker-list; for a role in state done with a dispatch still open
 #              whose task its prompt never named, one terminal show), and adds a 7th field, report: ok | missing (its last worker_done in that Run
-#              does not start with Done, see canary.sh) | - (no report, or older than the inbox's last 200 messages, or a role without a tab);
+#              does not start with Done, see canary.sh) | - (no report, or older than the Run's own mailbox's last 200 messages, or a role without a tab);
 #              then an 8th field, closable | -: whether the local coordinator may close the tab now (a tab, state done, interrupted or failed, no
 #              open dispatch of this Run to its handle, and a role opened per batch, per task or as an instance; --json: the key closable, a
 #              boolean, on every element).  Without --run neither field nor key exists.
@@ -46,7 +46,8 @@ PS="$(orca worktree ps --json 2>/dev/null)" && printf '%s' "$PS" | jq -e '.resul
 ROW=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  if [ "$p" = "$TOP" ] || [ "$(cd "$p" 2>/dev/null && pwd -P)" = "$TOP" ]; then ROW="$p"; break; fi
+  c="$(local_path "$p")"
+  if [ "$c" = "$TOP" ] || [ "$(cd "$c" 2>/dev/null && pwd -P)" = "$TOP" ]; then ROW="$p"; break; fi
 done <<< "$(printf '%s' "$PS" | jq -r '.result.worktrees[].path')"
 [ -n "$ROW" ] || { echo "team-status: Orca has no worktree at $TOP" >&2; exit 2; }
 # agents of every row: a pair tree's agent may be listed under the pair tree, its tab under this worktree; paneKeys are unique
@@ -114,7 +115,7 @@ if [ -n "$RUN" ]; then
 fi
 
 if [ -n "$RUN" ]; then
-  INB="$(orca orchestration inbox --json --full --limit 200 2>/dev/null)"
+  INB="$(orca orchestration inbox --terminal "run:$RUN" --json --full --limit 200 2>/dev/null)"
   printf '%s' "$INB" | jq -e '.result.messages | type == "array"' >/dev/null 2>&1 || INB='{"result":{"messages":[]}}'
   OUT="$(printf '%s' "$OUT" | jq -c --argjson inb "$INB" --arg run "$RUN" --arg re "$REPORT_MARK_RE" '
     map(. as $r | ([$inb.result.messages[] | select(.type == "worker_done" and .run_id == $run and .from_handle == $r.handle)] | sort_by(.sequence) | last) as $d

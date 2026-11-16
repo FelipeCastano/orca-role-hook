@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Lists the worker_done reports of a Run whose body does not start with the report marker (Done, see REPORT_MARK_RE in lib.sh): a role
-# that lost its prompt (a compaction, a wrong role message) stops writing it. Read-only for Orca: one 'orca orchestration inbox --full' read.
+# that lost its prompt (a compaction, a wrong role message) stops writing it. Read-only for Orca: one 'orca orchestration inbox --terminal run:<id> --full' read.
 # Usage (from the worktree):  canary.sh --run <run_id> [--all] [--json]
 #   By default only the reports not checked before (their ids are kept in <git dir>/orca-roles.canary-seen, the newest 1000).
-#   The inbox lists only the last 200 messages of all Runs: if more arrived since this Run's last check, reports in between were never
-#   seen; the script then says so (a "gap" line, exit 1) instead of reporting nothing.
+#   The Run's own mailbox (inbox --terminal run:<id>) lists only its last 200 messages: if more arrived since this Run's last check,
+#   reports in between were never seen; the script then says so (a "gap" line, exit 1) instead of reporting nothing.
 #   --all checks every report of the Run that the inbox still lists and remembers nothing.
 #   Text: one line per report without the marker: missing<TAB>created_at<TAB>role title (or "unknown")<TAB>handle<TAB>task id<TAB>first 80 characters
 #   of the body (newlines and tabs as spaces); a possible gap adds one line gap<TAB><last sequence seen><TAB><oldest sequence listed>;
@@ -29,7 +29,7 @@ GITDIR="$(git rev-parse --absolute-git-dir 2>/dev/null)" || GITDIR=""
 [ -n "$GITDIR" ] && [ -s "$GITDIR/orca-roles.env" ] || { echo "canary: this folder has no orca-roles team" >&2; exit 2; }
 CFG="$GITDIR/orca-roles.config.json"; [ -f "$CFG" ] || CFG=/dev/null
 SEEN="$GITDIR/orca-roles.canary-seen"
-IN="$(orca orchestration inbox --json --full --limit 200 2>/dev/null)"
+IN="$(orca orchestration inbox --terminal "run:$RUN" --json --full --limit 200 2>/dev/null)"
 printf '%s' "$IN" | jq -e '.result.messages | type == "array"' >/dev/null 2>&1 || { echo "canary: Orca did not answer 'orchestration inbox'" >&2; exit 2; }
 
 SEEN_IDS="[]"; COVERED=null

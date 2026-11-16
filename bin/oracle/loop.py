@@ -41,7 +41,8 @@ def run_orca(args):
 
 def orca(*a):
     """result of `orca orchestration <a> --json --full` (Orca's whole record, not its concise view), or None if it failed."""
-    r = run_orca(['orchestration'] + list(a) + ['--json', '--full'])
+    full = [] if os.environ.get('ORCA_ROLES_NO_FULL') == '1' else ['--full']   # Orca below 1.4.246 knows no --full and prints the whole record anyway
+    r = run_orca(['orchestration'] + list(a) + ['--json'] + full)
     if r is None:
         return None
     try:

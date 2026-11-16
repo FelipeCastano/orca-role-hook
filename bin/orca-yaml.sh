@@ -197,10 +197,13 @@ warn_run_policy() {
 if [ "$ACTION" = check ]; then
   lookup_policy || exit 0
   read -r POLICY LOCAL_KIT RUNPOL <<<"$POLICY_INFO"
-  SHARED_KIT=false
+  # SHARED_WHY names the first of the three conditions a shared source fails (only one is reported, in that order)
+  SHARED_KIT=false; SHARED_WHY=""
   # Any non-comment line of orca.yaml counts, not only the setup script's (known limit)
-  if [ -f "$YAML" ] && [ "$(jq -Rsr "$JQ_DEFS runs_kit" "$YAML" 2>/dev/null)" = true ] \
-    && { tracked orca.yaml || { has_line orca.yaml "$INCLUDE" && git -C "$ROOT" check-ignore -q orca.yaml; }; }; then SHARED_KIT=true; fi
+  if [ ! -f "$YAML" ]; then SHARED_WHY="there is no orca.yaml in $ROOT"
+  elif [ "$(jq -Rsr "$JQ_DEFS runs_kit" "$YAML" 2>/dev/null)" != true ]; then SHARED_WHY="$ROOT/orca.yaml does not run launch.sh"
+  elif tracked orca.yaml || { has_line orca.yaml "$INCLUDE" && git -C "$ROOT" check-ignore -q orca.yaml; }; then SHARED_KIT=true
+  else SHARED_WHY="$ROOT/orca.yaml runs launch.sh but is neither committed nor listed in .worktreeinclude and ignored by git"; fi
   case "$POLICY" in
     local-only) LAUNCHES="$LOCAL_KIT";;
     shared-only) LAUNCHES="$SHARED_KIT";;
@@ -209,8 +212,8 @@ if [ "$ACTION" = check ]; then
   if [ "$LAUNCHES" != true ]; then
     case "$POLICY" in
       local-only) echo "WARNING: new worktrees of this project will not start the kit: Orca's setup source is local-only and the local setup script does not run launch.sh. Put \$HOME/.orca-roles/bin/launch.sh as the first line of that script (Settings → Repository → $(basename "$ROOT") → Setup script), or switch the setup source to \"run both\" and run roles-yaml." >&2;;
-      shared-only) echo "WARNING: new worktrees of this project will not start the kit: Orca's setup source is shared-only and no orca.yaml that reaches new worktrees runs launch.sh. Run roles-yaml, or add \$HOME/.orca-roles/bin/launch.sh to the committed orca.yaml's setup script." >&2;;
-      *) echo "WARNING: new worktrees of this project will not start the kit: neither the local setup script nor an orca.yaml that reaches new worktrees runs launch.sh. Run roles-yaml, or put \$HOME/.orca-roles/bin/launch.sh in the local setup script (Settings → Repository → $(basename "$ROOT") → Setup script)." >&2;;
+      shared-only) echo "WARNING: new worktrees of this project will not start the kit: Orca's setup source is shared-only and no orca.yaml that reaches new worktrees runs launch.sh ($SHARED_WHY). Run roles-yaml, or add \$HOME/.orca-roles/bin/launch.sh to the committed orca.yaml's setup script." >&2;;
+      *) echo "WARNING: new worktrees of this project will not start the kit: neither the local setup script nor an orca.yaml that reaches new worktrees runs launch.sh ($SHARED_WHY). Run roles-yaml, or put \$HOME/.orca-roles/bin/launch.sh in the local setup script (Settings → Repository → $(basename "$ROOT") → Setup script)." >&2;;
     esac
     exit 0
   fi

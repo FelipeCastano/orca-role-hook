@@ -183,6 +183,11 @@ role_alive() {  # role_alive <role> <handle>
 if [ "$STATUS" = 1 ]; then   # read-only: nothing is written, not even the launch log
   kv="$(head -1 "$KIT/VERSION" 2>/dev/null)"; ki="$(head -1 "$KIT/.installed" 2>/dev/null)"   # what the installer recorded
   echo "Kit: ${kv:-unknown} (${ki:-unknown})"
+  ov="$(orca_version --no-write)"
+  ORCA_ROLES_ORCA_VERSION="$ov"; export ORCA_ROLES_ORCA_VERSION   # the rest of --status must not write the version cache either (empty: unknown, nothing looked up or cached)
+  if [ -z "$ov" ]; then echo "Orca: unknown version (minimum $ORCA_MIN_VERSION)"
+  elif version_lt "$ov" "$ORCA_MIN_VERSION"; then echo "Orca: $ov (older than the minimum $ORCA_MIN_VERSION: update Orca)"
+  else echo "Orca: $ov (minimum $ORCA_MIN_VERSION)"; fi
   if [ ! -s "$STATE" ]; then echo "No team launched in this worktree."; exit 0; fi
   SCFG="$CFG"; SAVEDSRC=1
   if [ ! -f "$CFG" ]; then   # no saved copy: the effective configuration, built aside and removed on exit
@@ -252,6 +257,9 @@ done
 trap 'lock_release; rm -f "$OVR.canon"' EXIT
 exec > >(tee -a "$LOG") 2>&1
 echo "== $(date '+%F %T') launch.sh in $WT"
+if orca_older_than "$ORCA_MIN_VERSION"; then   # the agents type orca themselves and the kit cannot rewrite their --full or --spec-file
+  echo "WARNING: Orca $(orca_version) is older than $ORCA_MIN_VERSION, the minimum this kit supports. The kit's scripts work around it, but the agents' own orchestration commands with --full or --spec-file, and task specs too long for the command line, will fail. Update Orca and run roles again." >&2
+fi
 
 # The new configuration and exceptions are prepared aside and only replace the saved ones once every check has passed
 NEWCFG="$CFG.new"; NEWOVR="$OVR.tmp"; OVRSRC=""
@@ -833,6 +841,12 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
     else
       echo "Switching mode from $PREV_MODE to $NEWMODE: closing ${OPEN_WORKERS:-no workers}; $FL keeps its tab and gets its role message for $NEWMODE after its conversation is cleared."
     fi
+    # `terminal close` reports success when the runtime only requested the PTY stop, and a tab Orca keeps as an orphaned
+    # terminal can leave its agent running: a close counts only once Orca has no tab for the handle and no agent of it runs.
+    sw_has_handle() { printf '%s' "$1" | jq -e --arg h "$2" 'any(.. | objects | select(has("handle")); .handle == $h)' >/dev/null 2>&1; }
+    sw_show_code() { printf '%s' "$1" | jq -r '.error.code // empty' 2>/dev/null; }
+    sw_show_orphaned() { printf '%s' "$1" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1; }
+    sw_signal() { if [ -n "${ORCA_ROLES_KILL:-}" ]; then "$ORCA_ROLES_KILL" "$@"; else kill "$@"; fi; return 0; }   # test hook: the signal option and the pid
     while IFS='|' read -r svar srole sopen src shandle srh stitle; do
       [ -n "$svar" ] && [ "$srole" != "$FRONT" ] || continue
       [ "$(rstr "$CFG" "$srole" agent)" != opencode ] || oc_session_delete "$srole" "$GITDIR"   # closed on purpose: its OpenCode session goes, before its tab closes (as close-role.sh)
@@ -840,10 +854,41 @@ if [ "$PENDING" = 0 ] && [ "$ASK" = 0 ] && [ -n "$PREV_MODE" ] && [ "$PREV_MODE"
         chs=""; case "$src" in 0|2|3) chs="$shandle";; esac
         [ -z "$srh" ] || [ "$srh" = "$chs" ] || chs="$chs $srh"
         for ch in $chs; do
-          orca terminal close --terminal "$ch" --tab --json >/dev/null 2>&1; crc=$?
-          [ "$crc" = 0 ] || [ "$crc" = 124 ] || { orca terminal close --terminal "$ch" --json >/dev/null 2>&1; crc=$?; }
-          [ "$crc" = 0 ] || { [ "$crc" = 124 ] && close_unconfirmed "$ch" "$stitle" >/dev/null; } \
-            || fail "ERROR: could not close $stitle's tab ($ch); close it by hand and switch again."
+          cjs="$(orca terminal close --terminal "$ch" --tab --json 2>/dev/null)"; crc=$?
+          { [ "$crc" = 0 ] || [ "$crc" = 124 ]; } || { cjs="$(orca terminal close --terminal "$ch" --json 2>/dev/null)"; crc=$?; }
+          cerr=""; ccode="$(sw_show_code "$cjs")"; [ -z "$ccode" ] || cerr=", $ccode"
+          tg=0; orph=0; apid=""; i=0
+          while :; do   # one check per second, up to 5 s, whatever the exit code of the close
+            shj="$(orca terminal show --terminal "$ch" --json 2>/dev/null)"
+            lj="$(orca terminal list --worktree "$WT" --json 2>/dev/null)"
+            tg=0; orph=0
+            [ "$(sw_show_code "$shj")" = terminal_handle_stale ] && tg=1
+            { [ "$tg" = 1 ] || [ -z "$lj" ]; } || { sw_has_handle "$lj" "$ch" || tg=1; }
+            sw_show_orphaned "$shj" && orph=1
+            apid="$(agent_pid_of_handle "$ch")"
+            { [ "$tg" = 1 ] || [ "$orph" = 1 ]; } && break   # the tab's state is settled; only its agent may still run
+            [ "$i" -ge 5 ] && break
+            sleep 1
+            i=$((i + 1))
+          done
+          if [ -n "$apid" ] && { [ "$tg" = 1 ] || [ "$orph" = 1 ]; }; then
+            pid="${apid%%$'\n'*}"
+            sw_signal -TERM "$pid"
+            i=0
+            while [ -n "$(agent_pid_of_handle "$ch")" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+            if [ -n "$(agent_pid_of_handle "$ch")" ]; then sw_signal -KILL "$pid"; sleep 1; fi   # TERM ignored: one more check after KILL
+            [ -z "$(agent_pid_of_handle "$ch")" ] \
+              || fail "ERROR: could not close $stitle's tab ($ch$cerr); close it by hand and switch again."
+            echo "Ended the agent of $stitle (pid $pid), which kept running after its tab was closed."
+            shj="$(orca terminal show --terminal "$ch" --json 2>/dev/null)"
+            sw_show_orphaned "$shj" && { orca terminal close --terminal "$ch" --json >/dev/null 2>&1 || true; }   # best effort: Orca may keep the orphaned PTY
+            lj="$(orca terminal list --worktree "$WT" --json 2>/dev/null)"
+            if [ -n "$lj" ] && sw_has_handle "$lj" "$ch"; then
+              echo "Note: Orca still lists the old tab of $stitle ($ch) after its agent ended; close it by hand if it stays."
+            fi
+          fi
+          { [ "$tg" = 1 ] || [ "$orph" = 1 ]; } \
+            || fail "ERROR: could not close $stitle's tab ($ch$cerr); close it by hand and switch again."
         done
       fi
       oc_reap_role "$CFG" "$srole" "$stitle" "$shandle" "$srh"
@@ -1203,7 +1248,13 @@ for id in $ROLES; do   # a role with no saved tab (left closed) is not written b
 done
 mv "$TABS.tmp.$$" "$TABS"
 if [ -s "$TREES.tmp.$$" ]; then mv "$TREES.tmp.$$" "$TREES"; else rm -f "$TREES.tmp.$$" "$TREES"; fi
-"$KIT/bin/orca-yaml.sh" --check || true
+# The setup-source warning is kept in the git dir and shown once: a launch repeats it only when its text changed (roles-yaml --check always prints)
+YW="$GITDIR/orca-roles.yaml-warned"; YWN="$("$KIT/bin/orca-yaml.sh" --check 2>&1 >/dev/null || true)"
+if [ -z "$YWN" ]; then rm -f "$YW" 2>/dev/null || true
+elif [ "$YWN" != "$(cat "$YW" 2>/dev/null)" ]; then
+  { printf '%s\n' "$YWN"; echo "(Shown once for this worktree; run roles-yaml --check to see it again.)"; } >&2
+  printf '%s\n' "$YWN" > "$YW" 2>/dev/null || true
+fi
 cat "$STATE"
 
 # The relauncher reopens the front role once its turn ends. It is detached from this process and from its terminal (double fork + new session),
