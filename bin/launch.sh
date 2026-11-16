@@ -128,21 +128,6 @@ SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has c
 # A live claude or codex process for the handle counts as alive even when Orca flags the tab orphaned (it also does for tabs it has not
 # bound yet) or shows no agent identity (idle Claude often does); an orphaned one sets ROLE_DETACHED=1 so the caller can say it kept it.
 # An orphaned OpenCode tab is state 3 even with a live OpenCode TUI: roles replaces it with its conversation.
-# The pid of the claude, codex or OpenCode TUI process (not its private 'opencode serve' child) whose ORCA_TERMINAL_HANDLE is that handle (none: the tab has no agent behind it).
-agent_pid_of_handle() {
-  [ -n "${ORCA_ROLES_AGENT_PID:-}" ] && { "$ORCA_ROLES_AGENT_PID" "$1"; return 0; }   # test hook
-  local pid comm env
-  while read -r pid comm; do
-    case "$comm" in
-      opencode|*/opencode) oc_tui_args "$(ps -o args= -p "$pid" 2>/dev/null)" || continue;;
-    esac
-    if [ -r "/proc/$pid/environ" ]; then env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"; else env="$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n')"; fi
-    printf '%s\n' "$env" | grep -qx "ORCA_TERMINAL_HANDLE=$1" || continue
-    echo "$pid"
-    return 0
-  done < <(ps -axo pid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)(claude|codex|opencode)$/ {print $1, $2}')
-  return 0
-}
 agent_in()   { local js rc; js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"; rc=$?; printf '%s' "$js" | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; return "$rc"; }
 role_alive() {  # role_alive <role> <handle>
   ROLE_DETACHED=0
