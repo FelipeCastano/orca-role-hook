@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # The E2E browser stack of the kit: the pinned Playwright packages in ~/.orca-roles/pw and their Chromium build in
 # ~/.orca-roles/browsers. The Playwright MCP, browser-login.sh and the E2E scripts all use it.
-# Usage:  e2e-browser.sh check     exit 0 if the stack is installed (no browser is started), 2 and the fix if not
+# Usage:  e2e-browser.sh check     exit 0 if the stack is installed (no browser is started; on Linux it also checks with ldd that Chromium's system libraries are found), 2 and the fix if not
 #         e2e-browser.sh install   npm ci in ~/.orca-roles/pw, then installs the pinned Chromium (no sudo); ends with check
 #         e2e-browser.sh session <base-url> [--as <identity>] [project]
 #                                  reads the saved session (no browser is started); exit 0 ok, 3 missing, 4 no-session-for-host,
 #                                  5 expired, 6 unknown (only session cookies); 1 usage; every non-zero prints the login command
-# Test hooks: E2E_NPM (default npm), E2E_NODE (default node), KIT (default ~/.orca-roles).
+# Test hooks: E2E_NPM (default npm), E2E_NODE (default node), E2E_LDD (default ldd), KIT (default ~/.orca-roles).
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"
-NPM="${E2E_NPM:-npm}"; NODE="${E2E_NODE:-node}"
+NPM="${E2E_NPM:-npm}"; NODE="${E2E_NODE:-node}"; LDD="${E2E_LDD:-ldd}"
 TREE="$KIT/pw"
 export PLAYWRIGHT_BROWSERS_PATH="$KIT/browsers"
 FIX="$KIT/bin/e2e-browser.sh install"
@@ -19,7 +19,7 @@ pinned() {  # $1 = package name → the version pinned in package.json (empty if
 }
 
 check() {
-  local missing="" pkg want have exe dir
+  local missing="" pkg="" want="" have="" exe="" dir="" libs="" lout="" lrc="" only_libs=0 chrom_ok=0
   if [ ! -f "$TREE/package.json" ]; then
     missing="$missing
   - $TREE/package.json (the kit's pinned packages)"
@@ -46,16 +46,32 @@ check() {
   else
     dir="$(dirname "$(dirname "$exe")")"
     while [ "$(dirname "$dir")" != "$KIT/browsers" ] && [ "$dir" != "/" ] && [ "$dir" != "." ]; do dir="$(dirname "$dir")"; done
-    [ -f "$dir/INSTALLATION_COMPLETE" ] || missing="$missing
-  - the Chromium install is incomplete: $dir/INSTALLATION_COMPLETE is missing"
+    if [ -f "$dir/INSTALLATION_COMPLETE" ]; then chrom_ok=1; else missing="$missing
+  - the Chromium install is incomplete: $dir/INSTALLATION_COMPLETE is missing"; fi
+  fi
+  # a browser whose libraries the loader cannot find fails at start with none of its own errors (the WSL run saw only "<gracefully close end>")
+  if [ "$chrom_ok" = 1 ] && [ "$(uname -s)" = Linux ]; then
+    lout="$("$LDD" "$exe" 2>/dev/null)"; lrc=$?
+    if [ "$lrc" = 0 ]; then
+      libs="$(printf '%s\n' "$lout" | awk '/=> not found/ { if (!seen[$1]++) printf "%s%s", (n++ ? " " : ""), $1 }')"
+    fi
+    if [ -n "$libs" ]; then
+      [ -n "$missing" ] || only_libs=1
+      missing="$missing
+  - Chromium cannot start: system libraries are missing: $libs"
+    fi
   fi
   if [ -n "$missing" ]; then
     echo "E2E browser not ready:$missing" >&2
-    echo "Fix: $FIX" >&2
+    if [ "$only_libs" = 1 ]; then
+      echo "Fix: install the system libraries (below); the kit's install cannot add them." >&2
+    else
+      echo "Fix: $FIX" >&2
+    fi
     if [ "$(uname -s)" = Linux ] && [ -x "$TREE/node_modules/.bin/playwright" ]; then
       echo "System libraries (Linux), as reported by Playwright:" >&2
       "$TREE/node_modules/.bin/playwright" install-deps --dry-run chromium >&2 2>&1 || true
-      echo "If libraries are missing, run once (the kit never runs sudo): sudo $TREE/node_modules/.bin/playwright install-deps chromium" >&2
+      echo "If libraries are missing, run once (the kit never runs sudo): sudo env PATH=\"\$PATH\" $TREE/node_modules/.bin/playwright install-deps chromium" >&2
     fi
     return 2
   fi
