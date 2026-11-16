@@ -6,7 +6,8 @@
 #   agents.orca-<role>: description, mode, model, steps (roles.<r>.opencode.steps, else settings.flow.maxStepsPerWorker, else none),
 #     system (the role anchor, the role's common rules, the role's prompt) and permissions: allow everything first (a call that matches no
 #     rule would wait for an answer that nobody gives in the tab), then roles.<r>.opencode.permissions as written, then the kit's denies
-#     (question, subagent for the reviewers (Plan-Reviewer, Code-Reviewer, Verifier), git push, editing the kit's own files)
+#     (question, subagent for the reviewers (Plan-Reviewer, Code-Reviewer, Verifier), git push, editing the kit's own files,
+#     read of .env and .env.* denied, .env.example/.sample/.template allowed, after the role's own items)
 #   mcp.servers: the role's MCP servers (the file in ORCA_ROLES_MCP, from agent.sh) in OpenCode's format; none: no "mcp" key.
 # Nothing is written in the worktree. An untracked <toplevel>/.opencode/agents/orca-<role>.md left by an older kit is deleted: OpenCode
 # ranks the project's agents above OPENCODE_CONFIG, so it would replace the kit's agent; nothing is removed when <toplevel>/.opencode or
@@ -73,7 +74,14 @@ jq -n --arg title "$(title_of "$CFG" "$ROLE")" --arg model "$MODEL" --arg steps 
        + [{action: "question", resource: "*", effect: "deny"}]
        + (if ($role == "plan-reviewer" or $role == "code-reviewer" or $role == "verifier") then [{action: "subagent", resource: "*", effect: "deny"}] else [] end)
        + [{action: "shell", resource: "git push*", effect: "deny"}]
-       + ($paths | split("\n") | map(select(. != "")) | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"})))})}}
+       + ($paths | split("\n") | map(select(. != "")) | map({action: "edit", resource: "\($kit)/\(.)", effect: "deny"}))
+       + [{action: "read", resource: ".env", effect: "deny"}]
+       + [{action: "read", resource: "*/.env", effect: "deny"}]
+       + [{action: "read", resource: ".env.*", effect: "deny"}]
+       + [{action: "read", resource: "*/.env.*", effect: "deny"}]
+       + [{action: "read", resource: "*.env.example", effect: "allow"}]
+       + [{action: "read", resource: "*.env.sample", effect: "allow"}]
+       + [{action: "read", resource: "*.env.template", effect: "allow"}])})}}
   + (if ($servers | length) > 0 then {mcp: {servers: $servers}} else {} end)' > "$TMPF" || { echo "opencode-prepare.sh: could not write $OUT" >&2; exit 1; }
 mv "$TMPF" "$OUT"; TMPF=""
 
