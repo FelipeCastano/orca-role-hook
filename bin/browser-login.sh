@@ -39,7 +39,12 @@ if PLAYWRIGHT_BROWSERS_PATH="$KIT/browsers" "$PW" open --save-storage="$TMP" "$U
 TOOK=$((SECONDS - T0))
 [ ! -s "$TMP.err" ] || cat "$TMP.err" >&2
 if [ ! -f "$TMP" ] && { [ "$PWC" -ne 0 ] || [ "$TOOK" -lt "$MIN" ]; }; then
-  LAST="$(awk '{ sub(/\r$/, ""); if (NF) l = $0 } END { print l }' "$TMP.err")"
+  # the loader's text names the real cause: Playwright's last line can be a benign dbus error or "<gracefully close end>"
+  LAST="$(awk '{ sub(/\r$/, "") }
+    !loader && /error while loading shared libraries|cannot open shared object file/ { loader = $0 }
+    !err && /\[err\]/ { err = $0 }
+    NF { last = $0 }
+    END { print (loader != "" ? loader : err != "" ? err : last) }' "$TMP.err")"
   [ -n "$LAST" ] || LAST="no output"
   echo "ERROR: the browser did not start or closed at once (playwright exited with $PWC after $TOOK s): $LAST. Nothing was saved." >&2
   if [ -f "$STATE" ]; then echo "The previous session ($STATE) is unchanged." >&2; fi
