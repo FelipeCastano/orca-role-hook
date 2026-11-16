@@ -28,9 +28,20 @@ orca_ide_path() {
   fi
   return 1
 }
+# The wslpath program the kit runs: $ORCA_ROLES_WSLPATH when set (empty: none, a path: that program), else the one on the PATH; nothing and 1 when there is none.
+wslpath_cmd() {
+  local p
+  if [ "${ORCA_ROLES_WSLPATH+set}" = set ]; then
+    [ -n "$ORCA_ROLES_WSLPATH" ] && [ -f "$ORCA_ROLES_WSLPATH" ] && [ -x "$ORCA_ROLES_WSLPATH" ] || return 1
+    printf '%s\n' "$ORCA_ROLES_WSLPATH"; return 0
+  fi
+  p="$(command -v wslpath 2>/dev/null)" || return 1
+  [ -n "$p" ] || return 1
+  printf '%s\n' "$p"
+}
 # Whether this is WSL (the kernel says Microsoft and wslpath exists).
 is_wsl() {
-  grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null && command -v wslpath >/dev/null 2>&1
+  grep -qi microsoft "${ORCA_ROLES_PROC_VERSION:-/proc/version}" 2>/dev/null && wslpath_cmd >/dev/null
 }
 # Orca's "Nested worker depth" (nestedWorkerMaxDepth) as Orca resolves it: an integer >= 1, or nothing when it cannot be read (WSL, no profile, no sqlite3).  orca_nested_depth
 orca_nested_depth() {
@@ -200,22 +211,93 @@ front_set_model() {
   return 0
 }
 
+# The oldest Orca this kit supports: --full (but on inbox) and --spec-file arrived in it, and from it Orca's orchestration commands print a
+# concise JSON view by default, which is why the kit's scripts ask for --full. Below it they fall back, or the launch says they cannot.
+ORCA_MIN_VERSION=1.4.246
+# <version> with the spaces and a leading v removed when it is dot-separated numbers; nothing otherwise
+version_norm() {
+  local v="${1:-}"
+  v="${v//[[:space:]]/}"
+  v="${v#v}"
+  case "$v" in ''|.*|*.|*..*|*[!0-9.]*) return 0;; esac
+  printf '%s\n' "$v"
+}
+# 0 only when both are dot-separated numbers and <a> is numerically lower than <b>; a missing component counts as 0
+version_lt() {
+  local x y n m
+  x="$(version_norm "${1:-}")"; y="$(version_norm "${2:-}")"
+  [ -n "$x" ] && [ -n "$y" ] || return 1
+  while [ -n "$x" ] || [ -n "$y" ]; do
+    n=0; m=0
+    [ -z "$x" ] || n="${x%%.*}"
+    [ -z "$y" ] || m="${y%%.*}"
+    case "$x" in *.*) x="${x#*.}";; *) x="";; esac
+    case "$y" in *.*) y="${y#*.}";; *) y="";; esac
+    n=$((10#$n)); m=$((10#$m))
+    [ "$n" -eq "$m" ] || { [ "$n" -lt "$m" ] && return 0; return 1; }
+  done
+  return 1
+}
+# Orca's version as dot-separated numbers (from `orca --version`), nothing when the answer does not look like one; always 0.
+# The answer is cached for 600 s in $KIT/state/orca-version (on WSL every call runs powershell.exe), an unknown one as an empty file too.
+# $ORCA_ROLES_ORCA_VERSION replaces the lookup (empty: unknown, nothing is looked up or cached); --no-write never writes the cache
+# (roles --status). The lookup keeps $ORCA_ROLES_VERSION_TIMEOUT s to answer (default 5; the session hook gives it what is left of its budget).
+orca_version() {
+  local nw=0 f="$KIT/state/orca-version" v="" raw="" lim="${ORCA_ROLES_VERSION_TIMEOUT:-5}"
+  [ "${1:-}" = --no-write ] && nw=1
+  if [ "${ORCA_ROLES_ORCA_VERSION+set}" = set ]; then
+    v="$(version_norm "$ORCA_ROLES_ORCA_VERSION")"
+    [ -z "$v" ] || printf '%s\n' "$v"
+    return 0
+  fi
+  if [ -f "$f" ] && [ -n "$(find "$f" -mmin -10 2>/dev/null)" ]; then
+    v="$(version_norm "$(cat "$f" 2>/dev/null)")"
+    [ -z "$v" ] || printf '%s\n' "$v"
+    return 0
+  fi
+  case "$lim" in ''|*[!0-9]*|0) lim=5;; esac
+  raw="$(bounded_run --quiet "$lim" "orca --version" command orca --version 2>/dev/null)" || raw=""   # a non-zero exit or a timeout is an unknown version
+  v="$(version_norm "$raw")"
+  if [ "$nw" = 0 ]; then
+    mkdir -p "$KIT/state" 2>/dev/null && { printf '%s' "$v" > "$f.tmp.$$" 2>/dev/null && mv "$f.tmp.$$" "$f" 2>/dev/null; } || rm -f "$f.tmp.$$" 2>/dev/null
+  fi
+  [ -z "$v" ] || printf '%s\n' "$v"
+  return 0
+}
+# 0 only when Orca's version is known and lower than <x.y.z>; an unknown version counts as not older
+orca_older_than() {
+  local have
+  have="$(orca_version)"
+  [ -n "$have" ] && version_lt "$have" "${1:-}"
+}
+# The array ORCA_COMPAT_ARGS: its arguments with every --full removed when they start with 'orchestration' and Orca is older than 1.4.246
+# (that Orca prints the whole record by default); otherwise unchanged.
+orca_compat_args() {
+  local a
+  if [ "${1:-}" = orchestration ] && orca_older_than "$ORCA_MIN_VERSION"; then
+    ORCA_COMPAT_ARGS=()
+    for a in "$@"; do [ "$a" = --full ] || ORCA_COMPAT_ARGS+=("$a"); done
+    return 0
+  fi
+  ORCA_COMPAT_ARGS=("$@")
+}
 # Every orca call of the kit's scripts has a time limit: $ORCA_ROLES_CLI_TIMEOUT s (60; 0 = none), or the call's --timeout-ms (rounded up to s) + 60.
 # `terminal close` has its own, $ORCA_ROLES_CLOSE_TIMEOUT s (15; 0 = none). A value that is not a whole number is ignored.
 orca() {
   local lim="${ORCA_ROLES_CLI_TIMEOUT:-}" a prev="" close="${ORCA_ROLES_CLOSE_TIMEOUT:-}"
   case "$lim" in ''|*[!0-9]*) lim=60;; esac
   case "$close" in ''|*[!0-9]*) close=15;; esac
+  orca_compat_args "$@"
   if [ "$lim" = 0 ] || { [ "${1:-} ${2:-}" = "terminal close" ] && [ "$close" = 0 ]; }; then   # by path: bash 3.2 ends a background job with set -e at a failing "command orca" inside this function
     a="$(type -P orca)" || return 127
-    "$a" "$@"; return
+    "$a" ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"}; return
   fi
   [ "${1:-} ${2:-}" = "terminal close" ] && lim="$close"   # on WSL a tab closing itself never gets the answer
   for a in "$@"; do
     if [ "$prev" = --timeout-ms ]; then case "$a" in ''|*[!0-9]*) ;; *) lim=$(( (a + 999) / 1000 + 60 ));; esac; fi
     prev="$a"
   done
-  bounded_run "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca "$@"
+  bounded_run "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"}
 }
 
 # After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale), else tells it was not confirmed and returns 1.
@@ -1746,7 +1828,7 @@ trust_custom_roles() {
 # On WSL (Orca for Windows) the binary is Orca.exe, found through orca-ide's ORCA_WIN_LAUNCHER line, and the result ends in "|wsl": the runtime client is a Windows path.
 # On failure it sets ORCA_APP_NODE_WHY to one line naming the cause (see orca_app_node_reason).
 orca_app_node() {
-  local p l d app c js w lc ide line v inst exe suf
+  local p l d app c js w lc ide line v inst exe suf wp
   ORCA_APP_NODE_WHY="no orca command on the PATH"
   if p="$(type -P orca 2>/dev/null)" && case "$p" in /*) true;; *) false;; esac; then
     while [ -L "$p" ]; do
@@ -1775,10 +1857,11 @@ orca_app_node() {
   suf='\resources\bin\orca.exe'
   [ "${#v}" -gt "${#suf}" ] && [ "$(printf '%s' "${v:${#v}-${#suf}}" | tr 'A-Z' 'a-z')" = "$suf" ] || return 1
   inst="${v:0:${#v}-${#suf}}"
-  exe="$(wslpath -u "$inst\\Orca.exe" 2>/dev/null)" || return 1
+  wp="$(wslpath_cmd)" || return 1
+  exe="$("$wp" -u "$inst\\Orca.exe" 2>/dev/null)" || return 1
   [ -n "$exe" ] && [ -f "$exe" ] && [ -x "$exe" ] || return 1
   w="${inst}\\resources\\app.asar.unpacked\\out\\cli"
-  if lc="$(wslpath -u "$w\\runtime\\client.js" 2>/dev/null)" && [ -n "$lc" ] && [ -f "$lc" ]; then js="$w\\runtime\\client.js"; else js="$w\\runtime-client.js"; fi
+  if lc="$("$wp" -u "$w\\runtime\\client.js" 2>/dev/null)" && [ -n "$lc" ] && [ -f "$lc" ]; then js="$w\\runtime\\client.js"; else js="$w\\runtime-client.js"; fi
   printf '%s|%s|wsl\n' "$exe" "$js"
 }
 
@@ -1790,16 +1873,16 @@ orca_app_node_reason() {
 
 # A path as the kit's shell sees it: a Windows UNC path (\\wsl.localhost\Ubuntu\...) as a Linux path; any other path unchanged.
 local_path() {
-  local c
+  local c wp
   case "$1" in
-    '\\'*) if command -v wslpath >/dev/null 2>&1 && c="$(wslpath -u "$1" 2>/dev/null)" && [ -n "$c" ]; then printf '%s\n' "$c"; else printf '%s\n' "$1"; fi;;
+    '\\'*) if wp="$(wslpath_cmd)" && c="$("$wp" -u "$1" 2>/dev/null)" && [ -n "$c" ]; then printf '%s\n' "$c"; else printf '%s\n' "$1"; fi;;
     *) printf '%s\n' "$1";;
   esac
 }
 
 # Wakes a tab Orca keeps asleep after a restart: wake_tab <worktreeId> <tabId> <leafId>. Returns 0 woken (stdout empty), 1 failed (stdout: the reason), 2 unavailable here (stdout: the reason).
 wake_tab() {
-  local n bin rc rcl err wenv
+  local n bin rc rcl err wenv wp
   if [ -n "${ORCA_ROLES_WAKE:-}" ]; then
     "$ORCA_ROLES_WAKE" "$@"; rc=$?
     case "$rc" in 0) return 0;; 2) return 2;; *) return 1;; esac
@@ -1810,7 +1893,8 @@ wake_tab() {
     rcl="${rcl%|wsl}"
     wenv="${WSLENV:-}"
     case ":$wenv:" in *:ELECTRON_RUN_AS_NODE:*|*:ELECTRON_RUN_AS_NODE/*) ;; *) wenv="${wenv:+$wenv:}ELECTRON_RUN_AS_NODE";; esac
-    err="$(cd "$(dirname "$bin")" && ELECTRON_RUN_AS_NODE=1 WSLENV="$wenv" bounded_run 30 "wake-tab" "$bin" "$(wslpath -w "$KIT/bin/wake-tab.cjs")" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
+    wp="$(wslpath_cmd)" || { printf '%s\n' "no wslpath to convert $KIT/bin/wake-tab.cjs"; return 1; }
+    err="$(cd "$(dirname "$bin")" && ELECTRON_RUN_AS_NODE=1 WSLENV="$wenv" bounded_run 30 "wake-tab" "$bin" "$("$wp" -w "$KIT/bin/wake-tab.cjs")" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
   else
     err="$(ELECTRON_RUN_AS_NODE=1 bounded_run 30 "wake-tab" "$bin" "$KIT/bin/wake-tab.cjs" "$rcl" "$@" 2>&1 >/dev/null)" && return 0
   fi
