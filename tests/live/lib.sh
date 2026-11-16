@@ -333,7 +333,24 @@ c_e2e() {  # the pinned E2E stack: install, a real login (cookie + localStorage)
   mkdir -p "$app"
   printf '%s\n' '<!doctype html><title>live</title><h1>live-checks</h1><script>document.cookie="live=1; path=/; max-age=86400"; localStorage.setItem("live","1")</script>' > "$app/index.html"
   (cd "$app" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) & srv=$!
-  sleep 1
+  # the server needs a moment to listen (a slow macOS CI runner is slower than one second): try the port every 0.2 s, for at most 10 s,
+  # and stop at once when the server process has exited, since then nothing will ever answer
+  port_up() { python3 -c 'import socket, sys
+s = socket.socket(); s.settimeout(0.3)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$port" 2>/dev/null; }
+  local up=0 t0; t0="$(date +%s)"
+  while [ "$up" = 0 ]; do
+    kill -0 "$srv" 2>/dev/null || break
+    port_up && { up=1; break; }
+    [ $(( $(date +%s) - t0 )) -ge 10 ] && break
+    sleep 0.2
+  done
+  if [ "$up" = 0 ]; then
+    fail "$id.login" "the local server did not start on 127.0.0.1:$port (python3 -m http.server)"
+    skip "$id.session" "the local server did not start"; skip "$id.flow" "the local server did not start"
+    kill "$srv" 2>/dev/null
+    return
+  fi
   out="$(cd "$PROJ" && "$KIT/bin/browser-login.sh" "http://127.0.0.1:$port/" 2>&1)"; rc=$?
   [ $rc = 0 ] && ok "$id.login" "browser-login.sh saved a session ($(printf '%s' "$out" | grep -o 'Session saved:.*'))" || fail "$id.login" "$(printf '%s' "$out" | tail -2)"
   out="$(cd "$PROJ" && "$KIT/bin/e2e-browser.sh" session "http://127.0.0.1:$port/" 2>&1)"; rc=$?
@@ -440,6 +457,10 @@ c_terminal_current() {  # orca terminal create --worktree current from a main ch
   check "$id" "the terminal opened in the project's main checkout" "$(cat "$f" 2>/dev/null)" "$(cd "$PROJ" && pwd -P)"
   orca terminal close --terminal "$h" --tab --json >/dev/null 2>&1
 }
+live_full() {  # --full, unless the installed kit knows Orca is older than 1.4.246 (then nothing, since that Orca knows no such flag)
+  if ( . "$KIT/bin/lib.sh" >/dev/null 2>&1 && declare -F orca_older_than >/dev/null 2>&1 && orca_older_than 1.4.246 ); then return 0; fi
+  printf '%s\n' --full
+}
 c_restart_prepare() {  # before the restart: what each role had
   cp "$GD/orca-roles.env" "$LIVE_DIR/env-before-restart"; wt_terms > "$LIVE_DIR/terms-before-restart"
   local lc out rc rid code msg why
@@ -450,7 +471,8 @@ c_restart_prepare() {  # before the restart: what each role had
   fi
   # the local coordinator's own Run when it has one (the one bound last, as the SessionStart hook would take it): Orca keeps one Run per tab, so a
   # second Run made here would be released when the agent binds its own again; a throwaway Run only when none is bound to it
-  rid="$(orca orchestration run-list --json --full 2>/dev/null | jq -r --arg h "$lc" '[(.result.runs // [])[] | select(.coordinator_handle == $h)] | sort_by(.updated_at // "", .created_at // "", .id) | last | .id // empty' 2>/dev/null)"
+  # shellcheck disable=SC2046  # live_full prints --full or nothing
+  rid="$(orca orchestration run-list --json $(live_full) 2>/dev/null | jq -r --arg h "$lc" '[(.result.runs // [])[] | select(.coordinator_handle == $h)] | sort_by(.updated_at // "", .created_at // "", .id) | last | .id // empty' 2>/dev/null)"
   if [ -n "$rid" ]; then st_set r1run "$rid"; st_set r1lc "$lc"; st_set r1kind own; st_set r1since "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; return 0; fi
   out="$( unset ORCA_PANE_KEY; orca orchestration run-create --from "$lc" --objective "live checks R1: Run binding after a restart (throwaway)" --json 2>&1 )"; rc=$?
   rid=""; [ "$rc" -eq 0 ] && rid="$(printf '%s' "$out" | jfield result.run.id)"; [ "$rc" -eq 0 ] && [ -z "$rid" ] && rid="$(printf '%s' "$out" | jfield result.runId)"
@@ -491,7 +513,16 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
   r="$(grep -c 'woke it' "$LIVE_DIR/last-roles.log")"
   check "$id.wake" "every asleep or placeholder role was woken" "$r" "$(echo $asleep | wc -w | tr -d ' ')"
   check "$id.memory" "every role reopened with its conversation" "$(grep -c 'with its conversation' "$LIVE_DIR/last-roles.log")" "$(grep -c . "$GD/orca-roles.env")"
-  check "$id.lost" "no role started without memory" "$(grep -cE 'opening a new one\.$|could not be read|treated as closed' "$LIVE_DIR/last-roles.log")" 0
+  # lost: the roles the launch opened without their conversation, read from the lines that end with "opening a new one."
+  check "$id.lost" "no role started without memory" "$(awk '
+    !/opening a new one\.$/ { next }
+    { i = index($0, "of "); if (i == 0) next
+      t = substr($0, i + 3); a = index(t, " after a restart ("); b = index(t, " (")
+      if (a > 0 && (b == 0 || a < b)) t = substr(t, 1, a - 1)
+      else if (b > 0) t = substr(t, 1, b - 1)
+      if (t == "" || seen[t]++) next
+      printf "%s%s", (n++ ? " " : ""), t }
+    END { if (!n) printf "none"; print "" }' "$LIVE_DIR/last-roles.log")" none
   sleep 20
   check "$id.duplicates" "one tab per role and no stray agent tab" "$(wt_terms | awk -F'\t' '$4 != ""' | wc -l | tr -d ' ')" "$(grep -c . "$GD/orca-roles.env")"
   local bad=""; while IFS='=' read -r v h; do orca terminal show --terminal "$h" --json >/dev/null 2>&1 || bad="$bad $v"; done < "$GD/orca-roles.env"
@@ -505,8 +536,9 @@ c_restart_run() {  # R1.run: the Run made before the restart is bound to the loc
   while :; do
     got=""; cursor=""; i=0
     while [ "$i" -lt 50 ]; do
-      if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --full --cursor "$cursor" 2>/dev/null)" || break
-      else js="$(orca orchestration run-list --json --full 2>/dev/null)" || break; fi
+      # shellcheck disable=SC2046  # live_full prints --full or nothing
+      if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json $(live_full) --cursor "$cursor" 2>/dev/null)" || break
+      else js="$(orca orchestration run-list --json $(live_full) 2>/dev/null)" || break; fi
       hs="$(printf '%s' "$js" | jq -r --arg id "$rid" '(.result.runs // [])[] | select(.id == $id) | .coordinator_handle' 2>/dev/null | head -n 1)"
       [ -n "$hs" ] && { got="$hs"; break; }
       cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)"

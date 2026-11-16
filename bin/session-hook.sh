@@ -31,11 +31,17 @@ slog() {
   if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 200 ]; then tail -n 200 "$LOG" > "$LOG.tmp.$$" 2>/dev/null && mv "$LOG.tmp.$$" "$LOG"; fi
   return 0
 }
-# one orca call with what is left of the 10 s (at least 1); 124 when the time is up
+# one orca call with what is left of the 10 s (at least 1); 124 when the time is up. The version lookup inside orca_compat_args gets what is left too.
 ho() {
-  local rem=$((DEADLINE - $(date +%s)))
+  local rem
+  rem=$((DEADLINE - $(date +%s)))
   [ "$rem" -ge 1 ] || { EXPIRED=1; return 124; }
-  bounded_run "$rem" session-hook command orca "$@" 2>/dev/null
+  # shellcheck disable=SC2034  # read by orca_version in bin/lib.sh
+  local ORCA_ROLES_VERSION_TIMEOUT="$rem"
+  orca_compat_args "$@"
+  rem=$((DEADLINE - $(date +%s)))
+  [ "$rem" -ge 1 ] || { EXPIRED=1; return 124; }
+  bounded_run "$rem" session-hook command orca ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"} 2>/dev/null
 }
 record() {
   if [ "$MARK" = coordinator ]; then
@@ -96,7 +102,10 @@ while listed && [ "$LOOKS" -lt 2 ] && [ $((DEADLINE - $(date +%s))) -ge 6 ]; do
 done
 # only a dead old handle gives up its Runs; a tab that still lives keeps its own
 if listed; then slog "the old tab $PREV is still listed (looked $((LOOKS + 1)) times): its Runs stay with it"; record; finish; exit 0; fi
-RL="$(ho orchestration run-list --json --full)" || { slog "run-list failed"; finish; exit 0; }
+RL="$(ho orchestration run-list --json --full)" || {
+  if orca_older_than "$ORCA_MIN_VERSION"; then slog "run-list failed (Orca $(orca_version) is older than $ORCA_MIN_VERSION)"
+  else slog "run-list failed"; fi
+  finish; exit 0; }
 # newest first: updated_at changes only when a Run is created, bound or released
 RUNS="$(printf '%s' "$RL" | jq -r --arg h "$PREV" '[(.result.runs // .result // []) | if type == "array" then .[] else empty end | select(.coordinator_handle == $h)] | sort_by(.updated_at // "", .created_at // "", .id) | reverse | .[].id' 2>/dev/null)" \
   || { slog "run-list gave no list"; finish; exit 0; }
