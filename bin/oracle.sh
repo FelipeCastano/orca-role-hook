@@ -13,6 +13,7 @@
 # Exit: verify_task.py's (0 = pass and no cheat, 1 = anything else), 2 = bad usage, 3 = no python3 >= 3.8. ORCA_ROLES_PYTHON picks the interpreter.
 set -uo pipefail
 KIT="${KIT:-$HOME/.orca-roles}"; . "$KIT/bin/lib.sh"
+ORCA_ROLES_NO_FULL=""; if [ -n "${ORCA_MIN_VERSION:-}" ] && orca_older_than "$ORCA_MIN_VERSION"; then ORCA_ROLES_NO_FULL=1; fi; export ORCA_ROLES_NO_FULL   # the Python side drops --full too below 1.4.246
 PY="${ORCA_ROLES_PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1 || ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
   echo "oracle.sh: needs python3 >= 3.8 (looked for '$PY' on the PATH). Install it or set ORCA_ROLES_PYTHON to a newer interpreter." >&2
