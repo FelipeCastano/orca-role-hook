@@ -78,11 +78,27 @@ case "$AGENT" in
   claude)
     [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")
     [ -n "$PERM" ] && [ "$PERM" != default ] && ARGS+=(--permission-mode "$PERM")
-    ARGS+=(--add-dir "$KIT/prompts")
-    SD="$(scratch_dir "$ROLE")" && mkdir -p "$SD" && ARGS+=(--add-dir "$SD")   # the role's scratch folder, outside the worktree
+    # The kit's own folders (its prompts, the role's scratch folder, the prompt folder and the extraDirs entries that lie under the kit) go
+    # into the kit's --settings below, as permissions.additionalDirectories: only --add-dir builds Claude Code's startup trust dialog, which
+    # loses the role message typed while it asks. Every other folder keeps --add-dir, in this order. A role whose extraArgs bring their own
+    # --settings replaces that object whole (claude takes the last one), so then every folder keeps --add-dir as before.
+    OWN_SETTINGS=0
+    while IFS= read -r o; do case "$o" in --settings|--settings=*) OWN_SETTINGS=1;; esac; done < <(rcfg "$CFG" "$ROLE" extraArgs | jq -r '.[]?' 2>/dev/null)
+    if [ "$OWN_SETTINGS" = 1 ]; then
+      echo "agent.sh: role $ROLE has its own --settings in extraArgs; the kit's folders are passed with --add-dir, and Claude Code may ask to trust them and lose the role message typed while it asks." >&2
+    fi
+    KIT_DIRS=()
+    add_dir() {  # $1...: folders for the role; a kit folder goes to the kit's settings, any other keeps --add-dir
+      local d
+      for d in "$@"; do [ -n "$d" ] || continue
+        if [ "$OWN_SETTINGS" = 0 ] && is_kit_folder "$d"; then KIT_DIRS+=("$d"); else ARGS+=(--add-dir "$d"); fi
+      done
+    }
+    add_dir "$KIT/prompts"
+    SD="$(scratch_dir "$ROLE")" && mkdir -p "$SD" && add_dir "$SD"   # the role's scratch folder, outside the worktree
     PDIR="$(dirname "$PROMPT")"
-    case "$PDIR/" in "$KIT/prompts/"*) ;; *) [ -d "$PDIR" ] && ARGS+=(--add-dir "$PDIR");; esac
-    add_list extraDirs --add-dir path
+    case "$PDIR/" in "$KIT/prompts/"*) ;; *) [ -d "$PDIR" ] && add_dir "$PDIR";; esac
+    while IFS= read -r x; do [ -n "$x" ] || continue; add_dir "$(expand_path "$x")"; done < <(rcfg "$CFG" "$ROLE" extraDirs | jq -r '.[]?' 2>/dev/null)
     # Claude Code plugins for this role only (the Planner's skill, superpowers); a folder that does not exist is skipped
     # settings.superpowers = false: the kit's superpowers folder is not loaded for any role (and so gets no kit deny list)
     SP_REAL=""; [ -d "$KIT/plugins/superpowers" ] && SP_REAL="$(cd "$KIT/plugins/superpowers" && pwd -P)"
@@ -145,11 +161,12 @@ case "$AGENT" in
     # extraArgs replaces this one and should carry its own "language". It also keeps superpowers out of the workers even when a project or the
     # user enables it (only those two plugin ids); a --settings in extraArgs replaces it whole.
     # Both objects also carry autoMemoryDirectory (claude_memory_settings): Claude Code then names the role's memory folder and its .md writes need no dialog.
-    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings "$(claude_memory_settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')")
+    # And the kit's own folders (claude_kit_dirs_settings), so that they need no trust dialog either.
+    [ "$ROLE" != "$FRONT" ] && ARGS+=(--settings "$(claude_kit_dirs_settings "$(claude_memory_settings '{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}')" ${KIT_DIRS[@]+"${KIT_DIRS[@]}"})")
     # settings.superpowers = false: "off" also means off for a superpowers the user installed (the front role has no other kit --settings)
     if [ "$ROLE" = "$FRONT" ]; then
       FSET='{}'; [ "$SP_OFF" = 1 ] && FSET='{"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}'
-      FSET="$(claude_memory_settings "$FSET")"
+      FSET="$(claude_kit_dirs_settings "$(claude_memory_settings "$FSET")" ${KIT_DIRS[@]+"${KIT_DIRS[@]}"})"
       [ "$FSET" = '{}' ] || ARGS+=(--settings "$FSET")
     fi
     # The role's advisor: a model adds Claude Code's hidden --advisor, off disables the tool, auto adds nothing

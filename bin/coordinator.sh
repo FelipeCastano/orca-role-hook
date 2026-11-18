@@ -43,9 +43,11 @@ elif [ "$ADVISOR" != auto ]; then
     echo "coordinator.sh: Claude Code $CV has no --advisor option (the kit's advisor setting needs 2.1.322 or later); the coordinator starts without it." >&2
   fi
 fi
-# The message goes first: --add-dir takes several values and would swallow it as one more folder.
+# The message goes first: claude takes it as its prompt, and the flags' values follow it.
 if [ -n "$DEPTH" ]; then DEPTH_MSG=" Orca's nested worker depth is $DEPTH."; else DEPTH_MSG=" Orca's nested worker depth could not be read."; fi
-MEM="$(claude_memory_settings '{}')"; MEM_ARGS=(); [ "$MEM" = '{}' ] || MEM_ARGS=(--settings "$MEM")
+# The kit's prompts go into --settings (permissions.additionalDirectories) instead of --add-dir: only --add-dir builds Claude Code's startup
+# trust dialog, which would lose this message.
+MEM="$(claude_kit_dirs_settings "$(claude_memory_settings '{}')" "$KIT/prompts")"; MEM_ARGS=(--settings "$MEM")
 # Marks this Claude session as a global coordinator's: the SessionStart hook starts the reopen of the coordinated worktrees' teams when it comes back with a new handle.
 export ORCA_ROLES_SESSION_KIND=coordinator
-exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\".$DEPTH_MSG" ${ARGS[@]+"${ARGS[@]}"} "${MEM_ARGS[@]+"${MEM_ARGS[@]}"}" --add-dir "$KIT/prompts" "${ADV_ARGS[@]+"${ADV_ARGS[@]}"}"
+exec claude "Read $KIT/prompts/coordinator.md and adopt that role from now on. Start with \"When you start\".$DEPTH_MSG" ${ARGS[@]+"${ARGS[@]}"} "${MEM_ARGS[@]+"${MEM_ARGS[@]}"}" "${ADV_ARGS[@]+"${ADV_ARGS[@]}"}"
