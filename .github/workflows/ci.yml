@@ -34,7 +34,7 @@ jobs:
           - id: 2
             sections: "launch"
           - id: 3
-            sections: "rules oracle mcp mcp-placeholders empty-lists roles-yaml academic-research wake install-migration e2e-browser checkpoint"
+            sections: "rules oracle mcp mcp-placeholders empty-lists roles-yaml academic-research wake install-migration e2e-browser checkpoint kit-dirs keep-live-roles"
           - id: 4
             sections: "status usage-pass research-defaults planner-skill role-notes orca-alias worktree-select sync-base model-check scholar hidden"
           - id: 5
@@ -78,7 +78,7 @@ jobs:
           - id: 2
             sections: "prompts config scratch launch-overrides launch-mode launch-add new-role-modes planner-skill composer-session composer-tab reopen worktree-select forget-trust prompt-paths kit-path checkpoint sync-base guard model-check models scholar team-status hidden test-run"
           - id: 3
-            sections: "syntax planner-msg flow oracle cleanup-msg mcp mcp-placeholders roles-yaml launch usage-metrics usage-install usage-pass usage-scheduler academic-research wizard plugin-dirs orca-alias remove-role restart opencode install-migration coordinator rounds e2e-browser front-model crosscheck review-skill relaunch dispatch tree-guard basecheck inbox on-done answer capacity capacity-contract"
+            sections: "syntax planner-msg flow oracle cleanup-msg mcp mcp-placeholders roles-yaml launch usage-metrics usage-install usage-pass usage-scheduler academic-research wizard plugin-dirs orca-alias remove-role restart opencode install-migration coordinator rounds e2e-browser front-model crosscheck review-skill relaunch dispatch tree-guard basecheck inbox on-done answer capacity capacity-contract kit-dirs keep-live-roles"
         # 3 shards for the 3 CPUs of GitHub's macOS runners: one section per CPU, as the shards before the Ubuntu split
     name: smoke-shard (macos-latest, ${{ matrix.shard.id }})
     runs-on: macos-latest
