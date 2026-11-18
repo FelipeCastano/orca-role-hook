@@ -197,6 +197,24 @@ chmod +x "$KIT/bin/usage-metrics.sh"
 . "$KIT/bin/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; smk_tick "$1"; }
+# kit_dirs_json <folder>...: the permissions.additionalDirectories claude_kit_dirs_settings (bin/lib.sh) builds for those kit folders, as JSON:
+# each folder as given and, next to it, its physical path when the two differ (the kit reached through a link, as on macOS where /tmp leads to
+# /private/tmp); where the temp folder is no link (Linux) each folder is listed once. A folder whose launcher has not created it yet resolves
+# through its existing parent, as the kit will see it once the launcher has made it.
+kit_dirs_json() {
+  local d o rest p dirs=() n=0
+  for d in "$@"; do
+    [ -n "$d" ] || continue
+    o="$d"; dirs[n]="$d"; n=$((n + 1)); rest=""
+    while [ "$d" != / ] && [ ! -e "$d" ]; do rest="/${d##*/}$rest"; d="${d%/*}"; [ -n "$d" ] || d=/; done
+    p="$(cd -P "$d" 2>/dev/null && pwd -P)" || p=""
+    [ "$p" = / ] && [ -n "$rest" ] && p=""
+    p="$p$rest"
+    if [ -n "$p" ] && [ "$p" != "$o" ]; then dirs[n]="$p"; n=$((n + 1)); fi
+  done
+  if [ "$n" = 0 ]; then printf '[]'; return 0; fi
+  jq -cn --args '$ARGS.positional' "${dirs[@]}"
+}
 gshim() {  # gshim <dir> <log>: a git in <dir> that logs each rev-parse with the command line of the process that started it, then runs the real git
   printf '#!/bin/sh\ncase "$*" in *rev-parse*) echo "$(ps -o command= -p $PPID)" >> "%s";; esac\nexec "%s" "$@"\n' "$2" "$(command -v git)" > "$1/git"; chmod +x "$1/git"; : > "$2"
 }
@@ -7108,14 +7126,13 @@ check "memory-dir settings: the kit object keeps its keys and gains only autoMem
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/argv"\n' "$MD" > "$MD/stub/claude"
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/cxargv"\n' "$MD" > "$MD/stub/codex"
 chmod +x "$MD/stub/claude" "$MD/stub/codex"
-KP="$(cd "$KIT" && pwd -P)"   # the kit's physical path: a kit folder is listed under both spellings (c1 of batch3)
-mdirs() { jq -cn --args '{permissions:{additionalDirectories:$ARGS.positional}}' "$@"; }
+mdirs() { jq -cn --argjson d "$(kit_dirs_json "$@")" '{permissions:{additionalDirectories:$d}}'; }
 SDD="$(cd "$MD/my.repo" && KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; scratch_dir dev')"
 SDL="$(cd "$MD/my.repo" && KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; scratch_dir local-coordinator')"
-MDW="$(mdirs "$KIT/prompts" "$KP/prompts" "$SDD" "$KP/${SDD#"$KIT"/}")"
-MDL="$(mdirs "$KIT/prompts" "$KP/prompts" "$SDL" "$KP/${SDL#"$KIT"/}")"
-MDC="$(mdirs "$KIT/prompts" "$KP/prompts")"
-MDA="$(mdirs "$KIT" "$KP")"
+MDW="$(mdirs "$KIT/prompts" "$SDD")"
+MDL="$(mdirs "$KIT/prompts" "$SDL")"
+MDC="$(mdirs "$KIT/prompts")"
+MDA="$(mdirs "$KIT")"
 EJW="$(printf '%s' "$EJ" | jq -c --argjson p "$MDW" '. + $p')"   # the worker's object with its memory folder
 NSW="$(printf '%s' "$LJ" | jq -c --argjson p "$MDW" '. + $p')"   # the same without a memory folder
 LJF="$(printf '%s' "{\"autoMemoryDirectory\":\"$EF\"}" | jq -c --argjson p "$MDL" '. + $p')"   # the front role: its memory folder and the kit's folders, no language
@@ -9651,8 +9668,7 @@ CO="$TMP/co"; rm -rf "$CO"; mkdir -p "$CO/bin" "$CO/wt" "$CO/home"; git -C "$CO/
 if [ -f "$KIT/config.json" ]; then mv "$KIT/config.json" "$CO/kit-config.json"; fi
 printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv"\nprintf "%%s" "${ORCA_ROLES_SESSION_KIND-unset}" > "%s/env"\n' "$CO" "$CO" > "$CO/bin/claude"; chmod +x "$CO/bin/claude"
 co() { (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= /bin/bash "$KIT/bin/coordinator.sh" "$@" > "$CO/out" 2>&1); }
-KC="$(cd "$KIT" && pwd -P)"   # the kit's physical path: a kit folder is listed under both spellings (c1 of batch3)
-co; check "coordinator.sh: claude gets the role message first, then the Planner's model and permission mode and its one --settings holding \$KIT/prompts in both spellings (no --add-dir), with ORCA_ROLES_SESSION_KIND=coordinator in its environment" "$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" <(sed -n 1p "$CO/argv"))|$(sed -n 2,7p "$CO/argv" | tr '\n' '|')|$(grep -cx -- '--add-dir' "$CO/argv" || true)|$(cat "$CO/env")" "1|--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":[\"$KIT/prompts\",\"$KC/prompts\"]}}||0|coordinator"
+co; check "coordinator.sh: claude gets the role message first, then the Planner's model and permission mode and its one --settings holding \$KIT/prompts in both spellings (no --add-dir), with ORCA_ROLES_SESSION_KIND=coordinator in its environment" "$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" <(sed -n 1p "$CO/argv"))|$(sed -n 2,7p "$CO/argv" | tr '\n' '|')|$(grep -cx -- '--add-dir' "$CO/argv" || true)|$(cat "$CO/env")" "1|--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT/prompts")}}||0|coordinator"
 check "coordinator.sh: trusts its folder like launch.sh (default trust worktree), recorded for forget-trust.sh" "$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null) $(grep -cxF "$(cd "$CO/wt" && pwd -P)" "$KIT/trusted.list" 2>/dev/null)" "true 1"
 echo '{"projects":{"'"$(cd "$CO/wt" && pwd -P)"'":{"allowedTools":["Bash(ls)"],"hasTrustDialogAccepted":false}}}' > "$CO/home/.claude.json"; n0="$(grep -c . "$KIT/trusted.list" 2>/dev/null || true)"; co
 check "coordinator.sh: a folder Claude already knows keeps its entry, gets the flag and is not recorded for forget-trust.sh" "$(jq -c --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d]' "$CO/home/.claude.json") $(( $(grep -c . "$KIT/trusted.list" 2>/dev/null || true) - ${n0:-0} ))" '{"allowedTools":["Bash(ls)"],"hasTrustDialogAccepted":true} 0'
@@ -9662,7 +9678,7 @@ au() { (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" OR
 echo '{"projects":{}}' > "$CO/home/.claude.json"; rm -rf "$KIT/tmp/auditor"; au; AU_MC="$(cd "$CO/wt" && KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; merged_config . > "$0"; rstr "$0" planner model; rstr "$0" planner permissionMode' "$CO/mc.json")"; AU_PLM="$(sed -n 1p <<<"$AU_MC")"; AU_PLP="$(sed -n 2p <<<"$AU_MC")"
 AU_EXP="$(KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; { reviewer_deny; kit_deny_rules; }')"; AU_N="$(printf '%s\n' "$AU_EXP" | wc -l | tr -d ' ')"
 AU_HD="--model $AU_PLM"; AU_HN=2; if [ -n "$AU_PLP" ]; then AU_HD="$AU_HD --permission-mode $AU_PLP"; AU_HN=4; fi
-check "auditor.sh: argv is the role message (scratchDir=\$KIT/tmp/auditor), the Planner's model and permission mode, --disallowedTools with Agent, Task and every kit_deny_rules line, then its one --settings holding \$KIT in both spellings (no --add-dir); \$KIT/tmp/auditor exists; it trusts its folder, and no ORCA_ROLES_SESSION_KIND" "$(sed -n 1p "$CO/argv" | grep -c "^Read $KIT/prompts/auditor.md and adopt that role.*scratchDir=$KIT/tmp/auditor\.\$"):$(sed -n "2,$((1 + AU_HN))p" "$CO/argv" | tr '\n' ' '):$(sed -n "$((2 + AU_HN))p" "$CO/argv"):$(sed -n "$((3 + AU_HN)),$((2 + AU_HN + AU_N))p" "$CO/argv"):$(sed -n "$((3 + AU_HN + AU_N)),\$p" "$CO/argv" | tr '\n' ' '):$(grep -cx -- '--add-dir' "$CO/argv" || true):$([ -d "$KIT/tmp/auditor" ] && echo dir):$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null):$(cat "$CO/env")" "1:$AU_HD :--disallowedTools:$AU_EXP:--settings {\"permissions\":{\"additionalDirectories\":[\"$KIT\",\"$KC\"]}} :0:dir:true:unset"
+check "auditor.sh: argv is the role message (scratchDir=\$KIT/tmp/auditor), the Planner's model and permission mode, --disallowedTools with Agent, Task and every kit_deny_rules line, then its one --settings holding \$KIT in both spellings (no --add-dir); \$KIT/tmp/auditor exists; it trusts its folder, and no ORCA_ROLES_SESSION_KIND" "$(sed -n 1p "$CO/argv" | grep -c "^Read $KIT/prompts/auditor.md and adopt that role.*scratchDir=$KIT/tmp/auditor\.\$"):$(sed -n "2,$((1 + AU_HN))p" "$CO/argv" | tr '\n' ' '):$(sed -n "$((2 + AU_HN))p" "$CO/argv"):$(sed -n "$((3 + AU_HN)),$((2 + AU_HN + AU_N))p" "$CO/argv"):$(sed -n "$((3 + AU_HN + AU_N)),\$p" "$CO/argv" | tr '\n' ' '):$(grep -cx -- '--add-dir' "$CO/argv" || true):$([ -d "$KIT/tmp/auditor" ] && echo dir):$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null):$(cat "$CO/env")" "1:$AU_HD :--disallowedTools:$AU_EXP:--settings {\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT")}} :0:dir:true:unset"
 au --model opus; check "auditor.sh: --model wins" "$(sed -n 3p "$CO/argv")" "opus"
 check "auditor.sh: unknown option -> exit 1" "$(au --nope; echo $?)" "1"
 # Orca's nested worker depth: coordinator.sh reads it from a temp Orca profile (sqlite or JSON source), tells the coordinator, warns below 2
@@ -9776,7 +9792,7 @@ acrun() { # acrun <project json or -> <inherited value or -> <version> [coordina
 PM="$(jq -r '.roles.planner.model' "$KIT/config.default.json")"; PA="$(jq -r '.roles.planner.advisor.model' "$KIT/config.default.json")"
 acrun - - ''
 avm "$(sed -n 1p "$ACO/argv" | grep -c "^Read $KIT/prompts/coordinator.md and adopt that role")" 1 message
-avm "$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "--model|$PM|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":[\"$KIT/prompts\",\"$KC/prompts\"]}}|" argv-2-7
+avm "$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "--model|$PM|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT/prompts")}}|" argv-2-7
 avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "9:--advisor:$PA:unset" default
 acrun - - '' --model opus
 avm "$(sed -n 3p "$ACO/argv"):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "opus:--advisor:$PA" model-option
@@ -9785,7 +9801,7 @@ avm "$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "$PA:unset" inherited-unset
 acrun '{"roles":{"planner":{"advisor":{"model":"off"}}}}' - ''
 avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(grep -c '^--advisor$' "$ACO/argv" || true):$(cat "$ACO/env")" 7:0:1 off
 acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' - ''
-avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env"):$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "7:unset:--model|$PM|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":[\"$KIT/prompts\",\"$KC/prompts\"]}}|" auto
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env"):$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "7:unset:--model|$PM|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT/prompts")}}|" auto
 acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' 1 ''
 avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env")" 7:1 auto-inherited
 acrun '{"roles":{"planner":{"advisor":{"model":"-p"}}}}' - ''
