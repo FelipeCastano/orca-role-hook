@@ -25,5 +25,7 @@ SCR="$KIT/tmp/auditor"; mkdir -p "$SCR"
 DENY=(); while IFS= read -r t; do DENY+=("$t"); done < <(reviewer_deny; kit_deny_rules)
 ARGS=(); [ -n "$MODEL" ] && ARGS+=(--model "$MODEL"); [ -n "$PERM" ] && ARGS+=(--permission-mode "$PERM")
 # The message goes first: the variadic flags would swallow it.
-MEM="$(claude_memory_settings '{}')"; MEM_ARGS=(); [ "$MEM" = '{}' ] || MEM_ARGS=(--settings "$MEM")
-exec claude "Read $KIT/prompts/auditor.md and adopt that role from now on. Configuration parameters: scratchDir=$SCR." ${ARGS[@]+"${ARGS[@]}"} --disallowedTools "${DENY[@]}" "${MEM_ARGS[@]+"${MEM_ARGS[@]}"}" --add-dir "$KIT"
+# The kit goes into --settings (permissions.additionalDirectories) instead of --add-dir: only --add-dir builds Claude Code's startup trust
+# dialog, which would lose this message.
+MEM="$(claude_kit_dirs_settings "$(claude_memory_settings '{}')" "$KIT")"; MEM_ARGS=(--settings "$MEM")
+exec claude "Read $KIT/prompts/auditor.md and adopt that role from now on. Configuration parameters: scratchDir=$SCR." ${ARGS[@]+"${ARGS[@]}"} --disallowedTools "${DENY[@]}" "${MEM_ARGS[@]+"${MEM_ARGS[@]}"}"
