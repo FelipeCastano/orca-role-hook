@@ -383,7 +383,16 @@ if is_new "$FRONT"; then
     if kick "${!FRONTV}" "$FRONT" "$PLANNER_MSG"; then PSENT=1; else PSENT=0; fi
     # a coordinator's marker covers only this first start and is removed once the front role's role message is sent: its Run id stays beside the state (the front role keeps messaging that Run), the hold does not
     if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
-      if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
+      if CR="$(coordinator_run "$STATE")"; then
+        # the owner line: the handle that owned the Run when this first start copied the marker, so a later run-use that releases the Run
+        # still leaves the worktree attributable to its coordinator (read once, here; its output and errors go nowhere)
+        COWN=""
+        if COUT="$(orca orchestration run-show --id "$CR" --json --full 2>/dev/null)"; then
+          COWN="$(printf '%s' "$COUT" | jq -r 'if (.result.run.coordinator_handle | type) == "string" then .result.run.coordinator_handle else "" end' 2>/dev/null)"
+          case "$COWN" in *[!A-Za-z0-9_-]*) COWN="";; esac
+        fi
+        { printf '%s\n' "$CR"; [ -z "$COWN" ] || printf '%s\n' "$COWN"; } > "$GITDIR/orca-roles.coordinator"
+      fi
       if [ "$PSENT" = 1 ]; then rm -f "$CM"; else echo "Kept the coordinator's marker: $FL's role was not sent yet."; fi
     fi
   fi
