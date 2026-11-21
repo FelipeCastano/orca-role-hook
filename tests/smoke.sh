@@ -4,7 +4,7 @@
 #        tests/smoke.sh <section>...     only those sections, in the given order
 #        tests/smoke.sh --list           the section names, one per line
 set -euo pipefail
-SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags memory-dir restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer capacity capacity-contract"
+SECTIONS="syntax prompts rules output-rules config planner-msg flow oracle loop clean scratch cleanup-msg mcp mcp-placeholders custom-command jira-key composer-title project-config mcp-gitdir empty-lists cli-shim roles-yaml launch-overrides launch launch-mode launch-add status metrics usage-metrics usage-install usage-pass usage-scheduler modes academic-research research-defaults new-role-modes planner-skill wizard role-notes plugin-dirs composer-session orca-alias remove-role prompts-misc composer-tab dead-tab agent-flags memory-dir restart reopen wake worktree-select trust-folder forget-trust codex-custom opencode prompt-paths new-role-repo install-flat install-migration install kit-path coordinator rounds e2e-browser browser-login e2e-run checkpoint sync-base front-model crosscheck pair-tree guard model-check models review-skill project-plugins relaunch scholar team-status dispatch hidden test-run tree-guard basecheck cli inbox on-done answer capacity capacity-contract kit-dirs keep-live-roles"
 if [ "${1:-}" = --list ]; then printf '%s\n' $SECTIONS; exit 0; fi
 for s in "$@"; do
   known=0; for k in $SECTIONS; do [ "$k" = "$s" ] && known=1; done
@@ -198,6 +198,24 @@ chmod +x "$KIT/bin/usage-metrics.sh"
 . "$KIT/bin/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected [$3], got [$2]"; FAIL=1; fi; smk_tick "$1"; }
+# kit_dirs_json <folder>...: the permissions.additionalDirectories claude_kit_dirs_settings (bin/lib.sh) builds for those kit folders, as JSON:
+# each folder as given and, next to it, its physical path when the two differ (the kit reached through a link, as on macOS where /tmp leads to
+# /private/tmp); where the temp folder is no link (Linux) each folder is listed once. A folder whose launcher has not created it yet resolves
+# through its existing parent, as the kit will see it once the launcher has made it.
+kit_dirs_json() {
+  local d o rest p dirs=() n=0
+  for d in "$@"; do
+    [ -n "$d" ] || continue
+    o="$d"; dirs[n]="$d"; n=$((n + 1)); rest=""
+    while [ "$d" != / ] && [ ! -e "$d" ]; do rest="/${d##*/}$rest"; d="${d%/*}"; [ -n "$d" ] || d=/; done
+    p="$(cd -P "$d" 2>/dev/null && pwd -P)" || p=""
+    [ "$p" = / ] && [ -n "$rest" ] && p=""
+    p="$p$rest"
+    if [ -n "$p" ] && [ "$p" != "$o" ]; then dirs[n]="$p"; n=$((n + 1)); fi
+  done
+  if [ "$n" = 0 ]; then printf '[]'; return 0; fi
+  jq -cn --args '$ARGS.positional' "${dirs[@]}"
+}
 gshim() {  # gshim <dir> <log>: a git in <dir> that logs each rev-parse with the command line of the process that started it, then runs the real git
   printf '#!/bin/sh\ncase "$*" in *rev-parse*) echo "$(ps -o command= -p $PPID)" >> "%s";; esac\nexec "%s" "$@"\n' "$2" "$(command -v git)" > "$1/git"; chmod +x "$1/git"; : > "$2"
 }
@@ -5410,7 +5428,7 @@ V="$V:$([ "$MW" = "$MT" ] && echo same || true):$(printf '%s' "$MT" | grep -c "s
 mkdir -p "$LA/fc"; printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$LA/fc/claude"; chmod +x "$LA/fc/claude"
 lagent() { (cd "$LPT" && HOME="$TMP/home" PATH="$LA/fc:$PATH" ORCA_ROLES_CONFIG="$LCF" "$TMP/home/.orca-roles/bin/agent.sh" researcher-2 2>&1); }
 rm -f "$LAG/orca-roles-mcp-researcher-2.json" "$LAG/orca-roles.provenance.jsonl" "$LPG/orca-roles-mcp-researcher-2.json" "$LPG/orca-roles.provenance.jsonl"
-AO="$(lagent)" || true; V="$V:$(printf '%s\n' "$AO" | grep -cxF "$SDW" || true):$([ -s "$LAG/orca-roles-mcp-researcher-2.json" ] && echo mcp || true):$([ -s "$LAG/orca-roles.provenance.jsonl" ] && echo prov || true):$(find "$LPG" -maxdepth 1 \( -name 'orca-roles-mcp*' -o -name '*provenance*' \) | wc -l | tr -d ' ')"
+AO="$(lagent)" || true; V="$V:$(printf '%s\n' "$AO" | awk '/^--settings$/ { getline; print }' | jq -r '[.permissions.additionalDirectories[]? | select(. == "'"$SDW"'")] | length' 2>/dev/null || true):$([ -s "$LAG/orca-roles-mcp-researcher-2.json" ] && echo mcp || true):$([ -s "$LAG/orca-roles.provenance.jsonl" ] && echo prov || true):$(find "$LPG" -maxdepth 1 \( -name 'orca-roles-mcp*' -o -name '*provenance*' \) | wc -l | tr -d ' ')"
 printf '%s\n' "$LTR/gone" > "$LPG/orca-roles.pair"; V="$V:$([ "$(cd "$LPT" && scratch_dir researcher-2)" != "$SDW" ] && echo own || true)"; rm -f "$LPG/orca-roles-mcp-researcher-2.json" "$LPG/orca-roles.provenance.jsonl"; lagent >/dev/null || true; V="$V:$([ -s "$LPG/orca-roles-mcp-researcher-2.json" ] && echo own-mcp || true)"
 printf '%s\n' "$LAG" > "$LPG/orca-roles.pair"; (cd "$LA/proj" && HOME="$TMP/home" "$TMP/home/.orca-roles/bin/pair-tree.sh" remove --force t7 >/dev/null 2>&1) || true
 check "a pair tree gets the worktree's scratch_dir, notes_file, front_of, clean.sh --msg, MCP file and provenance file; a marker naming a missing folder falls back to the tree's own git dir" "$V" "same:same:1:1:1:mcp:prov:0:own:own-mcp"
@@ -6378,7 +6396,10 @@ J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; chmod +x "$TMP/fakebin/claude"
 mkdir -p "$KIT/plugin"   # agent.sh skips a plugin folder that does not exist (the scratch kit has none)
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" local-coordinator | tr '\n' ' ')"
-case "$OUT" in *"--add-dir $TMP/home/.orca-roles --add-dir $TMP/home/x --plugin-dir $TMP/home/.orca-roles/plugin "*) echo "ok   agent.sh: --plugin-dir and --add-dir expanded";; *) echo "FAIL agent.sh plugin: $OUT"; FAIL=1;; esac
+case "$OUT" in *"--add-dir $TMP/home/x --plugin-dir $TMP/home/.orca-roles/plugin "*) P1=ok;; *) P1=no;; esac
+case "$OUT" in *"--add-dir $TMP/home/.orca-roles "*) P2=add;; *) P2=none;; esac
+case "$OUT" in *"--settings {\"permissions\":{\"additionalDirectories\":[\"$TMP/home/.orca-roles/prompts\","*) P3=in;; *) P3=out;; esac
+check "agent.sh: --plugin-dir expanded; an extraDirs folder outside the kit keeps --add-dir, the kit's own folders go to --settings instead (no --add-dir for them)" "$P1:$P2:$P3" "ok:none:in"
 case "$OUT" in *'"language":"english"'*) echo "FAIL agent.sh: the local coordinator got the English language override"; FAIL=1;; *) echo "ok   agent.sh: the local coordinator keeps the user's language (no --settings override)";; esac
 rm -f "$TMP/fakebin/claude"
 }
@@ -6679,14 +6700,15 @@ check "orphaned session: ended" "$(grep -c 'terminal close --terminal t-orp' "$D
 rm -f "$TMP/nopid.t-dev" "$TMP/nopid.t-orp" "$TMP/nopid.t-cx"
 # a live claude or codex process wins over Orca's flags: orphaned or without agentIdentity but with a process -> kept (the orphaned one says so once), no close, no create; no process -> closed and reopened as before; a custom agent is never looked up
 DK="$TMP/dkeep"; mkdir -p "$DK" "$TMP/dkbin"; git -C "$DK" init -q -b main
-printf 'LOCAL_COORDINATOR=t-lc\nPLANNER=t-ok\nDEV=t-op-live\nTST=t-op-dead\nAA=t-ei-live\nBB=t-ei-dead\nCU=t-oc\n' > "$DK/.git/orca-roles.env"
+printf 'LOCAL_COORDINATOR=t-lc\nPLANNER=t-ok\nDEV=t-op-live\nTST=t-op-dead\nAA=t-ei-live\nBB=t-ei-dead\nCU=t-oc\nCU2=t-oc2\n' > "$DK/.git/orca-roles.env"
+printf 'CU2=tk-cu2 lf-cu2\n' > "$DK/.git/orca-roles.tabs"
 DKL="$TMP/dkorca.log"; : > "$DKL"; : > "$TMP/dkpid.log"
 cat > "$TMP/dkbin/orca" <<EOS
 #!/bin/sh
 echo "\$*" >> "$DKL"
 case "\$1 \$2" in
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"h-\$t\"}";;
-  "terminal show") case "\$*" in *t-ei-*) echo '{"result":{"terminal":{"agentIdentity":null}}}';; *t-op-*|*t-oc*) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
+  "terminal show") case "\$*" in *t-ei-*) echo '{"result":{"terminal":{"agentIdentity":null}}}';; *t-oc2*) echo '{"result":{"terminal":{"agentIdentity":"x","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-cu2:lf-cu2"}}}';; *t-op-*|*t-oc*) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":false}}}';; esac;;
 esac
 exit 0
 EOS
@@ -6694,18 +6716,20 @@ printf '#!/bin/sh\necho "$1" >> "%s"\n[ -e "%s/nopid.$1" ] || echo 4242\n' "$TMP
 cat > "$KIT/config.json" <<'J'
 { "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
   "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
-  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" }, "aa": { "title": "Aa" }, "bb": { "title": "Bb" }, "cu": { "title": "Cu", "agent": "custom", "command": "x" } } }
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev" }, "tst": { "title": "Tst" }, "aa": { "title": "Aa" }, "bb": { "title": "Bb" }, "cu": { "title": "Cu", "agent": "custom", "command": "x" }, "cu2": { "title": "Cu2", "agent": "custom", "command": "x" } } }
 J
-for r in tst aa bb cu; do : > "$KIT/prompts/programmer/$r.md"; done   # removed at the end of the section
+for r in tst aa bb cu cu2; do : > "$KIT/prompts/programmer/$r.md"; done   # removed at the end of the section
 dkrun() { (cd "$DK" && HOME="$TMP/home" PATH="$TMP/dkbin:$PATH" ORCA_ROLES_AGENT_PID="$TMP/dkbin/agent-pid" ORCA_ROLES_AGENT_CHECKS=1 "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
 DKS="$(dkrun --status | awk -F'\t' '$2 ~ /^t-/ {printf "%s=%s ", $2, $3}')"
-check "status: a live agent process keeps a tab alive when Orca flags it orphaned or shows no agent identity; no process -> orphaned / agent gone; a custom agent flagged orphaned stays orphaned" "$DKS" "t-lc=alive t-ok=alive t-op-live=alive t-op-dead=orphaned t-ei-live=alive t-ei-dead=agent gone t-oc=orphaned "
+check "status: a live agent process keeps a tab alive when Orca flags it orphaned or shows no agent identity; no process -> orphaned / agent gone; a custom agent flagged orphaned stays orphaned unless its tab is the kit's own" "$DKS" "t-lc=alive t-ok=alive t-op-live=alive t-op-dead=orphaned t-ei-live=alive t-ei-dead=agent gone t-oc=orphaned t-oc2=alive "
 OUT="$(dkrun)"
 dkn() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
 dkc() { grep -c "terminal $1 .*$2" "$DKL" || true; }
 check "live process wins over Orca's flags: orphaned + process is kept with the 'detached but its agent is running' line once, identity-less + process is kept without a line; none of them is closed or reopened" "$(dkn "Orca reports the tab of Dev (t-op-live) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev."):$(printf '%s\n' "$OUT" | grep -c 'as detached but its agent is running' || true):$(dkc close 't-op-live'):$(dkc close 't-ei-live'):$(dkc close 't-ok'):$(dkc create '--title Dev'):$(dkc create '--title Aa'):$(dkc create '--title Planner')" "1:1:0:0:0:0:0:0"
 check "no process: an orphaned tab is ended and reopened (the 'kept its session running' line), an identity-less one takes the 'agent is gone' path; neither is called detached" "$(dkn 'The tab of Tst (t-op-dead) was closed but Orca kept its session running; ending it and opening a new one.'):$(dkn 'The agent in the tab of Bb (t-ei-dead) is gone; closing that tab and opening a new one.'):$(dkc close 't-op-dead'):$(dkc close 't-ei-dead'):$(dkc create '--title Tst'):$(dkc create '--title Bb')" "1:1:1:1:1:1"
 check "a custom role flagged orphaned is handled as before (ended and reopened): no process lookup for it" "$(grep -c 't-oc' "$TMP/dkpid.log" || true):$(dkc close 't-oc'):$(dkc create '--title Cu')" "0:1:1"
+check "a custom role whose orphaned tab is still the kit's own (its saved tabId:leafId is the recordedPaneKey, connected and writable) is kept with the 'still the tab the kit opened' line once, no close, no create and no process lookup" "$(dkn 'Orca reports the tab of Cu2 (t-oc2) as detached, but it is still the tab the kit opened and it is connected; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh cu2 and then roles --open cu2.'):$(dkc close 't-oc2'):$(dkc create '--title Cu2'):$(grep -c 't-oc2' "$TMP/dkpid.log" || true)" "1:0:0:0"
+jq 'del(.roles.cu2)' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"   # the relaunch fixture below counts the roles it opens
 rm -f "$TMP/nopid.t-op-dead" "$TMP/nopid.t-ei-dead"
 # back to back (relaunch-role.sh's shape: close one role, launch): a fake that flags every tab the previous launch created as orphaned while its agent runs ends none of the others
 jq '.settings.mode = "programmer" | .settings.enableAskModeOnStart = false' "$KIT/config.json" > "$TMP/c.tmp" && mv "$TMP/c.tmp" "$KIT/config.json"
@@ -6728,7 +6752,7 @@ drl "$TMP/home/.orca-roles/bin/launch.sh" >/dev/null || true
 check "relaunching back to back with every earlier claude tab flagged orphaned while its agent runs: the second launch ends none of Planner, Tst, Aa or Bb (nothing closed or reopened for them), reopens the role that was closed, and the custom role flagged orphaned is ended and reopened as before" "$DRA:$DRC:$(grep -c 'terminal close --terminal h-\(Planner\|Tst\|Aa\|Bb\)' "$DRL" || true):$(grep -c -- '--title \(Planner\|Tst\|Aa\|Bb\)' "$DRL" || true):$(grep -c -- '--title Dev' "$DRL" || true):$(grep -c 'terminal close --terminal h-Cu' "$DRL" || true):$(grep -c -- '--title Cu' "$DRL" || true)" "7:1:0:4:2:1:2"
 check "E1: non-Claude workers run Orca's commands in the foreground" "$(worker_msg "$KIT/config.json" cu | grep -c 'in the foreground')" "1"
 check "E1: Claude workers get no extra instruction" "$(worker_msg "$KIT/config.json" dev | grep -c 'in the foreground' || true)" "0"
-rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/cx.md" "$KIT/prompts/programmer/tst.md" "$KIT/prompts/programmer/aa.md" "$KIT/prompts/programmer/bb.md"
+rm -f "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/cu2.md" "$KIT/prompts/programmer/cx.md" "$KIT/prompts/programmer/tst.md" "$KIT/prompts/programmer/aa.md" "$KIT/prompts/programmer/bb.md"
 }
 
 sec_agent_flags() {
@@ -6737,20 +6761,37 @@ check "default config: thread caps and no GPU" "$(jq -r '.roles["code-reviewer"]
 check "default config: code-reviewer maxWorkers" "$(jq -r '.roles["code-reviewer"].params.maxWorkers' "$ROOT/config.default.json")" "2"
 # agent.sh: nice -n and --resume
 cat > "$KIT/config.json" <<'J'
-{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "planner": {}, "local-coordinator": {}, "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] }, "cx": { "agent": "codex" }, "pw": { "permissionMode": "plan" }, "aq": { "allowedTools": ["Read", "AskUserQuestion"], "extraArgs": ["--disallowedTools", "Foo"] }, "cu": { "agent": "custom", "command": "echo CUSTOM" } } }
+{ "defaults": { "mcp": "all", "agent": "claude" }, "mcpServers": {}, "roles": { "tester": { "nice": 10, "env": { "GOMAXPROCS": "2" } }, "dev": {}, "planner": {}, "local-coordinator": {}, "tx": { "extraArgs": ["--settings", "{\"language\":\"spanish\"}"] }, "cx": { "agent": "codex" }, "pw": { "permissionMode": "plan" }, "aq": { "allowedTools": ["Read", "AskUserQuestion"], "extraArgs": ["--disallowedTools", "Foo"] }, "wd": { "extraDirs": ["{kit}"] }, "esc": { "extraDirs": ["{kit}/outside-link"] }, "cu": { "agent": "custom", "command": "echo CUSTOM" } } }
 J
 printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"; cp "$TMP/fakebin/claude" "$TMP/fakebin/codex"; chmod +x "$TMP/fakebin/claude" "$TMP/fakebin/codex"
 printf '#!/bin/sh\nprintf "nice %%s %%s\\n" "$1" "$2"; shift 2; echo "GOMAXPROCS=$GOMAXPROCS"; exec "$@"\n' > "$TMP/fakebin/nice"; chmod +x "$TMP/fakebin/nice"
+# a worker's kit --settings up to the first folder of permissions.additionalDirectories (the kit's own folders, c1 of batch3)
+WEN='{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false},"permissions":{"additionalDirectories":["'
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester | tr '\n' ' ')"
-case "$OUT" in "nice -n 10 GOMAXPROCS=2 --add-dir "*) echo "ok   agent.sh: nice -n and the role's env";; *) echo "FAIL agent.sh nice: $OUT"; FAIL=1;; esac
-case "$OUT" in *'--settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '*) echo "ok   agent.sh: claude workers launch with the English language setting and superpowers disabled";; *) echo "FAIL agent.sh worker without the English setting: $OUT"; FAIL=1;; esac
+case "$OUT" in "nice -n 10 GOMAXPROCS=2 --append-system-prompt "*) echo "ok   agent.sh: nice -n and the role's env";; *) echo "FAIL agent.sh nice: $OUT"; FAIL=1;; esac
+case "$OUT" in *"--settings $WEN"*) echo "ok   agent.sh: claude workers launch with the English language setting, superpowers disabled and the kit's folders in the settings";; *) echo "FAIL agent.sh worker without the English setting: $OUT"; FAIL=1;; esac
 case "$OUT" in *'Always write in English'*) echo "ok   agent.sh: the worker's system prompt carries the English rule";; *) echo "FAIL agent.sh worker anchor without the English rule: $OUT"; FAIL=1;; esac
-OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tx | tr '\n' ' ')"
+OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tx 2>"$TMP/tx.err" | tr '\n' ' ')"
 case "$OUT" in *'--settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} --settings {"language":"spanish"} '*) echo "ok   agent.sh: a role's own --settings in extraArgs comes after (and wins over) the English one";; *) echo "FAIL agent.sh extraArgs --settings order: $OUT"; FAIL=1;; esac
+# its own --settings replaces the kit's whole object, so every folder keeps --add-dir (the folders of the kit included) and one line says so if the dialog comes
+SDX="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir tx)"
+check "agent.sh: a role whose extraArgs carry --settings keeps every folder in --add-dir (the kit's prompts and its scratch folder too) and prints the trust-dialog line once on stderr" "$(printf '%s' "$OUT" | grep -o -F -- "--add-dir $TMP/home/.orca-roles/prompts --add-dir $SDX " | wc -l | tr -d ' '):$(wc -l < "$TMP/tx.err" | tr -d ' '):$(grep -c -x -F -- "agent.sh: role tx has its own --settings in extraArgs; the kit's folders are passed with --add-dir, and Claude Code may ask to trust them and lose the role message typed while it asks." "$TMP/tx.err" || true)" "1:1:1"
+# a worker whose extraDirs name the kit: no --add-dir for the kit's folders, they are in the settings as spelled and as their physical path
+KITP="$(cd "$TMP/home/.orca-roles" && pwd -P)"; SDW="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir wd)"
+WD="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" wd 2>/dev/null)"
+: > "$TMP/wd.exp"
+for d in "$TMP/home/.orca-roles/prompts" "$SDW" "$TMP/home/.orca-roles"; do printf '%s\n' "$d" >> "$TMP/wd.exp"; p="$(cd -P "$d" && pwd -P)"; [ "$p" = "$d" ] || printf '%s\n' "$p" >> "$TMP/wd.exp"; done
+check "agent.sh claude: a worker whose extraDirs name the kit gets no --add-dir for \$KIT, \$KIT/prompts or its scratch folder, and its one --settings lists those three as spelled and as their physical path (the kit is reached through a link), keeping the language and the two superpowers ids" "$(awk '/^--settings$/ { getline; print }' <<<"$WD" | jq -r '.permissions.additionalDirectories[]' | cmp -s - "$TMP/wd.exp" && echo dirs-ok):$(awk '/^--add-dir$/ { getline; print }' <<<"$WD" | wc -l | tr -d ' '):$(awk '/^--settings$/ { getline; print }' <<<"$WD" | jq -c '[.language, (.enabledPlugins | keys | length)]')" "dirs-ok:0:[\"english\",2]"
+# a symlink inside the kit that points outside it is not a kit folder: it keeps --add-dir (criterion 8)
+mkdir -p "$TMP/outside"; ln -sfn "$TMP/outside" "$KIT/outside-link"
+ESC="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" esc 2>/dev/null)"
+check "agent.sh claude: a symlink inside the kit that points outside it keeps its --add-dir and is not in --settings (the kit's own folders still are)" "$(awk '/^--add-dir$/ { getline; print }' <<<"$ESC" | paste -sd' ' -):$(awk '/^--settings$/ { getline; print }' <<<"$ESC" | jq -r '[.permissions.additionalDirectories[]? | select(test("outside"))] | length')" "$TMP/home/.orca-roles/outside-link:0"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" local-coordinator | tr '\n' ' ')"
-case "$OUT" in *--settings*|*'Always write in English'*) echo "FAIL agent.sh: the local coordinator got the English setting or rule: $OUT"; FAIL=1;; *) echo "ok   agent.sh: the local coordinator gets neither --settings nor the English rule";; esac
+case "$OUT" in *'"language":"english"'*|*'Always write in English'*) echo "FAIL agent.sh: the local coordinator got the English setting or rule: $OUT"; FAIL=1;;
+  *'--settings {"permissions":{"additionalDirectories":["'*) echo "ok   agent.sh: the local coordinator gets no English setting or rule; its --settings holds only the kit's folders";;
+  *) echo "FAIL agent.sh: the local coordinator's --settings lacks the kit's folders: $OUT"; FAIL=1;; esac
 ag() { (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" "$@" 2>&1 | tr '\n' ' '); }
-DQ='--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '
+DQ="--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --settings $WEN"
 unset CLAUDE_CODE_DISABLE_TERMINAL_TITLE
 printf '#!/bin/sh\necho "TITLE=${CLAUDE_CODE_DISABLE_TERMINAL_TITLE-unset}"\n' > "$TMP/fakebin/claude"
 ENVC="$(ag dev | grep -o 'TITLE=[^ ]*'):$(ag local-coordinator | grep -o 'TITLE=[^ ]*'):$(ag cx | grep -c 'TITLE=' || true)"
@@ -6762,13 +6803,16 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/fakebin/claude"
 case "$(ag dev)" in *"$DQ"*) A1=dev-ok;; *) A1=dev-no;; esac
 KRD="$TMP/home/.orca-roles"; KRD="${KRD#/}"   # the kit's edit deny rules (see "workers cannot edit the kit" below) come between --allowedTools and the dialog deny
 KED="--disallowedTools Edit(//$KRD/prompts/**) Edit(//$KRD/roles/**) Edit(//$KRD/bin/**) Edit(//$KRD/plugin/**) Edit(//$KRD/plugins/**) Edit(//$KRD/shim/**) Edit(//$KRD/pw/**) Edit(//$KRD/mcp/**) Edit(//$KRD/browsers/**) Edit(//$KRD/browser/**) Edit(//$KRD/config.json) Edit(//$KRD/config.default.json) Edit(//$KRD/trusted.list) Edit(//$KRD/.manifest) Edit(//$KRD/.installed) Edit(//$KRD/VERSION) "
-case "$(ag aq)" in *'--allowedTools Read AskUserQuestion '"$KED$DQ"'--disallowedTools Foo '*) A1="$A1 aq-ok";; *) A1="$A1 aq-no";; esac
-check "agent.sh: a claude worker cannot open dialogs (--disallowedTools after --allowedTools, before --settings), its allowedTools and extraArgs (a second --disallowedTools) are kept" "$A1" "dev-ok aq-ok"
-A2="$(ag pw | grep -c -- '--permission-mode plan --add-dir' || true):$(ag pw | grep -cF -- '--disallowedTools AskUserQuestion --settings {"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} ' || true):$(ag pw | grep -c 'EnterPlanMode\|ExitPlanMode' || true)"
+AQO="$(ag aq)"
+AQ1="$(printf '%s' "$AQO" | grep -cF -- "--allowedTools Read AskUserQuestion $KED$DQ" || true)"
+AQ2="$(printf '%s' "$AQO" | grep -o -F -- ']}} --disallowedTools Foo ' | wc -l | tr -d ' ')"
+[ "$AQ1$AQ2" = 11 ] && A1="$A1 aq-ok" || A1="$A1 aq-no"
+check "agent.sh: a claude worker cannot open dialogs (--disallowedTools after --allowedTools, before --settings), its allowedTools and extraArgs (a second --disallowedTools, right after the settings) are kept" "$A1" "dev-ok aq-ok"
+A2="$(ag pw | grep -c -- '--permission-mode plan --append-system-prompt' || true):$(ag pw | grep -cF -- "--disallowedTools AskUserQuestion --settings $WEN" || true):$(ag pw | grep -c 'EnterPlanMode\|ExitPlanMode' || true)"
 A2="$A2:$(ag planner | grep -c 'disallowedTools' || true):$(ag cx | grep -c 'disallowedTools' || true):$(ag cu | grep -c 'disallowedTools' || true):$(ag cu | grep -c 'CUSTOM' || true)"
 check "agent.sh: a worker in permissionMode plan loses only AskUserQuestion (it can still leave plan mode); the Planner always gets the kit deny list (one --disallowedTools); a codex and a custom role get none" "$A2" "1:1:0:1:0:0:1"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" dev --resume abc-123 | tr '\n' ' ')"
-case "$OUT" in "--add-dir "*"--resume abc-123 "*) echo "ok   agent.sh: --resume passes the session to claude";; *) echo "FAIL agent.sh resume: $OUT"; FAIL=1;; esac
+case "$OUT" in "--append-system-prompt "*"--resume abc-123 "*) echo "ok   agent.sh: --resume passes the session to claude";; *) echo "FAIL agent.sh resume: $OUT"; FAIL=1;; esac
 case "$OUT" in nice*) echo "FAIL agent.sh: nice without the option"; FAIL=1;; *) echo "ok   agent.sh: no nice without the option";; esac
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" cx --resume abc-123 2>&1 | tr '\n' ' ')"
 case "$OUT" in *"--resume only applies to claude"*) echo "ok   agent.sh: --resume ignored for codex";; *) echo "FAIL agent.sh codex resume: $OUT"; FAIL=1;; esac
@@ -6808,10 +6852,12 @@ OUT="$(ttyag inj)"
 check "agent.sh on a terminal: control characters in the title are removed (no ESC or BEL but the OSC's own, no newline, DEL or SOH), printable and non-ASCII text stays" "${OUT%%--*}" "b'\\x1b]0;D\\xc3\\xa9v]0;evil\\xc3\\xbc (claude)\\x07"
 check "agent.sh in a pipe: no escape byte and no BEL, for a worker and the Planner" "$(ctlag dev):$(ctlag planner)" "0:0"
 check "agent.sh in a pipe: a custom agent's output carries no escape byte and no BEL, and is not empty" "$(ctlag cu):$(pipeag cu | grep -c 'CUSTOM')" "0:1"
-# agent.sh: --add-dir <scratch> only for claude agents (the fake claude and codex echo their arguments)
+# agent.sh: --add-dir <scratch> for codex; in claude the scratch folder and the kit's other folders travel in --settings (the fake agents echo their arguments)
 SDT="$(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir tester)"; mkdir -p "$SDT/sub"; touch "$SDT/f" "$SDT/sub/g" "$SDT/.hidden"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" tester | tr '\n' ' ')"
-case "$OUT" in *"--add-dir $SDT "*) echo "ok   agent.sh claude: --add-dir <scratch>";; *) echo "FAIL agent.sh claude scratch: $OUT"; FAIL=1;; esac
+CS1="$(case "$OUT" in (*'--settings '*"\"$SDT\""*) echo in;; (*) echo missing;; esac)"
+CS2="$(case "$OUT" in (*"--add-dir $SDT "*) echo add;; (*) echo no-add;; esac)"
+check "agent.sh claude: the scratch folder is in the kit's --settings, not in a --add-dir" "$CS1:$CS2" "in:no-add"
 check "agent.sh claude creates the scratch folder" "$([ -d "$SDT" ] && echo y)" "y"
 OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$KIT/config.json" "$TMP/home/.orca-roles/bin/agent.sh" cx | tr '\n' ' ')"
 case "$OUT" in *"--add-dir $(cd "$TMP" && KIT="$TMP/home/.orca-roles" scratch_dir cx) "*) echo "ok   agent.sh codex: --add-dir <scratch>";; *) echo "FAIL agent.sh codex scratch: $OUT"; FAIL=1;; esac
@@ -6835,19 +6881,18 @@ OUT="$(cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG
 check "agent.sh: the local coordinator gets no kit edit deny rules (it edits the configuration for the user; its superpowers list is checked below)" "$(printf '%s\n' "$OUT" | grep -c '^Edit(')" "0"
 # the Planner's superpowers: the kit deny list whenever the pinned folder is loaded (before the role's own list), a missing folder is skipped, workers get the dialog deny + the settings and never the kit list, codex ignores the field
 SPD="$KIT/plugins/superpowers"; mkdir -p "$SPD" "$KIT/plugin"
-NSJ='{"language":"english","enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}}'
 KD='--disallowedTools Skill(superpowers:subagent-driven-development) Skill(superpowers:executing-plans) Skill(superpowers:dispatching-parallel-agents) Skill(superpowers:requesting-code-review) Skill(superpowers:using-git-worktrees) Skill(superpowers:finishing-a-development-branch) Skill(superpowers:writing-skills) Skill(superpowers:diagnosing-superpowers) EnterWorktree ExitWorktree Agent Task '
 agj() {  # agj <config json> <role>: the arguments (and stderr) of agent.sh, on one line
   printf '%s' "$1" > "$TMP/acfg.json"; (cd "$TMP" && HOME="$TMP/home" PATH="$TMP/fakebin:$PATH" ORCA_ROLES_CONFIG="$TMP/acfg.json" "$TMP/home/.orca-roles/bin/agent.sh" "$2" 2>&1 | tr '\n' ' ')
 }
 APB='{"defaults":{"mcp":[]},"mcpServers":{},"roles":{"local-coordinator":{"agent":"claude","mcp":"all","allowedTools":["Bash(orca:*)","Read"],"pluginDirs":["{kit}/plugin","{kit}/plugins/superpowers"]},"dev":{"agent":"claude","disallowedTools":["Mine"]},"cx":{"agent":"codex","disallowedTools":["Mine"]}}}'
 PO="$(agj "$APB" local-coordinator)"; PH="$TMP/home/.orca-roles"
-G1="$(printf '%s\n' "$PO" | grep -cF -- "--plugin-dir $PH/plugin --plugin-dir $PH/plugins/superpowers " || true)"; G1="$G1:$(printf '%s\n' "$PO" | grep -cF -- "--allowedTools Bash(orca:*) Read $KD" || true)"; G1="$G1:$(printf '%s\n' "$PO" | grep -c -- '--settings\|AskUserQuestion' || true)"
+G1="$(printf '%s\n' "$PO" | grep -cF -- "--plugin-dir $PH/plugin --plugin-dir $PH/plugins/superpowers " || true)"; G1="$G1:$(printf '%s\n' "$PO" | grep -cF -- "--allowedTools Bash(orca:*) Read $KD" || true)"; G1="$G1:$(printf '%s\n' "$PO" | grep -cF -- '--settings {"permissions":{"additionalDirectories":["' || true):$(printf '%s\n' "$PO" | grep -c -- 'AskUserQuestion' || true)"
 rmdir "$SPD"; PM="$(agj "$APB" local-coordinator)"
 G1="$G1|$(printf '%s\n' "$PM" | grep -c "agent.sh: plugin folder $PH/plugins/superpowers not found; skipped\\." || true):$(printf '%s\n' "$PM" | grep -c -- '--plugin-dir [^ ]*plugins/superpowers' || true):$(printf '%s\n' "$PM" | grep -cF -- "--allowedTools Bash(orca:*) Read $KD" || true):$(printf '%s\n' "$PM" | grep -cF -- "--plugin-dir $PH/plugin " || true):$(printf '%s\n' "$PM" | grep -c -- '--settings' || true)"
 mkdir -p "$SPD"; PW="$(agj "$(printf '%s' "$APB" | jq -c '.roles["local-coordinator"].disallowedTools = ["Mine"]')" local-coordinator)"
 G1="$G1|$(printf '%s\n' "$PW" | grep -cF -- "--allowedTools Bash(orca:*) Read ${KD}--disallowedTools Skill(superpowers:brainstorming) Skill(superpowers:writing-plans) Skill(superpowers:receiving-code-review) Skill(superpowers:test-driven-development) Skill(superpowers:systematic-debugging) --disallowedTools Mine " || true)"
-check "front role argv: with the pinned superpowers loaded the kit deny list follows --allowedTools (and no settings or dialog deny), the role's own disallowedTools comes after it; with the folder missing it is skipped with one line and not loaded, the kit list is still given (a user-installed superpowers may load), the kit's own plugin still loads, no --settings" "$G1" "1:1:0|1:0:1:1:0|1"
+check "front role argv: with the pinned superpowers loaded the kit deny list follows --allowedTools (and no dialog deny), the role's own disallowedTools comes after it; with the folder missing it is skipped with one line and not loaded, the kit list is still given (a user-installed superpowers may load), the kit's own plugin still loads, and the front role gets exactly one --settings, holding only the kit's folders" "$G1" "1:1:1:0|1:0:1:1:1|1"
 # programmer mode: the local coordinator is the front role (no kit edit deny, no dialog deny, no English, its own skill denies) and the Planner is a worker (all of them, and its own skill denies); another mode's Planner is the front role
 APR='{"defaults":{"mcp":[]},"mcpServers":{},"roles":{"local-coordinator":{"agent":"claude"},"planner":{"agent":"claude"}}}'
 fl() { printf '%s\n' "$1" | { grep -c -- 'AskUserQuestion' || true; } | tr '\n' ','; printf '%s\n' "$1" | { grep -o 'Edit(//' || true; } | wc -l | tr -d ' ' | tr '\n' ','; for k in '"language":"english"' 'Always write in English' 'Skill(orca-roles:team)' 'Skill(superpowers:verification-before-completion)' 'Skill(superpowers:using-superpowers)' 'Skill(superpowers:brainstorming)' 'Skill(superpowers:receiving-code-review)' 'Skill(superpowers:test-driven-development)'; do printf '%s\n' "$1" | { grep -cF -- "$k" || true; } | tr '\n' ','; done; }
@@ -6866,7 +6911,7 @@ MB3="$(for m in programmer quick; do agj "${AMB/MODE/$m}" local-coordinator | gr
 MB4="$(front_launch_key "$MD0" programmer) $(front_launch_key "$MD0" quick) $(front_launch_key "$MD0" academic-research)"
 check "modelByMode: role_model gives the local coordinator opus in quick and sonnet in programmer (the mode argument too), falls back to model for an empty, non-string, null or non-object entry, and to model or defaults.model for a role without one; check_config refuses {\"nope\"}, {\"quick\":1}, \"x\" and [] and accepts {\"quick\":\"m\"}; agent.sh passes --model of the mode; front_launch_key is model|blocked outside quick and model|open in it" "$MB1|$MB2|$MB3|$MB4" "claude-opus-5-5 claude-sonnet-5-5 claude-opus-5-5 claude-sonnet-5-5 claude-sonnet-5-5 claude-sonnet-5-5 claude-sonnet-5-5 claude-sonnet-5-5 dm|$MBE/$MBE/$MBE/$MBE//|--model claude-sonnet-5-5 --model claude-opus-5-5 |claude-sonnet-5-5|blocked claude-opus-5-5|open claude-sonnet-5-5|blocked"
 DW="$(agj "$APB" dev)"; CW="$(agj "$APB" cx)"
-check "worker argv: the dialog deny, then the role's own disallowedTools, then the settings that disable superpowers; never the kit list or a plugin dir; codex ignores the field (no --disallowedTools, no --settings)" "$(printf '%s\n' "$DW" | grep -cF -- "--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --disallowedTools Mine --settings $NSJ " || true):$(printf '%s\n' "$DW" | grep -c 'Skill(superpowers\|--plugin-dir' || true):$(printf '%s\n' "$CW" | grep -c 'disallowedTools\|--settings' || true)" "1:0:0"
+check "worker argv: the dialog deny, then the role's own disallowedTools, then the settings that disable superpowers and hold the kit's folders; never the kit list or a plugin dir; codex ignores the field (no --disallowedTools, no --settings)" "$(printf '%s\n' "$DW" | grep -cF -- "--disallowedTools AskUserQuestion EnterPlanMode ExitPlanMode --disallowedTools Mine --settings $WEN" || true):$(printf '%s\n' "$DW" | grep -c 'Skill(superpowers\|--plugin-dir' || true):$(printf '%s\n' "$CW" | grep -c 'disallowedTools\|--settings' || true)" "1:0:0"
 # the kit deny list follows the physical folder: a trailing slash, a '..', a symlink, ~ and {home} all match; another folder named superpowers does not
 mkdir -p "$SPD" "$TMP/other/superpowers"; ln -sfn superpowers "$KIT/plugins/sp-link"
 V1=""; W1=""; for pd in '{kit}/plugins/superpowers' '{kit}/plugins/superpowers/' '{kit}/plugins/../plugins/superpowers' '{kit}/plugins/sp-link' "$(printf '~')/.orca-roles/plugins/superpowers" '{home}/.orca-roles/plugins/superpowers' "$TMP/other/superpowers" '{kit}/plugins/superpowersx'; do
@@ -6882,15 +6927,15 @@ APT="$(printf '%s' "$APB" | jq -c '.settings.superpowers = true | .roles.dev.plu
 spn() { printf '%s\n' "$1" | grep -c -- "--plugin-dir [^ ]*plugins/superpowers" || true; }   # superpowers folders loaded
 spd() { printf '%s\n' "$1" | grep -c 'Skill(superpowers:using-git-worktrees)' || true; }    # kit deny lists given
 OF="$(agj "$APF" local-coordinator)"; OFD="$(agj "$APF" dev)"; ON="$(agj "$APT" local-coordinator)"; OND="$(agj "$APT" dev)"; OA="$(agj "$APB" local-coordinator)"
-PSJ='--settings {"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false}} '
+PSJ='--settings {"enabledPlugins":{"superpowers@superpowers-marketplace":false,"superpowers@claude-plugins-official":false},"permissions":{"additionalDirectories":["'
 S1="off:$(spn "$OF")$(spd "$OF"):$(printf '%s\n' "$OF" | grep -cF -- "--plugin-dir $PH/plugin " || true):$(printf '%s\n' "$OF" | grep -c 'not found; skipped' || true):$(printf '%s\n' "$OF" | grep -cF -- "$PSJ" || true):$(printf '%s\n' "$OF" | grep -c 'language' || true)"
-S1="$S1|worker off:$(spn "$OFD")$(spd "$OFD")|worker on:$(spn "$OND")$(spd "$OND")|true:$(spn "$ON")$(spd "$ON"):$(printf '%s\n' "$ON" | grep -c -- '--settings' || true)|absent:$(spn "$OA")$(spd "$OA"):$(printf '%s\n' "$OA" | grep -c -- '--settings' || true)"
+S1="$S1|worker off:$(spn "$OFD")$(spd "$OFD")|worker on:$(spn "$OND")$(spd "$OND")|true:$(spn "$ON")$(spd "$ON"):$(printf '%s\n' "$ON" | grep -c -- '--settings' || true)$(printf '%s\n' "$ON" | grep -c 'superpowers@superpowers-marketplace' || true)|absent:$(spn "$OA")$(spd "$OA"):$(printf '%s\n' "$OA" | grep -c -- '--settings' || true)$(printf '%s\n' "$OA" | grep -c 'superpowers@superpowers-marketplace' || true)"
 for pd in '{kit}/plugins/superpowers/' '{kit}/plugins/../plugins/superpowers' '{kit}/plugins/sp-link' '{home}/.orca-roles/plugins/superpowers'; do
   S1="$S1|$(spn "$(agj "$(printf '%s' "$APF" | jq -c --arg d "$pd" '.roles["local-coordinator"].pluginDirs = [$d]')" local-coordinator)")$(spd "$(agj "$(printf '%s' "$APF" | jq -c --arg d "$pd" '.roles["local-coordinator"].pluginDirs = [$d]')" local-coordinator)")"
 done
 OTHR="$(agj "$(printf '%s' "$APF" | jq -c --arg d "$TMP/other/superpowers" '.roles["local-coordinator"].pluginDirs = [$d]')" local-coordinator)"; S1="$S1|other:$(printf '%s\n' "$OTHR" | grep -cF -- "--plugin-dir $TMP/other/superpowers" || true)$(spd "$OTHR")"
 rmdir "$SPD"; S1="$S1|missing:$(agj "$APF" local-coordinator | grep -c 'not found; skipped' || true)"; mkdir -p "$SPD"
-check "settings.superpowers=false: neither the Planner nor a worker loads the kit's superpowers folder (also written with a trailing slash, '..', a symlink or {home}; no 'not found' noise when it is missing), the kit's own plugin still loads; the Planner still gets the kit deny list and, only with false, a --settings disabling the two superpowers ids (no language setting); a worker without the folder gets neither; true, absent and a worker with it in pluginDirs load it with the list; another folder named superpowers is loaded (and, for the Planner, the list)" "$S1" "off:01:1:0:1:0|worker off:00|worker on:11|true:11:0|absent:11:0|01|01|01|01|other:11|missing:0"
+check "settings.superpowers=false: neither the Planner nor a worker loads the kit's superpowers folder (also written with a trailing slash, '..', a symlink or {home}; no 'not found' noise when it is missing), the kit's own plugin still loads; the Planner still gets the kit deny list and, only with false, a --settings disabling the two superpowers ids (no language setting); a worker without the folder gets neither; true and absent give the front role its folders-only --settings with no superpowers id; a worker with it in pluginDirs loads it with the list; another folder named superpowers is loaded (and, for the Planner, the list)" "$S1" "off:01:1:0:1:0|worker off:00|worker on:11|true:11:10|absent:11:10|01|01|01|01|other:11|missing:0"
 # the switch lives in settings, so it survives an install.sh update: upgrade_config keeps it (and migrates the old default pluginDirs), the upgraded config still loads no superpowers
 UPJ='{"settings":{"superpowers":false},"roles":{"planner":{"agent":"claude","mcp":"all","pluginDirs":["{kit}/plugin"]}}}'
 printf '%s' "$UPJ" > "$TMP/up-user.json"; upgrade_config "$KIT/config.default.json" "$TMP/up-user.json" > "$TMP/up-new.json"
@@ -7204,11 +7249,25 @@ mdset "$MD/my.repo" "$LJ" HOME="$MD/nofolder"; J3="$MD_OUT"
 mdset "$MD/my.repo" '{}' HOME="$MD/nofolder"; J4="$MD_OUT"
 check "memory-dir settings: the kit object keeps its keys and gains only autoMemoryDirectory (the new key last, the folder as one JSON string, no trailing slash, no permissions key); {} becomes only the folder; with no folder the input comes back unchanged" "$J1|$J2|$J3|$J4|$(printf '%s' "$J1" | jq -c 'del(.autoMemoryDirectory)'):$(printf '%s' "$J1" | jq -c 'has("permissions")'):$([ "${EF%/}" = "$EF" ] && echo noslash || echo slash)|$MBAD" "$EJ|{\"autoMemoryDirectory\":\"$EF\"}|$LJ|{}|$LJ:false:noslash|0"
 
-# the launchers: exactly one kit --settings with the folder (and, for a worker, the language), placed before --add-dir (and extraArgs), and
-# the same argv as without a folder once it is taken out; the front role keeps its language; codex and custom get nothing
+# the launchers: exactly one kit --settings with the folder and the kit's own folders (and, for a worker, the language), placed after that
+# option and, when there is one, right before the first --add-dir (and extraArgs); the same argv as without a folder once it is taken out; the
+# front role keeps its language; codex and custom get nothing
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/argv"\n' "$MD" > "$MD/stub/claude"
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/cxargv"\n' "$MD" > "$MD/stub/codex"
 chmod +x "$MD/stub/claude" "$MD/stub/codex"
+mdirs() { jq -cn --argjson d "$(kit_dirs_json "$@")" '{permissions:{additionalDirectories:$d}}'; }
+SDD="$(cd "$MD/my.repo" && KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; scratch_dir dev')"
+SDL="$(cd "$MD/my.repo" && KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; scratch_dir local-coordinator')"
+MDW="$(mdirs "$KIT/prompts" "$SDD")"
+MDL="$(mdirs "$KIT/prompts" "$SDL")"
+MDC="$(mdirs "$KIT/prompts")"
+MDA="$(mdirs "$KIT")"
+EJW="$(printf '%s' "$EJ" | jq -c --argjson p "$MDW" '. + $p')"   # the worker's object with its memory folder
+NSW="$(printf '%s' "$LJ" | jq -c --argjson p "$MDW" '. + $p')"   # the same without a memory folder
+LJF="$(printf '%s' "{\"autoMemoryDirectory\":\"$EF\"}" | jq -c --argjson p "$MDL" '. + $p')"   # the front role: its memory folder and the kit's folders, no language
+CJF="$(printf '%s' "{\"autoMemoryDirectory\":\"$EF\"}" | jq -c --argjson p "$MDC" '. + $p')"
+AJF="$(printf '%s' "{\"autoMemoryDirectory\":\"$EF\"}" | jq -c --argjson p "$MDA" '. + $p')"
+SPF="$(printf '%s' "{\"enabledPlugins\":{\"superpowers@superpowers-marketplace\":false,\"superpowers@claude-plugins-official\":false},\"autoMemoryDirectory\":\"$EF\"}" | jq -c --argjson p "$MDL" '. + $p')"
 cat > "$KIT/config.json" <<'J'
 { "settings": { "sessionHook": false }, "defaults": { "mcp": [], "agent": "claude" }, "mcpServers": {},
   "roles": { "local-coordinator": {}, "planner": { "permissionMode": "acceptEdits" }, "dev": {},
@@ -7220,27 +7279,28 @@ lset() { awk 'p {print; exit} $0 == "--settings" {p=1}' "$MD/argv"; }
 lnset() { grep -cx -- '--settings' "$MD/argv" || true; }
 lnoset() { awk 'p {p=0; next} $0 == "--settings" {p=1; next} {print}' "$1"; }
 lsame() { cmp -s "$1" "$2" && echo same || echo differs; }
-lplace() {  # lplace <--flag>: the single --settings and its value sit immediately before the first --add-dir and after that option
+lplace() {  # lplace <--flag>: the single --settings and its value sit after that option and, with a --add-dir, immediately before the first one
   local sid aid oid
   sid="$(grep -n '^--settings$' "$MD/argv" | cut -d: -f1 || true)"
   aid="$(grep -n '^--add-dir$' "$MD/argv" | head -1 | cut -d: -f1 || true)"
   oid="$(grep -n -- "^$1\$" "$MD/argv" | head -1 | cut -d: -f1 || true)"
-  if [ -n "$sid" ] && [ -n "$aid" ] && [ -n "$oid" ] && [ "$sid" -gt "$oid" ] && [ "$sid" = "$((aid - 2))" ] && [ "$(sed -n "$((aid - 1))p" "$MD/argv" | jq -r '.autoMemoryDirectory // "-"' 2>/dev/null)" = "$EF" ]; then echo ordered; else echo "misplaced:$sid:$aid:$oid"; fi
+  if [ -z "$sid" ] || [ -z "$oid" ] || [ "$sid" -le "$oid" ] || { [ -n "$aid" ] && [ "$sid" != "$((aid - 2))" ]; }; then echo "misplaced:$sid:$aid:$oid"; return; fi
+  if [ "$(sed -n "$((sid + 1))p" "$MD/argv" | jq -r '.autoMemoryDirectory // "-"' 2>/dev/null)" = "$EF" ]; then echo ordered; else echo "misplaced:$sid:$aid:$oid"; fi
 }
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" dev; W1="$(lnset):$(lset)"; cp "$MD/argv" "$MD/dev.all"
 lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/agent.sh" dev; lnoset "$MD/dev.all" > "$MD/dev.one"; lnoset "$MD/argv" > "$MD/dev.none"; W1="$W1|$(lnset):$(lset):$(printf '%s' "$(lset)" | grep -c autoMemoryDirectory || true):$(lsame "$MD/dev.one" "$MD/dev.none")"
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" local-coordinator; F1="$(lnset):$(lset)"; cp "$MD/argv" "$MD/lc.all"
-lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/agent.sh" local-coordinator; lnoset "$MD/lc.all" > "$MD/lc.one"; F1="$F1:$(lnset):$(lsame "$MD/lc.one" "$MD/argv")"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/agent.sh" local-coordinator; lnoset "$MD/lc.all" > "$MD/lc.one"; lnoset "$MD/argv" > "$MD/lc.none"; F1="$F1:$(lnset):$(lsame "$MD/lc.one" "$MD/lc.none")"
 jq '.settings.superpowers = false' "$KIT/config.json" > "$MD/sp-off.json"
 lgo "$MD/my.repo" "$MD/home" ORCA_ROLES_CONFIG="$MD/sp-off.json" "$KIT/bin/agent.sh" local-coordinator; F2="$(lnset):$(lset):$(printf '%s' "$LOUT" | grep -c '"language"' || true)"
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" tx; T1="$(lnset):$(lset):$(tail -1 "$MD/argv"):$(awk '$0 == "--settings" { if (!a) a = NR; else b = NR } END { print (a && b && a < b) ? "ordered" : "no" }' "$MD/argv")"
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/coordinator.sh"; C1="$(lnset):$(lset):$(lplace --permission-mode):$(sed -n 1p "$MD/argv" | grep -c '^Read ')"; cp "$MD/argv" "$MD/co.all"
-lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/coordinator.sh"; lnoset "$MD/co.all" > "$MD/co.one"; C1="$C1:$(lnset):$(lsame "$MD/co.one" "$MD/argv")"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/coordinator.sh"; lnoset "$MD/co.all" > "$MD/co.one"; lnoset "$MD/argv" > "$MD/co.none"; C1="$C1:$(lnset):$(lsame "$MD/co.one" "$MD/co.none")"
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/auditor.sh"; A1="$(lnset):$(lset):$(lplace --disallowedTools)"; cp "$MD/argv" "$MD/au.all"
-lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/auditor.sh"; lnoset "$MD/au.all" > "$MD/au.one"; A1="$A1:$(lnset):$(lsame "$MD/au.one" "$MD/argv")"
+lgo "$MD/my.repo" "$MD/nofolder" "$KIT/bin/auditor.sh"; lnoset "$MD/au.all" > "$MD/au.one"; lnoset "$MD/argv" > "$MD/au.none"; A1="$A1:$(lnset):$(lsame "$MD/au.one" "$MD/au.none")"
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" cx; X1="$(grep -c autoMemoryDirectory "$MD/cxargv" || true)"
 lgo "$MD/my.repo" "$MD/home" "$KIT/bin/agent.sh" cu; X2="$(printf '%s' "$LOUT" | grep -c autoMemoryDirectory || true)"
-check "memory-dir launchers: agent.sh gives a worker and the front role one --settings with the folder (the worker keeps the English language, the front role gets no language), the front role with settings.superpowers=false gets it with the superpowers-off object, a role's own extraArgs --settings still comes after the kit's, coordinator.sh and auditor.sh put it after their options and exactly before --add-dir with the role message first; without a folder each argv is today's (the same lines once the settings pair is taken out, and the worker's object without the new key); codex and custom get nothing" "$W1|$F1|$F2|$T1|$C1|$A1|$X1:$X2" "1:$EJ|1:$LJ:0:same|1:{\"autoMemoryDirectory\":\"$EF\"}:0:same|1:{\"enabledPlugins\":{\"superpowers@superpowers-marketplace\":false,\"superpowers@claude-plugins-official\":false},\"autoMemoryDirectory\":\"$EF\"}:0|2:$EJ:{\"language\":\"spanish\"}:ordered|1:{\"autoMemoryDirectory\":\"$EF\"}:ordered:1:0:same|1:{\"autoMemoryDirectory\":\"$EF\"}:ordered:0:same|0:0"
+check "memory-dir launchers: agent.sh gives a worker and the front role one --settings with the memory folder and the kit's own folders (the worker keeps the English language, the front role gets no language), the front role with settings.superpowers=false gets it with the superpowers-off object, a role's own extraArgs --settings still comes after the kit's and keeps every folder in --add-dir, coordinator.sh and auditor.sh put theirs after their options with the role message first; without a memory folder they still carry the kit's folders, and each argv is today's once the settings pair is taken out (the worker's object without the new key); codex and custom get nothing" "$W1|$F1|$F2|$T1|$C1|$A1|$X1:$X2" "1:$EJW|1:$NSW:0:same|1:$LJF:1:same|1:$SPF:0|2:$EJ:{\"language\":\"spanish\"}:ordered|1:$CJF:ordered:1:1:same|1:$AJF:ordered:1:same|0:0"
 
 # no settings file is written: the kit's folder travels in --settings only
 printf '{"theme":"dark"}\n' > "$MD/cfg/settings.json"; printf '{"theme":"light"}\n' > "$MD/prof/settings.json"; printf '{"projects":{}}\n' > "$MD/home/.claude.json"
@@ -7305,8 +7365,8 @@ check "restart: restored tabs block a mode change; nothing saved, closed or open
 case "$OUT" in *"ERROR: this worktree's team is open in mode 'programmer' and mode 'pr-reviewer' was requested. Open tabs: "*) echo "ok   restart: the mode change is refused while the restored tabs exist";; *) echo "FAIL restart mode change: $OUT"; FAIL=1;; esac
 rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$PRB" ] || cp -R "$PRB" "$KIT/prompts/pr-reviewer"; rm -f "$RP/.git/orca-roles.config.json"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_CLAUDE_PROJECTS="$RPJ" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
-case "$OUT" in *"Orca restored the tab of Planner after a restart (rs-pl) without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
-case "$OUT" in *"Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation ($SR_DEV)"*) echo "ok   restart: a restored tab whose live session is unreadable takes the record of its old handle (D8)";; *) echo "FAIL restart dev: $OUT"; FAIL=1;; esac
+case "$OUT" in *"Orca restored the tab of Planner (rs-pl) after Orca slept or restarted, without the kit's settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555)"*) echo "ok   restart: restored Planner tab recognized by ptyId";; *) echo "FAIL restart planner: $OUT"; FAIL=1;; esac
+case "$OUT" in *"Orca restored the tab of Dev (rs-dev) after Orca slept or restarted, without the kit's settings; reopening it with its conversation ($SR_DEV)"*) echo "ok   restart: a restored tab whose live session is unreadable takes the record of its old handle (D8)";; *) echo "FAIL restart dev: $OUT"; FAIL=1;; esac
 case "$OUT" in *"The previous tab of Tst (old-tst) no longer exists; opening a new one with its conversation ($SR_TST)."*) echo "ok   restart: a tab Orca did not restore takes the record of its saved handle";; *) echo "FAIL restart tst: $OUT"; FAIL=1;; esac
 check "restart: the restored tabs are closed, nothing else" "$(grep -E 'terminal close' "$RLOG" | sed 's/ --tab --json//' | tr '\n' ' ')" "terminal close --terminal rs-lc terminal close --terminal rs-pl terminal close --terminal rs-dev "
 check "restart: the local coordinator and the Planner reopen with --resume of their live sessions and the kit's launcher" "$(grep -c "agent.sh' local-coordinator --resume aaaaaaaa-2222-3333-4444-555555555555 --json" "$RLOG"):$(grep -c "agent.sh' planner --resume 11111111-2222-3333-4444-555555555555 --json" "$RLOG")" "1:1"
@@ -7319,7 +7379,7 @@ printf 'LOCAL_COORDINATOR=old-lc\nPLANNER=old-pl\nDEV=old-dev\nTST=old-tst\n' > 
 printf 'LOCAL_COORDINATOR=wt@@p0\nPLANNER=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' > "$RP/.git/orca-roles.pty"
 mv "$TRD/$SR_DEV.jsonl" "$RPD/$SR_DEV.jsonl"; : > "$RLOG"
 OUT="$(cd "$RP" && HOME="$TMP/home" PATH="$TMP/rbin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_SESSION_OF="$TMP/rbin/session-of" ORCA_ROLES_CLAUDE_PROJECTS="$RPJ" ORCA_ROLES_KICKOFF="$TMP/rbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)"
-check "restart: a pair-tree role's record filed only under the worktree root's folder is not resumed (the pair tree's folder is searched, not the root's)" "$(grep -c "agent.sh' dev --resume" "$RLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'Orca restored the tab of Dev after a restart (rs-dev), but its session could not be read; closing it and opening a new one\.' || true)" "0:1"
+check "restart: a pair-tree role's record filed only under the worktree root's folder is not resumed (the pair tree's folder is searched, not the root's)" "$(grep -c "agent.sh' dev --resume" "$RLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'Orca restored the tab of Dev (rs-dev) after Orca slept or restarted, but its session could not be read; closing it and opening a new one\.' || true)" "0:1"
 M4="$(planner_msg "$KIT/config.json" "planner dev" "$RP/.git/orca-roles.env" "" "" 2)"
 case "$M4" in *"you are BACK after a restart, with your previous conversation"*"Coming back with your memory"*) echo "ok   planner_msg: back with memory";; *) echo "FAIL planner_msg memory: $M4"; FAIL=1;; esac
 case "$(worker_back_msg "$KIT/config.json" dev new-Dev)" in "You are back in a new tab with your previous conversation ("*"Your terminal handle is now new-Dev"*"do not continue it on your own"*) echo "ok   worker_back_msg";; *) echo "FAIL worker_back_msg"; FAIL=1;; esac
@@ -7628,7 +7688,7 @@ ogate() {  # ogate <ost file content or ''> <no agent pid: 1 yes, 0 no> <wait fa
   ost $'LOCAL_COORDINATOR=old-pl\nDEV=old-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@b\n'
   echo '{"terminals":[{"handle":"rs-pl","ptyId":"wt@@p1","title":"x"}]}' > "$TMP/olist"
   OPROJ="$OPRJ" OTH=other-tab OSES=session-none ol
-  printf '%s:%s:%s:%s:%s' "$(printf '%s\n' "$OUT" | grep -cxF "Orca restored the tab of Local coordinator after a restart (rs-pl) without the kit's settings; reopening it with its conversation ($OREC).")" "$(printf '%s\n' "$OUT" | grep -c 'is busy: not reopened now')" "$(grep -c 'terminal close --terminal rs-pl --tab' "$OLOG")" "$(grep -c "agent.sh' local-coordinator --resume $OREC --json" "$OLOG")" "$(grep -c 'terminal wait --terminal rs-pl' "$OLOG" || true)"
+  printf '%s:%s:%s:%s:%s' "$(printf '%s\n' "$OUT" | grep -cxF "Orca restored the tab of Local coordinator (rs-pl) after Orca slept or restarted, without the kit's settings; reopening it with its conversation ($OREC).")" "$(printf '%s\n' "$OUT" | grep -c 'is busy: not reopened now')" "$(grep -c 'terminal close --terminal rs-pl --tab' "$OLOG")" "$(grep -c "agent.sh' local-coordinator --resume $OREC --json" "$OLOG")" "$(grep -c 'terminal wait --terminal rs-pl' "$OLOG" || true)"
 }
 G1="$(ogate noagent 1 ok)"; G2="$(ogate noagent 0 fail)"; G3="$(ogate '' 1 fail)"; rm -f "$TMP/owaitfail"
 check "records: the front role's restored tab with a record-derived sid is reopened at once, without the idle wait and without the busy line, when no agent process and no agentIdentity answer for it; a live agent pid or an agentIdentity keeps today's busy line and the tab" "$G1|$G2|$G3" "1:0:1:1:0|0:1:0:0:1|0:1:0:0:1"
@@ -7950,7 +8010,7 @@ wcfg
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2
 OTH=other wl
 check "wake: asleep tabs are woken in the saved order before any close or open, the user's tab is switched back to once after the wakes, each woken role is announced and then reopened once (no second tab); Tst has no saved tab and is not woken; the new tabs' ids are saved" \
-  "$RC:$(wev):$(wn 'Orca kept the tab of Planner asleep after a restart; woke it.'):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(find "$WG" -name 'orca-roles.tabs.tmp*' | wc -l | tr -d ' ')" \
+  "$RC:$(wev):$(wn 'Orca kept the tab of Planner asleep (after Orca slept or restarted); woke it.'):$(wn 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.'):$(tr '\n' '|' < "$WG/orca-roles.tabs"):$(find "$WG" -name 'orca-roles.tabs.tmp*' | wc -l | tr -d ' ')" \
   "0:W:tab-pl W:tab-dev switch:other close:rs-pl create:Planner close:rs-dev create:Dev create:Tst :1:1:LOCAL_COORDINATOR=tab-new-Planner leaf-new-Planner|DEV=tab-new-Dev leaf-new-Dev|TST=tab-new-Tst leaf-new-Tst|:0"
 # launch.sh itself starts at most 2 git rev-parse (children run as separate scripts do not count)
 gshim "$TMP/wbin" "$TMP/grp.log"
@@ -7997,7 +8057,7 @@ check "wake failures: a hook failure for one role -> 'Could not wake the tab of 
 # 6. waiting for the woken tabs: the list must show the tab, its session must be readable (claude), it must be idle (claude, codex); a tab that never shows up is treated as closed, one that shows up but is not ready stops the launch with nothing opened
 WB=1; R=""
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1
-OTH=other wl; R="a:$RC:$(wev):$(wn "Could not wake the tab of Dev (it did not appear in Orca's terminal list); it is treated as closed."):$(wn 'Orca kept the tab of Planner asleep after a restart; woke it.')"
+OTH=other wl; R="a:$RC:$(wev):$(wn "Could not wake the tab of Dev (it did not appear in Orca's terminal list); it is treated as closed."):$(wn 'Orca kept the tab of Planner asleep (after Orca slept or restarted); woke it.')"
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2 nosession; S0="$(wsum)"
 OTH=other wl; R="$R b:$RC:$(wev):$(wn 'ERROR: Orca woke the tab of Dev but its conversation has not started yet; run roles again in a moment. No tab was opened.'):$([ "$(wsum)" = "$S0" ] && echo same)"
 wst "$WALL_E" "$WALL_P" "$WPD_T"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-pl rs-pl wt@@p1; wadd tab-dev rs-dev wt@@p2; : > "$TMP/wwaitfail"; S0="$(wsum)"
@@ -8006,7 +8066,7 @@ OTH=other wl; R="$R c:$RC:$(wev):$(wn 'ERROR: Orca woke the tab of Planner but i
 wcfg ', "cx": { "title": "Cx", "agent": "codex" }, "cu": { "title": "Cu", "agent": "custom", "command": "x" }'; : > "$KIT/prompts/programmer/cx.md"; : > "$KIT/prompts/programmer/cu.md"
 CXE=$'CX=old-cx\nCU=old-cu\n'; CXP=$'CX=wt@@p4\nCU=wt@@p5\n'; CXT=$'CX=tab-cx leaf-cx\nCU=tab-cu leaf-cu\n'
 wst "$CXE" "$CXP" "$CXT"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-cx rs-cx wt@@p4 nosession; wadd tab-cu rs-cu wt@@p5 nosession
-OTH=other wl; R="$R d:$RC:$(wev | sed 's/create:[A-Za-z]* //g'):$(wn 'Orca kept the tab of Cx asleep after a restart; woke it.'):$(wn 'Orca kept the tab of Cu asleep after a restart; woke it.')"
+OTH=other wl; R="$R d:$RC:$(wev | sed 's/create:[A-Za-z]* //g'):$(wn 'Orca kept the tab of Cx asleep (after Orca slept or restarted); woke it.'):$(wn 'Orca kept the tab of Cu asleep (after Orca slept or restarted); woke it.')"
 wst "$CXE" "$CXP" "$CXT"; printf '%s\n' "$WOTHER" > "$TMP/wbase"; wadd tab-cx rs-cx wt@@p4 nosession; wadd tab-cu rs-cu wt@@p5 nosession; : > "$TMP/wwaitfail"
 OTH=other wl; R="$R e:$RC:$(wev):$(wn 'ERROR: Orca woke the tab of Cx but its conversation has not started yet; run roles again in a moment. No tab was opened.'):$(grep -c 'terminal wait --terminal rs-cu' "$WOLOG" || true)"
 rm -f "$KIT/prompts/programmer/cx.md" "$KIT/prompts/programmer/cu.md"; wcfg; unset WB
@@ -8026,7 +8086,7 @@ check "wake before a mode switch: from the local coordinator's tab the woken wor
 "a:0:W:tab-dev switch:pl close:rs-dev :1:LOCAL_COORDINATOR=tab-pl leaf-pl|:academic-research b:1:W:tab-dev switch:other :1:same"
 # 8. --reopen: only roles that are lost and had a tab are reopened; an asleep one is woken first, so it comes back once, with its conversation
 wst "$WALL_E" $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\nTST=wt@@p3\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; printf 'LOCAL_COORDINATOR=pl\nDEV=old-dev\nTST=old-tst\n' > "$WG/orca-roles.env"; wadd tab-dev rs-dev wt@@p2
-OTH=other wl --reopen; check "wake with --reopen: the asleep Dev is woken, then closed and reopened once; the live Planner is not touched; Tst, with no saved tab ids, is not woken and is opened new" "$RC:$(wev):$(printf '%s\n' "$OUT" | grep -c 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-dev switch:other close:rs-dev create:Dev create:Tst :1"
+OTH=other wl --reopen; check "wake with --reopen: the asleep Dev is woken, then closed and reopened once; the live Planner is not touched; Tst, with no saved tab ids, is not woken and is opened new" "$RC:$(wev):$(printf '%s\n' "$OUT" | grep -c 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.')" "0:W:tab-dev switch:other close:rs-dev create:Dev create:Tst :1"
 # 8b. an academic-research phase change wakes every saved role, also the ones the new phase does not have: the asleep old-phase role is seen by the phase guard (refusal naming it, nothing changed), not left asleep to come back next to the new team
 wcfgp() {  # wcfgp <phase>: academic-research with one role per phase
   cat > "$KIT/config.json" <<J
@@ -8049,9 +8109,9 @@ wpn() { printf '%s:%s' "$(grep -c '^WAKE ' "$WOLOG" || true)" "$(grep -c 'termin
 SESS='(11111111-2222-3333-4444-555555555555)'
 # a: a placeholder whose identity is stale (the fake show gives claude) and one with no identity (noid-*): both woken with the ids 'terminal show' gives, then reopened once with their conversation; neither is "already open" or "gone"
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2
-OTH=other wl; P="a:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.'):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open\|is gone\|no longer exists' || true)"
+OTH=other wl; P="a:$RC:$(wev):$(wn "Orca restored the tab of Dev (rs-dev) after Orca slept or restarted, without the kit's settings; reopening it with its conversation $SESS."):$(wn 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.'):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open\|is gone\|no longer exists' || true)"
 wst $'DEV=noid-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-noid-dev noid-dev rs-dev wt@@p2
-OTH=other wl; P="$P b:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')"
+OTH=other wl; P="$P b:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.')"
 # c: no ids from 'terminal show' (a tab id only): the tabs file's ids are used; with neither, the placeholder is not woken and is closed as gone
 wst $'DEV=h-noleaf\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-dev h-noleaf rs-dev wt@@p2
 OTH=other wl; P="$P c:$RC:$(wev)"
@@ -8062,7 +8122,7 @@ check "wake of placeholders: a tab listed with its old handle and no agent proce
 # e: the old handle is still listed (with a readable session and idle) while the new one has not appeared yet: the wait ignores it, so the tab reopened is the one under the new handle
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wdelay.tab-od-dev"; : > "$TMP/wsess.od-dev"; WB=8
 OTH=other wl; unset WB; for _ in $(seq 50); do grep -qF '"handle":"od-dev"' "$TMP/wbase" || break; sleep 0.1; done   # the delayed fake hook has dropped the old handle
-check "wake of a placeholder: while the old handle is still listed the readiness wait does not take it for the woken tab; the new handle is the one closed and reopened, the old one is never closed" "$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')" "0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
+check "wake of a placeholder: while the old handle is still listed the readiness wait does not take it for the woken tab; the new handle is the one closed and reopened, the old one is never closed" "$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.')" "0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
 # f: a placeholder that cannot be woken (the helper says unavailable, 2, or fails, 1) is a tab whose agent is gone: closed by its old handle and replaced, never 'already open'
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; echo 2 > "$TMP/wrc.tab-od-dev"
 OTH=other wl; Q="a:$RC:$(wev):$(wn "$WNOWAKE"):$(wn 'The agent in the tab of Dev (od-dev) is gone; closing that tab and opening a new one.'):$(printf '%s\n' "$OUT" | grep -c 'already open' || true)"
@@ -8095,7 +8155,7 @@ rm -rf "$KIT/prompts/pr-reviewer"; [ ! -d "$WPRB" ] || cp -R "$WPRB" "$KIT/promp
 check "a mode switch with a placeholder that could not be woken: from another terminal it is an open tab (refusal naming it, nothing changed); from the local coordinator's tab its tab is closed by the old handle" "$X" "a:1:1:same b:0:close:od-dev :1"
 # k: the old handle stays listed, first, next to the new one: the new one is the woken tab, reopened with its conversation; the old one is never taken (not by the wait, not by the reopening, not by a mode switch)
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wphkeep.tab-od-dev"
-OTH=other wl; K="a:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'Could not wake\|could not be read' || true)"
+OTH=other wl; K="a:$RC:$(wev):$(wn "Orca restored the tab of Dev (rs-dev) after Orca slept or restarted, without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'Could not wake\|could not be read' || true)"
 WPRB="$TMP/wake-pr-prompts"; rm -rf "$WPRB"; [ ! -d "$KIT/prompts/pr-reviewer" ] || cp -R "$KIT/prompts/pr-reviewer" "$WPRB"
 mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordinator.md"
 wsw_on
@@ -8106,9 +8166,9 @@ check "wake of a placeholder whose old handle stays listed first next to the new
 "a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1:0 b:0:W:tab-od-dev switch:pl close:rs-dev "
 # l: the wake does not need the tabs file when 'terminal show' gives the ids: empty, or missing
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' ""; wph tab-od-dev od-dev rs-dev wt@@p2
-OTH=other wl; L="a:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')"
+OTH=other wl; L="a:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.')"
 wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' ""; rm -f "$WG/orca-roles.tabs"; wph tab-od-dev od-dev rs-dev wt@@p2
-OTH=other wl; L="$L b:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep after a restart; woke it.')"
+OTH=other wl; L="$L b:$RC:$(wev):$(wn 'Orca kept the tab of Dev asleep (after Orca slept or restarted); woke it.')"
 check "wake of a listed placeholder with an empty or missing orca-roles.tabs (a team saved before the file existed): woken with the ids 'terminal show' gives and reopened with its conversation" "$L" \
 "a:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1 b:0:W:tab-od-dev switch:other create:Planner close:rs-dev create:Dev create:Tst :1"
 # m: a listed tab whose new handle never appears has its own, shorter budget (ORCA_ROLES_WAKE_LISTED_BUDGET) and then takes the 'agent is gone' path; an asleep (unlisted) one in the same run keeps ORCA_ROLES_WAKE_BUDGET
@@ -8138,7 +8198,7 @@ mkdir -p "$KIT/prompts/pr-reviewer"; : > "$KIT/prompts/pr-reviewer/local-coordin
 N=""
 for keep in listed unlisted; do
   wst $'DEV=od-dev\n' $'DEV=wt@@p2\n' "$WPT"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; [ "$keep" = unlisted ] || : > "$TMP/wphkeep.tab-od-dev"
-  OTH=other wl; N="$N $keep:$RC:$(wev):$(wn "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'is gone' || true)"
+  OTH=other wl; N="$N $keep:$RC:$(wev):$(wn "Orca restored the tab of Dev (rs-dev) after Orca slept or restarted, without the kit's settings; reopening it with its conversation $SESS."):$(printf '%s\n' "$OUT" | grep -c 'is gone' || true)"
 done
 wsw_on
 wst $'LOCAL_COORDINATOR=pl\nDEV=od-dev\n' $'LOCAL_COORDINATOR=wt@@p1\nDEV=wt@@p2\n' "$WPD_T"; printf '%s\n' '{"handle":"pl","ptyId":"wt@@p1"}' > "$TMP/wbase"; wph tab-od-dev od-dev rs-dev wt@@p2; : > "$TMP/wnostale.tab-od-dev"; : > "$TMP/wphkeep.tab-od-dev"
@@ -8990,7 +9050,15 @@ echo "\$*" >> "$LLOG"
 case "\$1 \$2" in
   "terminal list") cat "$OC/llist.json";;
   "terminal create") while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; echo "{\"handle\":\"new-\$t\"}";;
-  "terminal show") case "\$*" in *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;; *orph-*) echo '{"result":{"terminal":{"agentIdentity":"opencode","orphaned":true,"connected":false}}}';; *) echo '{"result":{"terminal":{"ptyId":"wt@@n","agentIdentity":"claude"}}}';; esac;;
+  "terminal show") h=""; pv=""; for x in "\$@"; do [ "\$pv" = --terminal ] && h="\$x"; pv="\$x"; done; s=""; [ -e "$TMP/ost.\$h" ] && s="\$(cat "$TMP/ost.\$h")"
+    case "\$s" in orphan) echo '{"result":{"terminal":{"agentIdentity":"claude","orphaned":true,"connected":false}}}'; exit 0;; esac
+    case "\$*" in
+    *old-*) echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1;;
+    *orph-ownbad*) echo '{"result":{"terminal":{"agentIdentity":"opencode","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-dev:lf-other"}}}';;
+    *orph-nocon*) echo '{"result":{"terminal":{"agentIdentity":"opencode","orphaned":true,"connected":false,"writable":true,"recordedPaneKey":"tk-dev:lf-dev"}}}';;
+    *orph-own*) echo '{"result":{"terminal":{"agentIdentity":"opencode","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-dev:lf-dev"}}}';;
+    *orph-*) echo '{"result":{"terminal":{"agentIdentity":"opencode","orphaned":true,"connected":false}}}';;
+    *) echo '{"result":{"terminal":{"ptyId":"wt@@n","agentIdentity":"claude"}}}';; esac;;
 esac
 exit 0
 EOS
@@ -9010,11 +9078,24 @@ oc_launch() {  # <env dev handle> <terminal list json> [saved session file: its 
 }
 # the reap of a replaced tab's OpenCode processes runs before the role's new tab is created. ocorder <log> <pid>: before/after/missing
 ocorder() { awk -v p="$2" '$0 == "kill TERM " p {if (!k) k = NR} /terminal create .*--title Dev/ {if (!c) c = NR} END {print (k && c && k < c) ? "before" : (k ? "after" : "missing")}' "$1"; }
+ocorph() {  # ocorph <dev handle> <agent pid hook> <ORCA_ROLES_AGENT_CHECKS> [<the DEV line of orca-roles.tabs>|-, default "tk-dev lf-dev"]: one launch of the opencode Dev of the fixture
+  printf 'LOCAL_COORDINATOR=live-pl\nDEV=%s\n' "$1" > "$LP/.git/orca-roles.env"; printf 'LOCAL_COORDINATOR=wt@@q1\nDEV=wt@@q2\n' > "$LP/.git/orca-roles.pty"
+  printf 'LOCAL_COORDINATOR=live-pl\nDEV=%s\n' "$1" > "$LP/.git/orca-roles.kicked"
+  case "${4-tk-dev lf-dev}" in -) rm -f "$LP/.git/orca-roles.tabs";; *) printf 'DEV=%s\n' "${4-tk-dev lf-dev}" > "$LP/.git/orca-roles.tabs";; esac
+  printf 'ses_saved_abc\n' > "$LP/.git/orca-roles-opencode-dev.session"
+  echo '{"terminals":[]}' > "$OC/llist.json"; : > "$LLOG"; : > "$LSEQ"; rm -f "$LP/.git/orca-roles.config.json"
+  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" OC_KILLLOG="$LLOG" ORCA_ROLES_AGENT_PID="$2" ORCA_ROLES_AGENT_CHECKS="$3" ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" 2>&1)" && RC=0 || RC=$?
+}
+ocl() {  # ocl <state env> <pty> <kicked> <terminal list json> [args...]: a launch of the fixture with the team given
+  printf '%s' "$1" > "$LP/.git/orca-roles.env"; printf '%s' "$2" > "$LP/.git/orca-roles.pty"; printf '%s' "$3" > "$LP/.git/orca-roles.kicked"
+  printf '%s' "$4" > "$OC/llist.json"; shift 4; : > "$LLOG"; : > "$LSEQ"; rm -f "$LP/.git/orca-roles.config.json"
+  OUT="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" OC_DELLOG="$LSEQ" OC_LIST="$OC/list.json" OC_KILLLOG="$LLOG" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1)" && RC=0 || RC=$?
+}
 printf '902\n' > "$TMP/ocpids.old-dev"; printf '903\n' > "$TMP/ocpids.rs-dev"
 oc_launch old-dev '{"terminals":[{"handle":"rs-dev","ptyId":"wt@@q2","title":"y"}]}'
 K5="$(grep -c '^kill TERM 90[23]$' "$LLOG" || true):$(ocorder "$LLOG" 902):$(ocorder "$LLOG" 903)"
 rm -f "$TMP/ocpids.old-dev" "$TMP/ocpids.rs-dev"
-check "opencode launch: a restored tab is reopened with the saved id; nothing is deleted; the old and the restored handle are reaped (two TERM lines) before the new tab is created" "$RC:$(grep -c "Orca restored the tab of Dev after a restart (rs-dev) without the kit's settings; reopening it with its conversation (ses_saved_abc)" <<<"$OUT"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$K5" "0:1:1:0:ses_saved_abc:2:before:before"
+check "opencode launch: a restored tab is reopened with the saved id; nothing is deleted; the old and the restored handle are reaped (two TERM lines) before the new tab is created" "$RC:$(grep -c "Orca restored the tab of Dev (rs-dev) after Orca slept or restarted, without the kit's settings; reopening it with its conversation (ses_saved_abc)" <<<"$OUT"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$K5" "0:1:1:0:ses_saved_abc:2:before:before"
 R1=""
 K1=""
 for GOOD in 'ses_saved_abc' 'ses_orca_dev-2_1731400000123' 'ses_ABCdef123_x'; do   # every form of a valid id
@@ -9043,10 +9124,52 @@ rm -f "$TMP/ocpids.old-dev"; cp "$OC/kit-config.c2" "$KIT/config.json"
 K6="$RC:$(grep -cFx 'The previous tab of Dev (old-dev) no longer exists; opening a new one.' <<<"$OUT"):$(printf '%s\n' "$OUT" | grep -c 'with its conversation' || true):$(grep -c "agent.sh' dev --json" "$LLOG"):$(grep -c "agent.sh' dev --resume" "$LLOG" || true):$(grep -c '^delete' "$LSEQ" || true):$(grep -c '^kill ' "$LLOG" || true):$([ -e "$LP/.git/orca-roles-opencode-dev.session" ] && echo file)"
 check "opencode launch: a tab that no longer exists: a valid saved id (letters, digits, an underscore, a hyphen) continues it (with its conversation, nothing deleted, the file kept) and its handle is reaped before the new tab is created; an id that is not ses_ plus [A-Za-z0-9_-]+, or no file, opens without --resume and deletes nothing; a Claude role with a leftover session file keeps today's reopen (the RESUMED line, no --resume, nothing deleted, no process scanned)" "$R1|$R2|$R3|$K1|$K6" "ok ok ok|ok ok ok ok ok ok|0:1:1:0|before|0:1:0:1:0:0:0:file"
 check "opencode launch: the fake orca drops the tab-title suffix, so the handle saved for the replaced tab is the plain role title" "$(grep '^DEV=' "$LP/.git/orca-roles.env")" "DEV=new-Dev"
+# Orca flags a tab orphaned also when it has not bound it yet (a live tab of a worktree it is not showing, a tab it opened seconds ago).
+# The kit's own tab is the one whose saved tabId:leafId (orca-roles.tabs) is the tab's recordedPaneKey, connected and writable: a live
+# OpenCode TUI behind it keeps the role, looked up once when the saved ids do not match and ORCA_ROLES_AGENT_CHECKS times when they do;
+# without any TUI the role is still ended and reopened with its conversation.
 printf '904\n' > "$TMP/ocpids.orph-dev"
+rm -f "$LP/.git/orca-roles.tabs" "$KIT/metrics/events.jsonl"
 oc_launch orph-dev '{"terminals":[]}'
 rm -f "$TMP/ocpids.orph-dev"
-check "opencode launch: a closed tab whose session Orca kept running: it is reopened with its conversation, nothing deleted, its handle reaped before the new tab; a live OpenCode TUI does not keep the orphaned tab" "$RC:$(grep -c 'was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc).' <<<"$OUT"):$(grep -c 'as detached but its agent is running' <<<"$OUT" || true):$(grep -c 'terminal close --terminal orph-dev' "$LLOG"):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG"):$(grep -c '^delete' "$LSEQ" || true):$(cat "$LP/.git/orca-roles-opencode-dev.session" 2>/dev/null || echo MISSING):$(ocorder "$LLOG" 904)" "0:1:0:1:1:0:ses_saved_abc:before"
+OST="$(cd "$LP" && HOME="$TMP/home" PATH="$OC/lbin:$OC/bin:$PATH" ORCA_ROLES_AGENT_CHECKS=1 ORCA_ROLES_KICKOFF="$OC/lbin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" --status 2>&1 | awk -F'\t' '$2 == "orph-dev" {print $3}')"
+check "opencode launch: an orphaned tab with a live OpenCode TUI that is not the kit's own tab is kept with the 'detached but its agent is running' line, nothing closed or opened, one detached-kept event, its saved handle unchanged, and --status shows it alive" "$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Orca reports the tab of Dev (orph-dev) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.' || true):$(grep -c 'terminal close --terminal orph-dev' "$LLOG" || true):$(grep -c -- '--title Dev' "$LLOG" || true):$(grep -c '"event":"detached-kept"' "$KIT/metrics/events.jsonl" || true):$(grep '^DEV=' "$LP/.git/orca-roles.env"):$OST" "0:1:0:0:1:DEV=orph-dev:alive"
+printf '#!/bin/sh\necho "$1" >> "%s/oc-orphook.log"\nexit 0\n' "$TMP" > "$OC/lbin/agent-pid-none"; chmod +x "$OC/lbin/agent-pid-none"
+: > "$TMP/oc-orphook.log"; ocorph orph-own "$OC/lbin/agent-pid-none" 2
+check "opencode launch: an orphaned tab that is the kit's own tab (recordedPaneKey is the saved tabId:leafId, connected and writable) with no TUI on any try is ended and reopened with its conversation, after ORCA_ROLES_AGENT_CHECKS lookups and no detached line" "$RC:$(printf '%s\n' "$OUT" | grep -cxF 'The tab of Dev (orph-own) was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc).' || true):$(printf '%s\n' "$OUT" | grep -c 'as detached' || true):$(grep -c 'terminal close --terminal orph-own' "$LLOG" || true):$(grep -c "agent.sh' dev --resume ses_saved_abc --json" "$LLOG" || true):$(grep -c '^orph-own$' "$TMP/oc-orphook.log" || true)" "0:1:0:1:1:2"
+printf '#!/bin/sh\nif [ "$1" = orph-own ]; then f="%s/cnt.orph-own"; n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$f"; [ "$n" -ge 2 ] || exit 0; fi\necho 4242\n' "$TMP" > "$OC/lbin/agent-pid2nd"; chmod +x "$OC/lbin/agent-pid2nd"
+rm -f "$TMP/cnt.orph-own" "$KIT/metrics/events.jsonl"; ocorph orph-own "$OC/lbin/agent-pid2nd" 2
+check "opencode launch: an orphaned tab of the kit's own whose TUI only shows on the second lookup (a tab whose agent is still starting) is kept with the detached line, nothing closed or opened" "$RC:$(printf '%s\n' "$OUT" | grep -cxF 'Orca reports the tab of Dev (orph-own) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.' || true):$(grep -c 'terminal close\|terminal create' "$LLOG" || true):$(grep -c '"event":"detached-kept"' "$KIT/metrics/events.jsonl" || true):$(cat "$TMP/cnt.orph-own" 2>/dev/null || echo 0)" "0:1:0:1:2"
+bad1() { printf '%s:%s:%s:%s' "$RC" "$(printf '%s\n' "$OUT" | grep -cxF "The tab of Dev ($1) was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_saved_abc)." || true)" "$(grep -c "terminal close --terminal $1" "$LLOG" || true)" "$(grep -c "^$1\$" "$TMP/oc-orphook.log" || true)"; }
+: > "$TMP/oc-orphook.log"; ocorph orph-ownbad "$OC/lbin/agent-pid-none" 2; B1="$(bad1 orph-ownbad)"
+: > "$TMP/oc-orphook.log"; ocorph orph-nocon "$OC/lbin/agent-pid-none" 2; B2="$(bad1 orph-nocon)"
+check "opencode launch: an orphaned tab whose recordedPaneKey is not the saved tabId:leafId, or that Orca reports not connected, is not the kit's own tab: it is ended and reopened as before, with one lookup" "$B1|$B2" "0:1:1:1|0:1:1:1"
+rm -f "$LP/.git/orca-roles.tabs"
+# a --reopen of a healthy team (an alive role and one orphaned with its live agent, a Claude and an OpenCode) closes and opens nothing;
+# without --reopen no new line is printed either
+HC_ST=$'LOCAL_COORDINATOR=live-lc\nDEV=orc-dev\n'; HC_PTY=$'LOCAL_COORDINATOR=wt@@q1\nDEV=wt@@q2\n'
+echo orphan > "$TMP/ost.orc-dev"; ocl "$HC_ST" "$HC_PTY" "$HC_ST" '{"terminals":[]}' --reopen
+HC1="$RC:$(grep -c 'terminal close\|terminal create' "$LLOG" || true):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true):$(printf '%s\n' "$OUT" | grep -cxF 'The tab of Local coordinator (live-lc) is open and its agent is running; keeping it.' || true):$(printf '%s\n' "$OUT" | grep -cxF 'Orca reports the tab of Dev (orc-dev) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.' || true)"
+ocl "$HC_ST" "$HC_PTY" "$HC_ST" '{"terminals":[]}'
+HC2="$RC:$(printf '%s\n' "$OUT" | grep -c 'is open and its agent is running; keeping it.' || true):$(printf '%s\n' "$OUT" | grep -c 'All roles are already open.' || true)"
+check "reopen of a healthy team: an alive Claude role and an orphaned OpenCode role with its live agent are kept (the alive one with its own line), no tab is closed or created and 'All roles are already open.' is still printed; a plain launch prints no keeping line" "$HC1|$HC2" "0:0:1:1:1|0:0:1"
+rm -f "$TMP/ost.orc-dev"
+# every role of a --reopen run gets one line naming it: alive, orphaned with its live agent (Claude and OpenCode), no saved tab, agent gone
+cp "$KIT/config.json" "$OC/kit-config.c5"
+cat > "$KIT/config.json" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev", "agent": "opencode" }, "tst": { "title": "Tst" }, "cx": { "title": "Cx" } } }
+J
+: > "$KIT/prompts/programmer/tst.md"; : > "$KIT/prompts/programmer/cx.md"
+F5_ST=$'LOCAL_COORDINATOR=live-lc\nPLANNER=orc-pl\nDEV=orc-dev\nTST=\nCX=gone-cx\n'; F5_PTY=$'LOCAL_COORDINATOR=wt@@q1\nPLANNER=wt@@p\nDEV=wt@@q2\nTST=wt@@t\nCX=wt@@c\n'
+echo orphan > "$TMP/ost.orc-pl"; echo orphan > "$TMP/ost.orc-dev"; : > "$TMP/nopid.gone-cx"
+ocl "$F5_ST" "$F5_PTY" "$F5_ST" '{"terminals":[]}' --reopen
+f5l() { printf '%s\n' "$OUT" | grep -cxF -- "$1" || true; }
+FIV="$(f5l 'The tab of Local coordinator (live-lc) is open and its agent is running; keeping it.'):$(f5l 'Orca reports the tab of Planner (orc-pl) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh planner and then roles --open planner.'):$(f5l 'Orca reports the tab of Dev (orc-dev) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.'):$(f5l 'Tst has no saved tab (closed on purpose or never opened); leaving it closed.'):$(f5l 'The agent in the tab of Cx (gone-cx) is gone; closing that tab and opening a new one.'):$(grep -c 'terminal close --terminal \(live-lc\|orc-pl\|orc-dev\)' "$LLOG" || true):$(grep -c -- '--title \(Local coordinator\|Planner\|Dev\)' "$LLOG" || true):$(grep -v '^ *#' "$KIT/bin/launch.sh" | grep -c 'after a restart (' || true)"
+check "reopen: each of the five roles gets exactly one line naming it (the alive one the new keeping line, the two orphaned ones the detached line, the one with no saved tab its line, the gone agent its line), the kept ones are neither closed nor opened, and no output line of launch.sh claims a restart ('after a restart (')" "$FIV" "1:1:1:1:1:0:0:0"
+rm -f "$TMP/ost.orc-pl" "$TMP/ost.orc-dev" "$TMP/nopid.gone-cx" "$KIT/prompts/programmer/tst.md" "$KIT/prompts/programmer/cx.md"
+cp "$OC/kit-config.c5" "$KIT/config.json"
 # a live OpenCode tab whose 'opencode mini' runs is reused; without a pid its agent is gone (state 2): the tab is closed and
 # a new one opens with its conversation (nothing is deleted)
 oc_live() {  # <env dev handle> <terminal list json> [pid hook (default the suite's)] [ORCA_ROLES_AGENT_CHECKS (default 1)]
@@ -9243,13 +9366,13 @@ cat > "$TMP/pkagent.json" <<J
     "sib": { "title": "Sib", "prompt": "$PKL/prompts-mine/x.md" },
     "ext": { "title": "Ext", "prompt": "$TMP/pkext/x.md" } } }
 J
-pk_adddirs() { (cd "$TMP" && SDIR="$(KIT="$PKL" scratch_dir "$1")" && HOME="$PH" PATH="$TMP/pkbin:$PATH" ORCA_ROLES_CONFIG="$TMP/pkagent.json" "$PKL/bin/agent.sh" "$1" 2>&1 | grep -A1 -x -e '--add-dir' | grep -v -x -e '--add-dir' -e '--' | grep -v -x -F -- "$SDIR" || true); }
+pk_adddirs() { (cd "$TMP" && SDIR="$(KIT="$PKL" scratch_dir "$1")" && HOME="$PH" PATH="$TMP/pkbin:$PATH" ORCA_ROLES_CONFIG="$TMP/pkagent.json" "$PKL/bin/agent.sh" "$1" 2>/dev/null > "$TMP/pkargv" && { awk '/^--add-dir$/ { getline; print }' "$TMP/pkargv"; awk '/^--settings$/ { getline; print }' "$TMP/pkargv" | jq -r '.permissions.additionalDirectories[]?' 2>/dev/null; } | grep -v -x -F -- "$SDIR" || true); }   # the folders the role can read: --add-dir values and the kit's --settings entries, minus its scratch folder
 for r in dev planner; do
-  check "agent.sh $r: one --add-dir for the kit prompts, none for programmer/" "$(pk_adddirs $r | grep -c -x -- "$PKL/prompts")$(pk_adddirs $r | grep -c programmer)" "10"
+  check "agent.sh $r: the kit prompts are among the folders it can read (its --settings), nothing else from the kit, and none for programmer/" "$(pk_adddirs $r | grep -c -x -- "$PKL/prompts")$(pk_adddirs $r | grep -c programmer)" "10"
 done
-check "agent.sh prompt in another kit subfolder: no extra --add-dir" "$(pk_adddirs sub | grep -c -x -- "$PKL/prompts")$(pk_adddirs sub | grep -c 'prompts/.')" "10"
-check "agent.sh prompt outside the kit: its folder is added" "$(pk_adddirs ext | grep -c -x -- "$TMP/pkext")$(pk_adddirs ext | grep -c -x -- "$PKL/prompts")" "11"
-check "agent.sh prompt in a sibling folder of the kit prompts (prompts-mine): its folder is added" "$(pk_adddirs sib | grep -c -x -- "$PKL/prompts-mine")$(pk_adddirs sib | grep -c -x -- "$PKL/prompts")" "11"
+check "agent.sh prompt in another kit subfolder: no extra folder from the kit" "$(pk_adddirs sub | grep -c -x -- "$PKL/prompts")$(pk_adddirs sub | grep -c 'prompts/.')" "10"
+check "agent.sh prompt outside the kit: its folder is added (--add-dir, not the settings), beside the kit prompts" "$(pk_adddirs ext | grep -c -x -- "$TMP/pkext")$(pk_adddirs ext | grep -c -x -- "$PKL/prompts")" "11"
+check "agent.sh prompt in a sibling folder of the kit prompts (prompts-mine): its folder is added (--add-dir, not the settings), beside the kit prompts" "$(pk_adddirs sib | grep -c -x -- "$PKL/prompts-mine")$(pk_adddirs sib | grep -c -x -- "$PKL/prompts")" "11"
 }
 
 sec_new_role_repo() {
@@ -9452,8 +9575,11 @@ cat > "$SH/bin/orca" <<EOS
 echo "\$*" >> "$SH/orca.log"
 case "\$1 \$2" in
   "terminal list") [ ! -e "$SH/fail.list" ] || exit 1; [ ! -e "$SH/hang" ] || sleep $((UT + 3)); cat "$SH/tl.json"; [ ! -e "$SH/tl.next" ] || mv "$SH/tl.next" "$SH/tl.json";;
-  "orchestration run-list") [ ! -e "$SH/fail.rl" ] || exit 1; cat "$SH/rl.json";;   # Orca's whole record: below 1.4.246 it is the default, with --full from 1.4.246
-  "orchestration run-use") [ ! -e "$SH/fail.\$4" ] || exit 1; echo '{"ok":true}';;
+  "orchestration run-list")   # Orca's whole record: below 1.4.246 it is the default, with --full from 1.4.246; the hook reads it page by page
+    [ ! -e "$SH/fail.rl" ] || exit 1
+    c=first; pv=""; for x in "\$@"; do [ "\$pv" = --cursor ] && c="\$x"; pv="\$x"; done
+    if [ -e "$SH/rl.always" ]; then echo '{"result":{"runs":[],"nextCursor":"again"}}'; elif [ "\$c" = first ]; then cat "$SH/rl.json"; elif [ -e "$SH/rl.\$c" ]; then cat "$SH/rl.\$c"; else exit 1; fi;;
+  "orchestration run-use") [ ! -e "$SH/fail.\$4" ] || exit 1; f="$SHK/state/session-handles/\${HKSID:-none}.runs"; c=none; [ ! -f "\$f" ] || c="\$(tr '\n' ',' < "\$f")"; printf '%s:%s\n' "\$4" "\$c" >> "$SH/use.log"; echo '{"ok":true}';;
   "orchestration check") echo '{"result":{"count":2}}';;
 esac
 exit 0
@@ -9481,7 +9607,7 @@ H10="$SHR:$(printf '%s\n' "$SHO" | grep -cx 'orca-roles: this tab reopened with 
 printf 't1\n' > "$SHK/state/session-handles/s10"; printf '{"result":{"terminals":[{"handle":"t1"},{"handle":"t2"}]}}' > "$SH/tl.json"; printf '{"result":{}}' > "$SH/tl.next"; shk s10 t2; H11="$SHR:${SHO:-quiet}:$(shl run-use):$(shl 'terminal list'):$(shrec s10)"; rm -f "$SH/tl.next"; printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"
 printf 't5\n' > "$SHK/state/session-handles/s11"; shk s11 t2; H12="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s11)"
 SH2="$TMP/shk2/.orca-roles"; rm -rf "$TMP/shk2"; mkdir -p "$SH2"; cp -R "$ROOT/bin" "$SH2/bin"; printf '{"session_id":"s7","source":"resume"}' | env -i HOME="$SH/h" KIT="$SHK" PATH="$SH/bin:$JQD:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= ORCA_TERMINAL_HANDLE=t1 bash "$SH2/bin/session-hook.sh" >/dev/null 2>&1; H9="$(cat "$SH2/state/session-handles/s7" 2>/dev/null || echo none):$(shrec s7)"
-check "session hook: no terminal handle -> nothing read or written; first start records the handle, no orca call; same handle again -> nothing; a new handle whose old one is gone takes only the Run bound to the old one most recently (b, though a sorts first and d last, by id and in the list; never c), one line naming it with its waiting count and the Runs it left (d, a), one log line naming them, record updated; a single Run -> the line without the left-Runs clause, one log line naming the Run; an old handle with no Run -> nothing taken, no output, record updated; an old handle that is still listed -> looked at twice more, then no run-use, no output, one log line, record updated; one that leaves the list at the second look -> its Runs are taken, and a re-look that fails or is incomplete takes nothing and keeps the record; a failing run-use -> no line, no other Run tried, the record is kept, one log line; a bad session id writes no record; a hanging orca -> exit 0 within 12 s, nothing kept running, record kept; a terminal list that is truncated or omits a host proves nothing (no run-use, record kept); the hook uses the kit that holds the script, not \$KIT" "$H0|$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9|$H10|$H11|$H12" "0:quiet:nostate|0:quiet:t1:0:quiet:t1:0|0:1:0:1:0:t2:1|0:quiet:0:t2:3:1|0:quiet:t1:1:0|0:quiet:3|0:in-time:quiet:t1:0|0:quiet:0:t1|0:quiet:0:t1|t1:none|0:1:2:t2:1|0:quiet:0:2:t1|0:quiet:0:t2"
+check "session hook: no terminal handle -> nothing read or written; first start records the handle, no orca call; same handle again -> nothing; a new handle whose old one is gone takes only the Run bound to the old one most recently (b, though a sorts first and d last, by id and in the list; never c), one line naming it with its waiting count and the Runs it left (d, a), one log line naming them, record updated; a single Run -> the line without the left-Runs clause, one log line naming the Run; an old handle with no Run -> nothing taken, no output, record updated; an old handle that is still listed -> looked at twice more, then no run-use, no output, one log line, record updated; one that leaves the list at the second look -> its Runs are taken, and a re-look that fails or is incomplete takes nothing and keeps the record; a failing run-use -> no line, no other Run tried, the record is kept, one log line; a bad session id writes no record; a hanging orca -> exit 0 within 12 s, nothing kept running, record kept; a terminal list that is truncated or omits a host proves nothing (no run-use, record kept); the hook uses the kit that holds the script, not \$KIT" "$H0|$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9|$H10|$H11|$H12" "0:quiet:nostate|0:quiet:t1:0:quiet:t1:0|0:1:0:1:0:t2:1|0:quiet:0:t2:3:1|0:quiet:t1:1:0|0:quiet:5|0:in-time:quiet:t1:0|0:quiet:0:t1|0:quiet:0:t1|t1:none|0:1:2:t2:1|0:quiet:0:2:t1|0:quiet:0:t2"
 # session hook log: a re-bind, a dead old handle with no Run, a run-use whose record missed the 10 s, and each early exit that has a handle; nothing on a first start, the same handle or no handle
 shline() { sed 's/^[^ ]* //' "$SHK/state/session-hook.log" 2>/dev/null | paste -sd'|' - || true; }
 printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; cp "$SH/rl.json" "$SH/rl.keep"
@@ -9526,7 +9652,7 @@ check "session hook (batch6 a3): a failing run-list on 1.4.259 logs the plain 'r
 # the same on WSL, where orca is only the shim the lib builds from orca-ide: the re-bind happens through it
 mkdir -p "$SH/ide"; cp "$SH/bin/orca" "$SH/ide/orca-ide"; chmod +x "$SH/ide/orca-ide"; rm -rf "$SHK/shim"
 printf 't1\n' > "$SHK/state/session-handles/s23"; shkv s23 t2 "$JQD:/usr/bin:/bin" ORCA_WSL_CLI_DIR="$SH/ide"
-H14="$SHR:$(shl 'run-use --id run_b'):$(shrec s23):$(grep -c -- '^orchestration run-list --json --full$' "$SH/orca.log"):$([ -x "$SHK/shim/orca" ] && echo shim || echo noshim)"
+H14="$SHR:$(shl 'run-use --id run_b'):$(shrec s23):$(grep -c -- '^orchestration run-list --limit 100 --json --full$' "$SH/orca.log"):$([ -x "$SHK/shim/orca" ] && echo shim || echo noshim)"
 check "session hook (batch6 a3): with no orca on the PATH and ORCA_WSL_CLI_DIR pointing at a fake orca-ide, the hook runs the shim's orca, re-binds the Run and keeps --full (the version is unknown)" "$H14" "0:1:t2:1:shim"
 rm -rf "$SHK/shim"
 # ensure_session_hook / remove_session_hook (the settings.json of Claude Code: everything else is kept)
@@ -9553,21 +9679,39 @@ EOS
 chmod +x "$SHK/bin/reopen-teams.sh"
 SHKR="$(cd "$SHK" && pwd -P)"
 I3A="orca-roles: reopening the teams of the coordinated worktrees in the background (log: $SHKR/state/reopen-teams.log); the result comes as a status \"Teams reopened\" and in $SHKR/state/reopen-teams.last."
-I3B="orca-roles: could not start reopening the teams of the coordinated worktrees; run ~/.orca-roles/bin/reopen-teams.sh --detach."
+I3B="orca-roles: could not start reopening the teams of the coordinated worktrees; run ~/.orca-roles/bin/reopen-teams.sh --detach --coordinator t1 --coordinator t2."
+I3B0="orca-roles: could not start reopening the teams of the coordinated worktrees; run ~/.orca-roles/bin/reopen-teams.sh --detach."
 hk() {  # hk <session id> <handle|-> [VAR=value...]: one hook start; SHO, SHR
   local sid="$1" h="$2"; shift 2
-  : > "$SH/orca.log"; : > "$SH/rlog"
+  : > "$SH/orca.log"; : > "$SH/rlog"; : > "$SH/use.log"
   # shellcheck disable=SC2086
-  if SHO="$(printf '{"session_id":"%s","source":"resume"}' "$sid" | env -i HOME="$SH/h" PATH="$SH/bin:$JQD:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= ${h:+ORCA_TERMINAL_HANDLE="$h"} "$@" bash "$SHK/bin/session-hook.sh" 2>&1)"; then SHR=0; else SHR=$?; fi
+  if SHO="$(printf '{"session_id":"%s","source":"resume"}' "$sid" | env -i HOME="$SH/h" PATH="$SH/bin:$JQD:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= HKSID="$sid" ${h:+ORCA_TERMINAL_HANDLE="$h"} "$@" bash "$SHK/bin/session-hook.sh" 2>&1)"; then SHR=0; else SHR=$?; fi
 }
 hlast() { printf '%s\n' "${SHO:-}" | tail -n 1; }
 hlines() { printf '%s\n' "${SHO:-}" | grep -c . || true; }
 hrl() { tr '\n' ';' < "$SH/rlog" 2>/dev/null || true; }
 hrec() { tr '\n' ';' < "$SHK/state/session-handles/$1" 2>/dev/null || true; }
 hreopen() { tr '\n' ';' < "$SHK/state/session-handles/$1.reopen" 2>/dev/null || true; }
+hhd() { if [ -f "$SHK/state/session-handles/$1.handles" ]; then tr '\n' ',' < "$SHK/state/session-handles/$1.handles"; else echo none; fi; }
+hruns() { if [ -f "$SHK/state/session-handles/$1.runs" ]; then tr '\n' ',' < "$SHK/state/session-handles/$1.runs"; else echo none; fi; }
 hmark() { printf 't1\ncoordinator\n' > "$SHK/state/session-handles/$1"; rm -f "$SHK/state/session-handles/$1.reopen"; }
 hrlone() { printf '{"result":{"runs":[{"id":"run_b","coordinator_handle":"t1","updated_at":"2026-01-01T00:00:00Z"}]}}' > "$SH/rl.json"; }
 printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"
+# 0. the history is on disk when the stub starts: a marked session whose handle changed from t1 to t2 starts it with both --coordinator values and
+# .handles already holds t1 then t2 (a stub that records the handles files it sees; the stub above is restored after this check)
+HKS="$SHK/bin/reopen-teams.sh"; cp "$HKS" "$SH/rstub"
+cat > "$HKS" <<EOS
+#!/bin/sh
+h=""
+for f in "$SHK"/state/session-handles/*.handles; do [ -f "\$f" ] || continue; h="\$h\${h:+,}\${f##*/}=\$(tr '\n' ',' < "\$f")"; done
+printf 'args=%s handles=%s\n' "\$*" "\$h" >> "$SH/rlog"
+exit 0
+EOS
+chmod +x "$HKS"
+hmark hh0; rm -f "$SHK/state/session-handles/hh0.handles"
+hk hh0 t2
+HN0="$SHR:$(cat "$SH/rlog"):$(hhd hh0)"
+cp "$SH/rstub" "$HKS"
 # 1. marked and a new handle: the re-bind line then the I3 line, one detached start, the .reopen record; with no Run bound only the I3 line
 rm -f "$SH/rrc"; hmark ha1; hrlone
 hk ha1 t2
@@ -9578,23 +9722,23 @@ QB="$SHR:$(hlines):$(hlast | grep -c -F "$I3A"):$(hrl):$(hreopen hb1):$(hrec hb1
 # 2. marked by the environment at the first start: the record keeps the mark, nothing is started; also on a later resume without it; unmarked: today's record, nothing started, no I3 line
 rm -f "$SHK/state/session-handles/hc1"; hrlone
 hk hc1 t3 ORCA_ROLES_SESSION_KIND=coordinator
-QC="$SHR:$(hlines):$(hrl):$(hrec hc1)"
+QC="$SHR:$(hlines):$(hrl):$(hrec hc1):$(hhd hc1)"
 hk hc1 t3
 QC="$QC|$SHR:$(hlines):$(hrl):$(hrec hc1)"
 printf 't1\n' > "$SHK/state/session-handles/hd1"; rm -f "$SHK/state/session-handles/hd1.reopen"; hk hd1 t2
 QD="$SHR:$(hlines):$(printf '%s\n' "$SHO" | grep -c -F "$I3A"):$(printf '%s\n' "$SHO" | grep -c 're-bound Run run_b'):$(hrl):$(hreopen hd1):$(hrec hd1)"
 rm -f "$SHK/state/session-handles/he1"; hk he1 t2
-QE="$SHR:$(hlines):$(hrl):$(wc -l < "$SHK/state/session-handles/he1" | tr -d ' '):$(hrec he1)"
+QE="$SHR:$(hlines):$(hrl):$(wc -l < "$SHK/state/session-handles/he1" | tr -d ' '):$(hrec he1):$(hhd he1)"
 hmark hr1; printf 't5\n' > "$SHK/state/session-handles/hr1.reopen"; printf '{"result":{"runs":[]}}' > "$SH/rl.json"; hk hr1 t2
 QR="$SHR:$(hlines):$(hlast | grep -c -F "$I3A"):$(hrl):$(hreopen hr1)"
-check "session hook reopen: a marked session with a new handle and the old one gone prints the re-bind line then the I3 line, starts reopen-teams.sh once with --detach (the kit's own) and keeps the new handle in .reopen; with no Run bound only the I3 line; a session marked by ORCA_ROLES_SESSION_KIND at its first start records the mark and starts nothing, and keeps it on a later resume without the variable; an unmarked session with a new handle and a dead old one prints today's line and no I3 line, starts nothing and writes no .reopen; a first start writes a one-line record and nothing else" "$QA|$QB|$QC|$QD|$QE|$QR" "0:2:1:1:args=--detach mark=unset kit=$SHKR;:t2;:t2;coordinator;|0:1:1:args=--detach mark=unset kit=$SHKR;:t2;:t2;coordinator;|0:0::t3;coordinator;|0:0::t3;coordinator;|0:1:0:1:::t2;|0:0::1:t2;|0:1:1:args=--detach mark=unset kit=$SHKR;:t2;"
+check "session hook reopen: a marked session with a new handle and the old one gone prints the re-bind line then the I3 line, starts reopen-teams.sh once with --detach (the kit's own) and keeps the new handle in .reopen; with no Run bound only the I3 line; a session marked by ORCA_ROLES_SESSION_KIND at its first start records the mark and starts nothing, and keeps it on a later resume without the variable; an unmarked session with a new handle and a dead old one prints today's line and no I3 line, starts nothing and writes no .reopen; a first start writes a one-line record and nothing else" "$QA|$QB|$QC|$QD|$QE|$QR" "0:2:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t2;:t2;coordinator;|0:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t2;:t2;coordinator;|0:0::t3;coordinator;:t3,|0:0::t3;coordinator;|0:1:0:1:::t2;|0:0::1:t2;:none|0:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t2;"
 # 3. started whatever the lists answer (each: one start, only the I3 line, exit 0, no second start for the same tab); a failed start -> the second I3 line, no .reopen, and a second run tries again
 printf '{"result":{"terminals":[{"handle":"t2"}],"truncated":true}}' > "$SH/tl.json"
 hmark hh1; printf '{"result":{"runs":[]}}' > "$SH/rl.json"; hk hh1 t2
 QH="$SHR:$(hlines):$(hlast | grep -c -F "$I3A"):$(hrl):$(hreopen hh1)"
 printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; : > "$SH/fail.rl"
 hmark hi1; hk hi1 t2
-QI="$SHR:$(hlines):$(hlast | grep -c -F "$I3A"):$(hrl):$(hreopen hi1)"
+QI="$SHR:$(hlines):$(hlast | grep -c -F "$I3A"):$(hrl):$(hreopen hi1):$(hhd hi1)"
 rm -f "$SH/fail.rl"; printf '{"result":{"terminals":[{"handle":"t1"},{"handle":"t2"}]}}' > "$SH/tl.json"
 hmark hj1; hrlone; hk hj1 t2
 QJ="$SHR:$(hlines):$(printf '%s\n' "$SHO" | grep -c -F "$I3A"):$(grep -c 'run-use' "$SH/orca.log" || true):$(hrl):$(hreopen hj1)"
@@ -9609,7 +9753,59 @@ QF="$QF|$SHR:$(hrl)"
 printf 't1\n' > "$SHK/state/session-handles/hk1"; rm -f "$SHK/state/session-handles/hk1.reopen"; hk hk1 t2
 QK="$SHR:$(hlines):$(hrl):$([ -e "$SHK/state/session-handles/hk1.reopen" ] && echo reopen || echo noreopen):$(hrec hk1)"
 rm -f "$SH/fail.list" "$SH/rrc"
-check "session hook reopen: a failed, truncated or incomplete terminal list, a failed run-list and an old handle still listed each start reopen-teams.sh once, print only the I3 line and exit 0, the record kept as today and no run-use call; a failed terminal list leaves the record unwritten and a second run of the same tab starts nothing and prints nothing new; a start that exits 3 prints the second I3 line last, writes no .reopen, exits 0, and a second run tries again" "$QH|$QI|$QJ|$QG|$QF|$QK" "0:1:1:args=--detach mark=unset kit=$SHKR;:t2;|0:1:1:args=--detach mark=unset kit=$SHKR;:t2;|0:1:1:0:args=--detach mark=unset kit=$SHKR;:t2;|0:1:1:args=--detach mark=unset kit=$SHKR;:t1;coordinator;:t2;|0:0::t1;coordinator;|0:1:1:args=--detach mark=unset kit=$SHKR;:noreopen|0:args=--detach mark=unset kit=$SHKR;|0:0::noreopen:t1;"
+check "session hook reopen: a marked session whose handle changed starts the stub with both --coordinator values and .handles already holds t1 then t2 when it starts" "$HN0" "0:args=--detach --coordinator t1 --coordinator t2 handles=hh0.handles=t1,t2,:t1,t2,"
+# 4. an invalid old handle: no start, the hook's own log line, today's failure line (the one without handles)
+printf 't;1\ncoordinator\n' > "$SHK/state/session-handles/hx1"; rm -f "$SHK/state/session-handles/hx1.reopen"
+hk hx1 t2
+HIX="$SHR:$(hlines):$(hlast | grep -c -F "$I3B0"):$(hrl):$(grep -c 'could not start reopen-teams.sh --detach (invalid handle)' "$SHK/state/session-hook.log" || true):$([ -e "$SHK/state/session-handles/hx1.reopen" ] && echo reopen || echo noreopen)"
+check "session hook reopen: a record whose old handle has a character outside the charset starts nothing, logs its own line and prints today's failure line" "$HIX" "0:1:1::1:noreopen"
+# 5. the run-list is read page by page: --limit 100, then --cursor with the page's nextCursor, and the Run of the second page is the one taken
+hmark hp1; rm -f "$SHK/state/session-handles/hp1.handles" "$SHK/state/session-handles/hp1.runs" "$SH/rl.c1"
+printf '{"result":{"runs":[{"id":"run_x","coordinator_handle":"t9","updated_at":"2026-01-01T00:00:00Z"}],"nextCursor":"c1"}}' > "$SH/rl.json"
+printf '{"result":{"runs":[{"id":"run_p","coordinator_handle":"t1","updated_at":"2026-01-02T00:00:00Z"}],"nextCursor":null}}' > "$SH/rl.c1"
+hk hp1 t2
+HPG="$SHR:$(grep -c -- '^orchestration run-list --limit 100 --json --full$' "$SH/orca.log" || true):$(grep -c -- '^orchestration run-list --limit 100 --cursor c1 --json --full$' "$SH/orca.log" || true):$(shl 'run-use --id run_p'):$(hruns hp1):$(printf '%s\n' "$SHO" | head -n 1 | grep -c 're-bound Run run_p'):$(grep -c 'run-list incomplete' "$SHK/state/session-hook.log" || true)"
+rm -f "$SH/rl.c1"; hrlone
+check "session hook reopen: run-list is read with --limit 100 and, while nextCursor is set, with --cursor; the Run bound to the old handle on the second page is taken and listed in .runs, with no incomplete read logged" "$HPG" "0:1:1:1:run_p,:1:0"
+# 5b. a later page that cannot be read: the pages read are used (page 1's Run is taken and recorded) and the cut read is logged with its page count
+hmark hq2; rm -f "$SHK/state/session-handles/hq2.handles" "$SHK/state/session-handles/hq2.runs" "$SH/rl.c1"
+printf '{"result":{"runs":[{"id":"run_q","coordinator_handle":"t1","updated_at":"2026-01-02T00:00:00Z"}],"nextCursor":"c1"}}' > "$SH/rl.json"
+L0="$(grep -c 'run-list incomplete: read 1 page(s)' "$SHK/state/session-hook.log" || true)"; F0="$(grep -c ' run-list failed$' "$SHK/state/session-hook.log" || true)"
+hk hq2 t2
+HIP="$SHR:$(cat "$SH/use.log"):$(hruns hq2):$(printf '%s\n' "$SHO" | head -n 1 | grep -c 're-bound Run run_q'):$(( $(grep -c 'run-list incomplete: read 1 page(s)' "$SHK/state/session-hook.log" || true) - L0 )):$(( $(grep -c ' run-list failed$' "$SHK/state/session-hook.log" || true) - F0 )):$(hrec hq2)"
+check "session hook reopen: a second page the fake cannot serve leaves page 1's Run taken and recorded, logs 'run-list incomplete: read 1 page(s)' and not 'run-list failed', and still updates the record" "$HIP" "0:run_q:run_q,:run_q,:1:1:0:t2;coordinator;"
+# 5c. an endless nextCursor: the read stops at the page cap, logs the pages it read, and takes nothing
+hmark hq3; rm -f "$SHK/state/session-handles/hq3.handles" "$SHK/state/session-handles/hq3.runs"; : > "$SH/rl.always"
+hk hq3 t2
+CAPN="$(grep -o 'run-list incomplete: read [0-9][0-9]* page(s)' "$SHK/state/session-hook.log" 2>/dev/null | tail -n 1 | grep -o '[0-9][0-9]*' || true)"
+CAPC="$(grep -c '^orchestration run-list' "$SH/orca.log" || true)"
+CAP="$SHR:$([ -n "$CAPN" ] && [ "$CAPC" = "$CAPN" ] && echo pages-counted):$([ -n "$CAPN" ] && [ "$CAPN" -ge 2 ] && [ "$CAPN" -le 20 ] && echo within-cap):$(shl 'run-use'):$(hruns hq3):$(hrec hq3)"
+rm -f "$SH/rl.always"
+check "session hook reopen: a nextCursor that never ends is read at most 20 pages, the logged page count is the number of run-list calls, and the hook takes nothing and keeps its record" "$CAP" "0:pages-counted:within-cap:0:none:t2;coordinator;"
+hrlone
+# 6. the Runs the hook may release are recorded before run-use and never removed or duplicated by a later start
+hmark hq1; rm -f "$SHK/state/session-handles/hq1.handles" "$SHK/state/session-handles/hq1.runs"
+printf '{"result":{"runs":[{"id":"r1","coordinator_handle":"t1","updated_at":"2026-01-02T00:00:00Z"},{"id":"r2","coordinator_handle":"t1","updated_at":"2026-01-01T00:00:00Z"}]}}' > "$SH/rl.json"
+hk hq1 t2
+HC1="$SHR:$(cat "$SH/use.log"):$(hruns hq1):$(printf '%s\n' "$SHO" | head -n 1 | grep -c 're-bound Run r1')"
+printf 't1\ncoordinator\n' > "$SHK/state/session-handles/hq1"; rm -f "$SHK/state/session-handles/hq1.reopen"
+printf '{"result":{"runs":[{"id":"r1","coordinator_handle":"t1","updated_at":"2026-01-02T00:00:00Z"}]}}' > "$SH/rl.json"
+hk hq1 t2
+HC2="$SHR:$(hruns hq1):$(grep -c '^r2$' "$SHK/state/session-handles/hq1.runs")"
+hrlone
+check "session hook reopen: two Runs bound to the old handle are in .runs when run-use is called, and a later start with only r1 bound keeps r2 once" "$HC1|$HC2" "0:r1:r1,r2,:r1,r2,:1|0:r1,r2,:1"
+# 7. .runs cannot be written: the hook says so and still calls run-use; 8. a 40-day-old .handles and .runs of a live session are refreshed at its start
+hmark hw1; chmod 500 "$SHK/state/session-handles"
+hk hw1 t2
+chmod 700 "$SHK/state/session-handles"
+HWR="$SHR:$(grep -c 'could not record the Runs of t1' "$SHK/state/session-hook.log" || true):$(shl 'run-use --id run_b'):$(hruns hw1)"
+rm -f "$SHK/state/session-handles/hw1" "$SHK/state/session-handles/hw1.reopen"
+printf 't3\ncoordinator\n' > "$SHK/state/session-handles/hm1"; printf 't3\n' > "$SHK/state/session-handles/hm1.handles"; printf 'r9\n' > "$SHK/state/session-handles/hm1.runs"
+touch -t 202610010000 "$SHK/state/session-handles/hm1.handles" "$SHK/state/session-handles/hm1.runs"; : > "$SHK/state/session-handles/.swept"
+hk hm1 t3
+HMT="$SHR:$([ -n "$(find "$SHK/state/session-handles/hm1.handles" -mtime -1)" ] && echo fresh || echo stale):$([ -n "$(find "$SHK/state/session-handles/hm1.runs" -mtime -1)" ] && echo fresh || echo stale):$(hhd hm1):$(hruns hm1)"
+check "session hook reopen: an unwritable .runs logs the hook's line and run-use is still called; a 40-day-old .handles and .runs of a session whose handle did not change come out newer than a day, keeping their lines" "$HWR|$HMT" "0:1:1:none|0:fresh:fresh:t3,:r9,"
+check "session hook reopen: a failed, truncated or incomplete terminal list, a failed run-list and an old handle still listed each start reopen-teams.sh once, print only the I3 line and exit 0, the record kept as today and no run-use call; a failed terminal list leaves the record unwritten and a second run of the same tab starts nothing and prints nothing new; a start that exits 3 prints the second I3 line last, writes no .reopen, exits 0, and a second run tries again" "$QH|$QI|$QJ|$QG|$QF|$QK" "0:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t2;|0:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t2;:t1,t2,|0:1:1:0:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t2;|0:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:t1;coordinator;:t2;|0:0::t1;coordinator;|0:1:1:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;:noreopen|0:args=--detach --coordinator t1 --coordinator t2 mark=unset kit=$SHKR;|0:0::noreopen:t1;"
 PM1="$(planner_ask_msg "$KIT/config.default.json")"; PH="$(for m in programmer pr-reviewer academic-research quick; do grep -c 'AskUserQuestion' "$ROOT/prompts/$m/local-coordinator.md"; done | tr '\n' ' ')"
 check "mode asked in plain text and Runs re-bound: planner_ask_msg says plain text and names AskUserQuestion only in its 'never' sentence; the four local coordinator prompts carry the same rule; the coordinator prompt tells it to take a Run bound to a dead handle (run-show, run-use) and never silences the check ack" "$(printf '%s' "$PM1" | grep -o 'plain text' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -o 'AskUserQuestion' | wc -l | tr -d ' '):$(printf '%s' "$PM1" | grep -c 'never with the AskUserQuestion tool'):$PH:$(grep -c 'run-use' "$ROOT/prompts/coordinator.md"):$(grep -c 'Never silence' "$ROOT/prompts/coordinator.md" || true)" "1:1:1:1 1 1 1 :1:1"
 }
@@ -9621,7 +9817,7 @@ CO="$TMP/co"; rm -rf "$CO"; mkdir -p "$CO/bin" "$CO/wt" "$CO/home"; git -C "$CO/
 if [ -f "$KIT/config.json" ]; then mv "$KIT/config.json" "$CO/kit-config.json"; fi
 printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv"\nprintf "%%s" "${ORCA_ROLES_SESSION_KIND-unset}" > "%s/env"\n' "$CO" "$CO" > "$CO/bin/claude"; chmod +x "$CO/bin/claude"
 co() { (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= /bin/bash "$KIT/bin/coordinator.sh" "$@" > "$CO/out" 2>&1); }
-co; check "coordinator.sh: claude gets the role message first (before the variadic --add-dir), then the Planner's model and permission mode and the prompts folder, with ORCA_ROLES_SESSION_KIND=coordinator in its environment" "$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" <(sed -n 1p "$CO/argv"))|$(sed -n 2,7p "$CO/argv" | tr '\n' '|')|$(cat "$CO/env")" "1|--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--add-dir|$KIT/prompts||coordinator"
+co; check "coordinator.sh: claude gets the role message first, then the Planner's model and permission mode and its one --settings holding \$KIT/prompts in both spellings (no --add-dir), with ORCA_ROLES_SESSION_KIND=coordinator in its environment" "$(grep -c "^Read $KIT/prompts/coordinator.md and adopt that role" <(sed -n 1p "$CO/argv"))|$(sed -n 2,7p "$CO/argv" | tr '\n' '|')|$(grep -cx -- '--add-dir' "$CO/argv" || true)|$(cat "$CO/env")" "1|--model|$(jq -r '.roles.planner.model' "$KIT/config.default.json")|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT/prompts")}}||0|coordinator"
 check "coordinator.sh: trusts its folder like launch.sh (default trust worktree), recorded for forget-trust.sh" "$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null) $(grep -cxF "$(cd "$CO/wt" && pwd -P)" "$KIT/trusted.list" 2>/dev/null)" "true 1"
 echo '{"projects":{"'"$(cd "$CO/wt" && pwd -P)"'":{"allowedTools":["Bash(ls)"],"hasTrustDialogAccepted":false}}}' > "$CO/home/.claude.json"; n0="$(grep -c . "$KIT/trusted.list" 2>/dev/null || true)"; co
 check "coordinator.sh: a folder Claude already knows keeps its entry, gets the flag and is not recorded for forget-trust.sh" "$(jq -c --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d]' "$CO/home/.claude.json") $(( $(grep -c . "$KIT/trusted.list" 2>/dev/null || true) - ${n0:-0} ))" '{"allowedTools":["Bash(ls)"],"hasTrustDialogAccepted":true} 0'
@@ -9631,7 +9827,7 @@ au() { (cd "$CO/wt" && env -i HOME="$CO/home" PATH="$CO/bin:$PATH" KIT="$KIT" OR
 echo '{"projects":{}}' > "$CO/home/.claude.json"; rm -rf "$KIT/tmp/auditor"; au; AU_MC="$(cd "$CO/wt" && KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; merged_config . > "$0"; rstr "$0" planner model; rstr "$0" planner permissionMode' "$CO/mc.json")"; AU_PLM="$(sed -n 1p <<<"$AU_MC")"; AU_PLP="$(sed -n 2p <<<"$AU_MC")"
 AU_EXP="$(KIT="$KIT" bash -c '. "$KIT/bin/lib.sh"; { reviewer_deny; kit_deny_rules; }')"; AU_N="$(printf '%s\n' "$AU_EXP" | wc -l | tr -d ' ')"
 AU_HD="--model $AU_PLM"; AU_HN=2; if [ -n "$AU_PLP" ]; then AU_HD="$AU_HD --permission-mode $AU_PLP"; AU_HN=4; fi
-check "auditor.sh: argv is the role message (scratchDir=\$KIT/tmp/auditor), the Planner's model and permission mode, --disallowedTools with Agent, Task and every kit_deny_rules line, then --add-dir \$KIT; \$KIT/tmp/auditor exists; it trusts its folder, and no ORCA_ROLES_SESSION_KIND" "$(sed -n 1p "$CO/argv" | grep -c "^Read $KIT/prompts/auditor.md and adopt that role.*scratchDir=$KIT/tmp/auditor\.\$"):$(sed -n "2,$((1 + AU_HN))p" "$CO/argv" | tr '\n' ' '):$(sed -n "$((2 + AU_HN))p" "$CO/argv"):$(sed -n "$((3 + AU_HN)),$((2 + AU_HN + AU_N))p" "$CO/argv"):$(sed -n "$((3 + AU_HN + AU_N)),\$p" "$CO/argv" | tr '\n' ' '):$([ -d "$KIT/tmp/auditor" ] && echo dir):$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null):$(cat "$CO/env")" "1:$AU_HD :--disallowedTools:$AU_EXP:--add-dir $KIT :dir:true:unset"
+check "auditor.sh: argv is the role message (scratchDir=\$KIT/tmp/auditor), the Planner's model and permission mode, --disallowedTools with Agent, Task and every kit_deny_rules line, then its one --settings holding \$KIT in both spellings (no --add-dir); \$KIT/tmp/auditor exists; it trusts its folder, and no ORCA_ROLES_SESSION_KIND" "$(sed -n 1p "$CO/argv" | grep -c "^Read $KIT/prompts/auditor.md and adopt that role.*scratchDir=$KIT/tmp/auditor\.\$"):$(sed -n "2,$((1 + AU_HN))p" "$CO/argv" | tr '\n' ' '):$(sed -n "$((2 + AU_HN))p" "$CO/argv"):$(sed -n "$((3 + AU_HN)),$((2 + AU_HN + AU_N))p" "$CO/argv"):$(sed -n "$((3 + AU_HN + AU_N)),\$p" "$CO/argv" | tr '\n' ' '):$(grep -cx -- '--add-dir' "$CO/argv" || true):$([ -d "$KIT/tmp/auditor" ] && echo dir):$(jq -r --arg d "$(cd "$CO/wt" && pwd -P)" '.projects[$d].hasTrustDialogAccepted' "$CO/home/.claude.json" 2>/dev/null):$(cat "$CO/env")" "1:$AU_HD :--disallowedTools:$AU_EXP:--settings {\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT")}} :0:dir:true:unset"
 au --model opus; check "auditor.sh: --model wins" "$(sed -n 3p "$CO/argv")" "opus"
 check "auditor.sh: unknown option -> exit 1" "$(au --nope; echo $?)" "1"
 # Orca's nested worker depth: coordinator.sh reads it from a temp Orca profile (sqlite or JSON source), tells the coordinator, warns below 2
@@ -9693,10 +9889,10 @@ at() { [ "$(pc "$1" "$2")" -ge 1 ] && echo y || echo n; }
 COF="$ROOT/prompts/coordinator.md"; BUL="$(awk '/^- \*\*After a restart\.\*\*/{print; exit}' "$COF")"
 P1="$(grep -c '^- \*\*After a restart\.\*\*' "$COF" || true):$(awk '/^- \*\*Your Runs must be bound to this tab\.\*\*/{f=1;next} f&&/^- \*\*After a restart\.\*\*/{print "after";exit}' "$COF"):$(pc "$BUL" 'reopen-teams\.sh --detach'):$(pc "$BUL" 'reopen-teams\.last'):$(pc "$BUL" '"Teams reopened"'):$(pc "$BUL" 'without memory'):$(pc "$BUL" 'only on the user.s yes'):$(pc "$BUL" 'launch\.sh id:'):$(pc "$BUL" 'When the Run check of "Your Runs must be bound to this tab"'):$(pc "$BUL" 'run-use'):$(grep -c 'run-use' "$COF" || true):$(pc "$BUL" 'ps -p <pid>'):$(pc "$BUL" '"Reopen stopped before it finished"')"
 RAS="$(rasec 'Resuming after a restart')"; RCA="$(rasec 'Coordinator above the worktrees')"; RTR="$(grep '^| After a restart a coordinated worktree' "$ROOT/README.md" || true)"
-P2="$(at "$RAS" 'reopen-teams\.sh'):$(at "$RAS" 'reopen-teams\.last'):$(at "$RAS" 'launch\.sh id:<worktree> --reopen'):$(at "$RAS" 'without their memory'):$(at "$RAS" 'sessionHook'):$(at "$RAS" 'this version.s .coordinator\.sh'):$(grep -c '^6\. \*\*After a restart\*\*.*reopened by the kit itself' "$ROOT/README.md" || true):$(at "$RCA" 'reopen-teams\.sh'):$(grep -c 'starts the reopen of the coordinated worktrees' "$ROOT/README.md" || true):$(grep -c 'reopen-teams\.sh  *#' "$ROOT/README.md" || true):$(grep -c 'state/reopen-teams\.last' "$ROOT/README.md" || true):$([ "$(grep -c 'state/reopen-teams\.log' "$ROOT/README.md" 2>/dev/null || true)" -ge 1 ] && echo y || echo n):$(grep -c '^| After a restart a coordinated worktree.s team did not come back |' "$ROOT/README.md" || true):$(at "$RTR" 'launch\.sh id:<worktree id> --reopen'):$(at "$RTR" 'ps -p <pid>'):$(at "$RTR" 'Reopen stopped before it finished'):$(at "$RTR" 'reopen-teams\.sh --detach')"
-LCD="$ROOT/docs/live-checks.md"; KBUL="$(awk '/^- \*\*K\. /{print; exit}' "$LCD")"
-P3="$(grep -c '^- \*\*K\. Automatic reopen of the coordinated worktrees' "$LCD" || true):$(awk '/^- \*\*J\. /{j=1} /^- \*\*K\. /{if (j) print "after"}' "$LCD"):$(pc "$KBUL" 'this version.s .coordinator\.sh.'):$(pc "$KBUL" 'reopen-teams\.last'):$(pc "$KBUL" 'no duplicate tab'):$(at "$KBUL" 'Teams reopened'):$(at "$KBUL" 'no second line `coordinator`')"
-check "coordinator prompt and docs after a restart: one bullet right after the Run-check bullet naming reopen-teams.sh --detach (for a dead pid or a stopped run too), reopen-teams.last, the Teams reopened status, without memory, the fallback tied to the Run check, launch.sh id:, the retry only on the user's yes and the dead-pid rule with its ps -p and the Reopen stopped line, with run-use only in the existing bullet; README quick start step 6, both sections, the sessionHook row, the Files tree, the state files and the Troubleshooting row with the dead pid and the stopped run; docs item K after J with its precondition and the session record without a coordinator line" "$P1|$P2|$P3" "1:after:1:1:1:1:1:1:1:0:1:1:1|y:y:y:y:y:y:1:y:1:1:3:y:1:y:y:y:y|1:after:1:1:1:y:y"
+P2="$(at "$RAS" 'reopen-teams\.sh'):$(at "$RAS" 'reopen-teams\.last'):$(at "$RAS" 'launch\.sh id:<worktree> --reopen'):$(at "$RAS" 'without their memory'):$(at "$RAS" 'sessionHook'):$(at "$RAS" 'this version.s .coordinator\.sh'):$(grep -c '^6\. \*\*After a restart\*\*.*reopened by the kit itself' "$ROOT/README.md" || true):$(at "$RCA" 'reopen-teams\.sh'):$(grep -c 'starts the reopen of the coordinated worktrees' "$ROOT/README.md" || true):$(grep -c 'reopen-teams\.sh  *#' "$ROOT/README.md" || true):$(grep -c 'state/reopen-teams\.last' "$ROOT/README.md" || true):$([ "$(grep -c 'state/reopen-teams\.log' "$ROOT/README.md" 2>/dev/null || true)" -ge 1 ] && echo y || echo n):$(grep -c '^| After a restart a coordinated worktree.s team did not come back |' "$ROOT/README.md" || true):$(at "$RTR" 'launch\.sh id:<worktree id> --reopen'):$(at "$RTR" 'ps -p <pid>'):$(at "$RTR" 'Reopen stopped before it finished'):$(at "$RTR" 'reopen-teams\.sh --detach'):$(at "$RAS" '`--coordinator <handle>`'):$(at "$RAS" 'other-coordinator'):$(at "$RTR" 'other-coordinator'):$(at "$RTR" 'unbound-run'):$(at "$RTR" 'run-unreadable'):$(grep -c 'asleep after a restart; woke it' "$ROOT/README.md" "$ROOT/docs/manual-checks.md" | awk -F: '{n+=$2} END{print n}'):$(grep -c 'also reopens the team tabs' "$ROOT/README.md" || true)"
+LCD="$ROOT/docs/live-checks.md"; KBUL="$(awk '/^- \*\*K\. /{print; exit}' "$LCD")"; LBUL="$(awk '/^- \*\*L\. /{print; exit}' "$LCD")"
+P3="$(grep -c '^- \*\*K\. Automatic reopen of the coordinated worktrees' "$LCD" || true):$(awk '/^- \*\*J\. /{j=1} /^- \*\*K\. /{if (j) print "after"}' "$LCD"):$(pc "$KBUL" 'this version.s .coordinator\.sh.'):$(pc "$KBUL" 'reopen-teams\.last'):$(pc "$KBUL" 'no duplicate tab'):$(at "$KBUL" 'Teams reopened'):$(at "$KBUL" 'no second line `coordinator`'):$(at "$KBUL" '[-][-]coordinator <handle>'):$(at "$KBUL" 'other-coordinator'):$(at "$KBUL" 'unbound-run'):$(at "$KBUL" 'Scope:'):$(awk '/^- \*\*K\. /{k=1} k&&/^- \*\*L\. No trust dialog for the kit.s folders\./{print "after"; exit}' "$LCD"):$(pc "$LBUL" 'Adding a new directory'):$(pc "$LBUL" 'first reply to the kickoff'):$(pc "$LBUL" 'jq'):$(pc "$LBUL" 'no `projects` record'):$(pc "$LBUL" 'Claude Code version')"
+check "coordinator prompt and docs after a restart: one bullet right after the Run-check bullet naming reopen-teams.sh --detach (for a dead pid or a stopped run too), reopen-teams.last, the Teams reopened status, without memory, the fallback tied to the Run check, launch.sh id:, the retry only on the user's yes and the dead-pid rule with its ps -p and the Reopen stopped line, with run-use only in the existing bullet; README quick start step 6, both sections, the sessionHook row, the Files tree, the state files and the Troubleshooting row with the dead pid and the stopped run; docs item K after J with its precondition and the session record without a coordinator line" "$P1|$P2|$P3" "1:after:1:1:1:1:1:1:1:0:1:1:1|y:y:y:y:y:y:1:y:1:1:3:y:1:y:y:y:y:y:y:y:y:y:0:0|1:after:1:1:1:y:y:y:y:y:y:after:1:1:1:1:1"
 # s5: how to run one check, and the X7 row on what leaves it not done
 s5body() { awk '/^### Running one check$/{f=1;next} f && (/^## / || /^### /){exit} f{print}' "$LCD"; }
 S5B="$(s5body)"
@@ -9745,7 +9941,7 @@ acrun() { # acrun <project json or -> <inherited value or -> <version> [coordina
 PM="$(jq -r '.roles.planner.model' "$KIT/config.default.json")"; PA="$(jq -r '.roles.planner.advisor.model' "$KIT/config.default.json")"
 acrun - - ''
 avm "$(sed -n 1p "$ACO/argv" | grep -c "^Read $KIT/prompts/coordinator.md and adopt that role")" 1 message
-avm "$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "--model|$PM|--permission-mode|auto|--add-dir|$KIT/prompts|" argv-2-7
+avm "$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "--model|$PM|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT/prompts")}}|" argv-2-7
 avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "9:--advisor:$PA:unset" default
 acrun - - '' --model opus
 avm "$(sed -n 3p "$ACO/argv"):$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "opus:--advisor:$PA" model-option
@@ -9754,7 +9950,7 @@ avm "$(sed -n 9p "$ACO/argv"):$(cat "$ACO/env")" "$PA:unset" inherited-unset
 acrun '{"roles":{"planner":{"advisor":{"model":"off"}}}}' - ''
 avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(grep -c '^--advisor$' "$ACO/argv" || true):$(cat "$ACO/env")" 7:0:1 off
 acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' - ''
-avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env"):$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "7:unset:--model|$PM|--permission-mode|auto|--add-dir|$KIT/prompts|" auto
+avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env"):$(sed -n 2,7p "$ACO/argv" | tr '\n' '|')" "7:unset:--model|$PM|--permission-mode|auto|--settings|{\"permissions\":{\"additionalDirectories\":$(kit_dirs_json "$KIT/prompts")}}|" auto
 acrun '{"roles":{"planner":{"advisor":{"model":"auto"}}}}' 1 ''
 avm "$(wc -l < "$ACO/argv" | tr -d ' '):$(cat "$ACO/env")" 7:1 auto-inherited
 acrun '{"roles":{"planner":{"advisor":{"model":"-p"}}}}' - ''
@@ -9768,7 +9964,7 @@ avm "$(sed -n 8p "$ACO/argv"):$(sed -n 9p "$ACO/argv")" "--advisor:$PA" at-floor
 acrun - - VECHO
 avm "$(sed -n 9p "$ACO/argv")" "$PA" unknown-line
 co -h; avm "$(grep -c advisor "$CO/out")" 1 usage
-check "coordinator.sh: with the default configuration --advisor <the Planner's advisor> is the last argv pair after --add-dir, --model does not move it, off and an inherited variable, auto, an invalid value, a Claude Code below 2.1.322, at the floor and on an unknown line, and the usage line (a2, C7, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 13))"
+check "coordinator.sh: with the default configuration --advisor <the Planner's advisor> is the last argv pair after --settings, --model does not move it, off and an inherited variable, auto, an invalid value, a Claude Code below 2.1.322, at the floor and on an unknown line, and the usage line (a2, C7, C12)" "$AV1" "$(printf '.%.0s' $(seq 1 13))"
 # --- a1: bin/reopen-teams.sh (a temp kit with a stub launch.sh and a fake orca; no real Orca, no real teams) ---
 RT="$TMP/rt"; RB="$TMP/rtbin"; rm -rf "$RT" "$RB"; mkdir -p "$RT/bin" "$RT/state" "$RT/home" "$RB"
 RR="$(cd "$RT" && pwd -P)"
@@ -9802,6 +9998,10 @@ case "\$1 \$2" in
   "status --json") case "\$(cat "$RT/statusmode" 2>/dev/null)" in fail) echo '{"ok":false}';; *) echo '{"ok":true}';; esac;;
   "worktree list") if [ -e "$RT/nolist.json" ]; then echo '{"ok":false,"error":{"code":"x"}}'; else cat "$RT/wl.json"; fi;;
   "orchestration send") if [ -e "$RT/sendfail" ]; then case " \$* " in *" --from "*) echo '{"ok":true}';; *) echo '{"ok":false,"error":{"code":"no_active_sender_terminal"}}'; exit 1;; esac; else echo '{"ok":true}'; fi;;
+  "orchestration run-show") id=""; pv=""; for x in "\$@"; do [ "\$pv" = --id ] && id="\$x"; pv="\$x"; done
+    if [ -e "$RT/rswrite" ] && [ "\$id" = "\$(sed -n 1p "$RT/rswrite" 2>/dev/null)" ]; then printf 'run_d\n' > "$RT/state/session-handles/\$(sed -n 2p "$RT/rswrite" 2>/dev/null).runs"; fi
+    [ ! -e "$RT/rsfail.\$id" ] || { echo "boom" >&2; exit 3; }
+    if [ -e "$RT/rs.\$id" ]; then cat "$RT/rs.\$id"; else echo '{"ok":false,"error":{"code":"run_not_found"}}'; exit 1; fi;;
 esac
 exit 0
 EOS
@@ -9816,7 +10016,7 @@ rtw() {  # rtw <name> <coordinator file or -> <env file or -> [pending]
   return 0
 }
 rbeh() { local n="$1"; shift; printf '%s\n' "$@" > "$RT/beh.wt-$n"; }
-rrt() { : > "$RT/launch.log"; rm -f "$RT"/calls.* "$RT"/in.* "$RT/statusmode" "$RT/sendfail" "$RT/nolist.json"; : > "$RT/orca.log"; }
+rrt() { : > "$RT/launch.log"; rm -f "$RT"/calls.* "$RT"/in.* "$RT/statusmode" "$RT/sendfail" "$RT/nolist.json" "$RT"/rsfail.* "$RT/rswrite"; : > "$RT/orca.log"; }
 rt() {  # rt [VAR=value...]: one run; OUT, RC, RSEC
   local t0; t0=$(date +%s)
   # shellcheck disable=SC2086
@@ -10059,6 +10259,72 @@ tc1stop INT 130
 check "reopen-teams stopped run: a run killed with TERM, HUP or INT after one worktree was reopened replaces its own Reopen running line with the spec's stopped line naming its pid, then that worktree's outcome line, and takes its lock away (status 143, 129 or 130)" "$C1B" "143:Reopen stopped before it finished (pid P); run ~/.orca-roles/bin/reopen-teams.sh --detach again.:1:TC1/wt-first: reopened;:0:clean|129:Reopen stopped before it finished (pid P); run ~/.orca-roles/bin/reopen-teams.sh --detach again.:1:TC1/wt-first: reopened;:0:clean|130:Reopen stopped before it finished (pid P); run ~/.orca-roles/bin/reopen-teams.sh --detach again.:1:TC1/wt-first: reopened;:0:clean|"
 C1P="$("$ROOT/bin/reopen-teams.sh" -h 2>/dev/null | grep -c 'Reopen stopped before it finished' || true):$(grep -c 'ps -p <pid>' "$ROOT/prompts/coordinator.md" || true):$(grep -c 'Reopen stopped before it finished' "$ROOT/prompts/coordinator.md" || true):$(grep -c 'run-use' "$ROOT/prompts/coordinator.md" || true):$(grep '^| After a restart a coordinated worktree' "$ROOT/README.md" | grep -c 'ps -p <pid>' || true):$(grep '^| After a restart a coordinated worktree' "$ROOT/README.md" | grep -c 'Reopen stopped before it finished' || true)"
 check "after a restart: the prompt's bullet treats a Reopen running pid that ps -p does not list, and a Reopen stopped line, as a dead run (one reopen-teams.sh --detach again), the README Troubleshooting row names the same remedy, the prompt keeps its one run-use line and the -h header names the stopped line" "$C1P" "1:1:1:1:1:1"
+# --- b1: the scope (a per-Run answer to run-show, a fixture of four coordinated worktrees, and never a run-list) ---
+rta() {  # rta [VAR=value ...] -- [reopen-teams.sh args...]: one run; OUT, RC, RSEC
+  local envs=() t0
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
+  [ $# -eq 0 ] || shift
+  t0=$(date +%s)
+  if OUT="$(cd "$TMP" && env -i HOME="$RT/home" RT="$RT" PATH="$RB:$PATH" KIT="$RT" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH="$RB/wslpath" ORCA_ROLES_REOPEN_PAUSE=0 ORCA_ROLES_CLI_TIMEOUT=0 ${envs[@]+"${envs[@]}"} "$RT/bin/reopen-teams.sh" "$@" 2>&1)"; then RC=0; else RC=$?; fi
+  RSEC=$(( $(date +%s) - t0 ))
+}
+sout() { printf '%s' "$OUT" | grep -c -- "$1" || true; }
+soutn() { printf '%s' "$OUT" | rn | grep -c -- "$1" || true; }
+scv() {  # scv <label>: what the last run did, from its own stdout (RN-normalised paths) and its calls; the tail is the line counts of the scope and of each skip verdict of the fixture
+  printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s' "$1" "$RC" "$(rfacts)" "$(grep -c '^orchestration run-show' "$RT/orca.log" || true):$(grep -c '^orchestration run-list' "$RT/orca.log" || true)" "$(rbody)" "$(sout '^Scope: the worktrees whose Run is bound to ')" "$(soutn '^RT/wt-sc[0-9]*: unbound-run (run_a)$')" "$(soutn '^RT/wt-sc[0-9]*: other-coordinator (run_a)$')" "$(soutn '^RT/wt-sc[0-9]*: other-coordinator (run_b)$')" "$(soutn '^RT/wt-sc[0-9]*: other-coordinator (run_d)$')" "$(soutn '^RT/wt-sc[0-9]*: run-unreadable (run_b)$')"
+}
+sb() { rm -rf "$RT"/wt-sc?; rm -f "$RT"/rs.* "$RT"/rsfail.*; rm -rf "$RT/state/session-handles"; mkdir -p "$RT/state/session-handles"; }
+sk() {  # sk <n> <run> [owner handle]: one worktree of the fixture; the owner handle is line 2 of the coordinator file
+  rtw "sc$1" "$2" 'DEV=h'; [ -z "${3:-}" ] || printf '%s\n' "$3" >> "$RT/wt-sc$1/.git/orca-roles.coordinator"
+}
+sfour() { sk 1 run_a; sk 2 run_a; sk 3 run_b; sk 4 run_d
+  printf '{"ok":true,"result":{"worktrees":[{"id":"w-sc1","path":"%s","isMainWorktree":false},{"id":"w-sc2","path":"%s","isMainWorktree":false},{"id":"w-sc3","path":"%s","isMainWorktree":false},{"id":"w-sc4","path":"%s","isMainWorktree":false}]}}\n' "$RT/wt-sc1" "$RT/wt-sc2" "$RT/wt-sc3" "$RT/wt-sc4" > "$RT/wl.json"
+}
+srs() { printf '{"ok":true,"result":{"run":{"id":"%s","coordinator_handle":%s}}}\n' "$1" "$2" > "$RT/rs.$1"; }
+sfix4() { sb; sfour; srs run_a '"tOld"'; srs run_b '"tOther"'; srs run_d '"tOther"'; }
+sfix4; rrt; rta -- --coordinator tOld --coordinator tNew; SC="$(scv A)"
+srs run_a '"tNew"'; rrt; rta -- --coordinator tOld --coordinator tNew; SC="$SC|$(scv B)"
+sfix4; srs run_a 'null'; printf 'tOld\ncoordinator\n' > "$RT/state/session-handles/s1"; printf 'run_a\n' > "$RT/state/session-handles/s1.runs"
+rrt; rta -- --coordinator tOld --coordinator tNew; SC="$SC|$(scv C)"
+sfix4; srs run_d 'null'; sk 4 run_d tMid
+printf 'tMid\ncoordinator\n' > "$RT/state/session-handles/s2"; printf 'tMid\ntNew\n' > "$RT/state/session-handles/s2.handles"
+rrt; rta -- --coordinator tOld --coordinator tNew; SC="$SC|$(scv D)"
+sfix4; srs run_a 'null'
+rrt; rta -- --coordinator tOld --coordinator tNew; SC="$SC|$(scv E):$(grep -c "wt-sc1: its Run (run_a) is bound to no tab and nothing records it as this coordinator's; not reopened. Run launch.sh --reopen in it if it is yours.$" "$RT/state/reopen-teams.last" || true):$(grep -c 'No coordinated worktree of this coordinator has a team to reopen' "$RT/state/reopen-teams.last" || true)"
+sfix4; srs run_a 'null'; printf 'tOld\nworker\n' > "$RT/state/session-handles/s1"; printf 'run_a\n' > "$RT/state/session-handles/s1.runs"
+rrt; rta -- --coordinator tOld --coordinator tNew; SC="$SC|$(scv G):$(grep -c "wt-sc1: its Run (run_a) is bound to no tab and nothing records it as this coordinator's; not reopened. Run launch.sh --reopen in it if it is yours.$" "$RT/state/reopen-teams.last" || true):$(grep -c 'No coordinated worktree of this coordinator has a team to reopen' "$RT/state/reopen-teams.last" || true)"
+sfix4; sk 3 run_b tOld
+rrt; rta -- --coordinator tOld --coordinator tNew; SC="$SC|$(scv F)"
+rrt; rta --; SC="$SC|unscoped:$RC:$(rfacts):$(grep -c '^orchestration run-show' "$RT/orca.log" || true):$(sout '^Scope: every coordinated worktree$')"
+check "reopen-teams scope: with --coordinator tOld --coordinator tNew a worktree whose marker Run is bound to either handle (also after the hook re-bound it) is reopened from one run-show per distinct Run and no run-list, a Run bound to another handle is logged other-coordinator and not reopened (an owner line in the scope does not override that), a null Run listed in a joined session's .runs or whose owner line is in the scope's handles is reopened, a null Run with nothing recording it is skipped as unbound-run with its summary line and not counted (also when the only record holding that Run id is not a coordinator's, its line 2), and without --coordinator every coordinated worktree is reopened with no run-show" "$SC" "A:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;Done: 2 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:1:0|B:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;Done: 2 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:1:0|C:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;Done: 2 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:1:0|D:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;CALL cwd=RT/wt-sc4 args=id:w-sc4 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;RT/wt-sc4: reopened;Done: 3 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:0:0|E:0::3:0:wt-sc1: its Run (run_a) is bound to no tab and nothing records it as this coordinator's; not reopened. Run launch.sh --reopen in it if it is yours.;wt-sc2: its Run (run_a) is bound to no tab and nothing records it as this coordinator's; not reopened. Run launch.sh --reopen in it if it is yours.;No coordinated worktree of this coordinator has a team to reopen.;Done: 0 reopened, 0 nothing to reopen, 0 failed.;:1:2:0:1:1:0:1:1|G:0::3:0:wt-sc1: its Run (run_a) is bound to no tab and nothing records it as this coordinator's; not reopened. Run launch.sh --reopen in it if it is yours.;wt-sc2: its Run (run_a) is bound to no tab and nothing records it as this coordinator's; not reopened. Run launch.sh --reopen in it if it is yours.;No coordinated worktree of this coordinator has a team to reopen.;Done: 0 reopened, 0 nothing to reopen, 0 failed.;:1:2:0:1:1:0:1:1|F:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;Done: 2 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:1:0|unscoped:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;CALL cwd=RT/wt-sc3 args=id:w-sc3 --reopen;CALL cwd=RT/wt-sc4 args=id:w-sc4 --reopen;:0:1"
+# the scope without --coordinator: the env of a coordinator's own session, chained sessions, and an invalid .handles line
+sfix4; printf 'tOld\ncoordinator\n' > "$RT/state/session-handles/s3"; printf 'tOld\ntNew\n' > "$RT/state/session-handles/s3.handles"
+rrt; rta ORCA_ROLES_SESSION_KIND=coordinator ORCA_TERMINAL_HANDLE=tNew --; SG="$(scv env):$(sout '^Scope: the worktrees whose Run is bound to tNew$')"
+sfix4; rrt; rta ORCA_ROLES_SESSION_KIND=coordinator ORCA_TERMINAL_HANDLE=tOther --; SG="$SG|$(scv other)"
+rrt; rta ORCA_TERMINAL_HANDLE=tNew --; SG="$SG|person:$RC:$(rfacts):$(sout '^Scope: every coordinated worktree$')"
+sb; sfour; srs run_a '"tOther"'; srs run_b '"tOther"'; srs run_d 'null'; sk 4 run_d tOld
+printf 'tA\ncoordinator\n' > "$RT/state/session-handles/s4"; printf 'tOld\ntA\n' > "$RT/state/session-handles/s4.handles"
+printf 'tA\ncoordinator\n' > "$RT/state/session-handles/s5"; printf 't;x\ntA\ntNew\n' > "$RT/state/session-handles/s5.handles"
+rrt; rta -- --coordinator tNew; SG="$SG|$(scv chain):$(sout '^Scope: the worktrees whose Run is bound to tNew$')"
+check "reopen-teams scope without a --coordinator: a coordinator's own session (ORCA_ROLES_SESSION_KIND plus a valid handle) is scoped to that handle and expanded through the .handles of its sessions (also chained through a shared handle, an invalid line ignored), the same environment with no record of that handle reopens only the Runs bound to it, a person's terminal without the kind stays unscoped" "$SG" "env:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;Done: 2 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:1:0:1|other:0:CALL cwd=RT/wt-sc3 args=id:w-sc3 --reopen;CALL cwd=RT/wt-sc4 args=id:w-sc4 --reopen;:3:0:RT/wt-sc3: reopened;RT/wt-sc4: reopened;Done: 2 reopened, 0 nothing to reopen, 0 failed.;:1:0:2:0:0:0|person:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;CALL cwd=RT/wt-sc3 args=id:w-sc3 --reopen;CALL cwd=RT/wt-sc4 args=id:w-sc4 --reopen;:1|chain:0:CALL cwd=RT/wt-sc4 args=id:w-sc4 --reopen;:3:0:RT/wt-sc4: reopened;Done: 1 reopened, 0 nothing to reopen, 0 failed.;:1:0:2:1:0:0:1"
+# a Run whose run-show fails: run-unreadable in the log and in the summary, exit 1, the other worktrees reopened; the usage errors start nothing; --detach reaches the run
+sfix4; rrt; : > "$RT/rsfail.run_b"
+rta -- --coordinator tOld --coordinator tNew; SC3="$(scv H):$(grep -c 'wt-sc3: could not read its Run (run_b) from Orca; not reopened.$' "$RT/state/reopen-teams.last" || true)"
+rrt; rta -- --coordinator; SC3="$SC3|bare:$RC:$(rfacts):$([ -e "$RT/state/reopen-teams.lock" ] && echo lock || echo clean):$(sout 'reopen-teams.sh \[--detach\] \[--coordinator <handle>\]')"
+for bad in '' 't 1' 't;x' '../x'; do
+  rrt; rta -- --coordinator "$bad"; SC3="$SC3|bad:$RC:$(rfacts):$([ -e "$RT/state/reopen-teams.lock" ] && echo lock || echo clean)"
+done
+sfix4
+rrt; rm -f "$RT/state/reopen-teams.last"; rta -- --detach --coordinator tOld
+poll grep -q 'Done:' "$RT/state/reopen-teams.last"
+SC3="$SC3|detach:$RC:$([ "$RSEC" -le 2 ] && echo fast):$(grep -c "Scope: the worktrees whose Run is bound to tOld$" "$RT/state/reopen-teams.log" || true):$(rfacts)"
+check "reopen-teams scope: a marker Run whose run-show fails is logged run-unreadable, named in the summary and makes the run exit 1 while the other worktrees are reopened; --coordinator with no value or an invalid one exits 2 with the usage line, starts nothing and leaves no lock; --detach returns at once and passes the handle to the detached run" "$SC3" "H:1:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;wt-sc3: could not read its Run (run_b) from Orca; not reopened.;Done: 2 reopened, 0 nothing to reopen, 1 failed.;:1:0:0:0:1:1:1|bare:2::clean:1|bad:2::clean|bad:2::clean|bad:2::clean|bad:2::clean|detach:0:fast:1:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;"
+# a .runs file the SessionStart hook writes while this run goes from one worktree to the next: read after every run-show, not once
+sb; sfour; srs run_a '"tNew"'; srs run_b '"tOther"'; srs run_d 'null'
+printf 'tOld\ncoordinator\n' > "$RT/state/session-handles/s6"
+rrt; printf 'run_b\ns6\n' > "$RT/rswrite"
+rta -- --coordinator tOld --coordinator tNew
+check "reopen-teams scope: a .runs file written between the first and the second run-show (the fake orca writes it while it answers run_b's show, as the hook's own run-use does meanwhile) is read after every run-show, so the null Run that a joined session lists there is reopened instead of skipped as unbound-run" "$(scv I):$(soutn '^RT/wt-sc4: unbound-run (run_d)$')" "I:0:CALL cwd=RT/wt-sc1 args=id:w-sc1 --reopen;CALL cwd=RT/wt-sc2 args=id:w-sc2 --reopen;CALL cwd=RT/wt-sc4 args=id:w-sc4 --reopen;:3:0:RT/wt-sc1: reopened;RT/wt-sc2: reopened;RT/wt-sc4: reopened;Done: 3 reopened, 0 nothing to reopen, 0 failed.;:1:0:0:1:0:0:0"
 if [ -f "$CO/kit-config.json" ]; then mv "$CO/kit-config.json" "$KIT/config.json"; fi
 }
 
@@ -10311,7 +10577,9 @@ EOT
 chmod +x "$KPB/orca"
 # agent.sh sources and uses the kit in KIT although HOME has no ~/.orca-roles
 OUT="$(cd "$TMP" && env HOME="$NH" PATH="$KPB:$PATH" KIT="$K2" ORCA_ROLES_CONFIG="$K2/config.json" "$K2/bin/agent.sh" dev 2>&1 | tr '\n' ' ')"
-case "$OUT" in *"--add-dir $K2/prompts "*) echo "ok   kit-path: agent.sh runs the kit in KIT with a HOME that has no ~/.orca-roles";; *) echo "FAIL kit-path agent.sh: $OUT"; FAIL=1;; esac
+KPK="$(case "$OUT" in (*"--add-dir $K2/prompts "*) echo add;; (*) echo none;; esac)"
+KPS="$(case "$OUT" in (*"\"additionalDirectories\":[\"$K2/prompts\","*) echo in;; (*) echo out;; esac)"
+check "kit-path: agent.sh runs the kit in KIT with a HOME that has no ~/.orca-roles (the kit's folders in its --settings, no --add-dir for them)" "$KPK:$KPS" "none:in"
 # launch.sh: the tab commands carry KIT and call the kit's agent.sh
 mkdir -p "$NH/.orca-roles"; : > "$KPO"
 try kp_run "$KPL" HOME="$NH" PATH="$KPB:$PATH" KIT="$K2" ORCA_ROLES_KICKOFF=/usr/bin/true "$K2/bin/launch.sh"; RCK="$RC"
@@ -10931,6 +11199,14 @@ case "\$1 \$2" in
     [ ! -f "$MF/ru.fail" ] || { [ ! -s "$MF/ru.fail" ] || echo "{\"ok\":false,\"error\":{\"code\":\"\$(cat "$MF/ru.fail")\"}}"; exit 1; }
     echo '{"ok":true}';;
   "terminal list") echo "TLIST \$*" >> "$MF/tl.log"; [ -f "$MF/tl.fail" ] && exit 1; cat "$MF/tl.json" 2>/dev/null || echo '{"result":{"terminals":[]}}';;
+  "orchestration run-show")   # the marker Run's owner handle (kickoff's owner line)
+    [ ! -f "$MF/rsfail" ] || { echo "boom: run-show failed" >&2; exit 3; }
+    case "\$(cat "$MF/rs" 2>/dev/null)" in
+      ok) echo '{"ok":true,"result":{"run":{"id":"run_c0ffee12","coordinator_handle":"tC"}}}';;
+      null) echo '{"ok":true,"result":{"run":{"id":"run_c0ffee12","coordinator_handle":null}}}';;
+      semi) echo '{"ok":true,"result":{"run":{"id":"run_c0ffee12","coordinator_handle":"t;C"}}}';;
+      *) echo '{"ok":false,"error":{"code":"run_not_found"}}'; exit 1;;
+    esac;;
   "terminal wait") echo "WAIT \$*" >> "$MF/waits.log"; [ -f "$MF/sent.\$h" ] && sleep "\$(cat "$MF/waitdelay")";;
   "terminal send")
     t=""; while [ \$# -gt 0 ]; do [ "\$1" = --text ] && t="\$2"; shift; done
@@ -10960,7 +11236,7 @@ CLERR="There's an issue with the selected model (x). It may not exist or you may
 echo 0 > "$MF/waitdelay"; export ORCA_ROLES_KICK_SETTLE=0
 mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STALE PASTE VIEW REM FAILSEND PRE NOSENDER FAILOUT ST PTY TL TLFAIL
   local KK="${MAILKIT:-$KIT}"; printf '%s' "$1" > "$MF/cfg.json"; : > "$MF/orca.log"; : > "$MF/tl.log"; rm -f "$MF"/text.* "$MF/rl.n" "$MF/orch.log" "$MF/mail.log" "$MF/tl.json" "$MF/tl.fail" "$MF/gd/orca-roles.pty"; [ -n "${HIST:-}" ] || rm -f "$MF/gd/orca-roles.planner-handles"; [ -z "${HIST:-}" ] || printf '%b' "$HIST" > "$MF/gd/orca-roles.planner-handles"
-  rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/failsend" "$MF/failhnd" "$MF/nosender" "$MF/failout" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
+  rm -f "$MF"/sent.* "$MF"/hist.* "$MF/paste" "$MF/wrap" "$MF/view" "$MF/gd/orca-roles.models" "$MF/gd/orca-roles.kicked" "$MF/rs" "$MF/rsfail" "$MF/failsend" "$MF/failhnd" "$MF/nosender" "$MF/failout" "$MF/waits.log" "$MF"/sendfail.*; for hh in ${SENDFAIL:-}; do : > "$MF/sendfail.$hh"; done
   [ -z "${OCSCREEN:-}" ] || printf '%s\n' "$OCSCREEN" > "$MF/hist.hd"
   printf '%s\n' "${ERRTXT:-$CLERR}" > "$MF/errtxt"; [ -z "${ERRWRAP:-}" ] || echo "$ERRWRAP" > "$MF/wrap"; [ -z "${PASTE:-}" ] || : > "$MF/paste"; [ -z "${VIEW:-}" ] || echo "$VIEW" > "$MF/view"
   [ -z "${STALE:-}" ] || for hh in hp hd ht ha; do echo "${STALETXT:-$CLERR}" > "$MF/hist.$hh"; done
@@ -10969,6 +11245,7 @@ mf() {  # <config json> <mode: bad | clean> <new roles>; env: ERRTXT ERRWRAP STA
   [ -z "${ST:-}" ] || printf '%s' "$ST" > "$MF/gd/orca-roles.env"
   [ -z "${PTY:-}" ] || printf '%s' "$PTY" > "$MF/gd/orca-roles.pty"
   [ -z "${TL:-}" ] || printf '%s' "$TL" > "$MF/tl.json"; [ -z "${TLFAIL:-}" ] || : > "$MF/tl.fail"
+  [ -z "${RS:-}" ] || printf '%s' "$RS" > "$MF/rs"; [ -z "${RSFAIL:-}" ] || : > "$MF/rsfail"
   (cd "$MF/wt" && HOME="$TMP/home" PATH="$MF/bin:$PATH" ORCA_TERMINAL_HANDLE="${OTH:-}" KIT="$KK" "$KK/bin/kickoff.sh" "$MF/wt" "$MF/gd/orca-roles.env" "$MF/cfg.json" "$3" "" "${REM:-}" "${REUSED:-}" > "$MF/out.log" 2>&1)
 }
 mfc() { printf '{ "settings": { "kickoffTimeoutSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false }, "defaults": { "agent": "claude", "params": {} }, "mcpServers": {}, "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner", "model": "claude-opus-5-5" }, "dev": { %s } } }' "$1"; }
@@ -11007,12 +11284,26 @@ REM="local-coordinator" mf "$(mfc "$DEVOK")" clean "local-coordinator"; check "k
 mf "$(mfc "$DEVOK")" clean "local-coordinator"; check "kickoff.sh: the local coordinator's first start removes the coordinator's marker" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c '^SEND Read' "$MF/orca.log")" "gone|1"
 check "kickoff.sh: an empty marker leaves no coordinator Run behind" "$([ -f "$MF/gd/orca-roles.coordinator" ] && echo kept || echo none)" "none"
 printf 'run_c0ffee12\n' > "$CM"; mf "$(mfc "$DEVOK")" clean "local-coordinator"
-check "kickoff.sh: the local coordinator's first start keeps the marker's Run beside the state" "$([ -f "$CM" ] && echo kept || echo gone)|$(cat "$MF/gd/orca-roles.coordinator" 2>/dev/null)" "gone|run_c0ffee12"
+check "kickoff.sh: the local coordinator's first start keeps the marker's Run beside the state" "$([ -f "$CM" ] && echo kept || echo gone)|$(head -n 1 "$MF/gd/orca-roles.coordinator" 2>/dev/null)" "gone|run_c0ffee12"
+# b3: when kickoff copies the marker it reads the Run once and writes its owner handle as line 2 (a failed read, null or an invalid handle: line 1 alone)
+mkb3() { mkdir -p "${CM%/*}"; printf 'run_c0ffee12\n' > "$CM"; rm -f "$MF/gd/orca-roles.coordinator"; }
+crun() { ( . "$KIT/bin/lib.sh" 2>/dev/null; coordinator_run "$MF/gd/orca-roles.env" ); }
+mkb3; RS=ok mf "$(mfc "$DEVOK")" clean "local-coordinator"
+B3A="$([ -f "$CM" ] && echo kept || echo gone):$(tr '\n' ',' < "$MF/gd/orca-roles.coordinator" 2>/dev/null):$(crun)"
+mkb3; RSFAIL=1 mf "$(mfc "$DEVOK")" clean "local-coordinator"
+B3B="$([ -f "$CM" ] && echo kept || echo gone):$(tr '\n' ',' < "$MF/gd/orca-roles.coordinator" 2>/dev/null)"
+mkb3; RS=null mf "$(mfc "$DEVOK")" clean "local-coordinator"
+B3B="$B3B|$(tr '\n' ',' < "$MF/gd/orca-roles.coordinator" 2>/dev/null)"
+mkb3; RS=semi mf "$(mfc "$DEVOK")" clean "local-coordinator"
+B3B="$B3B|$(tr '\n' ',' < "$MF/gd/orca-roles.coordinator" 2>/dev/null)"
+mkb3; mf "$(mfc "$DEVOK")" clean "local-coordinator"
+B3B="$B3B|$(tr '\n' ',' < "$MF/gd/orca-roles.coordinator" 2>/dev/null):$(grep -c 'boom: run-show failed\|tC\|run_not_found' "$MF/out.log" || true)"
+check "kickoff.sh: the marker's Run is read once with run-show and its owner handle written as line 2, which coordinator_run still reads line 1 of; a failed, null or invalid answer leaves line 1 alone and nothing of the call reaches kickoff's output" "$B3A|$B3B" "gone:run_c0ffee12,tC,:run_c0ffee12|gone:run_c0ffee12,|run_c0ffee12,|run_c0ffee12,|run_c0ffee12,:0"
 rm -rf "${CM%/*}" "$MF/gd/orca-roles.coordinator"
 # the marker outlives a Planner message that was not sent, and the next start sends the hold sentence and removes it
 mkdir -p "${CM%/*}"; printf 'run_c0ffee12\n' > "$CM"; rm -f "$MF/gd/orca-roles.coordinator"
 SENDFAIL=hp mf "$(mfc "$DEVOK")" clean "local-coordinator"
-check "kickoff.sh: the local coordinator's send failing keeps the marker, says so and still keeps the Run beside the state" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c "^Kept the coordinator's marker: the local coordinator's role was not sent yet.$" "$MF/out.log")|$(cat "$MF/gd/orca-roles.coordinator" 2>/dev/null)" "kept|1|run_c0ffee12"
+check "kickoff.sh: the local coordinator's send failing keeps the marker, says so and still keeps the Run beside the state" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c "^Kept the coordinator's marker: the local coordinator's role was not sent yet.$" "$MF/out.log")|$(head -n 1 "$MF/gd/orca-roles.coordinator" 2>/dev/null)" "kept|1|run_c0ffee12"
 mf "$(mfc "$DEVOK")" clean "local-coordinator"
 check "kickoff.sh: the next start's send carries the wait for the coordinator and removes the marker" "$([ -f "$CM" ] && echo kept || echo gone)|$(grep -c 'opened by a coordinator' "$MF/text.hp")|$(grep -c 'Kept the coordinator' "$MF/out.log" || true)" "gone|1|0"
 rm -rf "${CM%/*}" "$MF/gd/orca-roles.coordinator"
@@ -16736,6 +17027,295 @@ RW5="$(cc_rowsof "$CWTD")"
 cc_run "$CFG1" --json "$CWTD"
 RW6="$CCRC:$(printf '%s' "$CCOUT" | jq -c '[.worktrees[] | [.path, .team, .devTabs, .testerTabs, .pairTrees, .running, .moreHere, .limit, .machineMeasured]]' 2>/dev/null | sed -e "s#\"$CWTD\"#\"D\"#g" || true)"
 check "capacity-contract: a worktree row counts the saved Dev and Tester tabs (with their instances) and the open pair trees, says the larger of the two tab counts is running, and names what limits 'more fit here': maxExtraInstances (2 extras open and 2 allowed gives 0), the machine (3, CPU), maxExtraInstances on a tie with maxInstances (1) and on a tie with the machine's 2 (2); a folder without a team is 'no team'; two folders give two rows in argument order; with nothing readable it ends ' The machine was not measured.' (2, maxExtraInstances, machineMeasured false)" "$RW1|$RW2|$RW3|$RW4|$RW4B|$RW5|$RW6" "Worktree A: 2 pair(s) running (2 Dev tab(s), 2 Tester tab(s), 1 pair tree(s)); 0 more fit here (limited by maxExtraInstances).|Worktree A: 2 pair(s) running (2 Dev tab(s), 2 Tester tab(s), 1 pair tree(s)); 3 more fit here (limited by CPU)./Worktree B: 2 pair(s) running (2 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 1 more fit here (limited by maxExtraInstances).|Worktree B: 2 pair(s) running (2 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 1 more fit here (limited by maxExtraInstances).|Worktree C: no team.|Worktree E: 1 pair(s) running (1 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 2 more fit here (limited by maxExtraInstances).|Worktree D: 1 pair(s) running (1 Dev tab(s), 1 Tester tab(s), 0 pair tree(s)); 2 more fit here (limited by maxExtraInstances). The machine was not measured.|0:[[\"D\",true,1,1,0,1,2,\"maxExtraInstances\",false]]"
+}
+
+sec_keep_live_roles() {
+# keep-live-roles (a1, a2) contract: an orphaned tab whose agent still runs, or a tab that is still the kit's own (its saved tabId:leafId is the
+# recordedPaneKey and it is connected and writable), is kept; a --reopen run accounts for every role in one line and claims no restart.
+# Fixtures: a fake orca ($B1/bin/orca) whose 'terminal show' answer, exit code and 'terminal list' body come from files, a pid hook that
+# answers one line per call from $B1/pids.<handle>, and the kit's state files, rewritten per case.
+B1="$TMP/b1"; rm -rf "$B1"; mkdir -p "$B1/bin" "$B1/wt"; git -C "$B1/wt" init -q -b main
+BW="$B1/wt"; BG="$BW/.git"
+cat > "$B1/bin/orca" <<EOS
+#!/bin/sh
+echo "\$*" >> "$B1/orca.log"
+case "\$1 \$2" in
+  "terminal list") if [ -f "$B1/list.json" ]; then cat "$B1/list.json"; else echo '{"result":{"terminals":[]}}'; fi;;
+  "terminal create") t=""; while [ \$# -gt 0 ]; do [ "\$1" = --title ] && t="\$2"; shift; done; t="\${t% (*)}"; printf '{"handle":"b1-%s"}\n' "\$t";;
+  "terminal show") h=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\$2"; shift; done
+    if [ -f "$B1/show.\$h" ]; then cat "$B1/show.\$h"; else printf '{"result":{"terminal":{"ptyId":"pty-%s","agentIdentity":"claude","orphaned":false}}}\n' "\$h"; fi
+    if [ -f "$B1/rc.\$h" ]; then exit "\$(cat "$B1/rc.\$h")"; fi;;
+esac
+exit 0
+EOS
+chmod +x "$B1/bin/orca"
+cat > "$B1/bin/agent-pid" <<EOS
+#!/bin/sh
+printf '%s\n' "\$1" >> "$B1/pid.log"
+n=\$(grep -cxF -- "\$1" "$B1/pid.log")
+if [ -f "$B1/pids.\$1" ]; then sed -n "\${n}p" "$B1/pids.\$1"; else echo 4242; fi
+exit 0
+EOS
+chmod +x "$B1/bin/agent-pid"
+cat > "$B1/bin/session-of" <<'EOS'
+#!/bin/sh
+if [ "$1" = rs-cl ]; then echo 11111111-2222-3333-4444-555555555555; fi
+exit 0
+EOS
+chmod +x "$B1/bin/session-of"
+printf '#!/bin/sh\nexit 0\n' > "$B1/bin/kickoff"; chmod +x "$B1/bin/kickoff"
+b1_cfg() {   # <cu|cx>: the team's roles; the five-role cases need a codex one for an agent Orca shows as gone
+cat > "$B1/c.tmp" <<'J'
+{ "settings": { "kickoffTimeoutSeconds": 1, "launchWaitSeconds": 1, "closeComposerAgent": false, "jiraHandoff": false, "enableAskModeOnStart": false },
+  "defaults": { "agent": "claude", "params": {} }, "mcpServers": {},
+  "roles": { "local-coordinator": { "title": "Local coordinator" }, "planner": { "title": "Planner" }, "dev": { "title": "Dev", "agent": "opencode" }, "cl": { "title": "Cl" },
+             "cu": { "title": "Cu", "agent": "custom", "command": "x" }, "cx": { "title": "Cx", "agent": "codex" } } }
+J
+case "$1" in
+  cu) jq 'del(.roles.cx)' "$B1/c.tmp" > "$KIT/config.json";;
+  cx) jq 'del(.roles.cu)' "$B1/c.tmp" > "$KIT/config.json";;
+esac
+for r in cl cu cx; do : > "$KIT/prompts/programmer/$r.md"; done   # the invented roles need a prompt file to be launched (removed at the end of the section)
+}
+b1_show() { printf '%s\n' "$2" > "$B1/show.$1"; }        # b1_show <handle> <json>
+b1_rc() { printf '%s\n' "$2" > "$B1/rc.$1"; }            # b1_rc <handle> <exit code>
+b1_pids() { printf '%b' "$2" > "$B1/pids.$1"; }          # b1_pids <handle> <one answer per call: a pid, or an empty line for none>
+b1_reset() { : > "$B1/orca.log"; : > "$B1/pid.log"; rm -f "$B1"/show.* "$B1"/pids.* "$B1"/rc.* "$B1/list.json"; rm -rf "$KIT/metrics"; }
+b1_state() {  # b1_state <orca-roles.env lines, newline separated>: writes the saved team, its kicked handles and its ptyIds; no tabs line
+  local e="$1" l v h
+  printf '%s\n' "$e" > "$BG/orca-roles.env"
+  cp "$BG/orca-roles.env" "$BG/orca-roles.kicked"
+  : > "$BG/orca-roles.pty"
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue; v="${l%%=*}"; h="${l#*=}"
+    printf '%s=pty-%s\n' "$v" "$h" >> "$BG/orca-roles.pty"
+  done <<< "$e"
+  : > "$BG/orca-roles.tabs"
+}
+b1_run() { (cd "$BW" && HOME="$TMP/home" PATH="$B1/bin:$PATH" ORCA_ROLES_AGENT_PID="$B1/bin/agent-pid" ORCA_ROLES_AGENT_CHECKS="${B1_CHECKS:-1}" ORCA_ROLES_SESSION_OF="$B1/bin/session-of" ORCA_ROLES_KICKOFF="$B1/bin/kickoff" "$TMP/home/.orca-roles/bin/launch.sh" "$@" 2>&1); }
+b1_ev() { local n; n="$(grep -c "\"event\":\"$1\"" "$KIT/metrics/events.jsonl" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+b1_n() { local n; n="$(grep -c -- "$2" "$1" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+b1_out() { local n; n="$(printf '%s\n' "$OUT" | grep -cxF -- "$1" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+b1_outc() { local n; n="$(printf '%s\n' "$OUT" | grep -c -- "$1" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+b1_tab() { local v="$1" h="$2"; printf '%s=%s\n' "$v" "$h" >> "$BG/orca-roles.tabs"; }
+b1_own() { b1_show b-cu "{\"result\":{\"terminal\":{\"ptyId\":\"pty-b-cu\",\"agentIdentity\":\"x\",\"orphaned\":true,\"connected\":$1,\"writable\":$2,\"recordedPaneKey\":\"$3\"}}}"; }
+
+P_JUST='{"result":{"terminal":{"ptyId":"pty-b-oc","agentIdentity":"opencode","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-dev:lf-dev"}}}'
+P_OC='{"result":{"terminal":{"ptyId":"pty-b-oc","agentIdentity":"opencode","orphaned":true,"connected":false}}}'
+P_CL='{"result":{"terminal":{"ptyId":"pty-b-cl","agentIdentity":"claude","orphaned":true,"connected":false}}}'
+P_GONE='{"result":{"terminal":{"agentIdentity":null}}}'
+P_STALE='{"ok":false,"error":{"code":"terminal_handle_stale"}}'
+
+# a1, family agent=opencode x orphaned x live TUI x not the kit's own tab: kept, today's line once, one detached-kept event, nothing closed or opened
+b1_cfg cu; b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+P1="$(b1_n "$BG/orca-roles.env" '^DEV=b-oc$')"
+b1_show b-oc "$P_OC"; b1_pids b-oc '4711\n'
+OUT="$(b1_run)"
+K1="$(b1_out 'Orca reports the tab of Dev (b-oc) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.')"
+A1="$(b1_n "$B1/orca.log" 'terminal close --terminal b-oc'):$(b1_n "$B1/orca.log" 'terminal create .*--title Dev')"
+N1="$(b1_outc 'is open and its agent is running; keeping it.')"
+: > "$B1/pid.log"
+ST1="$(b1_run --status | awk -F'\t' '$2 == "b-oc" {print $3}')"
+check "keep-live-roles a1: an orphaned OpenCode tab that is not the kit's own, with a live TUI: no close and no create, today's detached line once, one detached-kept event, its saved handle kept, its --status row alive, and no keeping line without --reopen" "$K1:$A1:$P1:$(b1_ev detached-kept):$ST1:$N1" "1:0:0:1:1:alive:0"
+rm -f "$BG/orca-roles-opencode-dev.session"
+
+# a1, family agent=opencode x orphaned x no TUI on any try x the kit's own tab: reopened with its conversation after ORCA_ROLES_AGENT_CHECKS lookups
+b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+b1_tab DEV 'tk-dev lf-dev'
+b1_show b-oc "$P_JUST"; b1_pids b-oc '\n\n'
+printf 'ses_contract_1\n' > "$BG/orca-roles-opencode-dev.session"
+OUT="$(B1_CHECKS=2 b1_run)"
+check "keep-live-roles a1: an orphaned OpenCode tab that is the kit's own with no TUI on any try: the lookups are tried ORCA_ROLES_AGENT_CHECKS times (2), the saved session continues it (one close, one new tab with --resume), its handle is replaced and no keeping line is printed" "$(b1_out 'The tab of Dev (b-oc) was closed but Orca kept its session running; ending it and opening a new one with its conversation (ses_contract_1).'):$(grep -cx b-oc "$B1/pid.log" || true):$(b1_n "$B1/orca.log" 'terminal close --terminal b-oc'):$(b1_n "$B1/orca.log" 'terminal create .*--title Dev'):$(b1_n "$B1/orca.log" "agent.sh' dev --resume ses_contract_1"):$(b1_n "$BG/orca-roles.env" '^DEV=b1-Dev$'):$(b1_outc 'still the tab the kit opened')" "1:2:1:1:1:1:0"
+rm -f "$BG/orca-roles-opencode-dev.session"
+
+# a1, family agent=opencode x orphaned x TUI only on the second lookup x the kit's own tab: a tab whose agent is still starting is kept
+b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+b1_tab DEV 'tk-dev lf-dev'
+b1_show b-oc "$P_JUST"; b1_pids b-oc '\n4733\n'
+OUT="$(B1_CHECKS=2 b1_run)"
+check "keep-live-roles a1: an orphaned OpenCode tab that is the kit's own whose TUI answers only on the second lookup is kept (the detached line once, two lookups, no close, no create, its saved handle kept)" "$(b1_out 'Orca reports the tab of Dev (b-oc) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.'):$(grep -cx b-oc "$B1/pid.log" || true):$(b1_n "$B1/orca.log" 'terminal close --terminal b-oc'):$(b1_n "$B1/orca.log" 'terminal create .*--title Dev'):$(b1_n "$BG/orca-roles.env" '^DEV=b-oc$')" "1:2:0:0:1"
+
+# a1, family agent=codex x orphaned x the kit's own tab x the agent answers only on the second lookup: every agent the kit checks by process gets the retries
+b1_cfg cx; b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CX=b-cx'
+b1_tab CX 'tk-cx lf-cx'
+b1_show b-cx '{"result":{"terminal":{"ptyId":"pty-b-cx","tabId":"tk-cx","leafId":"lf-cx","agentIdentity":"codex","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-cx:lf-cx"}}}'
+b1_pids b-cx '\n4902\n'
+OUT="$(B1_CHECKS=2 b1_run)"
+check "keep-live-roles a1: an orphaned codex tab that is the kit's own whose agent answers only on the second lookup is kept (the detached line once, two lookups, no close, no create, its saved handle kept)" "$(b1_out 'Orca reports the tab of Cx (b-cx) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh cx and then roles --open cx.'):$(grep -cx b-cx "$B1/pid.log" || true):$(b1_n "$B1/orca.log" 'terminal close'):$(b1_n "$B1/orca.log" 'terminal create'):$(b1_n "$BG/orca-roles.env" '^CX=b-cx$')" "1:2:0:0:1"
+b1_cfg cu
+
+# a1, family agent=custom x orphaned x the kit's own tab: kept with the new line, no close, no create, no process lookup
+b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+b1_tab CU 'tk-cu lf-cu'
+b1_show b-cu '{"result":{"terminal":{"ptyId":"pty-b-cu","tabId":"tk-cu","leafId":"lf-cu","agentIdentity":"x","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-cu:lf-cu"}}}'
+OUT="$(b1_run)"
+K4="$(b1_out 'Orca reports the tab of Cu (b-cu) as detached, but it is still the tab the kit opened and it is connected; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh cu and then roles --open cu.')"
+: > "$B1/pid.log"
+ST4="$(b1_run --status | awk -F'\t' '$2 == "b-cu" {print $3}')"
+check "keep-live-roles a1: an orphaned custom tab that is the kit's own: the ROLE_DETACHED=2 line once, no close, no create, no process lookup, its saved handle kept, --status alive, one detached-kept event" "$K4:$(b1_n "$B1/orca.log" 'terminal close --terminal b-cu'):$(b1_n "$B1/orca.log" 'terminal create .*--title Cu'):$(grep -cx b-cu "$B1/pid.log" || true):$(b1_n "$BG/orca-roles.env" '^CU=b-cu$'):$ST4:$(b1_ev detached-kept):$(b1_outc 'as detached but its agent is running')" "1:0:0:0:1:alive:1:0"
+
+# a1, family agent=custom x orphaned x not the kit's own (a different recordedPaneKey, connected false, writable false, no saved line): state 3 as today
+b1_notown() {  # <connected> <writable> <recordedPaneKey> <tab line or ->
+  b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+  [ "$4" = - ] || b1_tab CU "$4"
+  b1_own "$1" "$2" "$3"
+  OUT="$(b1_run)"
+  printf '%s' "$(b1_n "$B1/orca.log" 'terminal close --terminal b-cu'):$(b1_n "$B1/orca.log" 'terminal create .*--title Cu'):$(b1_outc 'still the tab the kit opened'):$(grep -cx b-cu "$B1/pid.log" || true)"
+}
+C5="$(b1_notown true true 'tk-own:lf-own' 'tk-cu lf-cu') $(b1_notown false true 'tk-cu:lf-cu' 'tk-cu lf-cu') $(b1_notown true false 'tk-cu:lf-cu' 'tk-cu lf-cu') $(b1_notown true true 'tk-cu:lf-cu' -) $(b1_notown true true 'pty:abc:pty:def' 'pty:abc pty:def') $(b1_notown true true 'pty:abc:lf-cu' 'pty:abc lf-cu') $(b1_notown true true 'tk-cu:pty:def' 'tk-cu pty:def') $(b1_notown true true 'tk-cu:tk-cu' 'tk-cu')"
+check "keep-live-roles a1: an orphaned custom tab that is not the kit's own (recordedPaneKey different from the saved line, connected false, writable false, no saved line, a saved id Orca had not bound ('pty:') in either of its two ids even when the pane key matches it, or a saved line with one id only) is state 3 as today: closed once, reopened once, no keeping line, no process lookup" "$C5" "1:1:0:0 1:1:0:0 1:1:0:0 1:1:0:0 1:1:0:0 1:1:0:0 1:1:0:0 1:1:0:0"
+
+# a1: every reader of ROLE_DETACHED treats 2 like 1: tab_exists counts the kit's own orphaned custom tab as a session kept without a tab,
+# so --new-team warns about a session instead of refusing for an open tab
+b1_cfg cu; b1_reset; b1_state 'CU=b-cu'
+b1_tab CU 'tk-cu lf-cu'
+b1_show b-cu '{"result":{"terminal":{"ptyId":"pty-b-cu","tabId":"tk-cu","leafId":"lf-cu","agentIdentity":"x","orphaned":true,"connected":true,"writable":true,"recordedPaneKey":"tk-cu:lf-cu"}}}'
+OUT="$(b1_run --new-team)"
+check "keep-live-roles a1: tab_exists treats ROLE_DETACHED=2 like 1: a --new-team run reports the kit's own orphaned custom tab as a session kept without a tab (cu (b-cu)) and does not refuse for an open tab" "$(b1_outc 'Orca keeps these sessions of the saved team running without a tab: cu (b-cu);'):$(b1_outc 'these tabs of this worktree' || true)" "1:0"
+
+# a1 criterion 2 and a2: a --reopen of a healthy team (alive, orphaned live Claude, orphaned live OpenCode) closes and creates nothing,
+# prints the summary and one keeping line per alive role, and its kept-detached roles only get today's line
+b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+b1_show b-oc "$P_OC"; b1_pids b-oc '4801\n'
+b1_show b-cl "$P_CL"; b1_pids b-cl '4802\n'
+OUT="$(b1_run --reopen)"
+check "keep-live-roles a1/a2: a --reopen of a team whose roles are alive or orphaned with a live agent (one OpenCode, one Claude) issues no terminal close and no terminal create and keeps 'All roles are already open.', printing the keeping line once for each of the three alive roles only and today's detached line for the two kept ones" "$(b1_n "$B1/orca.log" 'terminal close'):$(b1_n "$B1/orca.log" 'terminal create'):$(b1_out 'All roles are already open.'):$(b1_outc 'is open and its agent is running; keeping it.'):$(b1_outc 'as detached but its agent is running')" "0:0:1:3:2"
+
+# a2: a --reopen of five roles (alive, orphaned live Claude, orphaned live OpenCode, no saved handle, gone agent) prints exactly one line naming each
+b1_cfg cx; b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+DEV=b-oc
+CL=b-cl
+CX=b-cx'
+b1_show b-oc "$P_OC"; b1_pids b-oc '4811\n'
+b1_show b-cl "$P_CL"; b1_pids b-cl '4812\n'
+b1_show b-cx "$P_GONE"; b1_pids b-cx '\n'
+OUT="$(b1_run --reopen)"
+K7="$(b1_out 'The tab of Local coordinator (b-lc) is open and its agent is running; keeping it.')$(b1_out 'Orca reports the tab of Cl (b-cl) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh cl and then roles --open cl.')$(b1_out 'Orca reports the tab of Dev (b-oc) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh dev and then roles --open dev.')$(b1_out 'Planner has no saved tab (closed on purpose or never opened); leaving it closed.')$(b1_out 'The agent in the tab of Cx (b-cx) is gone; closing that tab and opening a new one.')"
+K7K="$(b1_outc 'is open and its agent is running; keeping it.')"
+K7C="$(b1_n "$B1/orca.log" 'terminal close --terminal b-lc'):$(b1_n "$B1/orca.log" 'terminal close --terminal b-cl'):$(b1_n "$B1/orca.log" 'terminal close --terminal b-oc'):$(b1_n "$B1/orca.log" 'terminal close --terminal b-cx')"
+SOLO="$OUT"
+OUT="$(b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+DEV=b-oc
+CL=b-cl
+CX=b-cx'; b1_show b-oc "$P_OC"; b1_pids b-oc '4813\n'; b1_show b-cl "$P_CL"; b1_pids b-cl '4814\n'; b1_show b-cx "$P_GONE"; b1_pids b-cx '\n' ; b1_run)"
+K7B="$(b1_outc 'is open and its agent is running; keeping it.')"
+check "keep-live-roles a2: a --reopen of a five-role team (alive, orphaned live Claude, orphaned live OpenCode, no saved handle, gone agent) prints exactly one line naming each of the five, the keeping line only for the alive one, and the kept ones are neither closed nor opened; the same team without --reopen prints no keeping line at all" "$K7:$K7K:$K7C:$K7B" "11111:1:0:0:0:1:0"
+
+# a2: the two restored-tab lines are reworded; no output line of launch.sh claims an 'after a restart ('
+b1_cfg cu; b1_reset; b1_state 'LOCAL_COORDINATOR=b-lc
+PLANNER=b-pl
+DEV=b-oc
+CL=b-cl
+CU=b-cu'
+b1_rc b-cl 1; b1_show b-cl "$P_STALE"
+b1_rc b-cu 1; b1_show b-cu "$P_STALE"
+printf '{"result":{"terminals":[{"handle":"rs-cl","ptyId":"pty-b-cl","title":"Cl"},{"handle":"rs-cu","ptyId":"pty-b-cu","title":"Cu"}]}}\n' > "$B1/list.json"
+OUT="$(b1_run)"
+check "keep-live-roles a2: a restored Claude tab with its conversation and a restored custom tab without one print the reworded 'after Orca slept or restarted' lines, and no line of the run contains 'after a restart ('" "$(b1_out 'Orca restored the tab of Cl (rs-cl) after Orca slept or restarted, without the kit'"'"'s settings; reopening it with its conversation (11111111-2222-3333-4444-555555555555).'):$(b1_out 'Orca restored the tab of Cu (rs-cu) after Orca slept or restarted, but its session could not be read; closing it and opening a new one.'):$(printf '%s\n' "$OUT" | grep -c 'after a restart (' || true):$(printf '%s\n' "$SOLO" | grep -c 'after a restart (' || true)" "1:1:0:0"
+rm -f "$BG/orca-roles.config.json" "$KIT/prompts/programmer/cl.md" "$KIT/prompts/programmer/cu.md" "$KIT/prompts/programmer/cx.md"
+}
+
+
+sec_kit_dirs() {
+# spec-batch3 c1 (the spec's contract, written before reading the change): a Claude role receives the kit's own folders through the kit's
+# --settings object (permissions.additionalDirectories) instead of --add-dir; every other folder keeps today's --add-dir.
+KD="$TMP/kd"; KDH="$KD/home"; KDO1="$KD/out1"; KDO2="$KD/out2"; KDPO="$KD/prompts-out"; KDB="$KD/bin"; KDCONF_SAVED=""
+rm -rf "$KD"; mkdir -p "$KDH/.claude/projects" "$KDO1" "$KDO2" "$KDPO" "$KDB" "$KDH/.orca-roles2" "$TMP/kit-sibling"
+ln -sfn "$KIT" "$KDH/.orca-roles"; ln -s "$KDO2" "$KIT/kd-link-out"   # the kit spelled through HOME (a link to $KIT), and a link inside it that points out
+printf '# outside prompt\n' > "$KDPO/p.md"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$KDB/claude"; cp "$KDB/claude" "$KDB/codex"; chmod +x "$KDB/claude" "$KDB/codex"
+KDS="$KDH/.orca-roles"; KDP="$(cd "$KIT" && pwd -P)"; KDS2="$KDH/.orca-roles2"
+[ -f "$KIT/config.json" ] && { KDCONF_SAVED="$KD/kit-config.json"; mv "$KIT/config.json" "$KDCONF_SAVED"; }
+cat > "$KD/config.json" <<J
+{ "defaults": { "agent": "claude", "mcp": "all" }, "mcpServers": {},
+  "roles": {
+    "dev": { "extraDirs": ["{kit}"] },
+    "out": { "prompt": "$KDPO/p.md", "extraDirs": ["$KDO1", "{kit}"] },
+    "lnk": { "extraDirs": ["$KDS/kd-link-out"] },
+    "sib": { "extraDirs": ["$KDS2"] },
+    "spx": { "extraDirs": ["$TMP/kit-sibling"] },
+    "tx": { "extraDirs": ["{kit}"], "extraArgs": ["--settings", "{}"] },
+    "ty": { "extraDirs": ["{kit}"], "extraArgs": ["--settings={\"language\":\"x\"}"] },
+    "local-coordinator": {},
+    "cx": { "agent": "codex", "extraDirs": ["{kit}"] }
+  } }
+J
+kd_run() { ( cd "$TMP" && HOME="$KDH" PATH="$KDB:$PATH" ORCA_ROLES_CONFIG="$KD/config.json" "$KDS/bin/agent.sh" "$@" 2>"$KD/err" ); }
+kd_settings() { printf '%s\n' "$1" | awk '/^--settings$/{getline; print}'; }
+kd_last() { printf '%s\n' "$1" | awk '/^--settings$/{getline v} END{print v}'; }
+kd_add() { printf '%s\n' "$1" | awk '/^--add-dir$/{getline; print}' | paste -sd'|' -; }
+kd_dirs() { kd_last "$1" | jq -r '(.permissions.additionalDirectories // []) | sort | join("|")' 2>/dev/null || printf BADJSON; }
+kd_n() { printf '%s\n' "$1" | grep -cxF -- "$2" || true; }
+kds() { LC_ALL=C sort | paste -sd'|' -; }
+kd_sd() { ( cd "$TMP" && HOME="$KDH"; KIT="$KDS"; export HOME KIT; . "$KIT/bin/lib.sh" >/dev/null 2>&1; scratch_dir "$1" ); }
+kd_kit6() { local sd; sd="$(kd_sd "$1")"; { [ "${2:-}" = kit ] && printf '%s\n' "$KDS" "$KDP"; printf '%s\n' "$KDS/prompts" "$KDP/prompts" "$sd" "$(cd -P "$sd" && pwd -P)"; } | kds; }   # the kit folders a role is given: $KIT/prompts and its scratch folder, both spellings, and $KIT with "kit"
+kd_line() { printf "agent.sh: role %s has its own --settings in extraArgs; the kit's folders are passed with --add-dir, and Claude Code may ask to trust them and lose the role message typed while it asks." "$1"; }
+KD_MEM="$( ( cd "$TMP" && HOME="$KDH"; KIT="$KDS"; export HOME KIT; . "$KIT/bin/lib.sh" >/dev/null 2>&1; claude_memory_settings '{}' ) | jq -r '.autoMemoryDirectory // "-"' 2>/dev/null || true )"
+DEV="$(kd_run dev || true)"; DEV_ERR="$(cat "$KD/err")"; SDD="$(kd_sd dev)"; SDP="$(cd -P "$SDD" && pwd -P)"
+check "kit-dirs: a claude worker whose scratch folder and extraDirs are the kit's gets no --add-dir and one --settings holding \$KIT/prompts, its scratch folder and \$KIT, each as spelled and as its physical path, keeping language, the two superpowers ids and autoMemoryDirectory" \
+  "$(kd_n "$DEV" --add-dir)|$(kd_settings "$DEV" | wc -l | tr -d ' ')|$(kd_dirs "$DEV")|$(kd_last "$DEV" | jq -rc '[.language, (.enabledPlugins["superpowers@superpowers-marketplace"]|tostring), (.enabledPlugins["superpowers@claude-plugins-official"]|tostring), (.autoMemoryDirectory // "-")] | join(",")' 2>/dev/null)|$DEV_ERR" \
+  "0|1|$(kd_kit6 dev kit)|english,false,false,$KD_MEM|"
+OUT="$(kd_run out || true)"
+check "kit-dirs: an extraDirs entry outside the kit and a prompt folder outside it keep their --add-dir, in today's order (the prompt folder, then extraDirs), and stay out of additionalDirectories" \
+  "$(kd_add "$OUT")|$(kd_dirs "$OUT")" "$KDPO|$KDO1|$(kd_kit6 out kit)"
+LNK="$(kd_run lnk || true)"
+check "kit-dirs: a symlink inside the kit that points outside it keeps its --add-dir and is not in additionalDirectories" \
+  "$(kd_add "$LNK")|$(kd_dirs "$LNK")" "$KDS/kd-link-out|$(kd_kit6 lnk)"
+SIB="$(kd_run sib || true)"; SPX="$(kd_run spx || true)"
+check "kit-dirs: a folder that only starts with the kit's spelling, and one whose physical path only starts with the kit's physical path (a sibling named <kit>-…), are not kit folders: each keeps its --add-dir and stays out of additionalDirectories" \
+  "$(kd_add "$SIB")|$(kd_dirs "$SIB")|$(kd_add "$SPX")|$(kd_dirs "$SPX")" "$KDS2|$(kd_kit6 sib)|$TMP/kit-sibling|$(kd_kit6 spx)"
+FR="$(kd_run local-coordinator || true)"
+check "kit-dirs: the front role gets the kit's folders in its own single --settings (no --add-dir, no language key)" \
+  "$(kd_n "$FR" --add-dir)|$(kd_settings "$FR" | wc -l | tr -d ' ')|$(kd_dirs "$FR")|$(kd_last "$FR" | jq -rc 'has("language")' 2>/dev/null)" "0|1|$(kd_kit6 local-coordinator)|false"
+TX="$(kd_run tx || true)"; TX_ERR="$(cat "$KD/err")"
+TY="$(kd_run ty || true)"; TY_ERR="$(cat "$KD/err")"
+check "kit-dirs: a role with --settings (and with --settings=… ) in its extraArgs keeps today's --add-dir for every folder (\$KIT/prompts, its scratch folder, \$KIT), its kit settings object holds no additionalDirectories, and the spec's stderr line is printed once for it" \
+  "$(kd_add "$TX")|$TX_ERR|$(kd_add "$TY")|$TY_ERR|$(kd_settings "$TX" | head -1 | jq -c 'has("permissions")' 2>/dev/null)|$(kd_settings "$TY" | head -1 | jq -c 'has("permissions")' 2>/dev/null)" \
+  "$KDS/prompts|$(kd_sd tx)|$KDS|$(kd_line tx)|$KDS/prompts|$(kd_sd ty)|$KDS|$(kd_line ty)|false|false"
+kd_co() { ( cd "$TMP" && HOME="$KDH" PATH="$KDB:$PATH" KIT="$KDS" bash "$KDS/bin/$1" 2>"$KD/co-err" ); }
+COA="$(kd_co coordinator.sh || true)"; AUA="$(kd_co auditor.sh || true)"
+check "kit-dirs: coordinator.sh passes exactly one --settings holding \$KIT/prompts in both spellings and no --add-dir, role message first; auditor.sh the same for \$KIT" \
+  "$(printf '%s\n' "$COA" | sed -n 1p | grep -c '^Read [^ ]*/prompts/coordinator\.md and adopt that role')|$(kd_n "$COA" --add-dir)|$(kd_settings "$COA" | wc -l | tr -d ' ')|$(kd_dirs "$COA")|$(printf '%s\n' "$AUA" | sed -n 1p | grep -c '^Read [^ ]*/prompts/auditor\.md and adopt that role')|$(kd_n "$AUA" --add-dir)|$(kd_settings "$AUA" | wc -l | tr -d ' ')|$(kd_dirs "$AUA")" \
+  "1|0|1|$(printf '%s\n' "$KDS/prompts" "$KDP/prompts" | kds)|1|0|1|$(printf '%s\n' "$KDS" "$KDP" | kds)"
+CX="$(kd_run cx || true)"
+check "kit-dirs: a codex role keeps today's arguments: --add-dir for its scratch folder and for each extraDirs entry (the kit too), and no --settings" \
+  "$(kd_add "$CX")|$(printf '%s\n' "$CX" | grep -cx -- '--settings' || true)" "$(kd_sd cx)|$KDS|0"
+KD_BAD=0
+if [ -f "$KDH/.claude.json" ]; then
+  while IFS= read -r k; do
+    for p in "$KDS" "$KDP" "$KDS/prompts" "$KDP/prompts" "$SDD" "$SDP"; do case "$k" in "$p"|"$p"/*) KD_BAD=$((KD_BAD+1));; esac; done
+  done < <(jq -r '(.projects // {}) | keys[]' "$KDH/.claude.json" 2>/dev/null || true)
+fi
+check "kit-dirs: no launch writes a projects record for a kit folder (\$KIT, \$KIT/prompts or a scratch folder, either spelling) into the fixture's HOME/.claude.json" "$KD_BAD" "0"
+rm -f "$KIT/kd-link-out"; [ -z "$KDCONF_SAVED" ] || mv "$KDCONF_SAVED" "$KIT/config.json"
 }
 
 

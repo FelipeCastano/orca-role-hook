@@ -125,10 +125,29 @@ SWITCH_FILE="$GITDIR/orca-roles.switch-from"  # exists while a mode switch has c
 # 4 unknown: 'orca terminal show' failed for another reason (ROLE_ALIVE_CODE holds Orca's error code, or no-response).
 # Orca reports the agent of a tab in agentIdentity for the agents it knows (claude, codex). An OpenCode role is checked by its OpenCode TUI process instead (oc_tui_args: the full TUI, or 'opencode mini' of a tab an older kit opened); for custom agents only the tab counts.
 # An agent that is still starting has no identity for a moment, so it is checked a few times before giving up.
-# A live claude or codex process for the handle counts as alive even when Orca flags the tab orphaned (it also does for tabs it has not
-# bound yet) or shows no agent identity (idle Claude often does); an orphaned one sets ROLE_DETACHED=1 so the caller can say it kept it.
-# An orphaned OpenCode tab is state 3 even with a live OpenCode TUI: roles replaces it with its conversation.
+# A live claude, codex or OpenCode process for the handle counts as alive even when Orca flags the tab orphaned (it also does for tabs it
+# has not bound yet) or shows no agent identity (idle Claude often does); an orphaned one sets ROLE_DETACHED=1 so the caller can say it kept it.
+# Orca also flags tabs it has not bound yet (live ones of a worktree it is not showing, ones it opened seconds ago): an orphaned tab that is
+# still the kit's own tab (connected and writable, its recordedPaneKey the saved tabId:leafId of orca-roles.tabs) is kept for a custom agent
+# (ROLE_DETACHED=2), and gives an agent that can be checked by process the same retries the non-orphaned branch has while it starts; a tab
+# really closed with the X matches neither test, and stays state 3.
 agent_in()   { local js rc; js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"; rc=$?; printf '%s' "$js" | jq -r '[.. | objects | select(has("agentIdentity")) | .agentIdentity // empty] | first // empty' 2>/dev/null; return "$rc"; }
+# Whether the tab Orca flags orphaned is still the tab the kit opened for that role: its line in orca-roles.tabs holds that tab's tabId and
+# leafId, Orca reports the tab connected and writable, and its recordedPaneKey is "<tabId>:<leafId>". A field missing or of another type, or
+# a saved id starting with "pty:" (a tab Orca had not bound when the kit saved it), never matches.  kit_tab <show json> <role>
+kit_tab() {
+  local v tl tab leaf pk
+  v="$(var_of "$2")"; [ -n "$v" ] || return 1
+  tl="$(grep "^$v=" "$TABS" 2>/dev/null | head -1 | cut -d= -f2-)"
+  tab="${tl%% *}"; leaf="${tl#* }"
+  if [ -z "$tab" ] || [ -z "$leaf" ] || [ "$tab" = "$tl" ]; then return 1; fi
+  case "$tab" in pty:*) return 1;; esac
+  case "$leaf" in pty:*) return 1;; esac
+  pk="$(printf '%s' "$1" | jq -r '[.. | objects | select(has("orphaned"))] | first
+    | if . == null then "" elif (.recordedPaneKey | type) == "string" and (.connected | type) == "boolean" and (.writable | type) == "boolean"
+      then (if .connected and .writable then .recordedPaneKey else "" end) else "" end' 2>/dev/null)"
+  [ "$pk" = "$tab:$leaf" ]
+}
 role_alive() {  # role_alive <role> <handle>
   ROLE_DETACHED=0
   [ -n "${2:-}" ] || return 1
@@ -140,7 +159,19 @@ role_alive() {  # role_alive <role> <handle>
   fi
   local ag; ag="$(rstr "$CFG" "$1" agent)"
   if printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned")) | .orphaned] | first == true' >/dev/null 2>&1; then
-    case "$ag" in claude|codex|"") [ -z "$(agent_pid_of_handle "$2")" ] || { ROLE_DETACHED=1; return 0; };; esac
+    local own=0; kit_tab "$js" "$1" && own=1
+    case "$ag" in
+      claude|codex|""|opencode)
+        if [ "$own" = 1 ]; then   # the kit's own tab: the agent may still be starting, so look it up a few times as the non-orphaned branch does
+          local j; for j in $(seq 1 "${ORCA_ROLES_AGENT_CHECKS:-5}"); do
+            [ -z "$(agent_pid_of_handle "$2")" ] || { ROLE_DETACHED=1; return 0; }
+            [ "$j" -lt "${ORCA_ROLES_AGENT_CHECKS:-5}" ] && sleep 2
+          done
+        else
+          [ -z "$(agent_pid_of_handle "$2")" ] || { ROLE_DETACHED=1; return 0; }
+        fi;;
+      *) [ "$own" = 0 ] || { ROLE_DETACHED=2; return 0; };;   # custom agents: the kit's own tab counts, with no process lookup
+    esac
     return 3
   fi
   case "$ag" in
@@ -601,7 +632,7 @@ if [ "$LISTOK" = 1 ] && [ -s "$STATE" ]; then
           fi
         fi
         if [ "$wok" = 1 ]; then
-          W_READY[$wi]=1; echo "Orca kept the tab of ${W_TITLE[$wi]} asleep after a restart; woke it."
+          W_READY[$wi]=1; echo "Orca kept the tab of ${W_TITLE[$wi]} asleep (after Orca slept or restarted); woke it."
           [ -z "${W_OLD[$wi]}" ] || printf -v "WOKE_OLD_${W_VAR[$wi]}" '%s' "${W_OLD[$wi]}"
         elif [ "$SECONDS" -ge "${W_END[$wi]}" ]; then
           W_DONE[$wi]=1
@@ -629,7 +660,7 @@ fi
 # - its saved handle when that tab is alive (state 0, not detached) or has no agent behind it (2);
 # - only when the saved handle gave no such candidate, after a restart of Orca or the computer (new handles), the tab that has the
 #   role's saved ptyId when that terminal is a real tab (states 0, 2 and 3: Orca flags a restored tab it has not bound yet as orphaned);
-# - never a session Orca kept without its tab (state 3, or 0 with ROLE_DETACHED=1): it is recorded for the caller to name it;
+# - never a session Orca kept without its tab (state 3, or 0 with ROLE_DETACHED not 0): it is recorded for the caller to name it;
 # - never the plain terminal this launch runs in (ORCA_TERMINAL_HANDLE, by handle or by its ptyId) while no agent runs in it: an agent under
 #   the found handle or under the calling terminal's own handle makes the role count (the two are one tab);
 # - a state 4 stops the launch, unless the caller asked to only report it (TAB_NOFAIL).
@@ -643,7 +674,7 @@ tab_exists() {
   role_state "$var" "$role" "$h"; rc=$?
   case "$rc" in
     4) tab_unknown; return 1;;
-    0) if [ "$ROLE_DETACHED" = 1 ]; then sess="$h"; else cand="$h"; fi;;
+    0) if [ "$ROLE_DETACHED" != 0 ]; then sess="$h"; else cand="$h"; fi;;
     2) cand="$h";;
     3) sess="$h";;
   esac
@@ -1004,11 +1035,14 @@ state_set() {  # state_set <file> <VAR> <value>: replaces that line (or adds it)
 if [ ! -f "$KICKED" ]; then if [ -s "$STATE" ]; then cp "$STATE" "$KICKED"; else : > "$KICKED"; fi; fi
 kicked_of() { grep "^$1=" "$KICKED" 2>/dev/null | head -1 | cut -d= -f2-; }
 # Classify every role before closing or opening anything: if Orca cannot tell, the team is left exactly as it is
-KEPT_DETACHED=""   # roles kept by the orphaned-with-live-agent rule (recorded as metrics events once the team's state is written)
+KEPT_DETACHED=""   # roles kept by the orphaned-tab rules (recorded as metrics events once the team's state is written)
 for id in $ROLES; do
   v="$(var_of "$id")"; t="$(title_of "$CFG" "$id")"
   role_state "$v" "$id" "${!v:-}"; st=$?; printf -v "ST_$v" '%s' "$st"
-  [ "$st" != 0 ] || [ "$ROLE_DETACHED" != 1 ] || { KEPT_DETACHED="$KEPT_DETACHED $id"; echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles --open $id."; }
+  case "$st:$ROLE_DETACHED" in
+    0:1) KEPT_DETACHED="$KEPT_DETACHED $id"; echo "Orca reports the tab of $t (${!v}) as detached but its agent is running; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles --open $id.";;
+    0:2) KEPT_DETACHED="$KEPT_DETACHED $id"; echo "Orca reports the tab of $t (${!v}) as detached, but it is still the tab the kit opened and it is connected; keeping it. If you closed that tab, run ~/.orca-roles/bin/close-role.sh $id and then roles --open $id.";;
+  esac
   [ "$st" -ne 4 ] || fail "ERROR: Orca is not ready ($ROLE_ALIVE_CODE) for $t: no tab was closed or opened. Run roles again once Orca is ready."
   if [ "$LISTOK" != 1 ] && [ "$st" = 1 ] && [ -n "${!v:-}" ]; then
     fail "ERROR: 'orca terminal list' failed: cannot tell whether $t's tab was restored after a restart; no tab was closed or opened. Run roles again once Orca is ready."
@@ -1071,6 +1105,8 @@ for id in $ROLES; do
     if [ "$(kicked_of "$v")" != "${!v}" ]; then
       if kp="$(kickoff_of "$id")"; then echo "The kickoff of the previous launch is still running (pid $kp): $t gets its role from it."; continue; fi
       NEW="$NEW $id"; REUSED="$REUSED $id"; echo "The tab of $t (${!v}) never got its role message; sending it now."
+    elif [ "$REOPEN" = 1 ]; then
+      case " $KEPT_DETACHED " in *" $id "*) ;; *) echo "The tab of $t (${!v}) is open and its agent is running; keeping it.";; esac
     fi
     continue
   fi
@@ -1140,9 +1176,9 @@ for id in $ROLES; do
       orca terminal close --terminal "$rh" --tab --json >/dev/null 2>&1 || { [ $? != 124 ] || close_unconfirmed "$rh" "$t" || true; }
       oc_reap_role "$CFG" "$id" "$t" "${!v}" "$rh"
       if [ -n "$sid" ]; then
-        REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t after a restart ($rh) without the kit's settings; reopening it with its conversation ($sid)."
+        REMEMBERED="$REMEMBERED $id"; echo "Orca restored the tab of $t ($rh) after Orca slept or restarted, without the kit's settings; reopening it with its conversation ($sid)."
       else
-        RESUMED="$RESUMED $id"; echo "Orca restored the tab of $t after a restart ($rh), but its session could not be read; closing it and opening a new one."
+        RESUMED="$RESUMED $id"; echo "Orca restored the tab of $t ($rh) after Orca slept or restarted, but its session could not be read; closing it and opening a new one."
       fi
     else
       sid="$(oc_saved_id "$id")"

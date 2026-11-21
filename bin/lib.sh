@@ -1705,6 +1705,41 @@ claude_memory_settings() {
   out="$(jq -c --arg d "$d" '. + {autoMemoryDirectory: $d}' <<<"${1:-}" 2>/dev/null)" || out=""
   printf '%s\n' "${out:-${1:-}}"
 }
+# A folder whose physical path is the kit's or lies under it: the kit's own folders, which claude gets through the kit's --settings
+# (permissions.additionalDirectories) instead of --add-dir, because only --add-dir builds Claude Code's startup trust dialog. Both
+# sides are resolved (cd -P), so a symlink pointing out of the kit is not a kit folder; a folder that does not exist, or cannot be
+# resolved, is not one either.  is_kit_folder <folder>
+is_kit_folder() {
+  local kit real
+  [ -n "${1:-}" ] || return 1
+  kit="$(cd -P "$KIT" 2>/dev/null && pwd -P)" || return 1
+  real="$(cd -P "$1" 2>/dev/null && pwd -P)" || return 1
+  [ "$real" = "$kit" ] || [ "${real#"$kit"/}" != "$real" ]
+}
+# The kit's --settings object with the kit folders added to permissions.additionalDirectories: Claude Code builds its startup trust
+# dialog only from --add-dir, so a folder listed there opens with no dialog. A kit folder goes in as given and as its physical path
+# when the two differ; what is already in the object is kept, nothing is added twice, and every other key stays as it is. A folder
+# outside the kit is left out (it keeps its --add-dir).  claude_kit_dirs_settings <json object> <folder>...
+claude_kit_dirs_settings() {
+  local obj="${1:-}" f phys out
+  shift
+  [ -n "$obj" ] || obj='{}'
+  out="$obj"
+  for f in "$@"; do
+    [ -n "$f" ] || continue
+    is_kit_folder "$f" || continue
+    phys="$(cd -P "$f" 2>/dev/null && pwd -P)" || continue
+    if ! out="$(jq -c --arg a "$f" --arg b "$phys" '
+        . as $o | ($o.permissions // {} | if type == "object" then . else {} end) as $p
+        | ([$a, $b] | if .[0] == .[1] then [.[0]] else . end) as $new
+        | ($p.additionalDirectories // [] | if type == "array" then . else [] end) as $old
+        | (reduce $new[] as $x ($old; if index($x) then . else . + [$x] end)) as $dirs
+        | $o | .permissions = ($p + {additionalDirectories: $dirs})' <<<"$out" 2>/dev/null)"; then
+      printf '%s\n' "$obj"; return 0
+    fi
+  done
+  printf '%s\n' "$out"
+}
 # A worker's message when its tab was reopened with its previous conversation (after a restart, or after its tab or its agent was lost).  worker_back_msg <config> <role> <handle>
 worker_back_msg() {
   printf '%s' "You are back in a new tab with your previous conversation (your previous tab or its agent was lost, for example in a restart of the computer or of Orca); your role and its instructions still apply. Your terminal handle is now $3. Whatever task you were doing was interrupted and its dispatch is gone: do not continue it on your own. Look at your worktree (git status, git diff --stat) to remember what you had already changed, and wait for $(front_label "$(front_of "$1")") to send it again. If you had no task, stay idle. Reply only with one line saying whether you had a task in progress and what it was."
