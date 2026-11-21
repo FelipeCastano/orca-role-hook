@@ -335,11 +335,13 @@ orca() {
   bounded_run "$lim" "orca ${1:-} ${2:-} (no answer from Orca)" command orca ${ORCA_COMPAT_ARGS[@]+"${ORCA_COMPAT_ARGS[@]}"} < /dev/null
 }
 
-# After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale), else tells it was not confirmed and returns 1.
+# After a close that got no answer (124): returns 0 if the tab is gone (Orca says its handle is stale, or reports it orphaned and disconnected with no agent process on its handle), else tells it was not confirmed and returns 1.
 close_unconfirmed() {  # close_unconfirmed <handle> <title>
   local js
   js="$(orca terminal show --terminal "$1" --json 2>/dev/null)"
   [ "$(printf '%s' "$js" | jq -r '.error.code // empty' 2>/dev/null)" = terminal_handle_stale ] && return 0
+  if printf '%s' "$js" | jq -e '[.. | objects | select(has("orphaned") and has("connected"))] | first | .orphaned == true and .connected == false' >/dev/null 2>&1 \
+     && [ -z "$(agent_pid_of_handle "$1")" ]; then return 0; fi
   echo "Orca did not confirm closing the tab of $2 ($1)."; return 1
 }
 

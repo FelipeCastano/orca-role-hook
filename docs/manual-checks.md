@@ -64,7 +64,7 @@ On WSL also:
 | Id | Do | Look at | Expected |
 |---|---|---|---|
 | W0 | `command -v orca; type orca; echo $ORCA_CLI_COMMAND; orca --version` | the chain | Note it: kit shim, orca-ide, bridge, orca.exe |
-| W1 | Open a plain shell tab A in the throwaway worktree and type in it: `setsid sh -c 'sleep 5; orca terminal close --terminal <A> --tab --json; echo rc=$? > /tmp/close-a' >/dev/null 2>&1 &` | after a minute: does `/tmp/close-a` exist, is a `powershell.exe` still running for that close | Orca's behaviour, not the kit's: the file may never appear and powershell may keep running (the kit limits closes to 15 s, `ORCA_ROLES_CLOSE_TIMEOUT`, so it does not hang on it). Then close another tab B from a different terminal: it must return |
+| W1 | Open a plain shell tab A in the throwaway worktree and type in it: `setsid sh -c 'sleep 5; orca terminal close --terminal <A> --tab --json; echo rc=$? > /tmp/close-a' >/dev/null 2>&1 &` | after a minute: does `/tmp/close-a` exist, is a `powershell.exe` still running for that close | The tab closes; the file may never appear and powershell may keep running (Orca does not answer the close: its behaviour, not the kit's); the kit's own close returns within its 15 s limit (`ORCA_ROLES_CLOSE_TIMEOUT`). Then close another tab B from a different terminal: it must return |
 
 ## 4. Other agents (someone with Codex or OpenCode)
 
