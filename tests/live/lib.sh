@@ -152,10 +152,16 @@ wt_create() {  # wt_create <name> [orca worktree create options...]: a new workt
   }
   GD="$(git -C "$WT" rev-parse --absolute-git-dir)"; st_set wt "$WT"; st_set wtid "$WTID"
 }
-wt_terms() {  # one line per live terminal of the worktree: handle<TAB>ptyId<TAB>title<TAB>agent
-  orca terminal list --worktree "id:$WTID" --json 2>/dev/null | python3 -c 'import sys,json
-d=json.loads(sys.stdin.read(),strict=False)
-for t in (d.get("result") or {}).get("terminals") or []:
+wt_terms() {  # one line per live terminal of the worktree: handle<TAB>ptyId<TAB>title<TAB>agent; returns 1 (error code on stderr) when Orca gave no terminals list
+  orca terminal list --worktree "id:$WTID" --json 2>/dev/null < /dev/null | python3 -c 'import sys,json
+try: d=json.loads(sys.stdin.read(),strict=False)
+except Exception: d=None
+if not isinstance(d,dict): d={}
+r=d.get("result"); ts=r.get("terminals") if isinstance(r,dict) else None
+if d.get("ok") is False or not isinstance(ts,list):
+    e=d.get("error"); c=e.get("code") if isinstance(e,dict) else None
+    sys.stderr.write("terminal list failed: %s\n" % (c or "no answer")); sys.exit(1)
+for t in ts:
     print("\t".join([t.get("handle",""), t.get("ptyId",""), t.get("title") or "", t.get("agentIdentity") or ""]))'
 }
 roles_run() {  # roles_run [options]: the kit's launch in the throwaway worktree, as if typed in a terminal of this checkout (the kit takes the folder's worktree); output in $LIVE_DIR/last-roles.log
@@ -543,10 +549,34 @@ c_restart_after() {  # after a real restart: asleep tabs are woken and reopened 
       printf "%s%s", (n++ ? " " : ""), t }
     END { if (!n) printf "none"; print "" }' "$LIVE_DIR/last-roles.log")" none
   sleep 20
-  check "$id.duplicates" "one tab per role and no stray agent tab" "$(wt_terms | awk -F'\t' '$4 != ""' | wc -l | tr -d ' ')" "$(grep -c . "$GD/orca-roles.env")"
+  local terms terr nag=0 row th
+  if terms="$(wt_terms 2>"$LIVE_DIR/wt-terms.err")"; then
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      th="$(printf '%s' "$row" | cut -f1)"
+      if [ -n "$(printf '%s' "$row" | cut -f4)" ] || pid_of_handle "$th" >/dev/null; then nag=$((nag + 1)); fi
+    done <<< "$terms"
+    check "$id.duplicates" "one tab per role and no stray agent tab" "$nag" "$(grep -c . "$GD/orca-roles.env")"
+    [ "$nag" = "$(grep -c . "$GD/orca-roles.env")" ] || attach "$id terminals of the worktree (handle, ptyId, title, agent)" "$terms"
+  else
+    terr="$(head -n 1 "$LIVE_DIR/wt-terms.err")"
+    fail "$id.duplicates" "one tab per role and no stray agent tab: ${terr:-terminal list failed: no answer}"
+  fi
   local bad=""; while IFS='=' read -r v h; do orca terminal show --terminal "$h" --json >/dev/null 2>&1 < /dev/null || bad="$bad $v"; done < "$GD/orca-roles.env"
   check "$id.handles" "every handle in orca-roles.env is live (WSL stale handles, BACKLOG)" "${bad:-none}" none
+  c_restart_sent "$id"
   c_restart_run "$id"
+}
+c_restart_sent() {  # R1.sent: every message the kit sent the local coordinator with handles named its live handle (kickoff log only: the relaunch log is appended to, not rotated)
+  local id=$1 want lines bad kinds
+  want="$(env_of LOCAL_COORDINATOR)"
+  lines="$(grep -E '^Handles sent \(.*\): LOCAL_COORDINATOR=' "$GD/orca-roles-kickoff.log" 2>/dev/null)"
+  if [ -z "$lines" ]; then info "$id.sent" "no message carried the handles"; return 0; fi
+  bad="$(printf '%s\n' "$lines" | awk -v w="$want" '{ if (w == "" || substr($0, length($0) - length(w)) != "=" w) print }')"
+  kinds="$(printf '%s\n' "$lines" | sed -e 's/^Handles sent (//' -e 's/): LOCAL_COORDINATOR=.*$//' | sort | uniq -c | awk '{ c=$1; $1=""; sub(/^ /,""); printf "%s%s ×%s", (k++ ? ", " : ""), $0, c }')"
+  if [ -n "$bad" ]; then fail "$id.sent" "the kit's messages gave the local coordinator its live handle: expected [$want], got: $(printf '%s' "$bad" | tr '\n' ';')"
+  elif [ -z "$want" ] || ! pid_of_handle "$want" >/dev/null; then fail "$id.sent" "the kit's messages gave the local coordinator its live handle: no agent process carries the expected handle [$want]"
+  else ok "$id.sent" "the kit's messages gave the local coordinator its live handle: $kinds"; fi
 }
 c_restart_run() {  # R1.run: the Run made before the restart is bound to the local coordinator's new tab
   local id=$1 rid lc got k=0 cursor js i hs lg via since f
@@ -569,8 +599,13 @@ c_restart_run() {  # R1.run: the Run made before the restart is bound to the loc
   done
   check "$id.run" "the local coordinator's Run is bound to its new tab after the restart (by the SessionStart hook, or by the agent's run-use after the kickoff's reminder)" "${got:-not listed}" "$lc"
   lg="$GD/orca-roles-kickoff.log"; [ -e "$GD/orca-roles-relaunch.log" ] && lg="$lg $GD/orca-roles-relaunch.log"
+  local fail_line
   # shellcheck disable=SC2086
-  if cat $lg 2>/dev/null | grep -q "Run $rid is bound to an old"; then via="kickoff found the Run still bound to the old tab and told the local coordinator to run run-use (the SessionStart hook had not re-bound it before kickoff looked)"
+  fail_line="$(cat $lg 2>/dev/null | grep -F "Could not re-bind Run $rid to " | tail -n 1)"
+  # shellcheck disable=SC2086
+  if cat $lg 2>/dev/null | grep -qF "Run $rid was bound to an old "; then via="kickoff re-bound the Run to the local coordinator's new tab (run-use --from)"
+  elif [ -n "$fail_line" ]; then via="kickoff could not re-bind the Run ($(printf '%s' "$fail_line" | sed -e 's/^.* tab: //' -e 's/\.$//'))"
+  elif cat $lg 2>/dev/null | grep -q "Run $rid is bound to an old"; then via="kickoff found the Run still bound to the old tab and told the local coordinator to run run-use (the SessionStart hook had not re-bound it before kickoff looked)"
   elif cat $lg 2>/dev/null | grep -q 'Could not list the Runs to check'; then via="kickoff could not list the Runs; the binding came from the SessionStart hook or from the agent itself"
   else via="kickoff did not see the Run on an old tab (the SessionStart hook had re-bound it before kickoff looked, or kickoff had no previous handle to look for, or kickoff did not check (the local coordinator was not reopened))"; fi
   info "$id.run.via" "$via"

@@ -60,6 +60,9 @@ front_send() {
   FRONT_ERR="$(front_err_text "$out" "$code")"
   return 1
 }
+# handles_sent <what> <handle>: the kickoff log line naming the front role's handle in a message with the handles, after its send succeeded
+handles_sent() { echo "Handles sent ($1): $FRONTV=$2"; }
+state_handle() { printf '%s\n' "$1" | grep -m1 "^$FRONTV=" | cut -d= -f2-; }
 # role_status <role>: one "Roles reopened" status to the front role about that role, right after its kick, with the roles still to kick and the handles
 role_status() {
   local v t rest="" r after=0 first body
@@ -74,8 +77,61 @@ role_status() {
   body="$first
 Use these handles from now on:
 $(cat "$RESOLVED")"
-  if front_send "Roles reopened" "$body"; then echo "Told $FL the roles were reopened: $t."; front_mail
+  if front_send "Roles reopened" "$body"; then echo "Told $FL the roles were reopened: $t."; handles_sent "Roles reopened" "$(state_handle "$(cat "$RESOLVED")")"; front_mail
   else echo "Could not tell $FL the roles were reopened: $t ($FRONT_ERR)."; fi
+}
+# all_runs: every Run (every page of run-list) as one JSON array; 1 if they cannot be listed
+all_runs() {
+  local cursor="" js runs="[]" i=0
+  while [ "$i" -lt 50 ]; do
+    if [ -n "$cursor" ]; then js="$(orca orchestration run-list --json --full --cursor "$cursor" 2>/dev/null)" || return 1
+    else js="$(orca orchestration run-list --json --full 2>/dev/null)" || return 1; fi
+    runs="$(printf '%s' "$js" | jq -c --argjson acc "$runs" '$acc + [(.result.runs // [])[]]' 2>/dev/null)" || return 1
+    cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)" || return 1
+    i=$((i + 1)); [ -n "$cursor" ] || break
+  done
+  printf '%s' "$runs"
+}
+# rebind_front_run <run id> <old handle>: binds the front role's stale Run to its live tab (FRONT_TO) once its agent is up and the new tab's
+# SessionStart hook has had its 10 s (the hook's own run-use may have taken the Run already). REBIND is bound (nothing to tell the front role),
+# other (another Run is bound to the live tab: binding this one would release it) or failed (the front role is told to run-use).
+rebind_front_run() {
+  local id="$1" old="$2" live="$FRONT_TO" n=0 before after cur out code wait="${ORCA_ROLES_REBIND_WAIT:-}" settle="${ORCA_ROLES_REBIND_SETTLE:-}" st
+  case "$wait" in ''|*[!0-9]*) wait=30;; esac
+  case "$settle" in ''|*[!0-9]*) settle=15;; esac
+  REBIND=failed
+  while [ -z "$(agent_pid_of_handle "$live")" ]; do
+    if [ "$n" -ge "$wait" ]; then echo "Could not re-bind Run $id to $FL's tab: no agent runs in $live."; return 0; fi
+    sleep 1; n=$((n + 1))
+  done
+  [ "$settle" -le 0 ] || sleep "$settle"
+  before="$(all_runs)" || { echo "Could not re-bind Run $id to $FL's tab: run-list failed."; return 0; }
+  cur="$(printf '%s' "$before" | jq -r --arg h "$live" '[.[] | select(.coordinator_handle == $h)] | max_by(.updated_at) | .id // empty' 2>/dev/null)"
+  if [ -n "$cur" ]; then
+    if [ "$cur" = "$id" ]; then REBIND=bound
+    else REBIND=other; echo "Could not re-bind Run $id to $FL's tab: Run $cur is already bound to $live."; fi
+    return 0
+  fi
+  st="$(printf '%s' "$before" | jq -r --argjson hs "$(jq -R . "$GITDIR/orca-roles.planner-handles" 2>/dev/null | jq -s . 2>/dev/null || echo '[]')" --arg cur "$live" \
+    '[.[] | select(.coordinator_handle as $h | $h != $cur and ($hs | index($h)))] | max_by(.updated_at) // empty | "\(.id)\t\(.coordinator_handle)"' 2>/dev/null)" || st=""
+  if [ -z "$st" ]; then REBIND=other; echo "Could not re-bind Run $id to $FL's tab: no stale Run is left."; return 0; fi
+  IFS=$'\t' read -r id old <<<"$st"
+  if out="$(orca orchestration run-use --id "$id" --from "$live" --json 2>&1)" && ! printf '%s' "$out" | jq -e '.ok == false' >/dev/null 2>&1; then :
+  else
+    code="$(front_err_code "$out")"
+    echo "Could not re-bind Run $id to $FL's tab: run-use failed (${code:-no answer})."; return 0
+  fi
+  after="$(all_runs)" || after="[]"
+  if [ "$(printf '%s' "$after" | jq -r --arg i "$id" '[.[] | select(.id == $i)][0].coordinator_handle // empty' 2>/dev/null)" != "$live" ]; then
+    echo "Could not re-bind Run $id to $FL's tab: run-list does not show it on $live."
+  else
+    echo "Run $id was bound to an old ${FL#the } tab ($old); re-bound it to $FL's tab ($live)."; REBIND=bound
+  fi
+  jq -r -n --argjson b "$before" --argjson a "$after" --arg i "$id" '
+    $b[] | select(.id != $i) | . as $x | ($a[] | select(.id == $x.id)) as $y
+    | select(($x.coordinator_handle // "") != ($y.coordinator_handle // ""))
+    | "Re-binding Run \($i) also moved Run \($x.id) from \(if ($x.coordinator_handle // "") == "" then "none" else $x.coordinator_handle end) to \(if ($y.coordinator_handle // "") == "" then "none" else $y.coordinator_handle end)."' 2>/dev/null || true
+  return 0
 }
 # front_mail: once per kickoff, starts the kit's mail watcher (dispatch.sh --mail) on the front role's Run, so a status Orca leaves unannounced
 # still gets a notice when no task is in flight. kickoff runs in the worktree (launch.sh starts it there), so dispatch.sh finds the git dir.
@@ -90,7 +146,7 @@ front_mail() {
     cursor="$(printf '%s' "$js" | jq -r '.result.nextCursor // empty' 2>/dev/null)" || break
     i=$((i + 1)); [ -n "$cursor" ] || break
   done
-  run="$(printf '%s' "$runs" | jq -r --arg h "${!FRONTV}" '[.[] | select(.coordinator_handle == $h)] | max_by(.updated_at) | .id // empty' 2>/dev/null)"
+  run="$(printf '%s' "$runs" | jq -r --arg h "$FRONT_TO" '[.[] | select(.coordinator_handle == $h)] | max_by(.updated_at) | .id // empty' 2>/dev/null)"
   if [ -z "$run" ]; then echo "No Run is bound to $FL's tab: no mail watcher for the status."; return 0; fi
   "$KIT/bin/dispatch.sh" --mail --run "$run" >/dev/null 2>&1 || true
   echo "Mail watcher started on Run $run for $FL."
@@ -367,11 +423,14 @@ if is_new "$FRONT"; then
     PLANNER_MSG="$(planner_msg "$CFG" "$ROLES" "$RESOLVED" "$JIRA_KEY" "$JIRA_URL" "$RESUME")"
   fi
   planner_history_add "$GITDIR" ""   # seeds the handle history from the previous kicked/env files before kicked_set overwrites them
-  if STALE="$(stale_run "$GITDIR" "${!FRONTV}")"; then
+  if STALE="$(stale_run "$GITDIR" "$FRONT_TO")"; then
     if [ -n "$STALE" ]; then
       IFS=$'\t' read -r STALE_ID STALE_OLD STALE_OBJ <<<"$STALE"
-      PLANNER_MSG="$PLANNER_MSG Run $STALE_ID ($STALE_OBJ) is still bound to a previous tab of yours. If this is your Run, bind it with \`orca orchestration run-use --id $STALE_ID --json\` before anything else, so worker reports reach you."
-      echo "Run $STALE_ID is bound to an old ${FL#the } tab ($STALE_OLD); $FL was told."
+      rebind_front_run "$STALE_ID" "$STALE_OLD"
+      if [ "$REBIND" = failed ]; then
+        PLANNER_MSG="$PLANNER_MSG Run $STALE_ID ($STALE_OBJ) is still bound to a previous tab of yours. If this is your Run, bind it with \`orca orchestration run-use --id $STALE_ID --json\` before anything else, so worker reports reach you."
+        echo "Run $STALE_ID is bound to an old ${FL#the } tab ($STALE_OLD); $FL was told."
+      fi
     fi
   else
     echo "Could not list the Runs to check $FL's binding."
@@ -380,7 +439,7 @@ if is_new "$FRONT"; then
   if [ -e "$GITDIR/orca-roles.mode-pending" ]; then kick "${!FRONTV}" "$FRONT" "$(planner_ask_msg "$CFG")" nokick
   elif [ "$ASK_START" = 1 ]; then echo "The mode was chosen while this kickoff waited: the choice's launch sends $FL its role message."
   else
-    if kick "${!FRONTV}" "$FRONT" "$PLANNER_MSG"; then PSENT=1; else PSENT=0; fi
+    if kick "${!FRONTV}" "$FRONT" "$PLANNER_MSG"; then PSENT=1; handles_sent "role message" "${!FRONTV}"; else PSENT=0; fi
     # a coordinator's marker covers only this first start and is removed once the front role's role message is sent: its Run id stays beside the state (the front role keeps messaging that Run), the hold does not
     if [ "$RESUME" = 0 ] && CM="$(coordinated_marker)" && [ -f "$CM" ]; then
       if CR="$(coordinator_run "$STATE")"; then printf '%s\n' "$CR" > "$GITDIR/orca-roles.coordinator"; fi
@@ -420,7 +479,7 @@ if ! is_new "$FRONT" && [ -n "$OPENED_WORKERS" ] && [ -n "${!FRONTV:-}" ]; then
     HANDLES_BODY="roles opened or reopened: $OPENED_WORKERS. Use these handles from now on:
 $(cat "$RESOLVED")"
     if front_send "Role handles changed" "$HANDLES_BODY"; then
-      echo "Told $FL the new handles."
+      echo "Told $FL the new handles."; handles_sent "Role handles changed" "$(state_handle "$(cat "$RESOLVED")")"
       front_mail
     else
       echo "Could not tell $FL the new handles ($FRONT_ERR); tell it to run: cat $STATE"
