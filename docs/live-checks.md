@@ -61,7 +61,7 @@ bash -c '. tests/live/lib.sh; live_start wsl; live_preflight; run_check X7 c_e2e
 | T8, T9 | The same switch to `academic-research` and back to programmer | #58 |
 | T10 | A first-use role: `launch --open researcher` opens only it, the other tabs stay as they were, and it runs its configured model (the Researcher on Sonnet) | #58 |
 | T11 | `orca terminal create --worktree current` from a main checkout opens the terminal in that checkout | #58 |
-| R1 | After a real restart: whether the wake path is available (an INFO row: Orca's runtime client, or why it is missing), which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation (counted by the conversation-keeping wording), no role starts without memory, no duplicate tab, every saved handle is live, how long it took, and the local coordinator's Run (its own, or a throwaway one when it has none) is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
+| R1 | After a real restart: whether the wake path is available (an INFO row: Orca's runtime client, or why it is missing), which role tabs Orca left asleep, `roles` wakes them (macOS and WSL), every role reopens with its conversation (counted by the conversation-keeping wording), no role starts without memory, no duplicate tab (counted by agent processes, so a role tab with no agent identity still counts; a failed terminal listing is a FAIL of its own), every saved handle is live, how long it took, and the local coordinator's Run (its own, or a throwaway one when it has none) is bound to its new tab (SessionStart hook, or the kickoff's run-use reminder) | this PR, #8, #38, BACKLOG |
 | R2 | T3 again after the restart | this PR |
 
 ### wsl.sh only
@@ -69,7 +69,7 @@ bash -c '. tests/live/lib.sh; live_start wsl; live_preflight; run_check X7 c_e2e
 | Id | What it proves | From |
 |---|---|---|
 | W0 | How the `orca` CLI is reached from WSL (`$ORCA_CLI_COMMAND`, the bridge) | #19 |
-| W1 | The Planner relauncher's hang: a process started in a tab and detached with `setsid` closes that same tab; does the close return? And closing another tab from this terminal. It measures Orca's behaviour and stays FAIL while Orca hangs; the kit no longer hangs on it because it limits closes to 15 s (`ORCA_ROLES_CLOSE_TIMEOUT`) | WSL bug report |
+| W1 | The Planner relauncher's hang: a process started in a tab and detached with `setsid` closes that same tab. Four rows: W1.own (the tab closes itself) and W1.kit (the kit's own bounded close, 15 s `ORCA_ROLES_CLOSE_TIMEOUT`, then `close_unconfirmed` counts the tab closed) are the kit's pass/fail; W1.answer records whether Orca answered the close or never did (its WSL behaviour, INFO); W1.other closes another tab from this terminal | WSL bug report |
 | W2 | `capacity.sh --json` in the WSL VM: the OS kind and whether it is `wsl`, the available memory, the pairs it fits and what it says it does not measure | this PR |
 
 ### agents.sh

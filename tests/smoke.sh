@@ -157,6 +157,7 @@ unset ORCA_ROLES_CONFIG ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE ORCA_CLI_BIN_DIR O
 export ORCA_ROLES_CLI_TIMEOUT="${SMOKE_CLI_TIMEOUT:-0}"
 export ORCA_ROLES_WAKE_TICK=0.2   # the pause between passes of launch.sh's wake loop, shortened; a check that needs the real value sets it itself
 export ORCA_ROLES_PACE=0.05   # the kit's fixed retry and poll waits, shortened; a check that needs the real value sets it itself
+export ORCA_ROLES_REBIND_WAIT=0 ORCA_ROLES_REBIND_SETTLE=0   # kickoff.sh waits for no agent and no hook in the suite; a check that needs the real values sets them itself
 UT=$((7000 + $$ % 900))   # base of the timeout values whose 'sleep <n>' a check looks for with pgrep: unique per smoke process, so sections running at the same time never see each other's
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; DONE=0
@@ -3669,6 +3670,104 @@ EOLIB
     printf ' '
     r1v broken 'if then'
     ;;
+  b3)  # batch3: R1.run.via, R1.sent, wt_terms, R1.duplicates and W1 against fakes
+    B3="$LD/b3"; rm -rf "$B3"; mkdir -p "$B3/fb" "$B3/kit/bin"
+    LIVE_DIR="$B3"; REPORT="$B3/report.md"; TIMINGS="$B3/t.tsv"; STATE="$B3/state"; : > "$STATE"; : > "$REPORT"
+    GD="$B3/gd"; mkdir -p "$GD"; KIT="$B3/kit"; WTID=w1; AGENTS=""; TL='{"result":{"terminals":[]}}'
+    sleep() { :; }
+    pid_of_handle() { case " $AGENTS " in *" $1 "*) echo 1; return 0;; esac; return 1; }
+    live_full() { :; }
+    rowof() { awk -F'|' -v i="$1" -v m="$2" '{ for (k = 2; k <= 4; k++) gsub(/^ +| +$/, "", $k) } $2 == i { print (m == "st" ? $3 : $3 " " $4) }' "$REPORT"; }
+    orca() {
+      case "$1 $2" in
+        "orchestration run-list") printf '{"result":{"runs":[{"id":"run_x","coordinator_handle":"term_lc"}]}}\n';;
+        "terminal list") printf '%s\n' "$TL";;
+        "terminal create") case "$*" in *live-close-A*) echo '{"result":{"terminal":{"handle":"tA"}}}';; *live-close-kit*) echo '{"result":{"terminal":{"handle":"tB"}}}';; *) echo '{"result":{"terminal":{"handle":"tC"}}}';; esac;;
+        "terminal send") case "$*" in *"--terminal tA"*) [ "${A_RC:-}" = 1 ] && echo rc=0 > "$B3/close-own-tab.rc";; *"--terminal tB"*) [ -n "${K_RES:-}" ] && echo "$K_RES" > "$B3/close-kit.result";; esac;;
+        "terminal show") printf '%s\n' "$A_SHOW";;
+      esac
+      return 0
+    }
+    pgrep() { case "$*" in *tB*) printf '%s' "${LEFT_B:-}";; *) printf '%s' "${LEFT_A:-}";; esac; }
+    pkill() { :; }
+    # a3: R1.run.via
+    printf 'LOCAL_COORDINATOR=term_lc\nDEV=term_d\n' > "$GD/orca-roles.env"
+    viav() { printf '%s\n' "$2" > "$GD/orca-roles-kickoff.log"; rm -f "$GD/orca-roles-relaunch.log"; [ -z "$3" ] || printf '%s\n' "$3" > "$GD/orca-roles-relaunch.log"; : > "$REPORT"; st_set r1run run_x; c_restart_run R1 >/dev/null; echo "$1: $(rowof R1.run st) | $(rowof R1.run.via x | cut -c1-80)"; }
+    viav success "Run run_x was bound to an old claude tab (term_o); re-bound it to Planner's tab (term_lc)."
+    viav success-in-relaunch-log "" "Run run_x was bound to an old claude tab (term_o); re-bound it to Planner's tab (term_lc)."
+    viav fail-noagent "Could not re-bind Run run_x to Planner's tab: no agent runs in term_n."
+    viav fail-bound "Could not re-bind Run run_x to Planner's tab: Run run_y is already bound to term_n."
+    viav neither "nothing"
+    viav other-success "Run run_y was bound to an old claude tab (term_o); re-bound it to Planner's tab (term_lc)."
+    viav other-fail "Could not re-bind Run run_y to Planner's tab: no agent runs in term_n."
+    viav old-text "Run run_x is bound to an old claude tab (term_o)."
+    # b3: R1.sent
+    sentv() { : > "$REPORT"; AGENTS="$2"; printf '%s\n' "$3" > "$GD/orca-roles-kickoff.log"; rm -f "$GD/orca-roles-relaunch.log"; [ -z "$4" ] || printf '%s\n' "$4" > "$GD/orca-roles-relaunch.log"; c_restart_sent R1 >/dev/null; echo "$1: $(rowof R1.sent x)"; }
+    GOOD='Handles sent (role message): LOCAL_COORDINATOR=term_lc'
+    sentv two "term_lc" "$GOOD
+$GOOD"
+    sentv none "term_lc" "nothing here"
+    sentv stale-relaunch "term_lc" "$GOOD" 'Handles sent (role message): LOCAL_COORDINATOR=term_old'
+    sentv relaunch-only "term_lc" "" "$GOOD"
+    sentv old-beside "term_lc" "Handles sent (role message): LOCAL_COORDINATOR=term_old
+$GOOD"
+    sentv no-agent "" "$GOOD"
+    sentv prefix-handle "term_lc" 'Handles sent (role message): LOCAL_COORDINATOR=xterm_lc'
+    # b2: wt_terms
+    wtv() { TL="$2"; out="$(wt_terms 2>"$B3/err")"; rc=$?; echo "$1: rc=$rc rows=$(printf '%s' "$out" | grep -c .) cols=$(printf '%s' "$out" | awk -F'\t' 'NR==1 {print NF}') err=[$(cat "$B3/err")]"; }
+    wtv rows '{"ok":true,"result":{"terminals":[{"handle":"h1","ptyId":"p1","title":"Dev"},{"handle":"h2","ptyId":"p2","title":"Dev","agentIdentity":"claude"}]}}'
+    wtv empty '{"ok":true,"result":{"terminals":[]}}'
+    wtv okfalse '{"ok":false,"error":{"code":"runtime_unavailable","message":"x"}}'
+    wtv notjson 'garbage'
+    wtv noterms '{"ok":true,"result":{}}'
+    wtv okfalse-nocode '{"ok":false}'
+    # b2: R1.duplicates through c_restart_after
+    LASTLOG="$B3/lastlog"; : > "$LASTLOG"; : > "$GD/orca-roles.pty"
+    printf 'A=h1\nB=h2\nC=h3\nD=h4\nE=h5\nF=h6\nG=h7\n' > "$GD/orca-roles.env"
+    roles_run() { cp "$LASTLOG" "$LIVE_DIR/last-roles.log"; }
+    wt_terms() { [ "${TRC:-0}" = 1 ] && { echo "terminal list failed: $TERR" >&2; return 1; }; printf '%b' "$TERMS"; }
+    dupv() { : > "$REPORT"; AGENTS="$2"; TERMS="$3"; TRC="${4:-0}"; TERR="${5:-}"; c_restart_after R1 >/dev/null 2>&1; echo "$1: $(rowof R1.duplicates x | sed 's/^\([A-Z]*\) .*\(got.*\|terminal list failed.*\)$/\1 \2/') attached=$(grep -c 'R1 terminals of the worktree' "$REPORT")"; }
+    SEVEN='h1\tp1\tA\t\nh2\tp2\tB\t\nh3\tp3\tC\t\nh4\tp4\tD\t\nh5\tp5\tE\t\nh6\tp6\tF\t\nh7\tp7\tG\t\n'
+    ALL7="h1 h2 h3 h4 h5 h6 h7"
+    dupv seven-by-process "$ALL7" "$SEVEN"
+    dupv plain-shell-not-counted "$ALL7" "${SEVEN}hs\tps\tshell\t\n"
+    dupv eight-agents "$ALL7" "${SEVEN}h8\tp8\tH\tclaude\n"
+    dupv by-identity-only "" 'h1\tp1\tA\tclaude\nh2\tp2\tB\tclaude\nh3\tp3\tC\tclaude\nh4\tp4\tD\tclaude\nh5\tp5\tE\tclaude\nh6\tp6\tF\tclaude\nh7\tp7\tG\tclaude\n'
+    dupv list-failed "$ALL7" "" 1 runtime_unavailable
+    dupv list-failed-noanswer "$ALL7" "" 1 "no answer"
+    # b1: W1
+    eval "$(sed -n '/^c_close_own_tab() {/,/^}/p' "$ROOT/tests/live/wsl.sh")"
+    handle_of() { jq -r '[.. | .handle? // empty] | first // empty' 2>/dev/null; }
+    w1v() {  # w1v <label> <A listed> <A show> <rc file> <kit result> <left B>
+      : > "$REPORT"; rm -f "$B3/close-own-tab.rc" "$B3/close-kit.result"
+      wt_terms() { if [ "$A_LISTED" = 1 ]; then printf 'tA\tp\tt\t\n'; else :; fi; }
+      A_LISTED="$2"; A_SHOW="$3"; A_RC="$4"; K_RES="$5"; LEFT_B="$6"; LEFT_A=""
+      c_close_own_tab W1 >/dev/null
+      echo "$1: $(rowof W1.own x | cut -c1-70) | $(rowof W1.answer x | cut -c1-60) | $(rowof W1.kit x | cut -c1-110)"
+    }
+    STALE='{"ok":false,"error":{"code":"terminal_handle_stale"}}'
+    ORPH='{"result":{"terminal":{"handle":"tA","orphaned":true,"connected":false}}}'
+    LIVE='{"result":{"terminal":{"handle":"tA","orphaned":false,"connected":true}}}'
+    w1v gone-unanswered 0 "$STALE" "" "close=124 confirm=0 secs=15"
+    w1v gone-answered 0 "$ORPH" 1 "close=0 confirm=0 secs=1"
+    w1v still-listed 1 "$STALE" "" "close=124 confirm=0 secs=15"
+    w1v unlisted-but-live 0 "$LIVE" "" "close=124 confirm=0 secs=15"
+    w1v kit-confirm-fails 0 "$STALE" "" "close=124 confirm=1 secs=15"
+    w1v kit-no-result 0 "$STALE" "" ""
+    w1v kit-leftover 0 "$STALE" "" "close=124 confirm=0 secs=15" "123 orca terminal close --terminal tB"
+    w1v kit-close-rc1 0 "$STALE" "" "close=1 confirm=0 secs=1"
+    # b1: the written kit script run for real against the kit's lib and a fake orca binary
+    cat > "$B3/fb/orca" <<'EOSB'
+#!/bin/sh
+case "$1 $2" in
+  "terminal close") exec sleep 30;;
+  "terminal show") echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}';;
+esac
+EOSB
+    chmod +x "$B3/fb/orca"
+    bash -n "$B3/close-kit.sh" && echo "script-syntax: ok"
+    ( export ORCA_ROLES_CLOSE_TIMEOUT=1 PATH="$B3/fb:$PATH"; unset sleep; timeout 60 bash "$B3/close-kit.sh" tB "$B3/real.result" "$ROOT" </dev/null >/dev/null 2>&1 )
+    echo "script-run: $(sed -e 's/secs=.*/secs=N/' -e 's/close=\(0\|124\) /close=0or124 /' "$B3/real.result" 2>/dev/null)";;
 esac
 EOS
 ylive() { env PATH="$YL/bin:$YU/bin:$PATH" ORCA_ROLES_WSLPATH="$YU/bin/wslpath" ROOT="$ROOT" LD="$YLP/ld" LH="$YLP/home" FAKE_LOG="$YL/log" FAKE_REPOS="$YL/repos.json" FAKE_WTC="$YL/wtc.json" bash "$YL/probe.sh" "$@" 2>&1; }
@@ -3721,6 +3820,15 @@ restored-real R1.lost FAIL got [Planner], expected [none]
 two R1.lost FAIL got [Dev Tester], expected [none]
 wsl R1.wakepath INFO wake path available: C:\inst\runtime-client.js"
 check "live lib c_restart_prepare and c_restart_run: live_full drops --full from R1's setup and R1.run run-list calls when the installed kit's orca_older_than 1.4.246 holds, and R1.run is OK then (the Run's coordinator_handle is the local coordinator); a kit whose orca_older_than says it is not older, one with no orca_older_than, and one whose bin/lib.sh does not load keep --full" "$(ylive r1)" "older:prepare=0:run=0:rows=OK newer:prepare=1:run=1:rows=OK nolib:prepare=1:run=1:rows=OK broken:prepare=1:run=1:rows=OK"
+B3O="$(ylive b3)"
+b3g() { printf '%s\n' "$B3O" | grep "^$1: " | sed "s/^$1: //"; }
+b3v() { for l in "$@"; do printf '[%s]' "$(b3g "$l")"; done; }
+check "live lib c_restart_run R1.run.via (batch3 a3): a success line for this Run (in the kickoff or the relaunch log) -> 'kickoff re-bound the Run to the local coordinator's new tab (run-use --from)'; a failure line -> 'kickoff could not re-bind the Run (<reason copied from the line>)' for both reasons; no line, or lines only for another Run id, or a1's old 'is bound to an old' text -> today's texts; R1.run stays OK throughout" "$(b3v success success-in-relaunch-log fail-noagent fail-bound neither other-success other-fail old-text)" "[OK | INFO kickoff re-bound the Run to the local coordinator's new tab (run-use --from][OK | INFO kickoff re-bound the Run to the local coordinator's new tab (run-use --from][OK | INFO kickoff could not re-bind the Run (no agent runs in term_n)][OK | INFO kickoff could not re-bind the Run (Run run_y is already bound to term_n)][OK | INFO kickoff did not see the Run on an old tab (the SessionStart hook had re-bou][OK | INFO kickoff did not see the Run on an old tab (the SessionStart hook had re-bou][OK | INFO kickoff did not see the Run on an old tab (the SessionStart hook had re-bou][OK | INFO kickoff found the Run still bound to the old tab and told the local coordin]"
+check "live lib c_restart_sent (batch3 b3): R1.sent is OK naming the kinds and counts when every 'Handles sent' line of the kickoff log carries the env handle and an agent process carries it; INFO when there is no line; a stale line in an existing relaunch log changes nothing (it is not read, and a relaunch-only line gives INFO); FAIL listing the old handle beside a right one, FAIL when no agent carries the handle, FAIL for a longer handle that merely ends like the expected one" "$(b3v two none stale-relaunch relaunch-only old-beside no-agent prefix-handle)" "[OK the kit's messages gave the local coordinator its live handle: role message ×2][INFO no message carried the handles][OK the kit's messages gave the local coordinator its live handle: role message ×1][INFO no message carried the handles][FAIL the kit's messages gave the local coordinator its live handle: expected [term_lc], got: Handles sent (role message): LOCAL_COORDINATOR=term_old][FAIL the kit's messages gave the local coordinator its live handle: no agent process carries the expected handle [term_lc]][FAIL the kit's messages gave the local coordinator its live handle: expected [term_lc], got: Handles sent (role message): LOCAL_COORDINATOR=xterm_lc]"
+check "live lib wt_terms (batch3 b2): four tab-separated columns (an empty agentIdentity kept) and rc 0 for a list, an empty list included; no rows, rc 1 and 'terminal list failed: <code>' on stderr for ok:false, and '... no answer' for non-JSON, ok:false with no code and an answer with no terminals list" "$(b3v rows empty okfalse notjson noterms okfalse-nocode)" "[rc=0 rows=2 cols=4 err=[]][rc=0 rows=0 cols= err=[]][rc=1 rows=0 cols= err=[terminal list failed: runtime_unavailable]][rc=1 rows=0 cols= err=[terminal list failed: no answer]][rc=1 rows=0 cols= err=[terminal list failed: no answer]][rc=1 rows=0 cols= err=[terminal list failed: no answer]]"
+check "live lib c_restart_after R1.duplicates (batch3 b2): 7 role rows carried by agent processes with an empty agentIdentity and 7 env lines -> OK; a plain shell row (no process, no identity) is not counted; 8 agent rows -> FAIL got [8] with the rows attached; agentIdentity alone counts; a failed listing -> FAIL 'terminal list failed: <code>' (not a count of 0) with nothing attached" "$(b3v seven-by-process plain-shell-not-counted eight-agents by-identity-only list-failed list-failed-noanswer)" "[OK one tab per role and no stray agent tab attached=0][OK one tab per role and no stray agent tab attached=0][FAIL got [8], expected [7] attached=1][OK one tab per role and no stray agent tab attached=0][FAIL terminal list failed: runtime_unavailable attached=0][FAIL terminal list failed: no answer attached=0]"
+check "live wsl c_close_own_tab (batch3 b1): W1.own OK when the tab is unlisted and show says stale (rc file absent or present, W1.answer INFO 'never answered' or 'answered (rc=0)'; orphaned+disconnected also counts), FAIL when it is still listed or unlisted but live; W1.kit OK for close=124 or 0 with confirm=0 and nothing left, FAIL for confirm=1, close=1, no result, or a leftover 'terminal close --terminal <B>' process" "$(b3v gone-unanswered gone-answered still-listed unlisted-but-live kit-confirm-fails kit-no-result kit-leftover kit-close-rc1 | sed 's/  */ /g')" "[OK the tab closed itself from a detached process | INFO Orca never answered the close in 60 s (Orca's WSL behav | OK the kit's bounded close of its own tab returns and counts the tab closed][OK the tab closed itself from a detached process | INFO Orca answered the close (rc=0) | OK the kit's bounded close of its own tab returns and counts the tab closed][FAIL the tab is still open 60 s after it asked Orca to close it; termi | INFO Orca never answered the close in 60 s (Orca's WSL behav | OK the kit's bounded close of its own tab returns and counts the tab closed][FAIL the tab is still open 60 s after it asked Orca to close it; termi | INFO Orca never answered the close in 60 s (Orca's WSL behav | OK the kit's bounded close of its own tab returns and counts the tab closed][OK the tab closed itself from a detached process | INFO Orca never answered the close in 60 s (Orca's WSL behav | FAIL close=124 confirm=1 secs=15; left behind: nothing][OK the tab closed itself from a detached process | INFO Orca never answered the close in 60 s (Orca's WSL behav | FAIL no result in 45 s; left behind: nothing][OK the tab closed itself from a detached process | INFO Orca never answered the close in 60 s (Orca's WSL behav | FAIL close=124 confirm=0 secs=15; left behind: 123 orca terminal close --terminal tB][OK the tab closed itself from a detached process | INFO Orca never answered the close in 60 s (Orca's WSL behav | FAIL close=1 confirm=0 secs=1; left behind: nothing]"
+check "live wsl c_close_own_tab (batch3 b1): the script written for W1.kit is valid bash and, run against the kit's own bin/lib.sh with an orca whose close hangs and whose show answers terminal_handle_stale, writes 'close=<0 or 124> confirm=0 secs=<n>'" "$(b3g script-syntax):$(b3g script-run)" "ok:close=0or124 confirm=0 secs=N"
 # Live checks X1/X6/X7 with no terminal and no browser (batch2): the caller's SMOKE_JOBS, the file-fed wizard of X6 and the question before X7's browser
 LV="$YLP/lv"; rm -rf "$LV"; mkdir -p "$LV/fake/tests" "$LV/home"
 mkdir -p "$LV/fakebin"; printf '#!/bin/sh\nexit 0\n' > "$LV/fakebin/sleep"; chmod +x "$LV/fakebin/sleep"
@@ -6205,7 +6313,7 @@ rm -rf "$PK/config.json" "$PK/roles" "$PK/prompts/pr-reviewer"   # the kit copy 
 sec_planner_skill() {
 # The Planner's skill: plugin, new-role --from-json, per-worktree instructions and plugin loading
 jq -e '.name == "orca-roles"' "$ROOT/plugin/.claude-plugin/plugin.json" >/dev/null && echo "ok   plugin.json valid" || { echo "FAIL plugin.json"; FAIL=1; }
-check "plugin.json: version 1.5.1 (the skill changed; /plugin update only picks up a new version)" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")" "1.5.1"
+check "plugin.json: version 1.5.2 (the skill changed; /plugin update only picks up a new version)" "$(jq -r .version "$ROOT/plugin/.claude-plugin/plugin.json")" "1.5.2"
 check "skill: name in the frontmatter" "$(sed -n 2p "$ROOT/plugin/skills/team/SKILL.md")" "name: team"
 check "default config: the planner's plugins (the kit's skill and the pinned superpowers)" "$(jq -c '.roles.planner.pluginDirs' "$ROOT/config.default.json")" '["{kit}/plugin","{kit}/plugins/superpowers"]'
 cat > "$KIT/config.json" <<'J'
@@ -6415,13 +6523,14 @@ k="\$1\$2"; h=""; tab=""; while [ \$# -gt 0 ]; do [ "\$1" = --terminal ] && h="\
 case "\$k" in
   terminalshow) case "\$h" in
       n1) echo '{"result":{"terminal":{"orphaned":false}}}';;
+      o6|o7) echo '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":false,"exitCause":{"kind":"operator_close"}}}}';;
       o4) [ -e "$TMP/o4gone" ] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }; echo '{"result":{"terminal":{"orphaned":true}}}';;
       *) echo '{"result":{"terminal":{"orphaned":true}}}';; esac;;
   terminalclose) case "\$h" in
       o2) [ -n "\$tab" ] || exit 3;;
       o3) exit 3;;
       o4) : > "$TMP/o4gone"; exit 124;;
-      o5) exit 124;;
+      o5|o6|o7) exit 124;;
       n1) [ -n "\$tab" ] || exit 3;; esac;;
 esac
 exit 0
@@ -6433,8 +6542,10 @@ cr2case() {  # cr2case <handle>: RC, the output, the close calls (p = plain, t =
   try closerole2 dev
   echo "$RC:$(printf '%s' "$OUT" | grep -v 'still enabled' | tr '\n' '/'):$(grep 'terminal close' "$CR2" | sed 's/.*--tab.*/t/; s/terminal close.*/p/' | tr -d '\n'):$(cat "$TMP/state.env" "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" | grep -c '^DEV=')"
 }
-CR2R="$(cr2case o1)|$(cr2case o2)|$(cr2case o3)|$(cr2case o4)|$(cr2case o5)|$(cr2case n1)"
-check "close-role: an orphaned handle gets the plain close first and --tab only if it fails (plain ok -> no --tab, handle forgotten; plain fails and --tab ok -> closed; both fail -> 'could not close its tab', RC 1, handle kept; a 124 goes to the confirm step, which counts it gone or 'did not confirm'); a handle that is not orphaned gets the single --tab close" "$CR2R" "0:Dev: tab closed (o1)./:p:0|0:Dev: tab closed (o2)./:pt:0|1:Dev: could not close its tab (o3)./:pt:3|0:Dev: tab closed (o4)./:p:0|1:Orca did not confirm closing the tab of Dev (o5)./Dev: could not close its tab (o5)./:p:3|0:Dev: tab closed (n1)./:t:0"
+: > "$TMP/nopid.o6"
+CR2R="$(cr2case o1)|$(cr2case o2)|$(cr2case o3)|$(cr2case o4)|$(cr2case o5)|$(cr2case n1)|$(cr2case o6)|$(cr2case o7)"
+rm -f "$TMP/nopid.o6"
+check "close-role: an orphaned handle gets the plain close first and --tab only if it fails (plain ok -> no --tab, handle forgotten; plain fails and --tab ok -> closed; both fail -> 'could not close its tab', RC 1, handle kept; a 124 goes to the confirm step, which counts it gone, or orphaned and disconnected with no agent on its handle (o6), as closed, else 'did not confirm', also when an agent still carries the handle (o7)); a handle that is not orphaned gets the single --tab close" "$CR2R" "0:Dev: tab closed (o1)./:p:0|0:Dev: tab closed (o2)./:pt:0|1:Dev: could not close its tab (o3)./:pt:3|0:Dev: tab closed (o4)./:p:0|1:Orca did not confirm closing the tab of Dev (o5)./Dev: could not close its tab (o5)./:p:3|0:Dev: tab closed (n1)./:t:0|0:Dev: tab closed (o6)./:p:0|1:Orca did not confirm closing the tab of Dev (o7)./Dev: could not close its tab (o7)./:p:3"
 rm -f "$TMP/orca-roles.pty" "$TMP/orca-roles.tabs" "$TMP/o4gone"
 printf 'LOCAL_COORDINATOR=t0\nPLANNER=t1\nDEV=t6\n' > "$TMP/state.env"; : > "$CRLOG"
 try closerole local-coordinator; LCR="$RC:$(printf '%s\n' "$OUT" | grep -c 'the local coordinator is never closed'):$(grep -c 'terminal close' "$CRLOG" || true)"
@@ -6454,6 +6565,24 @@ EXI='0:Researcher 2: tab closed (t9)./Researcher 2: instance closed; launch.sh -
 check "close-role: an instance (by id, title or handle) closes its tab, loses its lines in the state, .pty and .tabs files and its entry in the configuration (the file keeps its mode and no temp file is left), and prints the instance line instead of the reopen or still-enabled hints" "$CRI1|$CRI2|$CRI3" "$EXI|$EXI|$EXI"
 CRI4="$(cri researcher)"
 check "close-role: the role of an instance closes only its own tab and keeps the instance, its lines and its entry" "$CRI4" "0:Researcher: tab closed (t8).:PLANNER RESEARCHER_2 :2:planner,researcher,researcher-2:t8,:-rw-r--r--:0"
+cu() {  # cu <show answer> [agent]: close_unconfirmed's return code and whether it printed the message; with a second argument an agent process carries the handle
+  local ap="$TMP/cu-agent"; printf '#!/bin/sh\n%s\n' "${2:+echo 4242}" > "$ap"; chmod +x "$ap"
+  ( ans="$1"; orca() { printf '%s' "$ans"; }; ORCA_ROLES_AGENT_PID="$ap"; m="$(close_unconfirmed h1 Dev)"; echo "$?:${m:+msg}" )
+}
+CU=""
+for a in '{"ok":false,"error":{"code":"terminal_handle_stale"}}' \
+  '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":false,"exitCause":{"kind":"operator_close"}}}}' \
+  '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":false,"exitCause":{"kind":"x"}}}}' \
+  '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":false}}}' \
+  '{"orphaned":true,"connected":false}' '{"ok":true,"orphaned":true,"result":{"terminal":{"orphaned":true,"connected":false}}}'; do CU="$CU$(cu "$a")|"; done
+CU="$CU/"
+for a in '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":false}}}' '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":true}}}' \
+  '{"ok":true,"result":{"terminal":{"orphaned":false,"connected":false}}}' '{"ok":true,"result":{"terminal":{"connected":false}}}' '{"ok":true,"result":{"terminal":{"orphaned":true}}}' \
+  '{"ok":false,"error":{"code":"runtime_unavailable"}}' '' 'not json'; do CU="$CU$(cu "$a" agent)|"; done
+CU="$CU/"
+for a in '{"ok":true,"result":{"terminal":{"orphaned":true,"connected":true}}}' '{"ok":true,"result":{"terminal":{"orphaned":false,"connected":false}}}' '{"ok":true,"result":{"terminal":{"connected":false}}}' \
+  '{"ok":true,"result":{"terminal":{"orphaned":true}}}' '{"ok":false,"error":{"code":"runtime_unavailable"}}' '' 'not json' '{"result":{"terminal":{"orphaned":"true","connected":"false"}}}'; do CU="$CU$(cu "$a")|"; done
+check "close_unconfirmed: closed for a stale handle and for orphaned+disconnected with no agent (any exitCause, record anywhere); not confirmed with an agent on the handle, connected, orphaned false or absent, connected absent, another error, no answer, non-JSON" "$CU" "0:|0:|0:|0:|0:|0:|/1:msg|1:msg|1:msg|1:msg|1:msg|1:msg|1:msg|1:msg|/1:msg|1:msg|1:msg|1:msg|1:msg|1:msg|1:msg|1:msg|"
 rm -f "$TMP/fakebin/orca"
 }
 
@@ -9478,7 +9607,27 @@ H10="$SHR:$(printf '%s\n' "$SHO" | grep -cx 'orca-roles: this tab reopened with 
 printf 't1\n' > "$SHK/state/session-handles/s10"; printf '{"result":{"terminals":[{"handle":"t1"},{"handle":"t2"}]}}' > "$SH/tl.json"; printf '{"result":{}}' > "$SH/tl.next"; shk s10 t2; H11="$SHR:${SHO:-quiet}:$(shl run-use):$(shl 'terminal list'):$(shrec s10)"; rm -f "$SH/tl.next"; printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"
 printf 't5\n' > "$SHK/state/session-handles/s11"; shk s11 t2; H12="$SHR:${SHO:-quiet}:$(shl run-use):$(shrec s11)"
 SH2="$TMP/shk2/.orca-roles"; rm -rf "$TMP/shk2"; mkdir -p "$SH2"; cp -R "$ROOT/bin" "$SH2/bin"; printf '{"session_id":"s7","source":"resume"}' | env -i HOME="$SH/h" KIT="$SHK" PATH="$SH/bin:$JQD:/usr/bin:/bin" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= ORCA_TERMINAL_HANDLE=t1 bash "$SH2/bin/session-hook.sh" >/dev/null 2>&1; H9="$(cat "$SH2/state/session-handles/s7" 2>/dev/null || echo none):$(shrec s7)"
-check "session hook: no terminal handle -> nothing read or written; first start records the handle, no orca call; same handle again -> nothing; a new handle whose old one is gone takes only the Run bound to the old one most recently (b, though a sorts first and d last, by id and in the list; never c), one line naming it with its waiting count and the Runs it left (d, a), one log line naming them, record updated; a single Run -> the line without the left-Runs clause, no log line; an old handle with no Run -> nothing taken, no output, record updated; an old handle that is still listed -> looked at twice more, then no run-use, no output, one log line, record updated; one that leaves the list at the second look -> its Runs are taken, and a re-look that fails or is incomplete takes nothing and keeps the record; a failing run-use -> no line, no other Run tried, the record is kept, one log line; a bad session id writes nothing; a hanging orca -> exit 0 within 12 s, nothing kept running, record kept; a terminal list that is truncated or omits a host proves nothing (no run-use, record kept); the hook uses the kit that holds the script, not \$KIT" "$H0|$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9|$H10|$H11|$H12" "0:quiet:nostate|0:quiet:t1:0:quiet:t1:0|0:1:0:1:0:t2:1|0:quiet:0:t2:3:1|0:quiet:t1:1:0|0:quiet:5|0:in-time:quiet:t1:0|0:quiet:0:t1|0:quiet:0:t1|t1:none|0:1:2:t2:0|0:quiet:0:2:t1|0:quiet:0:t2"
+check "session hook: no terminal handle -> nothing read or written; first start records the handle, no orca call; same handle again -> nothing; a new handle whose old one is gone takes only the Run bound to the old one most recently (b, though a sorts first and d last, by id and in the list; never c), one line naming it with its waiting count and the Runs it left (d, a), one log line naming them, record updated; a single Run -> the line without the left-Runs clause, one log line naming the Run; an old handle with no Run -> nothing taken, no output, record updated; an old handle that is still listed -> looked at twice more, then no run-use, no output, one log line, record updated; one that leaves the list at the second look -> its Runs are taken, and a re-look that fails or is incomplete takes nothing and keeps the record; a failing run-use -> no line, no other Run tried, the record is kept, one log line; a bad session id writes no record; a hanging orca -> exit 0 within 12 s, nothing kept running, record kept; a terminal list that is truncated or omits a host proves nothing (no run-use, record kept); the hook uses the kit that holds the script, not \$KIT" "$H0|$H1|$H2|$H3|$H4|$H5|$H6|$H7|$H8|$H9|$H10|$H11|$H12" "0:quiet:nostate|0:quiet:t1:0:quiet:t1:0|0:1:0:1:0:t2:1|0:quiet:0:t2:3:1|0:quiet:t1:1:0|0:quiet:5|0:in-time:quiet:t1:0|0:quiet:0:t1|0:quiet:0:t1|t1:none|0:1:2:t2:1|0:quiet:0:2:t1|0:quiet:0:t2"
+# session hook log: a re-bind, a dead old handle with no Run, a run-use whose record missed the 10 s, and each early exit that has a handle; nothing on a first start, the same handle or no handle
+shline() { sed 's/^[^ ]* //' "$SHK/state/session-hook.log" 2>/dev/null | paste -sd'|' - || true; }
+printf '{"result":{"terminals":[{"handle":"t2"}]}}' > "$SH/tl.json"; cp "$SH/rl.json" "$SH/rl.keep"
+printf '{"result":{"runs":[{"id":"run_e","coordinator_handle":"t1","updated_at":"2026-01-01T00:00:00Z"}]}}' > "$SH/rl.json"
+: > "$SHK/state/session-hook.log"; printf 't1\n' > "$SHK/state/session-handles/s30"; shk s30 t2; HL1="$SHR:$(printf '%s\n' "$SHO" | grep -c '^orca-roles: this tab reopened with a new terminal handle; re-bound Run run_e to it\. 2 message(s) waiting'):$(shline):$(shrec s30)"
+: > "$SHK/state/session-hook.log"; printf 't5\n' > "$SHK/state/session-handles/s31"; shk s31 t2; HL2="$SHR:${SHO:-quiet}:$(shline):$(shrec s31)"
+: > "$SHK/state/session-hook.log"; shk s32 t2; shk s32 t2; shk s32; HL3="$SHR:${SHO:-quiet}:[$(shline)]"
+: > "$SHK/state/session-hook.log"; shk '../x' t2; HL4="$SHR:${SHO:-quiet}:$(shline)"; shk '../x'; : > "$SHK/state/session-hook.log"; shk '../x'; HL4="$HL4:[$(shline)]"
+SH3="$TMP/shk3"; rm -rf "$SH3"; mkdir -p "$SH3/kit" "$SH3/nojq"; cp -R "$ROOT/bin" "$SH3/kit/bin"; for t in date cat grep sed tr wc tail mkdir mv dirname head sort uname awk cut env pwd basename rm; do ln -s "$(command -v $t)" "$SH3/nojq/$t" 2>/dev/null || true; done
+shx() {  # shx <variant> [handle]: one start of the hook of a kit copy with one thing missing
+  local p="$SH/bin:$JQD:/usr/bin:/bin" sid='{"session_id":"s40"}'
+  case "$1" in lib) rm -f "$SH3/kit/bin/lib.sh";; orca) p="$JQD:/usr/bin:/bin";; jq) p="$SH/bin:$SH3/nojq";; esac
+  mkdir -p "$SH3/kit/state"; : > "$SH3/kit/state/session-hook.log"
+  printf '%s' "$sid" | env -i HOME="$SH/h" PATH="$p" ORCA_ROLES_PROC_VERSION="$SMK_PV" ORCA_ROLES_WSLPATH= ${2:+ORCA_TERMINAL_HANDLE="$2"} "$BASH" "$SH3/kit/bin/session-hook.sh" >/dev/null 2>&1; local rc=$?
+  printf "%s~%s" "$(sed "s/^[^ ]* //" "$SH3/kit/state/session-hook.log" | paste -sd"|" -)" "$rc"
+}
+HL6="$(shx lib t2)"; rm -rf "$SH3/kit/bin"; cp -R "$ROOT/bin" "$SH3/kit/bin"; HL6="$HL6;$(shx lib)"; rm -rf "$SH3/kit/bin"; cp -R "$ROOT/bin" "$SH3/kit/bin"
+HL6="$HL6;$(shx jq t2);$(shx jq);$(shx orca t2);$(shx orca)"
+check "session hook log: a re-bind logs 'took Run <R> from <old> to <new>' next to today's line to Claude; a dead old handle with no Run logs 'handle changed ... no Run was bound' and writes the record; a first start, the same handle and a start with no handle log nothing; a bad session id logs the line with '-' and the handle, none without a handle; always exit 0" "$HL1|$HL2|$HL3|$HL4|$HL6" "0:1:s30 took Run run_e from t1 to t2:t2|0:quiet:s31 handle changed from t5 to t2: no Run was bound to t5:t2|0:quiet:[]|0:quiet:- no valid session_id on stdin (handle t2):[]|- could not load bin/lib.sh (handle t2)~0;~0;- no jq (handle t2)~0;~0;- no orca on PATH (handle t2)~0;~0"
+mv "$SH/rl.keep" "$SH/rl.json"
 # batch6 a1/a3: the hook's orca calls go through orca_compat_args (no --full below 1.4.246) and keep calling orca the way they do, shim included
 shkv() {  # shkv <session id> <handle> <PATH> [VAR=value...]: one hook start with that PATH and those variables; SHO, SHR
   local sid="$1" h="$2" path="$3"; shift 3
@@ -11042,7 +11191,13 @@ case "\$1 \$2" in
     [ -f "$MF/rl.junk" ] && { echo 'not json'; exit 0; }
     [ -f "$MF/rl.always" ] && { echo '{"result":{"runs":[],"nextCursor":"again"}}'; exit 0; }
     c=first; pv2=""; for x in "\$@"; do [ "\$pv2" = --cursor ] && c="\$x"; pv2="\$x"; done
-    if [ -f "$MF/rl.page.\$c" ]; then case " \$* " in *" --full "*) cat "$MF/rl.page.\$c";; *) jq -c '.result.runs |= map({id, objective})' "$MF/rl.page.\$c";; esac; else echo '{"result":{"runs":[]}}'; fi;;
+    pf="$MF/rl.page.\$c"; [ ! -f "\$pf.\$n" ] || pf="\$pf.\$n"
+    if [ -f "\$pf" ]; then case " \$* " in *" --full "*) cat "\$pf";; *) jq -c '.result.runs |= map({id, objective})' "\$pf";; esac; else echo '{"result":{"runs":[]}}'; fi;;
+  "orchestration run-use")
+    date +%s > "$MF/ru.time"
+    [ ! -f "$MF/ru.okfalse" ] || { echo "{\"ok\":false,\"error\":{\"code\":\"\$(cat "$MF/ru.okfalse")\"}}"; exit 0; }
+    [ ! -f "$MF/ru.fail" ] || { [ ! -s "$MF/ru.fail" ] || echo "{\"ok\":false,\"error\":{\"code\":\"\$(cat "$MF/ru.fail")\"}}"; exit 1; }
+    echo '{"ok":true}';;
   "terminal list") echo "TLIST \$*" >> "$MF/tl.log"; [ -f "$MF/tl.fail" ] && exit 1; cat "$MF/tl.json" 2>/dev/null || echo '{"result":{"terminals":[]}}';;
   "orchestration run-show")   # the marker Run's owner handle (kickoff's owner line)
     [ ! -f "$MF/rsfail" ] || { echo "boom: run-show failed" >&2; exit 3; }
@@ -11321,7 +11476,7 @@ mkdir -p "$MF/htmp"
 TL8="$(tls '{"handle":"hNew","ptyId":"p1"},{"handle":"hd"}')"
 TMPDIR="$MF/htmp" hn "$TL8" $'LOCAL_COORDINATOR=hOld\nDEV=hd\n' $'LOCAL_COORDINATOR=p1\n' dev
 check "handles: the resolved state file is a temporary one, removed when the kickoff exits" "$(hnds | cut -d'|' -f1):$(find "$MF/htmp" -mindepth 1 | wc -l | tr -d ' ')" "HND hNew:0"
-BL='- **Stale handles in orca-roles.env after an Orca restart.** launch.sh writes back the saved handle of a role that --open does not name, and of a front role that keeps its restored tab (busy, or its conversation cannot be read), so after a restart those lines can name pre-restart handles until roles runs; the kit'"'"'s messages to the front role resolve them to the tab with a live agent, but a script reading orca-roles.env directly can still see them, and so can the "tell it to run: cat orca-roles.env" hint kickoff logs when its message fails. Also: when the front role'"'"'s saved handle is stale and it runs launch.sh --open from its new tab, kickoff takes the "Role handles changed" path instead of the per-role "Roles reopened" one. Seen on WSL, not reproduced on macOS; a side effect seen there: relaunch-role.sh reopened the whole team, because the other roles'"'"' tabs counted as "closed but Orca kept its session running".'
+BL='- **Stale handles in orca-roles.env after an Orca restart.** launch.sh writes back the saved handle of a role that --open does not name, and of a front role that keeps its restored tab (busy, or its conversation cannot be read), so after a restart those lines can name pre-restart handles until roles runs; the kit'"'"'s messages to the front role resolve them to the tab with a live agent, but a script reading orca-roles.env directly can still see them, and so can the "tell it to run: cat orca-roles.env" hint kickoff logs when its message fails. Also: when the front role'"'"'s saved handle is stale and it runs launch.sh --open from its new tab, kickoff takes the "Role handles changed" path instead of the per-role "Roles reopened" one. Seen on WSL, not reproduced on macOS; a side effect seen there: relaunch-role.sh reopened the whole team, because the other roles'"'"' tabs counted as "closed but Orca kept its session running". The kit'"'"'s messages to the front role are now checked by the live check R1.sent; this entry goes once a WSL run with a real Orca restart passes R1.sent and R1.handles.'
 check "BACKLOG: the WSL stale-handles bullet is replaced by exactly the one-line entry about orca-roles.env" "$(grep -cxF -- "$BL" "$ROOT/BACKLOG.md" || true):$(grep -c 'WSL: stale handles after an Orca restart' "$ROOT/BACKLOG.md" || true)" "1:0"
 # the front role's handle history: seeded from the kicked and env files, no duplicates, no empty lines, never reseeded, atomic
 HD="$TMP/hd"; rm -rf "$HD"; mkdir -p "$HD"; hh() { tr '\n' ' ' < "$HD/orca-roles.planner-handles"; }
@@ -11361,7 +11516,7 @@ check "stale_run: follows nextCursor to the second page, stops at 50 pages witho
 # kickoff: the Planner's message carries the stale-Run reminder (never a bind), the history gets the Planner's new handle only, and a failing run-list does not stop anything
 rm -f "$MF"/rl.page.*; RUNB='Run r9 (Paper: topic) is still bound to a previous tab of yours. If this is your Run, bind it with `orca orchestration run-use --id r9 --json` before anything else, so worker reports reach you.'
 page first "$(rr r9 old1 2026-04-01 'Paper: topic'),$(rr r8 other 2026-05-01 unrelated)"
-HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "local-coordinator dev"
+dead hp; HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "local-coordinator dev"; live hp
 K1="$(grep -cF "$RUNB" "$MF/text.hp"):$(grep -c 'is still bound' "$MF/text.hd" || true):$(grep -c '^Run r9 is bound to an old local coordinator tab (old1); the local coordinator was told\.$' "$MF/out.log"):$(grep -cE 'run-use|run-create' "$MF/orch.log" || true):$(tr '\n' ' ' < "$MF/gd/orca-roles.planner-handles")"
 check "kickoff: the Planner's message ends with the reminder to bind the stale Run (named, with its objective), the worker's does not, nothing binds it, the history keeps the old handles and gains none but the Planner's" "$K1" "1:0:1:0:old1 hp "
 : > "$MF/rl.fail"; HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "local-coordinator dev"; rm -f "$MF/rl.fail"
@@ -11398,6 +11553,101 @@ MAILKIT="$MK" OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; M1="${M1}[$(ml)
 check "mail watcher: the first status of a kickoff runs dispatch.sh --mail --run on the newest Run bound to the front role's handle, once for two statuses, also from the second page of run-list (--cursor); no watcher (and the log line, once) with no bound Run or a failing run-list; none after failed sends; one still starts after a role whose kick failed" "$M1" "[--mail --run r2:1:2][--mail --run r5:1][:1:2][:1:2][:0:0][--mail --run r1]"
 MAILKIT="$MK" OTH=other mf "$CFGT2" clean "dev tester"; M2="$(hj):$(ml):$(nw)"
 check "launch not from the front role's tab: one 'Role handles changed' status as before, and the mail watcher starts once after it" "$M2" "hp|status|Role handles changed|roles opened or reopened: Dev, Tester. $HU:--mail --run r1:1"
+# kickoff: the front role's stale Run is bound to its live tab by the kit (run-use --from <live handle>), once its agent is up and the hook has had its settle
+RB_RUN='Run r9 (Paper: topic) is still bound to a previous tab of yours'
+rbl() { grep -F -- 'run-use' "$MF/orch.log" | sed 's/^ORCH //' | paste -sd';' - || true; }   # the run-use calls as logged
+rbn() { grep -c 'orchestration run-use' "$MF/orch.log" || true; }
+rbo() { grep -cF "$1" "$MF/out.log" || true; }
+RBOLD="Run r9 is bound to an old local coordinator tab (old1); the local coordinator was told."
+RBOK="Run r9 was bound to an old local coordinator tab (old1); re-bound it to the local coordinator's tab (hp)."
+RBF() { printf "Could not re-bind Run r9 to the local coordinator's tab: %s." "$1"; }
+RBN() { grep -c 'is bound to an old' "$MF/out.log" || true; }
+pg1() { rm -f "$MF"/rl.page.*; page first "$(rr r9 old1 2026-04-01 'Paper: topic'),$(rr r8 other 2026-05-01 unrelated),$(rr r7 '' 2026-05-02 unbound),$(rr r6 hq 2026-05-03 planner)"; }
+rbmf() { HIST=$'old1\nhp\n' mf "$(mfc "$DEVOK")" clean "local-coordinator dev"; }
+# R1: nothing bound to the live handle after the settle -> exactly one run-use with --id and --from; success line; no reminder; no other Run named
+pg1; page first.3 "$(rr r9 hp 2026-04-01 'Paper: topic'),$(rr r8 other 2026-05-01 unrelated),$(rr r7 '' 2026-05-02 unbound),$(rr r6 hq 2026-05-03 planner)"
+rbmf
+RB1="$(rbn):$(rbl):$(rbo "$RBOK"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(RBN):$(grep -cE 'run-create|--id r[0-8] ' "$MF/orch.log" || true):$(rbo 'also moved')"
+check "kickoff re-bind: a stale Run with the agent up and nothing bound to the live handle gets exactly one run-use, 'run-use --id r9 --from hp --json' (never without --from, never --from an old handle, no other Run: not one bound to another role, another tab or none), the success line, no reminder to the front role and no 'is bound to an old' line" "$RB1" "1:orchestration run-use --id r9 --from hp --json:1:0:0:0:0"
+# R2: hook first, same Run: nothing done, nothing said
+pg1; page first.2 "$(rr r9 hp 2026-04-01 'Paper: topic')"; rbmf
+RB2="$(rbn):$(grep -cE 'Re-bound|re-bound|Could not re-bind' "$MF/out.log" || true):$(grep -c 'is still bound' "$MF/text.hp" || true):$(RBN)"
+# R3: hook first, another Run on the live handle: no run-use, the failure line naming it, no reminder, no 'is bound to an old' line
+pg1; page first.2 "$(rr r9 old1 2026-04-01 'Paper: topic'),$(rr r8 hp 2026-05-01 other-run)"; rbmf
+RB2="$RB2|$(rbn):$(rbo "$(RBF 'Run r8 is already bound to hp')"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(RBN)"
+check "kickoff re-bind: when the hook bound the same Run first, nothing is run, logged or reminded; when another Run is bound to the live handle at the re-check, no run-use (it would release that Run), the failure line names it, and neither the reminder nor the 'is bound to an old' line appears" "$RB2" "0:0:0:0|0:1:0:0"
+# R4: the settle: run-use comes at least SETTLE seconds after the agent first answers
+printf '#!/bin/sh\n[ "$1" = hp ] || { echo 4242; exit 0; }\nf="%s/ag.start"; [ -e "$f" ] || date +%%s > "$f"\ns=$(cat "$f"); n=$(date +%%s); [ $((n - s)) -ge 1 ] || exit 0\n[ -e "%s/ag.first" ] || echo "$n" > "%s/ag.first"\necho 4242\n' "$MF" "$MF" "$MF" > "$MF/agent-late"; chmod +x "$MF/agent-late"
+pg1; page first.3 "$(rr r9 hp 2026-04-01 'Paper: topic')"; rm -f "$MF/ag.start" "$MF/ag.first" "$MF/ru.time"
+ORCA_ROLES_AGENT_PID="$MF/agent-late" ORCA_ROLES_REBIND_WAIT=8 ORCA_ROLES_REBIND_SETTLE=2 rbmf
+RB3="$(rbn):$(s=$(( $(cat "$MF/ru.time" 2>/dev/null || echo 0) - $(cat "$MF/ag.first" 2>/dev/null || echo 99999) )); case "$s" in 2|3) echo settled;; *) echo "$s";; esac)"
+check "kickoff re-bind: the run-use waits at least ORCA_ROLES_REBIND_SETTLE (2) seconds, and less than SETTLE + 2, after the agent on the live handle first answers (the agent appears a second after the start; both stamps are whole seconds and the re-check runs between the wait and the run-use, so 2 or 3)" "$RB3" "1:settled"
+# R5: no agent on the live handle within the wait -> no run-use; failure line; today's reminder and line verbatim
+dead hp; pg1; ORCA_ROLES_REBIND_WAIT=1 rbmf; live hp
+RB4="$(rbn):$(rbo "$(RBF 'no agent runs in hp')"):$(grep -c "$RB_RUN. If this is your Run, bind it with \`orca orchestration run-use --id r9 --json\` before anything else, so worker reports reach you\.\$" "$MF/text.hp" || true):$(rbo "$RBOLD")"
+check "kickoff re-bind: a live handle with no agent process (a closed handle, a plain shell) gets no run-use, the 'no agent runs in hp' line, then the reminder and the 'is bound to an old' line byte for byte" "$RB4" "0:1:1:1"
+# R6: run-use fails (ok:false with exit 0, a non-zero exit with a code, no answer at all) -> failure line with the code or 'no answer'; reminder and line verbatim
+pg1; echo run_gone > "$MF/ru.okfalse"; rbmf; rm -f "$MF/ru.okfalse"
+RB5="$(rbn):$(rbo "$(RBF 'run-use failed (run_gone)')"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(rbo "$RBOLD")"
+pg1; echo run_not_found > "$MF/ru.fail"; rbmf
+RB5="$RB5|$(rbn):$(rbo "$(RBF 'run-use failed (run_not_found)')"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(rbo "$RBOLD")"
+pg1; : > "$MF/ru.fail"; rbmf; rm -f "$MF/ru.fail"
+RB5="$RB5|$(rbn):$(rbo "$(RBF 'run-use failed (no answer)')"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(rbo "$RBOLD"):$(grep -cE 'Re-bound|was bound to an old' "$MF/out.log" || true)"
+check "kickoff re-bind: a run-use that answers ok:false, exits non-zero with an error code, or gives no answer logs 'run-use failed (<code>)' or '(no answer)' once, never the success line, and the front role still gets the reminder and the 'is bound to an old' line" "$RB5" "1:1:1:1|1:1:1:1|1:1:1:1:0"
+# R7: run-use ok but run-list still shows the old handle
+pg1; rbmf
+RB6="$(rbn):$(rbo "$(RBF 'run-list does not show it on hp')"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(rbo "$RBOLD"):$(rbo 'was bound to an old')"
+check "kickoff re-bind: a run-use that succeeds while run-list still shows the old handle logs 'run-list does not show it on hp' and keeps the reminder and the 'is bound to an old' line, with no success line" "$RB6" "1:1:1:1:0"
+# R8: the Runs the run-use moved are named, once each, and the success line is still logged; unchanged Runs are not named
+pg1; rm -f "$MF"/rl.page.*; page first "$(rr r9 old1 2026-04-01 'Paper: topic'),$(rr r5 oldx 2026-03-01 a),$(rr r4 oldy 2026-03-02 b),$(rr r3 '' 2026-03-03 c),$(rr r2 hq 2026-03-04 d)"
+page first.3 "$(rr r9 hp 2026-04-01 'Paper: topic'),$(rr r5 '' 2026-03-01 a),$(rr r4 hz 2026-03-02 b),$(rr r3 hp2 2026-03-03 c),$(rr r2 hq 2026-03-04 d)"; rbmf
+RB7="$(grep -c '^Re-binding Run r9 also moved Run ' "$MF/out.log" || true):$(rbo 'Re-binding Run r9 also moved Run r5 from oldx to none.'):$(rbo 'Re-binding Run r9 also moved Run r4 from oldy to hz.'):$(rbo 'Re-binding Run r9 also moved Run r3 from none to hp2.'):$(rbo 'Run r2'):$(rbo "$RBOK"):$(grep -c 'is still bound' "$MF/text.hp" || true)"
+check "kickoff re-bind: each other Run whose handle changed across the run-use gets one 'also moved' line (a missing or empty handle written none, in either direction), a Run that did not change is not named, and the success line is still logged with no reminder" "$RB7" "3:1:1:1:0:1:0"
+# R9: a saved handle that is stale with the resolved one live: the Run lookups use the resolved one; a Run already on it gets no wait and no run-use; one on the old handle is bound to the resolved one
+live hOld hNew hd; rm -f "$MF"/rl.page.*
+rbh() { MAILKIT="$MK" TL="$(tls '{"handle":"hNew","ptyId":"p1"},{"handle":"hd"}')" ST=$'LOCAL_COORDINATOR=hOld\nDEV=hd\n' PTY=$'LOCAL_COORDINATOR=p1\n' HIST=$'old1\nhOld\n' mf "$(mfc "$DEVOK")" clean "${RBROLES:-local-coordinator dev}"; }
+page first "$(rr r9 hNew 2026-04-01 'Paper: topic'),$(rr r8 hOld 2026-05-01 stale-binding)"; T0=$SECONDS; ORCA_ROLES_REBIND_WAIT=30 ORCA_ROLES_REBIND_SETTLE=30 rbh; TD=$((SECONDS-T0))
+RB8="$(rbn):$({ [ "$TD" -lt 15 ] && echo fast; } || echo "slow$TD"):$(cat "$MF"/text.* | grep -c "is still bound" || true)"
+RBROLES=dev OTH=hNew rbh; RB8="$RB8:$(grep -c -- "--mail --run r9" "$MF/mail.log" || true):$(grep -c -- "--mail --run r8" "$MF/mail.log" || true)"
+rm -f "$MF"/rl.page.*; page first "$(rr r9 hOld 2026-04-01 'Paper: topic')"; page first.3 "$(rr r9 hNew 2026-04-01 'Paper: topic')"; rm -f "$MF/orch.log"; rbh
+RB8="$RB8|$(rbl):$(grep -c "was bound to an old local coordinator tab (hOld); re-bound it to the local coordinator's tab (hNew)." "$MF/out.log" || true)"
+check "kickoff re-bind: with a stale saved handle and a live resolved one, a Run already on the resolved handle (the mail watcher follows it) means no wait and no run-use, and a Run on the saved handle is passed to run-use with --from the resolved handle" "$RB8" "0:fast:0:1:0|orchestration run-use --id r9 --from hNew --json:1"
+# f3: the re-check binds the stale Run it finds (the newest on a historic handle other than the live one) and names why it did not
+rm -rf "$MF/sleepbin"; mkdir -p "$MF/sleepbin"; printf '#!/bin/sh\necho "$1" >> "%s/sleep.log"\n' "$MF" > "$MF/sleepbin/sleep"; chmod +x "$MF/sleepbin/sleep"
+sln() { grep -cx -- "$1" "$MF/sleep.log" 2>/dev/null || true; }
+pg1; page first.2 "$(rr r9 '' 2026-04-02 'Paper: topic'),$(rr r5 old1 2026-04-03 stale-a),$(rr r4 old1 2026-04-04 stale-b),$(rr r8 other 2026-05-01 unrelated),$(rr r6 hq 2026-05-03 planner)"; page first.3 "$(rr r4 hp 2026-04-04 stale-b)"; rbmf
+RB9="$(rbn):$(rbl):$(rbo 'Run r4 was bound to an old local coordinator tab (old1); re-bound it to the local coordinator'"'"'s tab (hp).'):$(grep -c 'is still bound' "$MF/text.hp" || true)"
+pg1; page first.2 "$(rr r9 '' 2026-04-02 'Paper: topic'),$(rr r8 other 2026-05-01 unrelated),$(rr r7 '' 2026-05-02 unbound),$(rr r6 hq 2026-05-03 planner)"; rbmf
+RB9="$RB9|$(rbn):$(rbo "$(RBF 'no stale Run is left')"):$(grep -c 'is still bound' "$MF/text.hp" || true):$(RBN):$(rbo 'run-use failed')"
+pg1; echo 2 > "$MF/rl.failat"; rbmf; rm -f "$MF/rl.failat"
+RB9="$RB9|$(rbn):$(rbo "$(RBF 'run-list failed')"):$(rbo "$(RBF 'run-list does not show it on hp')"):$(grep -c 'is still bound' "$MF/text.hp" || true)"
+check "kickoff re-bind: when the first Run is released by the re-check, the newest Run on another historic handle (r4, not r5, not one on an unknown handle) gets the run-use and the success line; with no stale Run left there is no run-use, the 'no stale Run is left' line and no reminder; a failing run-list at the re-check logs 'run-list failed' (not 'does not show it') and the reminder follows" "$RB9" "1:orchestration run-use --id r4 --from hp --json:1:0|0:1:0:0:0|0:1:0:1"
+# f4: the two waits accept only whole numbers; anything else is the default (30, 15) with no error
+rbw() { rm -f "$MF/sleep.log"; pg1; page first.3 "$(rr r9 hp 2026-04-01 'Paper: topic')"; ORCA_ROLES_REBIND_WAIT="$1" ORCA_ROLES_REBIND_SETTLE="$2" PATH="$MF/sleepbin:$PATH" rbmf; printf '[%s:%s:%s:%s:%s]' "$(sln 1)" "$(sln 15)" "$(sln 7)" "$(grep -c 'integer expression' "$MF/out.log" || true)" "$(rbn)"; }
+RB10="$(rbw 0 abc)$(rbw 0 '')$(rbw 0 -3)$(rbw 0 1.5)$(rbw 0 0)$(rbw 0 7)"
+dead hp; RB10="$RB10|$(rbw abc 0)$(rbw 30 0)$(rbw '' 0)$(rbw -2 0)$(rbw 3 0)$(rbw 0 0)"; live hp
+check "kickoff re-bind: ORCA_ROLES_REBIND_SETTLE (15) and ORCA_ROLES_REBIND_WAIT (30) accept only whole numbers: abc, empty, negative and decimal values fall back to the default with no 'integer expression expected' on the output, 0 and 7 are used as given" "$RB10" "[0:1:0:0:1][0:1:0:0:1][0:1:0:0:1][0:1:0:0:1][0:0:0:0:1][0:0:1:0:1]|[30:0:0:0:0][30:0:0:0:0][30:0:0:0:0][30:0:0:0:0][3:0:0:0:0][0:0:0:0:0]"
+# kickoff: the 'Handles sent' log line, once per successful message with the handles, naming the front role's own handle as sent
+hsl() { grep '^Handles sent' "$MF/out.log" | paste -sd'|' - || true; }
+OTH=hp mf "$CFGT2" clean "dev tester"; HS1="$(hsl)"
+OTH=hp SENDFAIL=ht mf "$CFGT2" clean "dev tester"; HS1="$HS1;$(hsl)"
+OTH=hp FAILHND=1 mf "$CFGT2" clean "dev tester"; HS1="$HS1;[$(hsl)]"
+hn "$(tls '{"handle":"hNew","ptyId":"p1"},{"handle":"hd"}')" $'LOCAL_COORDINATOR=hOld\nDEV=hd\n' $'LOCAL_COORDINATOR=p1\n' dev; HS1="$HS1;$(hsl)"
+FAILHND=1 hn "$(tls '{"handle":"hNew","ptyId":"p1"},{"handle":"hd"}')" $'LOCAL_COORDINATOR=hOld\nDEV=hd\n' $'LOCAL_COORDINATOR=p1\n' dev; HS1="$HS1;[$(hsl)]"
+HS1="$HS1;$(OTH=hNew TL="$(tls '{"handle":"hNew","ptyId":"p1"},{"handle":"hd"}')" ST=$'LOCAL_COORDINATOR=hOld\nDEV=hd\n' PTY=$'LOCAL_COORDINATOR=p1\n' mf "$(mfc "$DEVOK")" clean dev; hsl)"
+mf "$(mfc "$DEVOK")" clean "local-coordinator dev"; HS1="$HS1;$(hsl)"
+SENDFAIL=hp mf "$(mfc "$DEVOK")" clean "local-coordinator dev"; HS1="$HS1;[$(hsl)]"
+check "kickoff handles sent: one 'Handles sent (<what>): LOCAL_COORDINATOR=<handle>' line per successful message with the handles: Roles reopened (one per role, also when the role's own kick failed, the handle of the resolved list, hp), Role handles changed (the resolved hNew, not the saved hOld), the role message (the handle it was sent to); none for a failed send" "$HS1" "Handles sent (Roles reopened): LOCAL_COORDINATOR=hp|Handles sent (Roles reopened): LOCAL_COORDINATOR=hp;Handles sent (Roles reopened): LOCAL_COORDINATOR=hp|Handles sent (Roles reopened): LOCAL_COORDINATOR=hp;[];Handles sent (Role handles changed): LOCAL_COORDINATOR=hNew;[];Handles sent (Role handles changed): LOCAL_COORDINATOR=hNew;Handles sent (role message): LOCAL_COORDINATOR=hp;[]"
+mf "$(mfc "$DEVOK")" clean "local-coordinator dev"; grep '^Handles sent' "$MF/out.log" > "$MF/real-sent.log" || true
+cat > "$MF/real-sent.sh" <<'EOS'
+S="$1"; export ORCA_LIVE_DIR="$S"; . "$ROOT/tests/live/lib.sh"
+LIVE_DIR="$S"; REPORT="$S/report.md"; TIMINGS="$S/t.tsv"; STATE="$S/state"; : > "$STATE"; : > "$REPORT"; GD="$2"
+pid_of_handle() { [ "$1" = hp ] && echo 1; }
+c_restart_sent R1 >/dev/null; grep 'R1.sent' "$REPORT" | cut -d'|' -f3 | tr -d ' '
+EOS
+mkdir -p "$MF/rsent"; cp "$MF/real-sent.log" "$MF/gd/orca-roles-kickoff.log"
+check "kickoff handles sent: the line a kickoff really writes for the role message (to the env handle hp, an agent carrying it) gives R1.sent OK in the live lib" "$(ROOT="$ROOT" bash "$MF/real-sent.sh" "$MF/rsent" "$MF/gd"):$(grep -c . "$MF/real-sent.log")" "OK:1"
+rm -f "$MF"/rl.page.* "$MF/ru.time"
 rm -f "$MF"/rl.page.*
 # check_config and docs
 cc() { echo "$1" > "$MF/cc.json"; check_config "$MF/cc.json"; }

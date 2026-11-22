@@ -20,21 +20,23 @@
 START="$(date +%s)"; DEADLINE=$((START + 10))
 KIT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd -P)" || exit 0   # the kit that holds this script, whatever $KIT says
 [ -n "${ORCA_TERMINAL_HANDLE:-}" ] || exit 0
-# shellcheck source=/dev/null
-. "$KIT/bin/lib.sh" 2>/dev/null || exit 0
-[ -n "$(type -P orca 2>/dev/null)" ] || exit 0
-command -v jq >/dev/null 2>&1 || exit 0
-INPUT="$(cat 2>/dev/null)" || INPUT=""
-SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)" || SID=""
-printf '%s' "$SID" | grep -Eq '^[A-Za-z0-9-]{1,64}$' || exit 0
-# the source (startup, resume, clear, compact, fork) does not change what the hook does: the handle is what counts
-DIR="$KIT/state/session-handles"; LOG="$KIT/state/session-hook.log"
-mkdir -p "$DIR" 2>/dev/null || exit 0
+SID="-"; LOG="$KIT/state/session-hook.log"
 slog() {
+  mkdir -p "${LOG%/*}" 2>/dev/null || return 0
   printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SID" "$*" >> "$LOG" 2>/dev/null || return 0
   if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 200 ]; then tail -n 200 "$LOG" > "$LOG.tmp.$$" 2>/dev/null && mv "$LOG.tmp.$$" "$LOG"; fi
   return 0
 }
+# shellcheck source=/dev/null
+. "$KIT/bin/lib.sh" 2>/dev/null || { slog "could not load bin/lib.sh (handle $ORCA_TERMINAL_HANDLE)"; exit 0; }
+[ -n "$(type -P orca 2>/dev/null)" ] || { slog "no orca on PATH (handle $ORCA_TERMINAL_HANDLE)"; exit 0; }
+command -v jq >/dev/null 2>&1 || { slog "no jq (handle $ORCA_TERMINAL_HANDLE)"; exit 0; }
+INPUT="$(cat 2>/dev/null)" || INPUT=""
+SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)" || SID=""
+printf '%s' "$SID" | grep -Eq '^[A-Za-z0-9-]{1,64}$' || { SID="-"; slog "no valid session_id on stdin (handle $ORCA_TERMINAL_HANDLE)"; exit 0; }
+# the source (startup, resume, clear, compact, fork) does not change what the hook does: the handle is what counts
+DIR="$KIT/state/session-handles"
+mkdir -p "$DIR" 2>/dev/null || exit 0
 # one orca call with what is left of the 10 s (at least 1); 124 when the time is up. The version lookup inside orca_compat_args gets what is left too.
 ho() {
   local rem
@@ -185,13 +187,14 @@ EOF
   else slog "could not record the Runs of $PREV"; rm -f "$CTMP" 2>/dev/null; fi
 fi
 R="$(printf '%s\n' "$RUNS" | head -n 1)"
-[ -n "$R" ] || { record; finish; exit 0; }
+[ -n "$R" ] || { slog "handle changed from $PREV to $ORCA_TERMINAL_HANDLE: no Run was bound to $PREV"; record; finish; exit 0; }
 LEFT="$(printf '%s\n' "$RUNS" | sed 1d | tr '\n' ' ' | sed -e 's/ $//' -e 's/ /, /g')"
 ho orchestration run-use --id "$R" --json >/dev/null || { slog "run-use $R failed"; finish; exit 0; }
+slog "took Run $R from $PREV to $ORCA_TERMINAL_HANDLE"
 [ -z "$LEFT" ] || slog "took Run $R from $PREV; Run(s) $LEFT were also bound to it and were not taken (Orca keeps one Run per tab: this run-use may have released them)"
 N="$(ho orchestration check --run "$R" --peek --json | jq -r '.result.count // (.result.messages | length) // 0' 2>/dev/null)" || N=0
 case "$N" in ''|*[!0-9]*) N=0;; esac
-[ "$EXPIRED" = 0 ] && record
+if [ "$EXPIRED" = 0 ]; then record; else slog "took Run $R but the time ran out before the record was written"; fi
 printf 'orca-roles: this tab reopened with a new terminal handle; re-bound Run %s to it. %s message(s) waiting: read them with orca orchestration check --run %s --json.%s\n' "$R" "$N" "$R" "${LEFT:+ Orca keeps one Run per tab: Run(s) $LEFT were also bound to the old tab and were not taken; run-use of one of them would release $R.}"
 finish
 exit 0
