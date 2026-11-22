@@ -11580,8 +11580,8 @@ check "kickoff re-bind: when the hook bound the same Run first, nothing is run, 
 printf '#!/bin/sh\n[ "$1" = hp ] || { echo 4242; exit 0; }\nf="%s/ag.start"; [ -e "$f" ] || date +%%s > "$f"\ns=$(cat "$f"); n=$(date +%%s); [ $((n - s)) -ge 1 ] || exit 0\n[ -e "%s/ag.first" ] || echo "$n" > "%s/ag.first"\necho 4242\n' "$MF" "$MF" "$MF" > "$MF/agent-late"; chmod +x "$MF/agent-late"
 pg1; page first.3 "$(rr r9 hp 2026-04-01 'Paper: topic')"; rm -f "$MF/ag.start" "$MF/ag.first" "$MF/ru.time"
 ORCA_ROLES_AGENT_PID="$MF/agent-late" ORCA_ROLES_REBIND_WAIT=8 ORCA_ROLES_REBIND_SETTLE=2 rbmf
-RB3="$(rbn):$(( $(cat "$MF/ru.time" 2>/dev/null || echo 0) - $(cat "$MF/ag.first" 2>/dev/null || echo 99999) ))"
-check "kickoff re-bind: the run-use waits ORCA_ROLES_REBIND_SETTLE (2) seconds after the agent on the live handle first answers (the agent appears a second after the start, the wait is longer than that)" "$RB3" "1:2"
+RB3="$(rbn):$(s=$(( $(cat "$MF/ru.time" 2>/dev/null || echo 0) - $(cat "$MF/ag.first" 2>/dev/null || echo 99999) )); case "$s" in 2|3) echo settled;; *) echo "$s";; esac)"
+check "kickoff re-bind: the run-use waits at least ORCA_ROLES_REBIND_SETTLE (2) seconds, and less than SETTLE + 2, after the agent on the live handle first answers (the agent appears a second after the start; both stamps are whole seconds and the re-check runs between the wait and the run-use, so 2 or 3)" "$RB3" "1:settled"
 # R5: no agent on the live handle within the wait -> no run-use; failure line; today's reminder and line verbatim
 dead hp; pg1; ORCA_ROLES_REBIND_WAIT=1 rbmf; live hp
 RB4="$(rbn):$(rbo "$(RBF 'no agent runs in hp')"):$(grep -c "$RB_RUN. If this is your Run, bind it with \`orca orchestration run-use --id r9 --json\` before anything else, so worker reports reach you\.\$" "$MF/text.hp" || true):$(rbo "$RBOLD")"
@@ -11645,8 +11645,8 @@ LIVE_DIR="$S"; REPORT="$S/report.md"; TIMINGS="$S/t.tsv"; STATE="$S/state"; : > 
 pid_of_handle() { [ "$1" = hp ] && echo 1; }
 c_restart_sent R1 >/dev/null; grep 'R1.sent' "$REPORT" | cut -d'|' -f3 | tr -d ' '
 EOS
-mkdir -p "$MF/rs"; cp "$MF/real-sent.log" "$MF/gd/orca-roles-kickoff.log"
-check "kickoff handles sent: the line a kickoff really writes for the role message (to the env handle hp, an agent carrying it) gives R1.sent OK in the live lib" "$(ROOT="$ROOT" bash "$MF/real-sent.sh" "$MF/rs" "$MF/gd"):$(grep -c . "$MF/real-sent.log")" "OK:1"
+mkdir -p "$MF/rsent"; cp "$MF/real-sent.log" "$MF/gd/orca-roles-kickoff.log"
+check "kickoff handles sent: the line a kickoff really writes for the role message (to the env handle hp, an agent carrying it) gives R1.sent OK in the live lib" "$(ROOT="$ROOT" bash "$MF/real-sent.sh" "$MF/rsent" "$MF/gd"):$(grep -c . "$MF/real-sent.log")" "OK:1"
 rm -f "$MF"/rl.page.* "$MF/ru.time"
 rm -f "$MF"/rl.page.*
 # check_config and docs
